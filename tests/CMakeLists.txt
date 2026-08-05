@@ -21,6 +21,7 @@ set(SIF_TESTS
   test_vsf          # void size function binning, normalization, merging
   test_delta_stats  # Fourier delta PDF, spectral moments, phase shuffle
   test_vsf_models   # SvdW / Vdn size functions and the sigma slope
+  test_ep           # correlated walks, Cholesky, first-crossing multiplicity
   test_finders      # end-to-end: both finders on a synthetic field
 )
 

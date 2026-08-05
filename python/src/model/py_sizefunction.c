@@ -2,6 +2,7 @@
 
 #include "py_delta_common.h"
 #include "sif/model/deltamoments.h"
+#include "sif/model/excursionset.h"
 #include "sif/model/sizefunction.h"
 #include "structures/py_size_function.h"
 #include <numpy/arrayobject.h>
@@ -9,7 +10,10 @@
 
 /* Both size functions take the same arguments; only the model differs. */
 typedef sif_size_function_t* (*__vsf_fn)(const real_t*, const real_t*, uint32_t,
-  const real_t*, uint32_t, real_t, real_t, real_t, sif_option_t);
+  const real_t*, uint32_t, real_t, real_t, sif_option_t);
+
+/* Forward-declared: shared with the mapping entry points further down. */
+static int py_sif_spherical_option(const char* method, sif_option_t* opt);
 
 static PyObject* __size_function(
   PyObject* args, PyObject* kwds, __vsf_fn compute, const char* name) {
@@ -18,14 +22,14 @@ static PyObject* __size_function(
   PyObject* radii_obj;
   double delta_v = -2.7;
   double delta_c = 1.686;
-  double expansion_factor = 0.0;
   const char* units = NULL;
+  const char* method = NULL;
 
-  static char* kwlist[] = {"k", "pk", "radii", "delta_v", "delta_c",
-    "expansion_factor", "units", NULL};
+  static char* kwlist[] = {"k", "pk", "radii", "delta_v", "delta_c", "units",
+    "method", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|dddz", kwlist, &k_obj,
-        &pk_obj, &radii_obj, &delta_v, &delta_c, &expansion_factor, &units)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|ddzz", kwlist, &k_obj,
+        &pk_obj, &radii_obj, &delta_v, &delta_c, &units, &method)) {
     return NULL;
   }
 
@@ -39,6 +43,11 @@ static PyObject* __size_function(
       "units must be None, 'ln_r' (dn/dlnR) or 'r' (dn/dR), not '%s'", units);
     return NULL;
   }
+
+  sif_option_t spherical;
+  if (py_sif_spherical_option(method, &spherical) != 0)
+    return NULL;
+  options |= spherical;
 
   if (!(delta_v < 0.0)) {
     PyErr_SetString(PyExc_ValueError, "delta_v must be strictly negative");
@@ -82,7 +91,7 @@ static PyObject* __size_function(
   Py_BEGIN_ALLOW_THREADS vsf = compute((const real_t*)PyArray_DATA(k_arr),
     (const real_t*)PyArray_DATA(pk_arr), (uint32_t)n_points,
     (const real_t*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
-    (real_t)delta_v, (real_t)delta_c, (real_t)expansion_factor, options);
+    (real_t)delta_v, (real_t)delta_c, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
@@ -175,20 +184,65 @@ PyObject* py_sif_sigma_slope_pk(
   return py_sif_owned_array(values, n_radii);
 }
 
-PyObject* py_sif_expansion_factor(
-  PyObject* self, PyObject* args, PyObject* kwds) {
-  double delta_v;
-  static char* kwlist[] = {"delta_v", NULL};
+static int py_sif_spherical_option(const char* method, sif_option_t* opt) {
+  if (!method || strcmp(method, "b94") == 0) {
+    *opt = SIF_SPHERICAL_B94;
+    return 0;
+  }
+  if (strcmp(method, "exact") == 0) {
+    *opt = SIF_SPHERICAL_EXACT;
+    return 0;
+  }
+  PyErr_Format(PyExc_ValueError, "method must be 'b94' or 'exact', got '%s'",
+    method);
+  return -1;
+}
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "d", kwlist, &delta_v))
+PyObject* py_sif_delta_nonlinear(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  double delta_linear;
+  const char* method = NULL;
+  static char* kwlist[] = {"delta_linear", "method", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "d|s", kwlist, &delta_linear, &method))
     return NULL;
 
-  if (!(delta_v < 0.0)) {
-    PyErr_SetString(PyExc_ValueError, "delta_v must be strictly negative");
+  if (!(delta_linear < 0.0)) {
+    PyErr_SetString(
+      PyExc_ValueError, "delta_linear must be strictly negative");
     return NULL;
   }
 
-  return PyFloat_FromDouble((double)sif_expansion_factor((real_t)delta_v));
+  sif_option_t opt;
+  if (py_sif_spherical_option(method, &opt) != 0)
+    return NULL;
+
+  return PyFloat_FromDouble(
+    (double)sif_delta_nonlinear((real_t)delta_linear, opt));
+}
+
+PyObject* py_sif_delta_linear(PyObject* self, PyObject* args, PyObject* kwds) {
+  double delta_nonlinear;
+  const char* method = NULL;
+  static char* kwlist[] = {"delta_nonlinear", "method", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "d|s", kwlist, &delta_nonlinear, &method))
+    return NULL;
+
+  if (!(delta_nonlinear < 0.0) || !(delta_nonlinear > -1.0)) {
+    PyErr_SetString(PyExc_ValueError,
+      "delta_nonlinear must lie strictly between -1 and 0");
+    return NULL;
+  }
+
+  sif_option_t opt;
+  if (py_sif_spherical_option(method, &opt) != 0)
+    return NULL;
+
+  return PyFloat_FromDouble(
+    (double)sif_delta_linear((real_t)delta_nonlinear, opt));
 }
 
 PyObject* py_sif_multiplicity_function_svdw(

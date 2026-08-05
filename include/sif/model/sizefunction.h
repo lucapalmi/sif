@@ -6,47 +6,45 @@
 #include "sif/core/macros.h"
 #include "sif/structures/sizefunction.h"
 
-/* Bernardeau (1994) fit constant linking the linear void barrier to the
- * spherical expansion factor. */
+/* Bernardeau (1994) fit constant linking the linear and non-linear void
+ * density contrasts. */
 #define SIF_SPHERICAL_EXPANSION_C 1.594
 
 /*
- * @brief Lagrangian-to-Eulerian expansion factor implied by a void barrier.
+ * @brief Non-linear density contrast a void of a given linear contrast
+ * evolves to.
  *
- * Inverts delta_v = c [1 - (r_NL/r_L)^(3/c)], the fit of Bernardeau (1994) as
- * quoted by Jennings, Li & Hu (2013) eq. (A4), accurate to 0.2%. Shell
- * crossing at delta_v = -2.7 gives about 1.69.
+ * Under SIF_SPHERICAL_B94, the Bernardeau (1994) fit quoted by Jennings, Li &
+ * Hu (2013) eq. (A4): delta_NL = (1 - delta_L/c)^-c - 1. Under
+ * SIF_SPHERICAL_EXACT, the Einstein-de Sitter expansion solution, by
+ * root-find. The two agree to better than 0.1% on the expansion factor.
  *
- * @param delta_v Linear void barrier, strictly negative
+ * @note Only the expanding branch is implemented; a non-negative linear
+ * contrast collapses rather than expands.
  *
- * @return r_NL / r_L, or 0 for a non-negative barrier.
+ * @param delta_linear Linear density contrast, strictly negative
+ * @param opt SIF_SPHERICAL_B94 (default) or SIF_SPHERICAL_EXACT
+ *
+ * @return The non-linear contrast, strictly between -1 and 0, or 0 for input
+ * outside that branch. A valid result is never 0, so the two are
+ * distinguishable.
  */
-real_t sif_expansion_factor(real_t delta_v);
+real_t sif_delta_nonlinear(real_t delta_linear, sif_option_t opt);
 
 /*
- * @brief Excursion-set void multiplicity function f_ln(sigma).
+ * @brief Linear density contrast that evolves into a given non-linear one,
+ * the inverse of sif_delta_nonlinear.
  *
- * Sheth & van de Weygaert (2004) as given by Jennings, Li & Hu (2013)
- * eq. (8): the analytic small-x limit below x = 0.276, the mode series above
- * it, with x = (D/|delta_v|) sigma and D = |delta_v| / (delta_c + |delta_v|).
+ * Wanted when a barrier is quoted as an observed underdensity rather than as a
+ * linear threshold.
  *
- * Shared by the SvdW and Vdn size functions, which differ only in how the
- * result is mapped from Lagrangian to Eulerian radii.
+ * @param delta_nonlinear Non-linear density contrast, strictly between -1 and 0
+ * @param opt SIF_SPHERICAL_B94 (default) or SIF_SPHERICAL_EXACT
  *
- * @note The series is summed to convergence rather than truncated at the four
- * terms the reference uses; the two agree well inside its quoted 0.2% for
- * D < 3/4, and summing further keeps it valid as D approaches 1.
- *
- * @param sigma R.m.s. density contrast per entry, strictly positive
- * @param n Length of sigma
- * @param delta_v Linear void barrier, strictly negative
- * @param delta_c Collapse barrier, strictly positive
- *
- * @return Newly allocated array of n values, released with sif_free_aligned,
- * or NULL on invalid input.
+ * @return The linear contrast, strictly negative, or 0 for input outside that
+ * range.
  */
-NODISCARD real_t* sif_multiplicity_function_svdw(
-  const real_t* sigma, uint32_t n, real_t delta_v, real_t delta_c);
+real_t sif_delta_linear(real_t delta_nonlinear, sif_option_t opt);
 
 /*
  * @brief Sheth & van de Weygaert void size function.
@@ -66,18 +64,20 @@ NODISCARD real_t* sif_multiplicity_function_svdw(
  * @param n_radii Number of radii
  * @param delta_v Linear void barrier, strictly negative
  * @param delta_c Collapse barrier, strictly positive
- * @param expansion_factor r_NL / r_L. Pass <= 0 to derive it from delta_v
- * through sif_expansion_factor.
- * @param opt SIF_VSF_BIN_LN (default) or SIF_VSF_BIN_LINEAR for the units.
- * The window is always a top-hat, which is what the barriers are calibrated
- * against.
+ * @param opt SIF_VSF_BIN_LN (default) or SIF_VSF_BIN_LINEAR for the units,
+ * combined with SIF_SPHERICAL_B94 (default) or SIF_SPHERICAL_EXACT for the
+ * mapping used to expand the radii. The window is always a top-hat, which is
+ * what the barriers are calibrated against.
+ *
+ * @note The Lagrangian-to-Eulerian expansion factor is not an argument: it is
+ * (1 + delta_NL)^(-1/3), which delta_v already determines.
  *
  * @return Newly allocated size function with n_bins = n_radii, released with
  * sif_size_function_free, or NULL on invalid input.
  */
 NODISCARD sif_size_function_t* sif_size_function_svdw(const real_t* k,
   const real_t* pk, uint32_t n_points, const real_t* radii, uint32_t n_radii,
-  real_t delta_v, real_t delta_c, real_t expansion_factor, sif_option_t opt);
+  real_t delta_v, real_t delta_c, sif_option_t opt);
 
 /*
  * @brief Volume-conserving (Vdn) void size function.
@@ -94,6 +94,6 @@ NODISCARD sif_size_function_t* sif_size_function_svdw(const real_t* k,
  */
 NODISCARD sif_size_function_t* sif_size_function_vdn(const real_t* k,
   const real_t* pk, uint32_t n_points, const real_t* radii, uint32_t n_radii,
-  real_t delta_v, real_t delta_c, real_t expansion_factor, sif_option_t opt);
+  real_t delta_v, real_t delta_c, sif_option_t opt);
 
 #endif /* __SIF_MODEL_SIZEFUNCTION_H__ */

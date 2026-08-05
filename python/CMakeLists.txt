@@ -52,6 +52,7 @@ set(PYTHON_SOURCES
     ${CMAKE_SOURCE_DIR}/src/model/py_deltamoments.c
     ${CMAKE_SOURCE_DIR}/src/model/py_bbks.c
     ${CMAKE_SOURCE_DIR}/src/model/py_sizefunction.c
+    ${CMAKE_SOURCE_DIR}/src/model/py_excursionset.c
 
     # Finders Submodule
     ${CMAKE_SOURCE_DIR}/src/finders/py_finders.c

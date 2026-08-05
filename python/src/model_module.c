@@ -43,10 +43,20 @@ static PyMethodDef model_methods[] = {
     "Differentiates the window under the integral, so it is exact rather than "
     "a finite difference: the radii need not be ordered or finely spaced."},
 
-  {"expansion_factor", (PyCFunction)py_sif_expansion_factor,
+  {"delta_nonlinear", (PyCFunction)py_sif_delta_nonlinear,
     METH_VARARGS | METH_KEYWORDS,
-    "Lagrangian-to-Eulerian expansion factor r_NL/r_L implied by a void "
-    "barrier, from the Bernardeau (1994) fit. delta_v = -2.7 gives ~1.69."},
+    "Non-linear density contrast a void of a given linear contrast evolves "
+    "to.\n"
+    "method='b94' (default) uses the Bernardeau (1994) fit, method='exact' "
+    "solves the Einstein-de Sitter expansion by root-find. The expansion "
+    "factor r_NL/r_L is (1 + delta_NL)**(-1/3); delta_L = -2.7 gives ~1.69."},
+
+  {"delta_linear", (PyCFunction)py_sif_delta_linear,
+    METH_VARARGS | METH_KEYWORDS,
+    "Linear density contrast that evolves into a given non-linear one, the "
+    "inverse of delta_nonlinear.\n"
+    "Wanted when a barrier is quoted as an observed underdensity rather than "
+    "as a linear threshold. Same method= choices."},
 
   {"multiplicity_function_svdw",
     (PyCFunction)py_sif_multiplicity_function_svdw,
@@ -61,14 +71,48 @@ static PyMethodDef model_methods[] = {
     "Sheth & van de Weygaert void size function, as a SizeFunction over the "
     "given Eulerian radii.\n"
     "Number-conserving, so its void volume fraction exceeds one at large "
-    "radii; present as the reference rather than the recommendation."},
+    "radii; present as the reference rather than the recommendation.\n"
+    "The expansion factor is not an argument: delta_v already fixes it. Use "
+    "method='b94' (default) or 'exact' to choose how."},
+
+  {"delta_covariance_pk", (PyCFunction)py_sif_delta_covariance_pk,
+    METH_VARARGS | METH_KEYWORDS,
+    "Covariance of the smoothed field between every pair of smoothing radii, "
+    "from a tabulated power spectrum.\n"
+    "Returns (cov, sigma, high_k_fraction). cov is the packed lower triangle "
+    "in float64, S(i,j) at i*(i+1)/2 + j for j <= i; sigma is the sqrt of its "
+    "diagonal, which equals sigma_0 from delta_moments_pk. window='top_hat' "
+    "(default) or 'gaussian'. Requires a P(k) sampled on at least ~1000 "
+    "log-spaced points."},
+
+  {"barrier_smt", (PyCFunction)py_sif_barrier_smt,
+    METH_VARARGS | METH_KEYWORDS,
+    "Sheth-Mo-Tormen moving barrier, alpha * (1 + (beta/sigma)**gamma).\n"
+    "Feed it the sigma returned by delta_covariance_pk, so the barrier and "
+    "the walk share one variance."},
+
+  {"first_crossing_counts_ep", (PyCFunction)py_sif_first_crossing_counts_ep,
+    METH_VARARGS | METH_KEYWORDS,
+    "Raw first-crossing counts of a correlated random walk against a moving "
+    "barrier, one per radius.\n"
+    "radii ascending, cov the packed triangle from delta_covariance_pk, "
+    "barrier one entry per radius. The result is a deterministic function of "
+    "(seed, n_paths), independent of the thread count."},
+
+  {"multiplicity_function_ep", (PyCFunction)py_sif_multiplicity_function_ep,
+    METH_VARARGS | METH_KEYWORDS,
+    "Void multiplicity function from the first crossing of a moving barrier "
+    "by a correlated random walk.\n"
+    "Returns len(radii) - 1 bin-centred values: a Monte Carlo can only place "
+    "a crossing between two consecutive smoothing scales. Same arguments as "
+    "first_crossing_counts_ep."},
 
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,
     METH_VARARGS | METH_KEYWORDS,
     "Volume-conserving (Vdn) void size function, as a SizeFunction over the "
     "given Eulerian radii.\n"
     "Identical to SvdW but divided by the Eulerian volume, which keeps the "
-    "void volume fraction below unity."},
+    "void volume fraction below unity. Same arguments as size_function_svdw."},
 
   {NULL, NULL, 0, NULL}};
 

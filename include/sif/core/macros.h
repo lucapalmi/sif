@@ -37,8 +37,16 @@ typedef uint32_t sif_option_t;
 
 /* --- SIZE FUNCTION OPTIONS --- */
 
-/* Bits 8-9 are free. They used to select between a histogram, a KDE and an
- * auto-binned histogram; the VSF is now always a plain histogram. */
+/* Bit 9 is free. Bits 8-9 used to select between a histogram, a KDE and an
+ * auto-binned histogram; the VSF is now always a plain histogram, and bit 8
+ * has since been taken by the spherical-evolution mapping below. */
+
+/* How the linear and non-linear density contrasts of a void are mapped onto
+ * each other. B94 is the Bernardeau (1994) fit, closed form and accurate to
+ * 0.2%; EXACT root-finds the Einstein-de Sitter expansion solution. */
+#define SIF_SPHERICAL_B94    (0u << 8)
+#define SIF_SPHERICAL_EXACT  (1u << 8)
+#define __SIF_SPHERICAL_MASK (1u << 8)
 
 #define SIF_VSF_BIN_LN     (0u << 10)
 #define SIF_VSF_BIN_LINEAR (1u << 10)

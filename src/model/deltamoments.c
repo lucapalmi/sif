@@ -279,3 +279,170 @@ real_t* sif_sigma_slope_pk(const real_t* k, const real_t* pk,
 
   return out;
 }
+
+/* --- Covariance across smoothing scales --- */
+
+/* Wavenumbers per pass, so the working set is bounded by the radius count
+ * rather than by the length of the P(k) table. */
+#define __SIF_COV_K_BLOCK 512
+
+/* Trapezoid weight of sample m in an integral over log k. Strictly positive
+ * for strictly increasing k, which is what makes the Gram form below positive
+ * semi-definite. */
+static double __log_trapezoid_weight(
+  const double* logk, uint32_t n, uint32_t m) {
+
+  const double lo = (m > 0) ? logk[m] - logk[m - 1] : 0.0;
+  const double hi = (m + 1 < n) ? logk[m + 1] - logk[m] : 0.0;
+  return 0.5 * (lo + hi);
+}
+
+double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
+  uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t* sigma,
+  real_t* high_k_fraction, sif_option_t opt) {
+
+  if (!radii || n_radii == 0) {
+    SIF_LOG_ERROR(__TAG, "no radii to evaluate");
+    return NULL;
+  }
+
+  if (n_radii > SIF_COV_MAX_RADII) {
+    SIF_LOG_ERROR(__TAG, "%u radii exceeds the maximum of %d", n_radii,
+      SIF_COV_MAX_RADII);
+    return NULL;
+  }
+
+  if (__validate_pk_table(k, pk, n_points) != SIF_OK)
+    return NULL;
+
+  for (uint32_t i = 0; i < n_radii; i++) {
+    if (!(radii[i] > 0.0f)) {
+      SIF_LOG_ERROR(__TAG, "radius %u is %g, must be strictly positive", i,
+        (double)radii[i]);
+      return NULL;
+    }
+  }
+
+  /* Stricter than sif_delta_moments_pk, which only ever squares the
+   * spectrum: the Gram accumulation takes a square root. */
+  for (uint32_t i = 0; i < n_points; i++) {
+    if (!(pk[i] >= 0.0f)) {
+      SIF_LOG_ERROR(__TAG,
+        "pk[%u] is %g; the covariance is accumulated as a Gram product and "
+        "needs a non-negative spectrum",
+        i, (double)pk[i]);
+      return NULL;
+    }
+  }
+
+  const bool gaussian =
+    (opt & __SIF_DELTA_FILTER_MASK) == SIF_DELTA_FILTER_GAUSSIAN;
+
+  SIF_LOG_INFO(__TAG,
+    "building a %u x %u covariance from a %u-point P(k) (%s window)", n_radii,
+    n_radii, n_points, gaussian ? "Gaussian" : "top-hat");
+
+  double* cov = sif_calloc_aligned(SIF_COV_SIZE(n_radii), sizeof(double));
+  double* logk = malloc((size_t)n_points * sizeof(double));
+  double* amp = malloc((size_t)n_points * sizeof(double));
+  double* block = sif_malloc_aligned(
+    (size_t)n_radii * __SIF_COV_K_BLOCK * sizeof(double));
+  double* high = calloc((size_t)n_radii, sizeof(double));
+
+  if (!cov || !logk || !amp || !block || !high) {
+    SIF_LOG_ERROR(__TAG, "failed to allocate the covariance workspace");
+    sif_free_aligned(cov);
+    free(logk);
+    free(amp);
+    sif_free_aligned(block);
+    free(high);
+    return NULL;
+  }
+
+  /*
+   * amp[m] = sqrt( w_m k_m^3 P(k_m) / 2 pi^2 ): the whole k-dependent part,
+   * hoisted out of the radius loop and square-rooted once, so a window
+   * evaluation is all that is left inside. The third power of k is the k^2 of
+   * the integral times the change of variable to log k.
+   */
+  const double prefactor = 1.0 / (2.0 * M_PI * M_PI);
+
+  for (uint32_t m = 0; m < n_points; m++)
+    logk[m] = log((double)k[m]);
+
+  for (uint32_t m = 0; m < n_points; m++) {
+    const double ki = (double)k[m];
+    const double w = __log_trapezoid_weight(logk, n_points, m);
+    amp[m] = sqrt(w * ki * ki * ki * (double)pk[m] * prefactor);
+  }
+
+  const double k_high = 0.5 * (double)k[n_points - 1];
+
+  for (uint32_t base = 0; base < n_points; base += __SIF_COV_K_BLOCK) {
+    const uint32_t len = (n_points - base < __SIF_COV_K_BLOCK)
+                           ? n_points - base
+                           : __SIF_COV_K_BLOCK;
+
+    /* The only transcendentals in the whole routine. */
+#pragma omp parallel for schedule(static)
+    for (uint32_t i = 0; i < n_radii; i++) {
+      const double R = (double)radii[i];
+      double* Ai = block + (size_t)i * __SIF_COV_K_BLOCK;
+
+      for (uint32_t m = 0; m < len; m++)
+        Ai[m] = amp[base + m] * __window(gaussian, (double)k[base + m] * R);
+    }
+
+    /* S += A A^T over this block of k. Rows are uneven because the triangle
+     * is packed, hence the dynamic schedule. */
+#pragma omp parallel for schedule(dynamic, 4)
+    for (uint32_t i = 0; i < n_radii; i++) {
+      const double* Ai = block + (size_t)i * __SIF_COV_K_BLOCK;
+
+      for (uint32_t j = 0; j <= i; j++) {
+        const double* Aj = block + (size_t)j * __SIF_COV_K_BLOCK;
+
+        double s = 0.0;
+        for (uint32_t m = 0; m < len; m++)
+          s += Ai[m] * Aj[m];
+
+        cov[SIF_COV_INDEX(i, j)] += s;
+      }
+
+      /* Diagonal only: the truncation diagnostic is about sigma. */
+      for (uint32_t m = 0; m < len; m++)
+        if ((double)k[base + m] > k_high)
+          high[i] += Ai[m] * Ai[m];
+    }
+  }
+
+  for (uint32_t i = 0; i < n_radii; i++) {
+    const double diag = cov[SIF_COV_INDEX(i, i)];
+
+    if (sigma)
+      sigma[i] = (real_t)(diag > 0.0 ? sqrt(diag) : 0.0);
+    if (high_k_fraction)
+      high_k_fraction[i] = (real_t)(diag > 0.0 ? high[i] / diag : 0.0);
+
+    if (!(diag > 0.0)) {
+      SIF_LOG_WARNING(__TAG,
+        "the covariance at radius %g integrated to zero; check that the P(k) "
+        "table covers the relevant scales",
+        (double)radii[i]);
+    } else if (high[i] / diag > __HIGH_K_WARN_LEVEL) {
+      SIF_LOG_WARNING(__TAG,
+        "at R = %g, %.1f%% of the variance comes from the top half of the "
+        "tabulated k range; the table is truncating the covariance",
+        (double)radii[i], 100.0 * high[i] / diag);
+    }
+  }
+
+  free(logk);
+  free(amp);
+  sif_free_aligned(block);
+  free(high);
+
+  SIF_LOG_INFO(__TAG, "covariance over %u radii evaluated from P(k)", n_radii);
+
+  return cov;
+}

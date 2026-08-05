@@ -67,4 +67,44 @@ static inline real_t sif_prng_next_real(sif_prng_state_t* state) {
 #endif
 }
 
+/*
+ * @brief Generate a random double in [0, 1), with the full 53 bits.
+ *
+ * Unlike sif_prng_next_real this does not follow real_t. At 24 bits the
+ * smallest non-zero draw is 6e-8, which puts a hard floor of about 5.7 sigma
+ * on the tail any Gaussian built on it can reach.
+ */
+static inline double sif_prng_next_double(sif_prng_state_t* state) {
+  return (double)(sif_prng_next_u64(state) >> 11) * (1.0 / (1ULL << 53));
+}
+
+/*
+ * @brief Two independent standard normal deviates, by the Box-Muller
+ * transform.
+ *
+ * Returned as a pair because one logarithm, one square root and one
+ * sine-cosine serve both, so a caller that keeps only the first pays twice per
+ * normal.
+ *
+ * @param state PRNG state, advanced by two draws
+ * @param z0 First deviate, written
+ * @param z1 Second deviate, written
+ */
+static inline void sif_prng_next_gaussian_pair(
+  sif_prng_state_t* state, double* z0, double* z1) {
+
+  /* 1 - u, since next_double can return exactly zero and log(0) would poison
+   * both deviates. */
+  const double u1 = 1.0 - sif_prng_next_double(state);
+  const double u2 = sif_prng_next_double(state);
+
+  const double r = sqrt(-2.0 * log(u1));
+  /* Spelled out: macros.h defines M_PI with an f suffix where the platform
+   * does not provide it, which would round the angle to float precision. */
+  const double theta = 6.283185307179586476925286766559 * u2;
+
+  *z0 = r * cos(theta);
+  *z1 = r * sin(theta);
+}
+
 #endif /* __SIF_RANDOM_H__ */

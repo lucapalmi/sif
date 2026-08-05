@@ -101,6 +101,7 @@ set(SOURCES
     src/model/deltamoments.c
     src/model/bbks.c
     src/model/sizefunction.c
+    src/model/excursionset.c
 
   # io
     src/io/core_io.c

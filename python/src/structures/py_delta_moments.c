@@ -138,6 +138,45 @@ static PyObject* sifDeltaMoments_get_r_star(PyObject* self_obj, void* closure) {
   return __derived(self_obj, sif_r_star_moments, "r_star");
 }
 
+/*
+ * The per-order accessor, mirroring sif_delta_moments_sigma. Equivalent to
+ * sigma[order], but names the available range instead of raising IndexError.
+ */
+static PyObject* sifDeltaMoments_moment(PyObject* self_obj, PyObject* args) {
+  sifDeltaMomentsObject* self = (sifDeltaMomentsObject*)self_obj;
+  int order;
+
+  if (!PyArg_ParseTuple(args, "i", &order))
+    return NULL;
+
+  if (!self->moments || !self->moments->sigma)
+    Py_RETURN_NONE;
+
+  if (order < 0 || order > (int)self->moments->order) {
+    PyErr_Format(PyExc_ValueError,
+      "order %d is out of range; these moments reach order %u", order,
+      self->moments->order);
+    return NULL;
+  }
+
+  const real_t* values =
+    sif_delta_moments_sigma(self->moments, (uint8_t)order);
+  if (!values) {
+    PyErr_Format(PyExc_RuntimeError, "order %d was not computed", order);
+    return NULL;
+  }
+
+  npy_intp dims[1] = {self->moments->n_radii};
+  return py_sif_wrap_borrowed(self_obj, 1, dims, (void*)values);
+}
+
+static PyMethodDef sifDeltaMoments_methods[] = {
+  {"moment", sifDeltaMoments_moment, METH_VARARGS,
+    "sigma_order across radii, as a read-only view into the moment set.\n"
+    "Equivalent to sigma[order], but rejects an order that was not computed "
+    "rather than indexing past the end."},
+  {NULL}};
+
 static PyGetSetDef sifDeltaMoments_getset[] = {
   {"n_radii", sifDeltaMoments_get_n_radii, NULL, "Number of smoothing radii",
     NULL},
@@ -169,6 +208,7 @@ PyTypeObject sifDeltaMomentsType = {
   .tp_dealloc = sifDeltaMoments_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
   .tp_doc = "Spectral moments sigma_0..sigma_order of the smoothed field.",
+  .tp_methods = sifDeltaMoments_methods,
   .tp_getset = sifDeltaMoments_getset,
   .tp_init = sifDeltaMoments_init,
   .tp_new = PyType_GenericNew,

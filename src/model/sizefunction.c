@@ -12,6 +12,7 @@
 #include "sif/model/sizefunction.h"
 
 #include "sif/model/deltamoments.h"
+#include "sif/model/excursionset.h"
 #include "structures/results_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -23,112 +24,177 @@
 
 #define __TAG "vsf_model"
 
-/* Below this the mode series is replaced by its analytic small-x limit; above
- * it the series converges. Jennings, Li & Hu (2013) eq. (8). */
-#define __SVDW_X_SWITCH 0.276
+/* --- Spherical evolution --- */
 
-/* The Gaussian factor kills the series long before this; the cap only stops a
- * pathological D from spinning. */
-#define __SVDW_MAX_TERMS 64
+/*
+ * Both contrasts are functions of the single parameter eta of the
+ * Einstein-de Sitter expansion solution, so converting between them means
+ * eliminating eta, which has no closed form.
+ */
 
-real_t sif_expansion_factor(real_t delta_v) {
-  const double d = (double)delta_v;
+/* Below this the closed forms lose more than half their digits to
+ * cancellation, while the series are exact to double precision. */
+#define __EDS_SERIES_SWITCH 1e-2
+
+#define __EDS_ETA_MIN 1e-8
+#define __EDS_ETA_MAX 30.0
+
+#define __BRENT_TOL      1e-12
+#define __BRENT_MAX_ITER 100
+
+/* sinh(eta) - eta, whose leading terms cancel exactly. */
+static double __sinh_minus(double eta) {
+  if (eta < __EDS_SERIES_SWITCH) {
+    const double e2 = eta * eta;
+    return eta * e2 / 6.0 * (1.0 + e2 / 20.0 + e2 * e2 / 840.0);
+  }
+  return sinh(eta) - eta;
+}
+
+/* delta_L(eta), decreasing from 0. */
+static double __eds_linear(double eta) {
+  return -0.15 * pow(6.0 * __sinh_minus(eta), 2.0 / 3.0);
+}
+
+/* delta_NL(eta), decreasing from 0 to -1. */
+static double __eds_nonlinear(double eta) {
+  if (eta < __EDS_SERIES_SWITCH) {
+    /* (9/2) (eta^3/6)^2 / (eta^2/2)^3 is exactly 1, so the ratio is taken
+     * between the bracketed corrections rather than the raw differences,
+     * which would cancel away nine digits before dividing. */
+    const double e2 = eta * eta;
+    const double num = 1.0 + e2 / 20.0 + e2 * e2 / 840.0;
+    const double den = 1.0 + e2 / 12.0 + e2 * e2 / 360.0;
+    return num * num / (den * den * den) - 1.0;
+  }
+  const double s = sinh(eta) - eta;
+  const double c = cosh(eta) - 1.0;
+  return 4.5 * s * s / (c * c * c) - 1.0;
+}
+
+/* Brent's method on g(eta) == target. Both g above are smooth and strictly
+ * monotone. */
+static int __brent(
+  double (*g)(double), double target, double lo, double hi, double* root) {
+
+  double a = lo, b = hi;
+  double fa = g(a) - target;
+  double fb = g(b) - target;
+
+  if (!(fa * fb < 0.0))
+    return SIF_ERR_RANGE;
+
+  if (fabs(fa) < fabs(fb)) {
+    double t = a; a = b; b = t;
+    t = fa; fa = fb; fb = t;
+  }
+
+  double c = a, fc = fa, d = 0.0;
+  bool bisected = true;
+
+  for (int it = 0; it < __BRENT_MAX_ITER; it++) {
+    if (fb == 0.0 || fabs(b - a) < __BRENT_TOL * (fabs(b) + 1.0))
+      break;
+
+    double s;
+    if (fa != fc && fb != fc) {
+      s = a * fb * fc / ((fa - fb) * (fa - fc)) +
+          b * fa * fc / ((fb - fa) * (fb - fc)) +
+          c * fa * fb / ((fc - fa) * (fc - fb));
+    } else {
+      s = b - fb * (b - a) / (fb - fa);
+    }
+
+    const double bound = 0.25 * (3.0 * a + b);
+    bool take_bisection =
+      !(s > fmin(bound, b) && s < fmax(bound, b)) ||
+      (bisected && fabs(s - b) >= 0.5 * fabs(b - c)) ||
+      (!bisected && fabs(s - b) >= 0.5 * fabs(c - d)) ||
+      (bisected && fabs(b - c) < __BRENT_TOL) ||
+      (!bisected && fabs(c - d) < __BRENT_TOL);
+
+    if (take_bisection)
+      s = 0.5 * (a + b);
+    bisected = take_bisection;
+
+    const double fs = g(s) - target;
+    d = c;
+    c = b;
+    fc = fb;
+
+    if (fa * fs < 0.0) {
+      b = s;
+      fb = fs;
+    } else {
+      a = s;
+      fa = fs;
+    }
+
+    if (fabs(fa) < fabs(fb)) {
+      double t = a; a = b; b = t;
+      t = fa; fa = fb; fb = t;
+    }
+  }
+
+  *root = b;
+  return SIF_OK;
+}
+
+real_t sif_delta_nonlinear(real_t delta_linear, sif_option_t opt) {
+  const double d = (double)delta_linear;
 
   if (!(d < 0.0)) {
-    SIF_LOG_ERROR(__TAG, "delta_v is %g, must be strictly negative", d);
+    SIF_LOG_ERROR(__TAG,
+      "delta_linear is %g, must be strictly negative; only the expanding "
+      "branch of the spherical solution is implemented",
+      d);
     return (real_t)0.0;
   }
 
-  const double c = SIF_SPHERICAL_EXPANSION_C;
-  return (real_t)pow(1.0 - d / c, c / 3.0);
+  if ((opt & __SIF_SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
+    const double c = SIF_SPHERICAL_EXPANSION_C;
+    return (real_t)(pow(1.0 - d / c, -c) - 1.0);
+  }
+
+  double eta;
+  if (__brent(__eds_linear, d, __EDS_ETA_MIN, __EDS_ETA_MAX, &eta) != SIF_OK) {
+    SIF_LOG_ERROR(__TAG,
+      "delta_linear = %g lies outside the range the parametric solution is "
+      "bracketed over",
+      d);
+    return (real_t)0.0;
+  }
+
+  return (real_t)__eds_nonlinear(eta);
 }
 
-/* --- Multiplicity function --- */
+real_t sif_delta_linear(real_t delta_nonlinear, sif_option_t opt) {
+  const double d = (double)delta_nonlinear;
 
-static double __f_ln_sigma(double sigma, double abs_dv, double dcal) {
-  /* D = |delta_v| / (delta_c + |delta_v|), x = (D / |delta_v|) sigma. */
-  const double x = dcal / abs_dv * sigma;
-
-  if (x <= __SVDW_X_SWITCH) {
-    /* The series does not converge as x -> 0: sum_j j sin(j pi D) diverges,
-     * so the limit has to come from the analytic form. */
-    return sqrt(2.0 / M_PI) * (abs_dv / sigma) *
-           exp(-0.5 * abs_dv * abs_dv / (sigma * sigma));
+  if (!(d < 0.0) || !(d > -1.0)) {
+    SIF_LOG_ERROR(__TAG,
+      "delta_nonlinear is %g, must lie strictly between -1 and 0; -1 is total "
+      "evacuation and is reached only asymptotically",
+      d);
+    return (real_t)0.0;
   }
 
-  double sum = 0.0;
-  for (int j = 1; j <= __SVDW_MAX_TERMS; j++) {
-    const double jpx = j * M_PI * x;
-    const double term =
-      exp(-0.5 * jpx * jpx) * j * M_PI * x * x * sin(j * M_PI * dcal);
-
-    sum += term;
-
-    /* The envelope is monotonic past the first term, so once it is negligible
-     * everything after it is too, regardless of the sine. */
-    if (j > 1 && fabs(exp(-0.5 * jpx * jpx) * j * M_PI * x * x) < 1e-16)
-      break;
+  if ((opt & __SIF_SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
+    const double c = SIF_SPHERICAL_EXPANSION_C;
+    return (real_t)(c * (1.0 - pow(1.0 + d, -1.0 / c)));
   }
 
-  return 2.0 * sum;
-}
-
-real_t* sif_multiplicity_function_svdw(
-  const real_t* sigma, uint32_t n, real_t delta_v, real_t delta_c) {
-
-  if (!sigma || n == 0) {
-    SIF_LOG_ERROR(__TAG, "invalid arguments to multiplicity_function_svdw");
-    return NULL;
+  double eta;
+  if (__brent(__eds_nonlinear, d, __EDS_ETA_MIN, __EDS_ETA_MAX, &eta) !=
+      SIF_OK) {
+    SIF_LOG_ERROR(__TAG,
+      "delta_nonlinear = %g lies outside the range the parametric solution is "
+      "bracketed over",
+      d);
+    return (real_t)0.0;
   }
 
-  if (!(delta_v < 0.0f)) {
-    SIF_LOG_ERROR(
-      __TAG, "delta_v is %g, must be strictly negative", (double)delta_v);
-    return NULL;
-  }
-
-  if (!(delta_c > 0.0f)) {
-    SIF_LOG_ERROR(
-      __TAG, "delta_c is %g, must be strictly positive", (double)delta_c);
-    return NULL;
-  }
-
-  const double abs_dv = fabs((double)delta_v);
-  const double dcal = abs_dv / ((double)delta_c + abs_dv);
-
-  if (dcal >= 0.75) {
-    SIF_LOG_WARNING(__TAG,
-      "D = %g exceeds the 3/4 the reference validates; the series is summed to "
-      "convergence but the underlying approximation is outside its tested "
-      "range",
-      dcal);
-  }
-
-  real_t* out = sif_calloc_aligned((size_t)n, sizeof(real_t));
-  if (!out) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the multiplicity array");
-    return NULL;
-  }
-
-  uint32_t n_bad = 0;
-
-#pragma omp parallel for schedule(static) reduction(+ : n_bad)
-  for (uint32_t i = 0; i < n; i++) {
-    if (!(sigma[i] > 0.0f)) {
-      n_bad++;
-      continue;
-    }
-    const double f = __f_ln_sigma((double)sigma[i], abs_dv, dcal);
-    out[i] = (real_t)(f > 0.0 ? f : 0.0);
-  }
-
-  if (n_bad > 0) {
-    SIF_LOG_WARNING(__TAG,
-      "%u of %u sigma values were not positive and were reported as zero",
-      n_bad, n);
-  }
-
-  return out;
+  return (real_t)__eds_linear(eta);
 }
 
 /* --- The two size functions --- */
@@ -145,8 +211,7 @@ real_t* sif_multiplicity_function_svdw(
  */
 static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
   uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t delta_v,
-  real_t delta_c, real_t expansion_factor, sif_option_t opt,
-  bool conserve_volume) {
+  real_t delta_c, sif_option_t opt, bool conserve_volume) {
 
   if (!radii || n_radii == 0) {
     SIF_LOG_ERROR(__TAG, "no radii to evaluate");
@@ -161,15 +226,12 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
     }
   }
 
-  double factor = (double)expansion_factor;
-  if (!(factor > 0.0)) {
-    const real_t derived = sif_expansion_factor(delta_v);
-    if (!(derived > 0.0f))
-      return NULL;
-    factor = (double)derived;
-    SIF_LOG_INFO(__TAG, "expansion factor derived from delta_v = %g: %g",
-      (double)delta_v, factor);
-  }
+  /* The expansion factor, (1 + delta_NL)^(-1/3): the same mass occupies
+   * 1/(1 + delta_NL) times the volume. */
+  const real_t delta_nl = sif_delta_nonlinear(delta_v, opt);
+  if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
+    return NULL;
+  const double factor = pow(1.0 + (double)delta_nl, -1.0 / 3.0);
 
   /* The barriers are calibrated against top-hat smoothing, so the window is
    * not the caller's to choose here. */
@@ -247,16 +309,16 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
 
 sif_size_function_t* sif_size_function_svdw(const real_t* k, const real_t* pk,
   uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t delta_v,
-  real_t delta_c, real_t expansion_factor, sif_option_t opt) {
+  real_t delta_c, sif_option_t opt) {
 
-  return __size_function(k, pk, n_points, radii, n_radii, delta_v, delta_c,
-    expansion_factor, opt, false);
+  return __size_function(
+    k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, false);
 }
 
 sif_size_function_t* sif_size_function_vdn(const real_t* k, const real_t* pk,
   uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t delta_v,
-  real_t delta_c, real_t expansion_factor, sif_option_t opt) {
+  real_t delta_c, sif_option_t opt) {
 
-  return __size_function(k, pk, n_points, radii, n_radii, delta_v, delta_c,
-    expansion_factor, opt, true);
+  return __size_function(
+    k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, true);
 }

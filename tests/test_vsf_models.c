@@ -9,6 +9,7 @@
  */
 #include "sif/core/system.h"
 #include "sif/model/deltamoments.h"
+#include "sif/model/excursionset.h"
 #include "sif/model/sizefunction.h"
 #include "sif/structures/deltamoments.h"
 #include "sif/structures/sizefunction.h"
@@ -156,33 +157,101 @@ static void test_sigma_slope_vs_finite_difference(void) {
   free(pk);
 }
 
-/* The expansion factor inverts the barrier relation it was derived from. */
-static void test_expansion_factor(void) {
-  printf("expansion factor\n");
+/*
+ * The linear/non-linear mapping, both ways and both methods.
+ *
+ * The round trip is the check that carries the weight: it holds separately for
+ * each method, with no reference value to agree on, so it tests the fit and
+ * the root-find independently rather than against each other.
+ */
+static void test_delta_mapping(void) {
+  printf("linear <-> non-linear density contrast\n");
 
-  const double c = SIF_SPHERICAL_EXPANSION_C;
-  const double barriers[4] = {-2.7, -1.8, -1.24, -0.8};
+  const double barriers[5] = {-2.7, -1.8, -1.24, -0.8, -0.5};
+  const sif_option_t methods[2] = {SIF_SPHERICAL_B94, SIF_SPHERICAL_EXACT};
+  const char* names[2] = {"B94", "exact"};
 
-  for (int i = 0; i < 4; i++) {
-    const double f = (double)sif_expansion_factor((real_t)barriers[i]);
+  for (int m = 0; m < 2; m++) {
+    double worst_trip = 0.0;
 
-    /* Invert: delta_v = c [1 - (r_NL/r_L)^(3/c)]. */
-    const double back = c * (1.0 - pow(f, 3.0 / c));
-    CHECK(fabs(back - barriers[i]) < 1e-4,
-      "delta_v=%g gave F=%g which inverts to %g", barriers[i], f, back);
+    for (int i = 0; i < 5; i++) {
+      const real_t dnl = sif_delta_nonlinear((real_t)barriers[i], methods[m]);
 
-    /* And the nonlinear density it implies, rho_v/rho_m = F^-3. */
-    printf("    delta_v=%+.2f  ->  F=%.4f  (rho_v/rho_m = %.3f)\n",
-      barriers[i], f, 1.0 / (f * f * f));
+      CHECK(dnl < 0.0f && dnl > -1.0f,
+        "%s: delta_L=%g gave delta_NL=%g, outside (-1, 0)", names[m],
+        barriers[i], (double)dnl);
+
+      const real_t back = sif_delta_linear(dnl, methods[m]);
+      const double rel = fabs((double)back - barriers[i]) / fabs(barriers[i]);
+      if (rel > worst_trip)
+        worst_trip = rel;
+    }
+
+    CHECK(worst_trip < 1e-5, "%s: the round trip is off by %.3e", names[m],
+      worst_trip);
+    printf("  %-5s round trip worst relative error %.2e\n", names[m],
+      worst_trip);
   }
 
-  /* Shell crossing: the reference quotes about 1.7. */
-  const double f_sc = (double)sif_expansion_factor(-2.7f);
-  CHECK(fabs(f_sc - 1.69) < 0.02,
-    "shell crossing gave F=%g, expected about 1.69", f_sc);
+  /*
+   * The fit against what it is a fit to. Bernardeau quotes 0.2%, and it is
+   * quoted on the expansion factor rather than on the contrast, so that is
+   * what gets compared.
+   */
+  double worst_f = 0.0;
+  for (int i = 0; i < 5; i++) {
+    const double a =
+      (double)sif_delta_nonlinear((real_t)barriers[i], SIF_SPHERICAL_B94);
+    const double b =
+      (double)sif_delta_nonlinear((real_t)barriers[i], SIF_SPHERICAL_EXACT);
 
-  CHECK(sif_expansion_factor(0.5f) == 0.0f,
-    "a positive barrier was accepted");
+    const double fa = pow(1.0 + a, -1.0 / 3.0);
+    const double fb = pow(1.0 + b, -1.0 / 3.0);
+    const double rel = fabs(fa - fb) / fb;
+    if (rel > worst_f)
+      worst_f = rel;
+
+    printf("    delta_L=%+.2f  ->  F = %.4f (B94) vs %.4f (exact)\n",
+      barriers[i], fa, fb);
+  }
+  CHECK(worst_f < 3e-3,
+    "the fit and the exact solution disagree by %.3e on the expansion factor, "
+    "beyond the 0.2%% the fit claims",
+    worst_f);
+
+  /* Shell crossing, the one value the literature pins down. */
+  for (int m = 0; m < 2; m++) {
+    const double d =
+      (double)sif_delta_nonlinear(-2.7f, methods[m]);
+    const double f = pow(1.0 + d, -1.0 / 3.0);
+    CHECK(fabs(f - 1.69) < 0.02,
+      "%s: shell crossing gave F=%g, expected about 1.69", names[m], f);
+
+    /* And the non-linear contrast the reference implementations default to. */
+    CHECK(fabs(d - (-0.795)) < 0.005,
+      "%s: shell crossing gave delta_NL=%g, expected about -0.795", names[m],
+      d);
+  }
+
+  /* The linear limit: a barely underdense region has not evolved. */
+  for (int m = 0; m < 2; m++) {
+    const double tiny = -1e-4;
+    const double d = (double)sif_delta_nonlinear((real_t)tiny, methods[m]);
+    CHECK(fabs(d - tiny) < 1e-6,
+      "%s: delta_L=%g should map to nearly itself, gave %g", names[m], tiny, d);
+  }
+
+  /* Out of the expanding branch, both directions, both methods. */
+  for (int m = 0; m < 2; m++) {
+    CHECK(sif_delta_nonlinear(0.5f, methods[m]) == 0.0f,
+      "%s: a positive linear contrast was accepted", names[m]);
+    CHECK(sif_delta_nonlinear(0.0f, methods[m]) == 0.0f,
+      "%s: a zero linear contrast was accepted", names[m]);
+    CHECK(sif_delta_linear(-1.0f, methods[m]) == 0.0f,
+      "%s: total evacuation was accepted", names[m]);
+    CHECK(sif_delta_linear(0.5f, methods[m]) == 0.0f,
+      "%s: a positive non-linear contrast was accepted", names[m]);
+  }
 }
 
 /* The multiplicity function has to be continuous across its branch. */
@@ -248,12 +317,15 @@ static void test_svdw_vdn_ratio(void) {
     radii[i] = (real_t)exp(log(1.0) + (log(25.0) - log(1.0)) * i / (n_r - 1.0));
 
   const real_t dv = -2.7f, dc = 1.686f;
-  const double f = (double)sif_expansion_factor(dv);
+
+  /* The same expansion factor the models derive internally when passed 0. */
+  const double f =
+    pow(1.0 + (double)sif_delta_nonlinear(dv, SIF_SPHERICAL_B94), -1.0 / 3.0);
 
   sif_size_function_t* sw =
-    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, 0.0f, SIF_DEFAULT);
+    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, SIF_DEFAULT);
   sif_size_function_t* vdn =
-    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, 0.0f, SIF_DEFAULT);
+    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, SIF_DEFAULT);
 
   CHECK(sw && vdn, "size functions returned NULL");
 
@@ -290,7 +362,7 @@ static void test_svdw_vdn_ratio(void) {
 
   /* The linear convention is the log one over R. */
   sif_size_function_t* per_r = sif_size_function_vdn(
-    k, pk, N_K, radii, n_r, dv, dc, 0.0f, SIF_VSF_BIN_LINEAR);
+    k, pk, N_K, radii, n_r, dv, dc, SIF_VSF_BIN_LINEAR);
   if (per_r && vdn) {
     double worst = 0.0;
     for (uint32_t i = 0; i < n_r; i++) {
@@ -302,13 +374,32 @@ static void test_svdw_vdn_ratio(void) {
     CHECK(worst < 1e-5, "dn/dR is not dn/dlnR over R (worst %.3e)", worst);
   }
 
-  /* An explicit factor overrides the derived one, and 1.7 is the value the
-   * reference actually uses alongside delta_v = -2.7. */
-  sif_size_function_t* forced =
-    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, 1.7f, SIF_DEFAULT);
+  /*
+   * The spherical-evolution option has to reach the mapping. Both methods
+   * agree to well under a percent on the expansion factor, so the two curves
+   * must differ -- proving the flag is threaded through -- but only slightly.
+   */
+  sif_size_function_t* forced = sif_size_function_svdw(
+    k, pk, N_K, radii, n_r, dv, dc, SIF_SPHERICAL_EXACT);
   if (forced && sw) {
-    CHECK(forced->vsf[0] != sw->vsf[0],
-      "an explicit expansion factor did not override the derived one");
+    double worst = 0.0;
+    int differs = 0;
+    for (uint32_t i = 0; i < n_r; i++) {
+      if (forced->vsf[i] != sw->vsf[i])
+        differs = 1;
+      const double rel =
+        fabs((double)forced->vsf[i] - (double)sw->vsf[i]) / (double)sw->vsf[i];
+      if (rel > worst)
+        worst = rel;
+    }
+    CHECK(differs,
+      "SIF_SPHERICAL_EXACT gave the same curve as B94; the option is not "
+      "reaching the mapping");
+    CHECK(worst < 0.02,
+      "the two spherical-evolution methods give size functions differing by "
+      "%.3e, far more than their agreement on the expansion factor allows",
+      worst);
+    printf("    B94 vs exact: worst relative difference %.2e\n", worst);
   }
 
   sif_size_function_free(sw);
@@ -328,7 +419,7 @@ int main(void) {
 
   test_sigma_slope_closed_form();
   test_sigma_slope_vs_finite_difference();
-  test_expansion_factor();
+  test_delta_mapping();
   test_multiplicity_continuity();
   test_svdw_vdn_ratio();
 
