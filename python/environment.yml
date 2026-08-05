@@ -1,0 +1,14 @@
+name: sif-env
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python>=3.9
+  - pip
+  - numpy>=1.20
+  - scikit-build-core
+  - cmake>=3.15
+  - ninja
+  - c-compiler
+  - fftw
+  - llvm-openmp

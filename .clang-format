@@ -1,0 +1,40 @@
+Language: C
+BasedOnStyle: LLVM
+
+# Indentation
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ContinuationIndentWidth: 2
+
+# Namespaces
+NamespaceIndentation: All
+CompactNamespaces: false
+
+AlignConsecutiveMacros: true
+IndentPPDirectives: AfterHash
+
+# Access modifiers (private/public)
+AccessModifierOffset: -2
+
+# Braces
+BreakBeforeBraces: Attach
+AlwaysBreakTemplateDeclarations: Yes
+PenaltyReturnTypeOnItsOwnLine: 1000
+
+# Long lines
+ColumnLimit: 80
+AlignAfterOpenBracket: DontAlign
+BinPackParameters: true
+BinPackArguments: true
+AllowAllParametersOfDeclarationOnNextLine: true
+AllowAllArgumentsOnNextLine: true
+
+
+# Pointers/references
+PointerAlignment: Left
+ReferenceAlignment: Left 
+
+# Misc
+Cpp11BracedListStyle: true
+SortIncludes: CaseSensitive

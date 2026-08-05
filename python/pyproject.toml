@@ -1,0 +1,25 @@
+[build-system]
+requires = ["scikit-build-core>=0.5.0", "numpy>=1.20"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pysif"
+version = "0.1.0"
+description = "Python bindings for the sif library"
+authors = [
+    { name = "Luca Palmieri", email = "luca.palmieri16@studio.unibo.it" },
+]
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.20"]
+
+[project.urls]
+Homepage = "https://gitlab.com/lpalmi/sif"
+
+[tool.scikit-build]
+cmake.version = ">=3.15"
+ninja.version = ">=1.5"
+build-dir = "build/{wheel_tag}"
+
+cmake.build-type = "Release"
+
+wheel.packages = ["pysif"]
