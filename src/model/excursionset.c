@@ -524,12 +524,17 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
 
 real_t* sif_multiplicity_function_ep(const real_t* radii, uint32_t n_radii,
   const double* cov, const real_t* barrier, uint64_t n_paths, uint64_t seed,
-  sif_option_t opt) {
+  uint64_t* counts_out, sif_option_t opt) {
 
   uint64_t* counts = sif_first_crossing_counts_ep(
     radii, n_radii, cov, barrier, n_paths, seed, opt);
   if (!counts)
     return NULL;
+
+  if (counts_out) {
+    for (uint32_t i = 0; i < n_radii; i++)
+      counts_out[i] = counts[i];
+  }
 
   const uint32_t n_bins = n_radii - 1;
 

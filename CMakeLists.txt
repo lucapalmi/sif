@@ -33,6 +33,10 @@ option(SIF_BUILD_TESTS "Build the sif test suite" ${SIF_TESTS_DEFAULT})
 # to NDEBUG, which the release preset never defines.
 option(SIF_DEBUG_CHECKS "Enable internal assertions" OFF)
 
+# Offline data-generation programs. Not part of the library and not built by
+# default: they exist to produce emulator training sets on a cluster.
+option(SIF_BUILD_TOOLS "Build the offline tools in tools/" OFF)
+
 # OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -102,6 +106,7 @@ set(SOURCES
     src/model/bbks.c
     src/model/sizefunction.c
     src/model/excursionset.c
+    src/model/ep_upcrossing.c
 
   # io
     src/io/core_io.c
@@ -183,6 +188,15 @@ endif()
 if(SIF_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
+endif()
+
+if(SIF_BUILD_TOOLS)
+  foreach(_tool ep_gen_case ep_validate)
+    add_executable(${_tool} tools/${_tool}.c)
+    target_link_libraries(${_tool} PRIVATE sif m)
+    set_target_properties(${_tool} PROPERTIES
+      RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
+  endforeach()
 endif()
 
 # installation

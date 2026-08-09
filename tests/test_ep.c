@@ -678,10 +678,26 @@ static void test_binning(void) {
 
   uint64_t* c = sif_first_crossing_counts_ep(
     radii, n, cov, barrier, n_paths, 4242u, SIF_DEFAULT);
-  real_t* f = sif_multiplicity_function_ep(
-    radii, n, cov, barrier, n_paths, 4242u, SIF_DEFAULT);
 
-  CHECK(c && f, "the counts or the multiplicity returned NULL");
+  uint64_t* c_out = calloc(n, sizeof(uint64_t));
+  real_t* f = sif_multiplicity_function_ep(
+    radii, n, cov, barrier, n_paths, 4242u, c_out, SIF_DEFAULT);
+
+  CHECK(c && c_out && f, "the counts or the multiplicity returned NULL");
+
+  /* The out-parameter exists so nobody has to run the walk twice to see the
+   * counts, which makes "it returns what the second run would have" the whole
+   * of its contract. Same seed, so this is exact, not statistical. */
+  if (c && c_out) {
+    uint32_t mismatched = 0;
+    for (uint32_t i = 0; i < n; i++)
+      if (c[i] != c_out[i])
+        mismatched++;
+    CHECK(mismatched == 0,
+      "the counts out-parameter disagrees with first_crossing_counts_ep at "
+      "%u of %u radii",
+      mismatched, n);
+  }
 
   if (c && f) {
     /* The two calls share a seed, so they are the same ensemble. */
@@ -717,6 +733,7 @@ static void test_binning(void) {
   }
 
   sif_free_aligned(c);
+  free(c_out);
   sif_free_aligned(f);
   free(barrier);
   sif_free_aligned(cov);
@@ -807,7 +824,7 @@ static void test_guards(void) {
 
   {
     real_t* f = sif_multiplicity_function_ep(
-      radii, 1, cov, barrier, 100, 1u, SIF_DEFAULT);
+      radii, 1, cov, barrier, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(f == NULL, "the multiplicity accepted a single radius");
     sif_free_aligned(f);
   }
@@ -859,7 +876,7 @@ static void test_covariance_diagonal(void) {
 
   for (int w = 0; w < 2; w++) {
     double* cov =
-      sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, windows[w]);
+      sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, NULL, windows[w]);
     sif_delta_moments_t* m =
       sif_delta_moments_pk(k, pk, N_K, radii, n, 0, windows[w]);
 
@@ -929,8 +946,8 @@ static void test_covariance_properties(void) {
   for (uint32_t i = 0; i < n; i++)
     scaled[i] = (real_t)(lambda * (double)radii[i]);
 
-  double* a = sif_delta_covariance_pk(k, pk, N_K, radii, n, NULL, NULL, SIF_DEFAULT);
-  double* b = sif_delta_covariance_pk(k, pk, N_K, scaled, n, NULL, NULL, SIF_DEFAULT);
+  double* a = sif_delta_covariance_pk(k, pk, N_K, radii, n, NULL, NULL, NULL, SIF_DEFAULT);
+  double* b = sif_delta_covariance_pk(k, pk, N_K, scaled, n, NULL, NULL, NULL, SIF_DEFAULT);
 
   CHECK(a && b, "the covariance returned NULL");
 
@@ -988,6 +1005,179 @@ static void test_covariance_properties(void) {
 }
 
 /* --- The barrier --- */
+
+/*
+ * The derivative variance, <(d delta / dS)^2>, and the dimensionless quantity
+ * it exists to serve:
+ *
+ *     Gamma^2 = 1 / (4 S <(d delta / dS)^2>)
+ *
+ * which is the squared correlation between the walk and its own derivative.
+ *
+ * The point of computing this under the integral rather than differencing the
+ * covariance is that the differenced form converges only at second order in
+ * the radius spacing, so it reports a property of the caller's grid rather
+ * than of the field. All three checks below are about exactly that:
+ *
+ *   - Gamma^2 is bounded in (0, 1] by Cauchy-Schwarz, since <delta delta'> is
+ *     identically 1/2 whatever the spectrum
+ *   - for a power-law spectrum the walk is self-similar, so Gamma^2 must not
+ *     depend on R at all. No quadrature enters that statement, which makes it
+ *     the sharpest available assertion
+ *   - the differenced form has to converge TO this one, at second order, or
+ *     the two are not computing the same thing
+ */
+static void test_deriv_variance(void) {
+  printf("derivative variance and Gamma^2\n");
+
+  real_t* k = malloc(N_K * sizeof(real_t));
+  real_t* pk = malloc(N_K * sizeof(real_t));
+  __power_law(k, pk, -2.0);
+
+  /* --- self-similarity, and the bound --- */
+  {
+    const uint32_t n = 24;
+    real_t* radii = __log_radii(n, 2.0, 30.0);
+    real_t* sigma = malloc(n * sizeof(real_t));
+    double* dvar = malloc(n * sizeof(double));
+
+    double* cov = sif_delta_covariance_pk(
+      k, pk, N_K, radii, n, sigma, NULL, dvar, SIF_DEFAULT);
+    CHECK(cov != NULL, "the covariance returned NULL");
+
+    if (cov) {
+      double g_min = 1e300, g_max = -1e300;
+      int out_of_range = 0;
+
+      for (uint32_t i = 0; i < n; i++) {
+        const double S = (double)sigma[i] * (double)sigma[i];
+        const double g2 = 1.0 / (4.0 * S * dvar[i]);
+        if (!(g2 > 0.0 && g2 <= 1.0))
+          out_of_range++;
+        if (g2 < g_min)
+          g_min = g2;
+        if (g2 > g_max)
+          g_max = g2;
+      }
+
+      CHECK(out_of_range == 0,
+        "Gamma^2 left (0, 1] at %u of %u radii; <delta delta'> is 1/2 exactly, "
+        "so Cauchy-Schwarz forbids it",
+        out_of_range, n);
+
+      /*
+       * Self-similar, so the spread is quadrature error and nothing else. It
+       * bottoms out around 7e-4 and does NOT improve with more k samples:
+       * <(d delta / dR)^2> weights the integrand by k^4, which pushes its
+       * support to where the top-hat oscillates fastest, and past a point the
+       * trapezoid is aliasing those oscillations rather than resolving them.
+       * The header already warns about this for the covariance itself. The
+       * bound here is set to catch a real defect while sitting above that
+       * floor.
+       */
+      const double spread = (g_max - g_min) / g_max;
+      CHECK(spread < 3e-3,
+        "Gamma^2 varies by a relative %.3e across the radii of a power-law "
+        "spectrum, which is self-similar and must give a constant",
+        spread);
+
+      printf("  power law: Gamma^2 = %.6f, spread %.2e over %u radii\n", g_max,
+        spread, n);
+    }
+
+    sif_free_aligned(cov);
+    free(dvar);
+    free(sigma);
+    free(radii);
+  }
+
+  /*
+   * The property the exact form exists for: it does not depend on how finely
+   * the caller sampled `radii`, and the finite difference it replaces does.
+   *
+   * The fine grid is chosen so that every fourth of its radii coincides with a
+   * coarse one, which makes the comparison exact rather than interpolated.
+   */
+  {
+    const uint32_t n_c = 40;
+    const uint32_t n_f = 4 * (n_c - 1) + 1; /* fine[4i] == coarse[i] */
+
+    real_t* rc = __log_radii(n_c, 2.0, 30.0);
+    real_t* rf = __log_radii(n_f, 2.0, 30.0);
+    real_t* sc = malloc(n_c * sizeof(real_t));
+    real_t* sf = malloc(n_f * sizeof(real_t));
+    double* dc = malloc(n_c * sizeof(double));
+    double* df = malloc(n_f * sizeof(double));
+
+    double* cc =
+      sif_delta_covariance_pk(k, pk, N_K, rc, n_c, sc, NULL, dc, SIF_DEFAULT);
+    double* cf =
+      sif_delta_covariance_pk(k, pk, N_K, rf, n_f, sf, NULL, df, SIF_DEFAULT);
+
+    CHECK(cc && cf, "the covariance returned NULL");
+
+    if (cc && cf) {
+      double worst_exact = 0.0, worst_fd = 0.0;
+
+      for (uint32_t i = 1; i + 1 < n_c; i++) {
+        const uint32_t j = 4 * i;
+
+        /* The exact form, coarse against fine at the same radius. */
+        const double rel = fabs(dc[i] - df[j]) / df[j];
+        if (rel > worst_exact)
+          worst_exact = rel;
+
+        /* The differenced form on the coarse grid, against the exact value. */
+        const double Sp = (double)sc[i + 1] * (double)sc[i + 1];
+        const double Sm = (double)sc[i - 1] * (double)sc[i - 1];
+        const double h = Sp - Sm;
+        const double fd =
+          (Sp + Sm - 2.0 * cc[SIF_COV_INDEX(i + 1, i - 1)]) / (h * h);
+
+        const double rel_fd = fabs(fd - dc[i]) / dc[i];
+        if (rel_fd > worst_fd)
+          worst_fd = rel_fd;
+      }
+
+      CHECK(worst_exact < 2e-3,
+        "the derivative variance moved by a relative %.3e when the radius grid "
+        "was refined 4x; it is supposed to be a property of the field, not of "
+        "the grid",
+        worst_exact);
+
+      /*
+       * And the converse, which is why this parameter exists at all. The
+       * stencil is only first order here whatever the spacing -- the
+       * covariance carries a |S1 - S2|^3 term across its diagonal, so the
+       * leading error of a mixed second difference does not cancel -- and at
+       * a realistic radius count it is wrong by percent. If this check ever
+       * starts failing because the two agree, the exact path has probably
+       * been quietly replaced by a difference.
+       */
+      CHECK(worst_fd > 20.0 * worst_exact,
+        "the differenced derivative variance is within %.3e of the exact one, "
+        "against the exact form's own %.3e grid drift; the two are not "
+        "supposed to be this close at %u radii",
+        worst_fd, worst_exact, n_c);
+
+      printf("  grid refinement 4x: exact moves %.2e, finite difference is "
+             "%.2e off\n",
+        worst_exact, worst_fd);
+    }
+
+    sif_free_aligned(cc);
+    sif_free_aligned(cf);
+    free(df);
+    free(dc);
+    free(sf);
+    free(sc);
+    free(rf);
+    free(rc);
+  }
+
+  free(pk);
+  free(k);
+}
 
 static void test_barrier_smt(void) {
   printf("Sheth-Mo-Tormen barrier\n");
@@ -1076,7 +1266,7 @@ static void test_pipeline(void) {
   {
     const real_t eight[1] = {8.0f};
     real_t s8[1];
-    double* c = sif_delta_covariance_pk(k, pk, N_K, eight, 1, s8, NULL, SIF_DEFAULT);
+    double* c = sif_delta_covariance_pk(k, pk, N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
     if (c) {
       const double scale = (0.8 / (double)s8[0]) * (0.8 / (double)s8[0]);
       for (uint32_t i = 0; i < N_K; i++)
@@ -1092,7 +1282,7 @@ static void test_pipeline(void) {
   real_t* sigma = malloc(n * sizeof(real_t));
 
   double* cov =
-    sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, SIF_DEFAULT);
+    sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, NULL, SIF_DEFAULT);
   CHECK(cov != NULL, "the covariance returned NULL");
 
   real_t* barrier = cov ? sif_barrier_smt(sigma, n, 0.3f, 0.2f, 0.87f) : NULL;
@@ -1107,7 +1297,7 @@ static void test_pipeline(void) {
     CHECK(falling, "sigma does not decrease with radius");
 
     real_t* f = sif_multiplicity_function_ep(
-      radii, n, cov, barrier, n_paths, 1234u, SIF_DEFAULT);
+      radii, n, cov, barrier, n_paths, 1234u, NULL, SIF_DEFAULT);
     CHECK(f != NULL, "the multiplicity returned NULL on the real pipeline");
 
     if (f) {
@@ -1151,22 +1341,22 @@ static void test_covariance_guards(void) {
   const real_t radii[3] = {2.0f, 8.0f, 20.0f};
   double* r;
 
-  r = sif_delta_covariance_pk(NULL, pk, N_K, radii, 3, NULL, NULL, SIF_DEFAULT);
+  r = sif_delta_covariance_pk(NULL, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL k was accepted");
   sif_free_aligned(r);
 
-  r = sif_delta_covariance_pk(k, pk, N_K, NULL, 3, NULL, NULL, SIF_DEFAULT);
+  r = sif_delta_covariance_pk(k, pk, N_K, NULL, 3, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
 
-  r = sif_delta_covariance_pk(k, pk, N_K, radii, 0, NULL, NULL, SIF_DEFAULT);
+  r = sif_delta_covariance_pk(k, pk, N_K, radii, 0, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "zero radii were accepted");
   sif_free_aligned(r);
 
   {
     const real_t bad_radii[3] = {2.0f, 0.0f, 20.0f};
     r = sif_delta_covariance_pk(
-      k, pk, N_K, bad_radii, 3, NULL, NULL, SIF_DEFAULT);
+      k, pk, N_K, bad_radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero radius was accepted");
     sif_free_aligned(r);
   }
@@ -1176,7 +1366,7 @@ static void test_covariance_guards(void) {
      * takes a square root of k^3 P(k). */
     real_t saved = pk[10];
     pk[10] = -1.0f;
-    r = sif_delta_covariance_pk(k, pk, N_K, radii, 3, NULL, NULL, SIF_DEFAULT);
+    r = sif_delta_covariance_pk(k, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a negative P(k) was accepted");
     sif_free_aligned(r);
     pk[10] = saved;
@@ -1187,7 +1377,7 @@ static void test_covariance_guards(void) {
     memcpy(k_bad, k, N_K * sizeof(real_t));
     k_bad[10] = k_bad[9]; /* not strictly increasing */
     r = sif_delta_covariance_pk(
-      k_bad, pk, N_K, radii, 3, NULL, NULL, SIF_DEFAULT);
+      k_bad, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a non-increasing k table was accepted");
     sif_free_aligned(r);
     free(k_bad);
@@ -1206,6 +1396,7 @@ int main(void) {
 
   test_covariance_diagonal();
   test_covariance_properties();
+  test_deriv_variance();
   test_barrier_smt();
   test_covariance_guards();
 

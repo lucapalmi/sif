@@ -7,13 +7,28 @@
 #include <numpy/arrayobject.h>
 #include <string.h>
 
+/* Which G(gamma, w) to evaluate. Shared by every entry point here. */
+static int py_sif_bbks_g_option(const char* g, sif_option_t* opt) {
+  if (!g || strcmp(g, "fitted") == 0) {
+    *opt = SIF_BBKS_G_FITTED;
+    return 0;
+  }
+  if (strcmp(g, "exact") == 0) {
+    *opt = SIF_BBKS_G_EXACT;
+    return 0;
+  }
+  PyErr_Format(
+    PyExc_ValueError, "g must be 'fitted' or 'exact', got '%s'", g);
+  return -1;
+}
+
 PyObject* py_sif_g_bbks(PyObject* self, PyObject* args, PyObject* kwds) {
   double gamma, w;
-  int exact = 0;
-  static char* kwlist[] = {"gamma", "w", "exact", NULL};
+  const char* g_mode = NULL;
+  static char* kwlist[] = {"gamma", "w", "g", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "dd|p", kwlist, &gamma, &w, &exact))
+        args, kwds, "dd|z", kwlist, &gamma, &w, &g_mode))
     return NULL;
 
   if (gamma <= 0.0 || gamma >= 1.0) {
@@ -21,7 +36,9 @@ PyObject* py_sif_g_bbks(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
   }
 
-  const sif_option_t options = exact ? SIF_BBKS_G_EXACT : SIF_BBKS_G_FITTED;
+  sif_option_t options;
+  if (py_sif_bbks_g_option(g_mode, &options) != 0)
+    return NULL;
   return PyFloat_FromDouble(
     (double)sif_g_bbks((real_t)gamma, (real_t)w, options));
 }
@@ -31,16 +48,18 @@ PyObject* py_sif_differential_number_density_bbks(
   PyObject* nu_obj;
   PyObject* gamma_obj;
   PyObject* r_star_obj;
-  int exact = 0;
+  const char* g_mode = NULL;
 
-  static char* kwlist[] = {"nu", "gamma", "r_star", "exact", NULL};
+  static char* kwlist[] = {"nu", "gamma", "r_star", "g", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|p", kwlist, &nu_obj,
-        &gamma_obj, &r_star_obj, &exact)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|z", kwlist, &nu_obj,
+        &gamma_obj, &r_star_obj, &g_mode)) {
     return NULL;
   }
 
-  const sif_option_t options = exact ? SIF_BBKS_G_EXACT : SIF_BBKS_G_FITTED;
+  sif_option_t options;
+  if (py_sif_bbks_g_option(g_mode, &options) != 0)
+    return NULL;
 
   PyArrayObject* nu_arr = py_sif_as_real_array(nu_obj, "nu");
   if (!nu_arr)
@@ -96,12 +115,12 @@ PyObject* py_sif_cumulative_number_density_bbks(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* moments_obj;
   double delta;
-  int exact = 0;
+  const char* g_mode = NULL;
 
-  static char* kwlist[] = {"moments", "delta", "exact", NULL};
+  static char* kwlist[] = {"moments", "delta", "g", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|p", kwlist,
-        &sifDeltaMomentsType, &moments_obj, &delta, &exact)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|z", kwlist,
+        &sifDeltaMomentsType, &moments_obj, &delta, &g_mode)) {
     return NULL;
   }
 
@@ -121,7 +140,9 @@ PyObject* py_sif_cumulative_number_density_bbks(
     return NULL;
   }
 
-  const sif_option_t options = exact ? SIF_BBKS_G_EXACT : SIF_BBKS_G_FITTED;
+  sif_option_t options;
+  if (py_sif_bbks_g_option(g_mode, &options) != 0)
+    return NULL;
   real_t* values = NULL;
 
   Py_BEGIN_ALLOW_THREADS values =
@@ -142,16 +163,18 @@ PyObject* py_sif_size_function_bbks(
   PyObject* moments_obj;
   double delta;
   const char* units = NULL;
-  int exact = 0;
+  const char* g_mode = NULL;
 
-  static char* kwlist[] = {"moments", "delta", "units", "exact", NULL};
+  static char* kwlist[] = {"moments", "delta", "units", "g", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|zp", kwlist,
-        &sifDeltaMomentsType, &moments_obj, &delta, &units, &exact)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!d|zz", kwlist,
+        &sifDeltaMomentsType, &moments_obj, &delta, &units, &g_mode)) {
     return NULL;
   }
 
-  sif_option_t options = exact ? SIF_BBKS_G_EXACT : SIF_BBKS_G_FITTED;
+  sif_option_t options;
+  if (py_sif_bbks_g_option(g_mode, &options) != 0)
+    return NULL;
 
   if (units == NULL || strcmp(units, "ln_r") == 0) {
     options |= SIF_VSF_BIN_LN;

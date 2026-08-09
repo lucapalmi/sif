@@ -299,7 +299,7 @@ static double __log_trapezoid_weight(
 
 double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
   uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t* sigma,
-  real_t* high_k_fraction, sif_option_t opt) {
+  real_t* high_k_fraction, double* deriv_variance, sif_option_t opt) {
 
   if (!radii || n_radii == 0) {
     SIF_LOG_ERROR(__TAG, "no radii to evaluate");
@@ -349,13 +349,37 @@ double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
     (size_t)n_radii * __SIF_COV_K_BLOCK * sizeof(double));
   double* high = calloc((size_t)n_radii, sizeof(double));
 
-  if (!cov || !logk || !amp || !block || !high) {
+  /*
+   * The derivative pass. Allocated only when asked for: the block alone is
+   * another n_radii x 512 doubles, which at the maximum radius count is not
+   * something to carry for callers who never look at it.
+   *
+   * dblock[i][m] holds amp_m k_m W'(k_m R_i), so that summing dblock against
+   * block gives dS/dR and summing it against itself gives <(d delta / dR)^2>,
+   * both over the same log-k trapezoid the covariance already uses.
+   */
+  double* dblock = NULL;
+  double* ds_dr = NULL;
+  double* dd_dr2 = NULL;
+
+  if (deriv_variance) {
+    dblock = sif_malloc_aligned(
+      (size_t)n_radii * __SIF_COV_K_BLOCK * sizeof(double));
+    ds_dr = calloc((size_t)n_radii, sizeof(double));
+    dd_dr2 = calloc((size_t)n_radii, sizeof(double));
+  }
+
+  if (!cov || !logk || !amp || !block || !high ||
+      (deriv_variance && (!dblock || !ds_dr || !dd_dr2))) {
     SIF_LOG_ERROR(__TAG, "failed to allocate the covariance workspace");
     sif_free_aligned(cov);
     free(logk);
     free(amp);
     sif_free_aligned(block);
     free(high);
+    sif_free_aligned(dblock);
+    free(ds_dr);
+    free(dd_dr2);
     return NULL;
   }
 
@@ -391,6 +415,24 @@ double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
 
       for (uint32_t m = 0; m < len; m++)
         Ai[m] = amp[base + m] * __window(gaussian, (double)k[base + m] * R);
+
+      if (!deriv_variance)
+        continue;
+
+      double* Bi = dblock + (size_t)i * __SIF_COV_K_BLOCK;
+      double sum_cross = 0.0, sum_sq = 0.0;
+
+      for (uint32_t m = 0; m < len; m++) {
+        const double ki = (double)k[base + m];
+        Bi[m] = amp[base + m] * ki * __window_slope(gaussian, ki * R);
+
+        /* d/dR of W^2 is 2 W W', so the cross term carries the factor two. */
+        sum_cross += 2.0 * Ai[m] * Bi[m];
+        sum_sq += Bi[m] * Bi[m];
+      }
+
+      ds_dr[i] += sum_cross;
+      dd_dr2[i] += sum_sq;
     }
 
     /* S += A A^T over this block of k. Rows are uneven because the triangle
@@ -424,6 +466,18 @@ double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
     if (high_k_fraction)
       high_k_fraction[i] = (real_t)(diag > 0.0 ? high[i] / diag : 0.0);
 
+    if (deriv_variance) {
+      /*
+       * delta' = (d delta / dR) / (dS / dR) by the chain rule, so its variance
+       * is the ratio below. dS/dR is strictly negative for any window that
+       * smooths more at larger R, and squaring it drops the sign; it vanishes
+       * only if the spectrum has no support at this scale, which the diagonal
+       * warning below already reports.
+       */
+      deriv_variance[i] =
+        (ds_dr[i] != 0.0) ? dd_dr2[i] / (ds_dr[i] * ds_dr[i]) : 0.0;
+    }
+
     if (!(diag > 0.0)) {
       SIF_LOG_WARNING(__TAG,
         "the covariance at radius %g integrated to zero; check that the P(k) "
@@ -441,6 +495,9 @@ double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
   free(amp);
   sif_free_aligned(block);
   free(high);
+  sif_free_aligned(dblock);
+  free(ds_dr);
+  free(dd_dr2);
 
   SIF_LOG_INFO(__TAG, "covariance over %u radii evaluated from P(k)", n_radii);
 

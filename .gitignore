@@ -4,3 +4,36 @@ build/
 venv/
 env/
 data/
+__pycache__/
+
+# --- emulator pipeline ---------------------------------------------------
+#
+# The tools/ scripts ARE tracked: they are how the emulator is reproduced.
+# What is excluded is everything they generate, all of which is derived and
+# most of which is large.
+#
+# The chain is:
+#   make_ep_design.py     -> ep_design.txt          (deterministic, regenerable)
+#   ep_training.slurm     -> tools/ep_data/         (~60 MB of Monte Carlo)
+#   train_ep_emulator.py  -> fit_*.npz              (intermediate)
+#   emit_ep_weights.py    -> ep_emulator_weights.h  (TRACKED: the artifact)
+#
+# Only the last is committed. It records its own provenance in a header
+# comment, and the scripts above regenerate every step from scratch.
+
+tools/ep_data/
+tools/ep_res_data/
+tools/camb_spectra/
+ep_design.txt
+ep_resolution.txt
+*.npz
+
+# The second-attempt pipeline in research/ follows the same rule: the scripts
+# are tracked, everything they generate is not.
+#
+#   research.ep.design      -> ep_design.jsonl      (deterministic, regenerable)
+#   research/ep_campaign.slurm -> ep_data/          (the Monte Carlo)
+#   research/fit.py         -> fit_*.npz            (intermediate)
+ep_design.jsonl
+ep_data/
+logs/

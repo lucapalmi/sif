@@ -11,7 +11,7 @@ static PyMethodDef model_methods[] = {
 
   {"g_bbks", (PyCFunction)py_sif_g_bbks, METH_VARARGS | METH_KEYWORDS,
     "The BBKS G(gamma, w) function, w = gamma * nu. Fitted form by default "
-    "(BBKS 1986 eq. 4.4); exact=True quadratures the defining integral "
+    "(BBKS 1986 eq. 4.4); g='exact' quadratures the defining integral "
     "(Wu 2020 eqs. 18-19)."},
 
   {"differential_number_density_bbks",
@@ -79,11 +79,13 @@ static PyMethodDef model_methods[] = {
     METH_VARARGS | METH_KEYWORDS,
     "Covariance of the smoothed field between every pair of smoothing radii, "
     "from a tabulated power spectrum.\n"
-    "Returns (cov, sigma, high_k_fraction). cov is the packed lower triangle "
-    "in float64, S(i,j) at i*(i+1)/2 + j for j <= i; sigma is the sqrt of its "
-    "diagonal, which equals sigma_0 from delta_moments_pk. window='top_hat' "
-    "(default) or 'gaussian'. Requires a P(k) sampled on at least ~1000 "
-    "log-spaced points."},
+    "Returns (cov, sigma, high_k_fraction, deriv_variance). cov is the packed "
+    "lower triangle in float64, S(i,j) at i*(i+1)/2 + j for j <= i; sigma is "
+    "the sqrt of its diagonal, which equals sigma_0 from delta_moments_pk; "
+    "deriv_variance is <(d delta / dS)^2> with S = sigma^2, differentiated "
+    "under the integral rather than differenced off the matrix, so it does not "
+    "depend on how finely radii was sampled. window='top_hat' (default) or "
+    "'gaussian'. Requires a P(k) sampled on at least ~1000 log-spaced points."},
 
   {"barrier_smt", (PyCFunction)py_sif_barrier_smt,
     METH_VARARGS | METH_KEYWORDS,
@@ -105,7 +107,10 @@ static PyMethodDef model_methods[] = {
     "by a correlated random walk.\n"
     "Returns len(radii) - 1 bin-centred values: a Monte Carlo can only place "
     "a crossing between two consecutive smoothing scales. Same arguments as "
-    "first_crossing_counts_ep."},
+    "first_crossing_counts_ep.\n"
+    "return_counts=True returns (mult, counts) instead, with the raw "
+    "len(radii) counts the multiplicity was built from. Prefer it to a second "
+    "call to first_crossing_counts_ep, which would run the whole walk again."},
 
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,
     METH_VARARGS | METH_KEYWORDS,

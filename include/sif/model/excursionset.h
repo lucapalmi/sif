@@ -106,7 +106,13 @@ NODISCARD uint64_t* sif_first_crossing_counts_ep(const real_t* radii,
  *
  * @note The Monte Carlo error on a bin is sqrt(n_i) / (n_paths dr_i), so a bin
  * holding a fraction p of the walks is known to a relative 1 / sqrt(p n_paths).
- * Check the counts from sif_first_crossing_counts_ep before trusting the tails.
+ * Take `counts` and check it before trusting the tails; re-running the walk
+ * through sif_first_crossing_counts_ep to get the same numbers doubles the
+ * cost of the most expensive call in the library.
+ *
+ * @param counts Optional output, n_radii entries: the raw first-crossing
+ * counts this multiplicity was built from, exactly as
+ * sif_first_crossing_counts_ep would have returned them. Pass NULL to skip.
  *
  * Remaining parameters, and the barrier and reproducibility conventions, are as
  * sif_first_crossing_counts_ep.
@@ -116,6 +122,6 @@ NODISCARD uint64_t* sif_first_crossing_counts_ep(const real_t* radii,
  */
 NODISCARD real_t* sif_multiplicity_function_ep(const real_t* radii,
   uint32_t n_radii, const double* cov, const real_t* barrier, uint64_t n_paths,
-  uint64_t seed, sif_option_t opt);
+  uint64_t seed, uint64_t* counts, sif_option_t opt);
 
 #endif /* __SIF_MODEL_EXCURSIONSET_H__ */

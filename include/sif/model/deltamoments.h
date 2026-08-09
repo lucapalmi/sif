@@ -94,6 +94,27 @@ NODISCARD real_t* sif_sigma_slope_pk(const real_t* k, const real_t* pk,
  * @param high_k_fraction Optional output, n_radii entries: the fraction of
  * each diagonal element accumulated above half of k[n_points-1], as in
  * sif_delta_moments_pk. Pass NULL to skip.
+ * @param deriv_variance Optional output, n_radii entries:
+ *
+ *     <(d delta / dS)^2>,   S = sigma^2(R)
+ *
+ * the variance of the smoothed field's derivative with respect to its own
+ * variance, which is the mixed second derivative of this covariance evaluated
+ * on its diagonal. Pass NULL to skip.
+ *
+ * @note Evaluated by differentiating the window under the integral, as
+ * sif_sigma_slope_pk does, rather than by differencing the matrix. That is not
+ * a refinement: a finite difference of the diagonal converges only at second
+ * order in the radius spacing, so the value it returns depends on how finely
+ * the caller sampled `radii` -- by around 3% at 100 radii and 8% at 50. Any
+ * consumer that treats this as a property of the field rather than of the grid
+ * needs the form computed here.
+ *
+ * @note Carries units of 1 / sigma^2. The dimensionless combination is
+ * 1 / (4 S <(d delta / dS)^2>), the squared correlation between the walk and
+ * its own derivative: zero for uncorrelated steps, one for a walk whose slope
+ * its value determines.
+ *
  * @param opt SIF_DELTA_FILTER_TOP_HAT (default) or SIF_DELTA_FILTER_GAUSSIAN
  *
  * @return Newly allocated packed lower triangle of SIF_COV_SIZE(n_radii)
@@ -104,6 +125,6 @@ NODISCARD real_t* sif_sigma_slope_pk(const real_t* k, const real_t* pk,
  */
 NODISCARD double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
   uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t* sigma,
-  real_t* high_k_fraction, sif_option_t opt);
+  real_t* high_k_fraction, double* deriv_variance, sif_option_t opt);
 
 #endif /* __SIF_MODEL_DELTAMOMENTS_H__ */

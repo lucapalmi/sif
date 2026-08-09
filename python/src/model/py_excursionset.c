@@ -107,9 +107,14 @@ PyObject* py_sif_delta_covariance_pk(
   PyObject* sigma_arr = PyArray_SimpleNew(1, (npy_intp*)&n_radii, NPY_REAL_T);
   PyObject* high_arr = PyArray_SimpleNew(1, (npy_intp*)&n_radii, NPY_REAL_T);
 
-  if (!sigma_arr || !high_arr) {
+  /* Double, not real_t: the derivative variance follows the covariance, which
+   * is double for the same reason. */
+  PyObject* dvar_arr = PyArray_SimpleNew(1, (npy_intp*)&n_radii, NPY_FLOAT64);
+
+  if (!sigma_arr || !high_arr || !dvar_arr) {
     Py_XDECREF(sigma_arr);
     Py_XDECREF(high_arr);
+    Py_XDECREF(dvar_arr);
     Py_DECREF(k_arr);
     Py_DECREF(pk_arr);
     Py_DECREF(radii_arr);
@@ -122,7 +127,8 @@ PyObject* py_sif_delta_covariance_pk(
     (const real_t*)PyArray_DATA(k_arr), (const real_t*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const real_t*)PyArray_DATA(radii_arr),
     (uint32_t)n_radii, (real_t*)PyArray_DATA((PyArrayObject*)sigma_arr),
-    (real_t*)PyArray_DATA((PyArrayObject*)high_arr), options);
+    (real_t*)PyArray_DATA((PyArrayObject*)high_arr),
+    (double*)PyArray_DATA((PyArrayObject*)dvar_arr), options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
@@ -132,6 +138,7 @@ PyObject* py_sif_delta_covariance_pk(
   if (!cov) {
     Py_DECREF(sigma_arr);
     Py_DECREF(high_arr);
+    Py_DECREF(dvar_arr);
     PyErr_SetString(PyExc_RuntimeError,
       "failed to evaluate the covariance; see the sif log");
     return NULL;
@@ -142,10 +149,11 @@ PyObject* py_sif_delta_covariance_pk(
   if (!cov_arr) {
     Py_DECREF(sigma_arr);
     Py_DECREF(high_arr);
+    Py_DECREF(dvar_arr);
     return NULL;
   }
 
-  return Py_BuildValue("(NNN)", cov_arr, sigma_arr, high_arr);
+  return Py_BuildValue("(NNNN)", cov_arr, sigma_arr, high_arr, dvar_arr);
 }
 
 PyObject* py_sif_barrier_smt(PyObject* self, PyObject* args, PyObject* kwds) {
@@ -187,23 +195,26 @@ PyObject* py_sif_barrier_smt(PyObject* self, PyObject* args, PyObject* kwds) {
   return py_sif_owned_array(values, n);
 }
 
-/* Shared argument handling for the two first-crossing entry points. */
+/* Shared argument handling for the two first-crossing entry points.
+ * `return_counts` is accepted by both and ignored by the counts entry point,
+ * which returns them either way. */
 static int __parse_walk_args(PyObject* args, PyObject* kwds,
   PyArrayObject** radii_arr, PyArrayObject** cov_arr,
   PyArrayObject** barrier_arr, unsigned long long* n_paths,
-  unsigned long long* seed) {
+  unsigned long long* seed, int* return_counts) {
 
   PyObject* radii_obj;
   PyObject* cov_obj;
   PyObject* barrier_obj;
   *n_paths = 1000000;
   *seed = 0;
+  *return_counts = 0;
 
   static char* kwlist[] = {
-    "radii", "cov", "barrier", "n_paths", "seed", NULL};
+    "radii", "cov", "barrier", "n_paths", "seed", "return_counts", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|KK", kwlist, &radii_obj,
-        &cov_obj, &barrier_obj, n_paths, seed)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|KKp", kwlist, &radii_obj,
+        &cov_obj, &barrier_obj, n_paths, seed, return_counts)) {
     return -1;
   }
 
@@ -258,9 +269,10 @@ PyObject* py_sif_first_crossing_counts_ep(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyArrayObject *radii_arr, *cov_arr, *barrier_arr;
   unsigned long long n_paths, seed;
+  int return_counts;
 
-  if (__parse_walk_args(
-        args, kwds, &radii_arr, &cov_arr, &barrier_arr, &n_paths, &seed) < 0) {
+  if (__parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr,
+        &n_paths, &seed, &return_counts) < 0) {
     return NULL;
   }
 
@@ -291,20 +303,38 @@ PyObject* py_sif_multiplicity_function_ep(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyArrayObject *radii_arr, *cov_arr, *barrier_arr;
   unsigned long long n_paths, seed;
+  int return_counts;
 
-  if (__parse_walk_args(
-        args, kwds, &radii_arr, &cov_arr, &barrier_arr, &n_paths, &seed) < 0) {
+  if (__parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr,
+        &n_paths, &seed, &return_counts) < 0) {
     return NULL;
   }
 
   const npy_intp n = PyArray_SIZE(radii_arr);
+
+  /* Allocated up front so the walk can write straight into it: the whole
+   * point of the out-parameter is that the counts cost nothing extra. */
+  PyObject* counts_arr = NULL;
+  uint64_t* counts_data = NULL;
+
+  if (return_counts) {
+    counts_arr = PyArray_SimpleNew(1, (npy_intp*)&n, NPY_UINT64);
+    if (!counts_arr) {
+      Py_DECREF(radii_arr);
+      Py_DECREF(cov_arr);
+      Py_DECREF(barrier_arr);
+      return NULL;
+    }
+    counts_data = (uint64_t*)PyArray_DATA((PyArrayObject*)counts_arr);
+  }
+
   real_t* values = NULL;
 
   Py_BEGIN_ALLOW_THREADS values = sif_multiplicity_function_ep(
     (const real_t*)PyArray_DATA(radii_arr), (uint32_t)n,
     (const double*)PyArray_DATA(cov_arr),
     (const real_t*)PyArray_DATA(barrier_arr), (uint64_t)n_paths, (uint64_t)seed,
-    SIF_DEFAULT);
+    counts_data, SIF_DEFAULT);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -312,10 +342,21 @@ PyObject* py_sif_multiplicity_function_ep(
   Py_DECREF(barrier_arr);
 
   if (!values) {
+    Py_XDECREF(counts_arr);
     PyErr_SetString(PyExc_RuntimeError,
       "failed to evaluate the multiplicity function; see the sif log");
     return NULL;
   }
 
-  return py_sif_owned_array(values, n - 1);
+  PyObject* mult_arr = py_sif_owned_array(values, n - 1);
+  if (!mult_arr) {
+    Py_XDECREF(counts_arr);
+    return NULL;
+  }
+
+  if (!return_counts)
+    return mult_arr;
+
+  return Py_BuildValue("(NN)", mult_arr, counts_arr);
 }
+
