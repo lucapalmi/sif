@@ -10,49 +10,49 @@
 #include <stdio.h>
 #include <stdlib.h>
 
-int str_decode_format(
-  const char* fmt, col_target_t* targets_out, int max_cols) {
+int sif_str_decode_format(
+  const char* fmt, sif_col_target_t* targets_out, int max_cols) {
   int col_count = 0;
   for (int i = 0; fmt[i] != '\0' && col_count < max_cols; i++) {
     switch (fmt[i]) {
     case '*':
     case '/':
-      targets_out[col_count++] = COL_IGNORE;
+      targets_out[col_count++] = SIF_COL_IGNORE;
       break;
     case 'x':
     case 'X':
-      targets_out[col_count++] = COL_X;
+      targets_out[col_count++] = SIF_COL_X;
       break;
     case 'y':
     case 'Y':
-      targets_out[col_count++] = COL_Y;
+      targets_out[col_count++] = SIF_COL_Y;
       break;
     case 'z':
     case 'Z':
-      targets_out[col_count++] = COL_Z;
+      targets_out[col_count++] = SIF_COL_Z;
       break;
     case 'u':
     case 'U':
-      targets_out[col_count++] = COL_VX;
+      targets_out[col_count++] = SIF_COL_VX;
       break;
     case 'v':
     case 'V':
-      targets_out[col_count++] = COL_VY;
+      targets_out[col_count++] = SIF_COL_VY;
       break;
     case 'w':
     case 'W':
-      targets_out[col_count++] = COL_VZ;
+      targets_out[col_count++] = SIF_COL_VZ;
       break;
     case 'm':
     case 'M':
-      targets_out[col_count++] = COL_M;
+      targets_out[col_count++] = SIF_COL_M;
       break;
     }
   }
   return col_count;
 }
 
-int str_extract_next_real(char** cursor, char delimiter, real_t* out_val) {
+int sif_str_extract_next_real(char** cursor, char delimiter, real_t* out_val) {
   if (!cursor || !*cursor || **cursor == '\0' || **cursor == '\n')
     return 0;
 

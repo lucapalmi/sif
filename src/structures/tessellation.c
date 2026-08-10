@@ -122,7 +122,7 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
 #pragma omp parallel
     {
       sif_prng_state_t rng_state;
-      sif_prng_init(&rng_state, base_seed ^ (uint64_t)system_get_thread_num());
+      sif_prng_init(&rng_state, base_seed ^ (uint64_t)sif_system_get_thread_num());
 
       bool is_pbc = ((opt & __SIF_PBC_MASK) == SIF_PBC_PERIODIC);
 

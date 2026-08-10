@@ -260,7 +260,7 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
   const real_t* sigma = sif_delta_moments_sigma(moments, 0);
   real_t* f = sif_multiplicity_function_svdw(sigma, n_radii, delta_v, delta_c);
 
-  sif_size_function_t* out = __sif_size_function_alloc(n_radii);
+  sif_size_function_t* out = sif_size_function_alloc(n_radii);
 
   if (!f || !out) {
     free(lagrangian);
@@ -275,7 +275,7 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
   out->r_min = radii[0];
   out->r_max = radii[n_radii - 1];
   memcpy(out->r_centers, radii, (size_t)n_radii * sizeof(real_t));
-  __sif_edges_from_centers(radii, n_radii, out->r_edges);
+  sif_edges_from_centers(radii, n_radii, out->r_edges);
 
   const bool per_radius = (opt & __SIF_VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR;
   const double four_thirds_pi = 4.0 / 3.0 * M_PI;

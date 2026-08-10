@@ -219,7 +219,7 @@ void sif_profiles_mesh(const sif_catalog_t* cat,
   /* Per-thread bin scratch, allocated once on the heap. These used to be VLAs
    * inside the parallel region, which overflows an OpenMP thread stack (far
    * smaller than the main stack) for a large caller-supplied n_bins. */
-  const int n_threads = system_get_max_threads() > 0 ? system_get_max_threads() : 1;
+  const int n_threads = sif_system_get_max_threads() > 0 ? sif_system_get_max_threads() : 1;
   real_t* scratch_mass = sif_malloc_aligned((size_t)n_threads * n_bins * sizeof(real_t));
   real_t* scratch_vrad = sif_malloc_aligned((size_t)n_threads * n_bins * sizeof(real_t));
   uint64_t* scratch_count = sif_malloc_aligned((size_t)n_threads * n_bins * sizeof(uint64_t));
@@ -245,7 +245,7 @@ void sif_profiles_mesh(const sif_catalog_t* cat,
     real_t r_max = rv * ext;
     real_t r_max_sq = r_max * r_max;
 
-    const int tid = system_get_thread_num();
+    const int tid = sif_system_get_thread_num();
     real_t* local_mass = scratch_mass + (size_t)tid * n_bins;
     real_t* local_vrad = scratch_vrad + (size_t)tid * n_bins;
     uint64_t* local_count = scratch_count + (size_t)tid * n_bins;
@@ -538,7 +538,7 @@ void sif_profiles_voronoi(const sif_catalog_t* cat,
   const real_t* fvz = field->vz ? SIF_ASSUME_ALIGNED(field->vz) : NULL;
 
   /* Per-thread bin scratch, see the note in sif_profiles_mesh. */
-  const int n_threads = system_get_max_threads() > 0 ? system_get_max_threads() : 1;
+  const int n_threads = sif_system_get_max_threads() > 0 ? sif_system_get_max_threads() : 1;
   real_t* scratch_mass = sif_malloc_aligned((size_t)n_threads * n_bins * sizeof(real_t));
   real_t* scratch_vrad = sif_malloc_aligned((size_t)n_threads * n_bins * sizeof(real_t));
   real_t* scratch_vol = sif_malloc_aligned((size_t)n_threads * n_bins * sizeof(real_t));
@@ -568,7 +568,7 @@ void sif_profiles_voronoi(const sif_catalog_t* cat,
     real_t voxel_len = (2.0f * r_max) / (real_t)__SIF_PROFILE_GRID_DIM;
     real_t vol_per_voxel = voxel_len * voxel_len * voxel_len;
 
-    const int tid = system_get_thread_num();
+    const int tid = sif_system_get_thread_num();
     real_t* local_mass = scratch_mass + (size_t)tid * n_bins;
     real_t* local_vrad = scratch_vrad + (size_t)tid * n_bins;
     real_t* local_vol = scratch_vol + (size_t)tid * n_bins;

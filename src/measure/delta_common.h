@@ -26,20 +26,20 @@
  *
  * @return SIF_OK or SIF_ERR_INVALID
  */
-int __sif_delta_validate_radii(
+int sif_delta_validate_radii(
   const sif_grid_t* grid, const real_t* radii, uint32_t n_radii);
 
 /*
  * @brief Resolves the smoothing window selected in the options bitmask.
  */
-filter_type_t __sif_delta_filter(sif_option_t opt);
+sif_filter_type_t sif_delta_filter(sif_option_t opt);
 
 /*
  * @brief Validates the parts of the options bitmask both estimators share.
  *
  * @return SIF_OK or SIF_ERR_INVALID
  */
-int __sif_delta_validate_options(sif_option_t opt);
+int sif_delta_validate_options(sif_option_t opt);
 
 /*
  * @brief Builds the spectrum both estimators work from.
@@ -55,7 +55,7 @@ int __sif_delta_validate_options(sif_option_t opt);
  *
  * @return The workspace, owned by the caller, or NULL on failure.
  */
-NODISCARD fft_workspace_t* __sif_delta_prepare_spectrum(
+NODISCARD sif_fft_workspace_t* sif_delta_prepare_spectrum(
   const sif_grid_t* grid, uint64_t seed, sif_option_t opt);
 
 #endif /* __SIF_DELTA_COMMON_H__ */

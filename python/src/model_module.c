@@ -112,6 +112,24 @@ static PyMethodDef model_methods[] = {
     "len(radii) counts the multiplicity was built from. Prefer it to a second "
     "call to first_crossing_counts_ep, which would run the whole walk again."},
 
+  {"multiplicity_function_ep_emu",
+    (PyCFunction)py_sif_multiplicity_function_ep_emu,
+    METH_VARARGS | METH_KEYWORDS,
+    "Emulated void multiplicity function: the same quantity as "
+    "multiplicity_function_ep, without the random walks.\n"
+    "A semi-analytic up-crossing rate corrected by a small trained network. "
+    "About 0.13% of the Monte Carlo it was fitted against, and roughly a "
+    "million times faster.\n"
+    "Takes sigma, NOT the packed covariance the Monte Carlo needs: the "
+    "emulator reads only the diagonal, so it wants n values rather than "
+    "n(n+1)/2. deriv_variance is required, from delta_covariance_pk.\n"
+    "Returns the answer the Monte Carlo CONVERGES to, not the answer it gives "
+    "on a coarse grid; the emulated result moves by under 0.25% between 64 and "
+    "256 radii, where the walk itself moves by about a per cent.\n"
+    "Extend the radius grid outward far enough that few walks start above the "
+    "barrier; return_domain=True returns (mult, domain) with in_domain, "
+    "n_bins_outside, nu_origin, first_step_mass and expected_error."},
+
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,
     METH_VARARGS | METH_KEYWORDS,
     "Volume-conserving (Vdn) void size function, as a SizeFunction over the "

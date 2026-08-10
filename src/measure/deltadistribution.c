@@ -22,7 +22,7 @@ static int __histogram_field(const real_t* data, uint64_t total_cells,
   real_t* out, real_t pdf_norm) {
 
   const int n_threads =
-    system_get_max_threads() > 0 ? system_get_max_threads() : 1;
+    sif_system_get_max_threads() > 0 ? sif_system_get_max_threads() : 1;
 
   uint64_t* scratch =
     sif_calloc_aligned((size_t)n_threads * n_bins, sizeof(uint64_t));
@@ -36,7 +36,7 @@ static int __histogram_field(const real_t* data, uint64_t total_cells,
 
 #pragma omp parallel num_threads(n_threads)
   {
-    uint64_t* local = scratch + (size_t)system_get_thread_num() * n_bins;
+    uint64_t* local = scratch + (size_t)sif_system_get_thread_num() * n_bins;
 
 #pragma omp for schedule(static)
     for (uint64_t i = 0; i < total_cells; i++) {
@@ -81,16 +81,16 @@ sif_delta_distribution_t* sif_delta_distribution_grid(
     return NULL;
   }
 
-  if (__sif_delta_validate_radii(grid, radii, n_radii) != SIF_OK)
+  if (sif_delta_validate_radii(grid, radii, n_radii) != SIF_OK)
     return NULL;
 
-  if (__sif_delta_validate_options(opt) != SIF_OK)
+  if (sif_delta_validate_options(opt) != SIF_OK)
     return NULL;
 
-  const filter_type_t filter = __sif_delta_filter(opt);
+  const sif_filter_type_t filter = sif_delta_filter(opt);
 
   sif_delta_distribution_t* dist =
-    __sif_delta_distribution_alloc(n_radii, n_bins);
+    sif_delta_distribution_alloc(n_radii, n_bins);
   if (!dist)
     return NULL;
 
@@ -118,14 +118,14 @@ sif_delta_distribution_t* sif_delta_distribution_grid(
       ? "phase-randomized surrogate"
       : "Gaussian surrogate");
 
-  fft_workspace_t* ws = __sif_delta_prepare_spectrum(grid, seed, opt);
+  sif_fft_workspace_t* ws = sif_delta_prepare_spectrum(grid, seed, opt);
   if (!ws) {
     sif_delta_distribution_free(dist);
     return NULL;
   }
 
-  system_state_t* state = get_system_state();
-  if (fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
+  sif_system_state_t* state = sif_get_system_state();
+  if (sif_fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
     SIF_LOG_ERROR(__TAG, "failed to initialize the backward FFT");
     goto fail;
   }
@@ -134,14 +134,14 @@ sif_delta_distribution_t* sif_delta_distribution_grid(
     (real_t)(1.0 / ((double)grid->total_cells * (double)bin_width));
 
   for (uint32_t k = 0; k < n_radii; k++) {
-    if (fft_apply_filter(ws, filter, radii[k], grid->box_length) != SIF_OK) {
+    if (sif_fft_apply_filter(ws, filter, radii[k], grid->box_length) != SIF_OK) {
       SIF_LOG_ERROR(__TAG, "failed to apply the filter at radius %u", k);
       goto fail;
     }
 
     /* Runs in place on delta_k_cpy, which the next iteration's filter fully
      * overwrites from the untouched delta_k. */
-    real_t* filtered = fft_grid_backward(ws);
+    real_t* filtered = sif_fft_grid_backward(ws);
     if (!filtered) {
       SIF_LOG_ERROR(__TAG, "backward transform failed at radius %u", k);
       goto fail;
@@ -154,14 +154,14 @@ sif_delta_distribution_t* sif_delta_distribution_grid(
     }
   }
 
-  fft_workspace_free(ws);
+  sif_fft_workspace_free(ws);
 
   SIF_LOG_INFO(__TAG, "delta distribution computation complete");
 
   return dist;
 
 fail:
-  fft_workspace_free(ws);
+  sif_fft_workspace_free(ws);
   sif_delta_distribution_free(dist);
   return NULL;
 }

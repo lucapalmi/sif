@@ -340,7 +340,7 @@ static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
    * must be sized by the team the parallel regions below will actually get,
    * not by the ceiling recorded at init time. Pinning the team size makes the
    * two agree by construction. */
-  int n_threads = system_get_max_threads();
+  int n_threads = sif_system_get_max_threads();
   if (n_threads < 1)
     n_threads = 1;
 
@@ -360,8 +360,8 @@ static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
 
 #pragma omp parallel num_threads(n_threads)
     {
-      int tid = system_get_thread_num();
-      int num_t = system_get_num_threads();
+      int tid = sif_system_get_thread_num();
+      int num_t = sif_system_get_num_threads();
       uint64_t chunk = n / num_t;
       uint64_t start = tid * chunk;
       uint64_t end = (tid == num_t - 1) ? n : start + chunk;
@@ -382,8 +382,8 @@ static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
 
 #pragma omp parallel num_threads(n_threads)
     {
-      int tid = system_get_thread_num();
-      int num_t = system_get_num_threads();
+      int tid = sif_system_get_thread_num();
+      int num_t = sif_system_get_num_threads();
       uint64_t chunk = n / num_t;
       uint64_t start = tid * chunk;
       uint64_t end = (tid == num_t - 1) ? n : start + chunk;

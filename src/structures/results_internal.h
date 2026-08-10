@@ -17,13 +17,13 @@
 #include "sif/structures/deltamoments.h"
 #include "sif/structures/sizefunction.h"
 
-NODISCARD sif_delta_moments_t* __sif_delta_moments_alloc(
+NODISCARD sif_delta_moments_t* sif_delta_moments_alloc(
   uint32_t n_radii, uint8_t order);
 
-NODISCARD sif_delta_distribution_t* __sif_delta_distribution_alloc(
+NODISCARD sif_delta_distribution_t* sif_delta_distribution_alloc(
   uint32_t n_radii, uint32_t n_bins);
 
-NODISCARD sif_size_function_t* __sif_size_function_alloc(uint32_t n_bins);
+NODISCARD sif_size_function_t* sif_size_function_alloc(uint32_t n_bins);
 
 /*
  * @brief Reconstructs bin edges from the radii a model was evaluated at.
@@ -38,6 +38,6 @@ NODISCARD sif_size_function_t* __sif_size_function_alloc(uint32_t n_bins);
  * @param n Number of centres, at least 2
  * @param edges Output, n + 1 entries
  */
-void __sif_edges_from_centers(const real_t* centers, uint32_t n, real_t* edges);
+void sif_edges_from_centers(const real_t* centers, uint32_t n, real_t* edges);
 
 #endif /* __SIF_RESULTS_INTERNAL_H__ */

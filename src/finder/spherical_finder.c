@@ -36,8 +36,8 @@ typedef struct {
   sif_catalog_t* cat;
   sif_bitmask_t* mask;
   sif_cell_linked_list_t* cll;
-  fft_workspace_t* fft_ws;
-  candidate_buffer_t candidates;
+  sif_fft_workspace_t* fft_ws;
+  sif_candidate_buffer_t candidates;
 } spherical_ctx_t;
 
 static void __ctx_release(spherical_ctx_t* ctx, sif_grid_t* grid) {
@@ -48,10 +48,10 @@ static void __ctx_release(spherical_ctx_t* ctx, sif_grid_t* grid) {
    * released, so handing it back is what keeps it from leaking. Before that
    * point there is nothing to take and grid->delta must stay untouched. */
   if (ctx->fft_ws) {
-    real_t* recovered = fft_workspace_take_real_buffer(ctx->fft_ws);
+    real_t* recovered = sif_fft_workspace_take_real_buffer(ctx->fft_ws);
     if (recovered)
       grid->delta = recovered;
-    fft_workspace_free(ctx->fft_ws);
+    sif_fft_workspace_free(ctx->fft_ws);
     ctx->fft_ws = NULL;
   }
 
@@ -90,28 +90,28 @@ static int __ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
   if (!ctx->mask)
     return SIF_ERR_ALLOC;
 
-  /* __check_overlap_mesh always wraps its query with PBC, so the list has to
+  /* sif_check_overlap_mesh always wraps its query with PBC, so the list has to
    * bin with PBC too. */
   ctx->cll = sif_cell_linked_list_alloc(
     __VOID_CLL_CELLS, grid->box_length, ctx->cat->capacity, SIF_PBC_PERIODIC);
   if (!ctx->cll)
     return SIF_ERR_ALLOC;
 
-  system_state_t* state = get_system_state();
-  ctx->fft_ws = fft_workspace_alloc(state->fft_mgr, grid->n_cells);
+  sif_system_state_t* state = sif_get_system_state();
+  ctx->fft_ws = sif_fft_workspace_alloc(state->fft_mgr, grid->n_cells);
   if (!ctx->fft_ws) {
     SIF_LOG_ERROR(__TAG, "failed to allocate the FFT workspace");
     return SIF_ERR_ALLOC;
   }
 
-  fft_grid_forward(ctx->fft_ws, grid);
+  sif_fft_grid_forward(ctx->fft_ws, grid);
 
   /* The density field is no longer needed: from here on the finder works out
    * of the FFT workspace's real-space buffer, which saves a full grid. */
   sif_free_aligned(grid->delta);
   grid->delta = NULL;
 
-  if (fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
+  if (sif_fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
     SIF_LOG_ERROR(__TAG, "failed to initialize the backward FFT");
     return SIF_ERR_ALLOC;
   }
@@ -138,7 +138,7 @@ static int __accept_void(spherical_ctx_t* ctx, const sif_grid_t* grid,
   if (status != SIF_OK)
     return status;
 
-  __mark_sphere(ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask,
+  sif_mark_sphere(ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask,
     grid->cell_length);
 
   return SIF_OK;
@@ -169,14 +169,14 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
     sif_timer_start(&timer);
 
     const real_t radius = ctx.sorted_radii[i];
-    finder_radius_stats_t stats = {0};
+    sif_finder_radius_stats_t stats = {0};
 
-    if (fft_apply_filter(ctx.fft_ws, FILTER_TOP_HAT, radius,
+    if (sif_fft_apply_filter(ctx.fft_ws, FILTER_TOP_HAT, radius,
           grid->box_length) != SIF_OK) {
       failed = 1;
       break;
     }
-    grid->delta = fft_grid_backward(ctx.fft_ws);
+    grid->delta = sif_fft_grid_backward(ctx.fft_ws);
 
     if (sif_finder_scan_candidates(grid, ctx.mask, threshold, require_min,
           &ctx.candidates) != SIF_OK) {
@@ -202,7 +202,7 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
       sif_unflatten_index(grid, flat, &ix, &iy, &iz);
 
       if (proxy_pole > 0 &&
-          __check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask, ix, iy,
+          sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask, ix, iy,
             iz, (uint32_t)proxy_pole)) {
         stats.rejected_proxy++;
         continue;
@@ -213,9 +213,9 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
       real_t cz = (real_t)iz * grid->cell_length;
 
       if (options & SIF_FINDER_REFINE_CENTER_HESSIAN)
-        __refine_center_hessian(grid, ix, iy, iz, &cx, &cy, &cz);
+        sif_refine_center_hessian(grid, ix, iy, iz, &cx, &cy, &cz);
 
-      if (__check_overlap_mesh(ctx.cat, cx, cy, cz, radius, max_radius,
+      if (sif_check_overlap_mesh(ctx.cat, cx, cy, cz, radius, max_radius,
             grid->box_length, ctx.cll, grid->p2_mask, overlap_fraction)) {
         stats.rejected_mesh++;
         continue;
@@ -235,8 +235,8 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
   }
 
   if (!failed && (options & SIF_FINDER_PRESERVE_GRID)) {
-    if (fft_apply_filter(ctx.fft_ws, FILTER_NONE, 0, 0) == SIF_OK) {
-      grid->delta = fft_grid_backward(ctx.fft_ws);
+    if (sif_fft_apply_filter(ctx.fft_ws, FILTER_NONE, 0, 0) == SIF_OK) {
+      grid->delta = sif_fft_grid_backward(ctx.fft_ws);
       SIF_LOG_INFO(__TAG, "recovered original density grid");
     }
   }

@@ -25,7 +25,7 @@ static const char* level_colors[] = {
 };
 
 void __sif_log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
-  system_state_t* state = get_system_state_safe();
+  sif_system_state_t* state = sif_get_system_state_safe();
 
   /* 1. Determine Runtime Level */
   /* Fallback to INFO if the user logs something before calling sif_init() */

@@ -374,8 +374,8 @@ typedef struct {
   sif_bitmask_t* mask;
   sif_cell_linked_list_t* void_cll;
   sif_chain_mesh_t* mesh;
-  fft_workspace_t* fft_ws;
-  candidate_buffer_t candidates;
+  sif_fft_workspace_t* fft_ws;
+  sif_candidate_buffer_t candidates;
 
   batch_result_t* batch_results;
   uint64_t* batch_indices;
@@ -389,10 +389,10 @@ static void __ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
     return;
 
   if (ctx->fft_ws) {
-    real_t* recovered = fft_workspace_take_real_buffer(ctx->fft_ws);
+    real_t* recovered = sif_fft_workspace_take_real_buffer(ctx->fft_ws);
     if (recovered)
       grid->delta = recovered;
-    fft_workspace_free(ctx->fft_ws);
+    sif_fft_workspace_free(ctx->fft_ws);
     ctx->fft_ws = NULL;
   }
 
@@ -428,7 +428,7 @@ static int __ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
 
   memset(ctx, 0, sizeof(*ctx));
 
-  ctx->n_threads = system_get_max_threads();
+  ctx->n_threads = sif_system_get_max_threads();
   if (ctx->n_threads < 1)
     ctx->n_threads = 1;
 
@@ -486,19 +486,19 @@ static int __ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
     }
   }
 
-  system_state_t* state = get_system_state();
-  ctx->fft_ws = fft_workspace_alloc(state->fft_mgr, grid->n_cells);
+  sif_system_state_t* state = sif_get_system_state();
+  ctx->fft_ws = sif_fft_workspace_alloc(state->fft_mgr, grid->n_cells);
   if (!ctx->fft_ws) {
     SIF_LOG_ERROR(__TAG, "failed to allocate the FFT workspace");
     return SIF_ERR_ALLOC;
   }
 
-  fft_grid_forward(ctx->fft_ws, grid);
+  sif_fft_grid_forward(ctx->fft_ws, grid);
 
   sif_free_aligned(grid->delta);
   grid->delta = NULL;
 
-  if (fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
+  if (sif_fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
     SIF_LOG_ERROR(__TAG, "failed to initialize the backward FFT");
     return SIF_ERR_ALLOC;
   }
@@ -523,7 +523,7 @@ static int __accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, real_t cx,
   if (status != SIF_OK)
     return status;
 
-  __mark_sphere(ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask,
+  sif_mark_sphere(ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask,
     grid->cell_length);
 
   return SIF_OK;
@@ -562,14 +562,14 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
     sif_timer_start(&timer);
 
     const real_t radius = ctx.sorted_radii[i];
-    finder_radius_stats_t stats = {0};
+    sif_finder_radius_stats_t stats = {0};
 
-    if (fft_apply_filter(ctx.fft_ws, FILTER_TOP_HAT, radius,
+    if (sif_fft_apply_filter(ctx.fft_ws, FILTER_TOP_HAT, radius,
           grid->box_length) != SIF_OK) {
       failed = 1;
       break;
     }
-    grid->delta = fft_grid_backward(ctx.fft_ws);
+    grid->delta = sif_fft_grid_backward(ctx.fft_ws);
 
     if (sif_finder_scan_candidates(grid, ctx.mask, threshold, require_min,
           &ctx.candidates) != SIF_OK) {
@@ -618,7 +618,7 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
        * past the per-thread shell buffers allocated in __ctx_init. */
 #pragma omp parallel for schedule(dynamic, 16) num_threads(ctx.n_threads)
       for (uint64_t b = 0; b < batch_count; b++) {
-        const int tid = system_get_thread_num();
+        const int tid = sif_system_get_thread_num();
         const uint64_t flat =
           ctx.candidates.items[ctx.batch_indices[b]].flat_idx;
         batch_result_t* res = &ctx.batch_results[b];
@@ -632,7 +632,7 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         res->proxy_pole = proxy_pole;
 
         if (proxy_pole > 0 &&
-            __check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask, ix,
+            sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask, ix,
               iy, iz, (uint32_t)proxy_pole)) {
           res->status = __BATCH_REJECTED_PROXY;
           continue;
@@ -643,13 +643,13 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         real_t cz = (real_t)iz * grid->cell_length;
 
         if (options & SIF_FINDER_REFINE_CENTER_HESSIAN)
-          __refine_center_hessian(grid, ix, iy, iz, &cx, &cy, &cz);
+          sif_refine_center_hessian(grid, ix, iy, iz, &cx, &cy, &cz);
 
         res->cx = cx;
         res->cy = cy;
         res->cz = cz;
 
-        if (__check_overlap_mesh(ctx.cat, cx, cy, cz, radius, max_radius,
+        if (sif_check_overlap_mesh(ctx.cat, cx, cy, cz, radius, max_radius,
               grid->box_length, ctx.void_cll, grid->p2_mask,
               overlap_fraction)) {
           res->status = __BATCH_REJECTED_MESH;
@@ -690,7 +690,7 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         }
 
         if (res->proxy_pole > 0 &&
-            __check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask,
+            sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask,
               res->ix, res->iy, res->iz, (uint32_t)res->proxy_pole)) {
           stats.rejected_proxy++;
           continue;
@@ -703,13 +703,13 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
                     grid->cell_length) -
           1;
         if (exact_pole > 0 && exact_pole != res->proxy_pole &&
-            __check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask,
+            sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask,
               res->ix, res->iy, res->iz, (uint32_t)exact_pole)) {
           stats.rejected_exact++;
           continue;
         }
 
-        if (__check_overlap_mesh(ctx.cat, res->cx, res->cy, res->cz,
+        if (sif_check_overlap_mesh(ctx.cat, res->cx, res->cy, res->cz,
               res->r_scaled, max_radius, grid->box_length, ctx.void_cll,
               grid->p2_mask, overlap_fraction)) {
           stats.rejected_exact++;
@@ -734,8 +734,8 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
   }
 
   if (!failed && (options & SIF_FINDER_PRESERVE_GRID)) {
-    if (fft_apply_filter(ctx.fft_ws, FILTER_NONE, 0, 0) == SIF_OK) {
-      grid->delta = fft_grid_backward(ctx.fft_ws);
+    if (sif_fft_apply_filter(ctx.fft_ws, FILTER_NONE, 0, 0) == SIF_OK) {
+      grid->delta = sif_fft_grid_backward(ctx.fft_ws);
       SIF_LOG_INFO(__TAG, "recovered original density grid");
     }
   }

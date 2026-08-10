@@ -114,7 +114,7 @@ sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
   }
 
   /* 2. Allocate the VSF struct */
-  sif_size_function_t* vsf = __sif_size_function_alloc(n_bins);
+  sif_size_function_t* vsf = sif_size_function_alloc(n_bins);
   if (!vsf)
     return NULL;
 
@@ -232,7 +232,7 @@ sif_size_function_t* sif_size_function_combine(
   /* 2. Allocate the Master VSF. counts stay zero: raw void counts are not
    * meaningful once several catalogs have been interpolated onto a shared
    * grid. */
-  sif_size_function_t* master = __sif_size_function_alloc(master_bins);
+  sif_size_function_t* master = sif_size_function_alloc(master_bins);
   if (!master)
     return NULL;
 

@@ -32,8 +32,9 @@
  */
 #define __EP_Y_ASYMPTOTIC 5.0
 
-/* 1 - Phi(x), the upper tail of the standard normal. */
-static inline double __upper_tail(double x) {
+/* 1 - Phi(x), the upper tail of the standard normal. Shared with the emulator,
+ * which needs it for the walk's first step. */
+double sif_ep_upper_tail(double x) {
   return 0.5 * erfc(x / sqrt(2.0));
 }
 
@@ -56,12 +57,12 @@ static double __mean_excess(double y) {
   }
 
   const double phi = exp(-0.5 * y * y) / sqrt(2.0 * M_PI);
-  return phi - y * __upper_tail(y);
+  return phi - y * sif_ep_upper_tail(y);
 }
 
 /* --- The local description --- */
 
-int ep_features_init(ep_features_t* f, uint32_t n) {
+int sif_ep_features_init(sif_ep_features_t* f, uint32_t n) {
 
   f->n = n;
   f->S = NULL;
@@ -83,7 +84,7 @@ int ep_features_init(ep_features_t* f, uint32_t n) {
   return SIF_OK;
 }
 
-void ep_features_free(ep_features_t* f) {
+void sif_ep_features_free(sif_ep_features_t* f) {
   if (!f)
     return;
   sif_free_aligned(f->S);
@@ -110,16 +111,16 @@ static void __deriv_variance_differenced(
   for (uint32_t i = 1; i + 1 < n; i++) {
     const double h = S[i + 1] - S[i - 1];
     V[i] =
-      (S[i + 1] + S[i - 1] - 2.0 * ep_cov_get(cov, i + 1, i - 1)) / (h * h);
+      (S[i + 1] + S[i - 1] - 2.0 * sif_ep_cov_get(cov, i + 1, i - 1)) / (h * h);
   }
 
   /* One-sided at the ends, so no radius is left without a value. */
   if (n >= 3) {
     double h = S[2] - S[0];
-    V[0] = (S[2] + S[0] - 2.0 * ep_cov_get(cov, 2, 0)) / (h * h);
+    V[0] = (S[2] + S[0] - 2.0 * sif_ep_cov_get(cov, 2, 0)) / (h * h);
     h = S[n - 1] - S[n - 3];
     V[n - 1] =
-      (S[n - 1] + S[n - 3] - 2.0 * ep_cov_get(cov, n - 1, n - 3)) / (h * h);
+      (S[n - 1] + S[n - 3] - 2.0 * sif_ep_cov_get(cov, n - 1, n - 3)) / (h * h);
   }
 }
 
@@ -167,22 +168,15 @@ static double __deriv_nonuniform(
          (h1 * h2 * (h1 + h2));
 }
 
-int ep_features_fill(ep_features_t* f, const real_t* radii, uint32_t n,
-  const double* cov, const real_t* barrier, const double* deriv_variance) {
-
-  (void)radii; /* named only in diagnostics below */
-
-  for (uint32_t i = 0; i < n; i++) {
-    f->S[i] = ep_cov_get(cov, i, i);
-    if (!(f->S[i] > 0.0)) {
-      SIF_LOG_ERROR(__TAG,
-        "the covariance diagonal at radius %u (%g) is %g; the walk has no "
-        "scale there",
-        i, (double)radii[i], f->S[i]);
-      return SIF_ERR_RANGE;
-    }
-    f->nu[i] = (double)barrier[i] / sqrt(f->S[i]);
-  }
+/*
+ * The physics, once: f->S is already filled and V is already chosen, so this
+ * is shared verbatim between the covariance entry point and the diagonal one
+ * the emulator uses. Splitting it is not tidiness -- the network was fitted
+ * against these exact expressions, so a second copy that drifted would be a
+ * silently different model.
+ */
+static int __fill_core(sif_ep_features_t* f, const real_t* radii, uint32_t n,
+  const real_t* barrier, const double* V) {
 
   /* Promoted once: the barrier arrives as real_t but every derivative below
    * is taken in double, and differencing a float array in double precision
@@ -195,26 +189,6 @@ int ep_features_fill(ep_features_t* f, const real_t* radii, uint32_t n,
   }
   for (uint32_t i = 0; i < n; i++)
     Bd[i] = (double)barrier[i];
-
-  const double* V = deriv_variance;
-  double* V_owned = NULL;
-
-  if (!V) {
-    V_owned = malloc((size_t)n * sizeof(double));
-    if (!V_owned) {
-      SIF_LOG_ERROR(__TAG, "failed to allocate the derivative variance");
-      free(Bd);
-      return SIF_ERR_ALLOC;
-    }
-    __deriv_variance_differenced(cov, f->S, n, V_owned);
-    V = V_owned;
-
-    SIF_LOG_WARNING(__TAG,
-      "no derivative variance supplied, so it was differenced off the "
-      "covariance; that estimate converges only at first order and is wrong by "
-      "several per cent at a realistic radius count, which propagates into the "
-      "result. Take it from sif_delta_covariance_pk instead");
-  }
 
   int bad = 0;
 
@@ -252,7 +226,6 @@ int ep_features_fill(ep_features_t* f, const real_t* radii, uint32_t n,
       f->f_up[i] = 0.0;
   }
 
-  free(V_owned);
   free(Bd);
 
   if (bad > 0) {
@@ -267,41 +240,84 @@ int ep_features_fill(ep_features_t* f, const real_t* radii, uint32_t n,
   return SIF_OK;
 }
 
-/* --- The multiplicity --- */
+int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
+  uint32_t n, const double* S, const real_t* barrier,
+  const double* deriv_variance) {
 
-real_t* ep_multiplicity_upcrossing(
-  const ep_features_t* f, const real_t* radii, uint32_t n) {
-
-  const uint32_t n_bins = n - 1;
-
-  real_t* out = sif_calloc_aligned((size_t)n_bins, sizeof(real_t));
-  if (!out) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the multiplicity array");
-    return NULL;
+  if (!deriv_variance) {
+    SIF_LOG_ERROR(__TAG,
+      "the derivative variance is required when only the diagonal is given; "
+      "there are no off-diagonal elements left to difference");
+    return SIF_ERR_INVALID;
   }
 
-  /*
-   * The walk enters bin n - 2 first, at the largest radius, and works down. A
-   * hazard rather than a rate: 1 - exp(-Lambda) is bounded in [0, 1], so the
-   * survival below can never leave [0, 1] and the multiplicity can never come
-   * out negative. That bound is structural, not a clamp.
-   */
-  double alive = 1.0;
+  for (uint32_t i = 0; i < n; i++) {
+    if (!(S[i] > 0.0)) {
+      SIF_LOG_ERROR(__TAG,
+        "sigma^2 at radius %u (%g) is %g; the walk has no scale there", i,
+        (double)radii[i], S[i]);
+      return SIF_ERR_RANGE;
+    }
+    f->S[i] = S[i];
+    f->nu[i] = (double)barrier[i] / sqrt(S[i]);
+  }
 
-  for (int32_t i = (int32_t)n_bins - 1; i >= 0; i--) {
+  return __fill_core(f, radii, n, barrier, deriv_variance);
+}
+
+int sif_ep_features_fill(sif_ep_features_t* f, const real_t* radii, uint32_t n,
+  const double* cov, const real_t* barrier, const double* deriv_variance) {
+
+  for (uint32_t i = 0; i < n; i++) {
+    f->S[i] = sif_ep_cov_get(cov, i, i);
+    if (!(f->S[i] > 0.0)) {
+      SIF_LOG_ERROR(__TAG,
+        "the covariance diagonal at radius %u (%g) is %g; the walk has no "
+        "scale there",
+        i, (double)radii[i], f->S[i]);
+      return SIF_ERR_RANGE;
+    }
+    f->nu[i] = (double)barrier[i] / sqrt(f->S[i]);
+  }
+
+  const double* V = deriv_variance;
+  double* V_owned = NULL;
+
+  if (!V) {
+    V_owned = malloc((size_t)n * sizeof(double));
+    if (!V_owned) {
+      SIF_LOG_ERROR(__TAG, "failed to allocate the derivative variance");
+      return SIF_ERR_ALLOC;
+    }
+    __deriv_variance_differenced(cov, f->S, n, V_owned);
+    V = V_owned;
+
+    SIF_LOG_WARNING(__TAG,
+      "no derivative variance supplied, so it was differenced off the "
+      "covariance; that estimate converges only at first order and is wrong by "
+      "several per cent at a realistic radius count, which propagates into the "
+      "result. Take it from sif_delta_covariance_pk instead");
+  }
+
+  const int rc = __fill_core(f, radii, n, barrier, V);
+  free(V_owned);
+  return rc;
+}
+
+/* --- The hazard and the survival --- */
+
+void sif_ep_hazard_bins(
+  const sif_ep_features_t* f, uint32_t n, double* lam) {
+
+  for (uint32_t i = 0; i + 1 < n; i++) {
 
     const double dS = f->S[i] - f->S[i + 1]; /* positive: S descends */
-    const double f0 = f->f_up[i + 1];
+    const double f0 = f->f_up[i + 1];        /* entered first */
     const double f1 = f->f_up[i];
 
     /*
-     * The rate carries exp(-nu^2/2) and so varies EXPONENTIALLY across a bin,
-     * not linearly. A trapezoid on that is wrong by an amount growing with the
-     * bin width, which made the whole result depend on how finely the caller
-     * sampled the radii -- and badly so, not marginally.
-     *
-     * Integrating the log-linear interpolant instead is exact for a pure
-     * exponential and costs one logarithm:
+     * Integrating the log-linear interpolant is exact for a pure exponential
+     * and costs one logarithm:
      *
      *     int f dS  =  (f1 - f0) dS / ln(f1 / f0)
      *
@@ -309,25 +325,59 @@ real_t* ep_multiplicity_upcrossing(
      * are close, where the trapezoid is both accurate and stable, so that is
      * the branch taken there.
      */
-    double lambda;
+    double v;
 
     if (f0 > 0.0 && f1 > 0.0) {
       const double lr = log(f1 / f0);
-      lambda = (fabs(lr) > 1e-6) ? (f1 - f0) * dS / lr : 0.5 * (f0 + f1) * dS;
+      v = (fabs(lr) > 1e-6) ? (f1 - f0) * dS / lr : 0.5 * (f0 + f1) * dS;
     } else {
-      lambda = 0.5 * (f0 + f1) * dS;
+      v = 0.5 * (f0 + f1) * dS;
     }
 
-    if (!(lambda > 0.0))
-      lambda = 0.0;
+    lam[i] = (v > 0.0) ? v : 0.0;
+  }
+}
 
-    const double h = 1.0 - exp(-lambda);
-    const double p = alive * h;
+void sif_ep_survival(const double* lam, const real_t* radii, uint32_t n_bins,
+  double alive0, real_t* out) {
+
+  double alive = alive0;
+
+  /* The walk enters the largest-radius bin first and works down. */
+  for (int32_t i = (int32_t)n_bins - 1; i >= 0; i--) {
+    const double p = alive * (1.0 - exp(-lam[i]));
     alive -= p;
 
     const double dr = (double)radii[i + 1] - (double)radii[i];
     out[i] = (real_t)(dr > 0.0 ? p / dr : 0.0);
   }
+}
 
+/* --- The multiplicity --- */
+
+real_t* sif_ep_multiplicity_upcrossing(
+  const sif_ep_features_t* f, const real_t* radii, uint32_t n) {
+
+  const uint32_t n_bins = n - 1;
+
+  real_t* out = sif_calloc_aligned((size_t)n_bins, sizeof(real_t));
+  double* lam = malloc((size_t)n_bins * sizeof(double));
+
+  if (!out || !lam) {
+    SIF_LOG_ERROR(__TAG, "failed to allocate the multiplicity array");
+    sif_free_aligned(out);
+    free(lam);
+    return NULL;
+  }
+
+  sif_ep_hazard_bins(f, n, lam);
+
+  /* Walks that begin above the barrier cross on the walk's first step, at the
+   * largest radius, and never enter a bin. That point mass is exactly the
+   * one-point tail there, so it is removed rather than estimated. */
+  sif_ep_survival(
+    lam, radii, n_bins, 1.0 - sif_ep_upper_tail(f->nu[n - 1]), out);
+
+  free(lam);
   return out;
 }

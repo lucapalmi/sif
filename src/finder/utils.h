@@ -27,7 +27,7 @@ static inline uint64_t sif_fast_get_flat_index(uint32_t n, uint32_t shift, uint3
   return (uint64_t)ix * n * n + (uint64_t)iy * n + iz;
 }
 
-uint64_t __get_flat_index(uint32_t n, uint32_t ix, uint32_t iy, uint32_t iz);
+uint64_t sif_get_flat_index(uint32_t n, uint32_t ix, uint32_t iy, uint32_t iz);
 
 /*
  * @brief Splits a flat grid index back into its three cell coordinates.
@@ -49,7 +49,7 @@ static inline void sif_unflatten_index(const sif_grid_t* grid, uint64_t flat,
 typedef struct {
   real_t delta;
   uint64_t flat_idx;
-} candidate_t;
+} sif_candidate_t;
 
 /*
  * @brief A reusable, self-growing list of candidate cells.
@@ -58,12 +58,12 @@ typedef struct {
  * the allocation is amortized across radii.
  */
 typedef struct {
-  candidate_t* items;
+  sif_candidate_t* items;
   uint64_t count;
   uint64_t capacity;
-} candidate_buffer_t;
+} sif_candidate_buffer_t;
 
-void sif_candidate_buffer_free(candidate_buffer_t* buf);
+void sif_candidate_buffer_free(sif_candidate_buffer_t* buf);
 
 /*
  * @brief Collects every unmasked cell at or below `threshold`, sorted by
@@ -77,7 +77,7 @@ void sif_candidate_buffer_free(candidate_buffer_t* buf);
  */
 int sif_finder_scan_candidates(const sif_grid_t* grid,
   const sif_bitmask_t* mask, real_t threshold, uint8_t require_minimum,
-  candidate_buffer_t* buf);
+  sif_candidate_buffer_t* buf);
 
 /* --- Per-radius reporting --- */
 
@@ -89,30 +89,30 @@ typedef struct {
   uint64_t rejected_rescale; /* radius rescaling did not converge */
   uint64_t rejected_exact;   /* failed a re-check after rescaling */
   uint64_t accepted;
-} finder_radius_stats_t;
+} sif_finder_radius_stats_t;
 
 /*
  * @brief Emits the per-radius TRACE breakdown and the INFO summary line.
  */
 void sif_finder_log_radius(const char* tag, real_t radius,
-  const finder_radius_stats_t* stats, uint64_t total_voids, double elapsed_s);
+  const sif_finder_radius_stats_t* stats, uint64_t total_voids, double elapsed_s);
 
 /* --- Geometry --- */
 
-void __refine_center_hessian(const sif_grid_t* grid, uint32_t ix, uint32_t iy,
+void sif_refine_center_hessian(const sif_grid_t* grid, uint32_t ix, uint32_t iy,
   uint32_t iz, real_t* cx, real_t* cy, real_t* cz);
 
-uint8_t __check_overlap_cells(const sif_bitmask_t* mask, uint32_t n_cells,
+uint8_t sif_check_overlap_cells(const sif_bitmask_t* mask, uint32_t n_cells,
   uint32_t p2_mask, uint32_t ix, uint32_t iy, uint32_t iz, uint32_t r);
 
-uint8_t __check_overlap_mesh(const sif_catalog_t* cat, real_t cx, real_t cy,
+uint8_t sif_check_overlap_mesh(const sif_catalog_t* cat, real_t cx, real_t cy,
   real_t cz, real_t r, real_t max_r, real_t box_length,
   const sif_cell_linked_list_t* cll, uint32_t p2_mask, real_t overlap_fraction);
 
 /*
  * @brief Marks every grid cell whose center lies inside the void sphere.
  */
-void __mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy, real_t cz,
+void sif_mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy, real_t cz,
   real_t r_true, uint32_t n_cells, uint32_t p2_mask, real_t cell_length);
 
 #endif // __SIF_FINDER_UTILS_H

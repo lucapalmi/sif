@@ -46,4 +46,7 @@ PyObject* py_sif_first_crossing_counts_ep(
 PyObject* py_sif_multiplicity_function_ep(
   PyObject* self, PyObject* args, PyObject* kwds);
 
+PyObject* py_sif_multiplicity_function_ep_emu(
+  PyObject* self, PyObject* args, PyObject* kwds);
+
 #endif /* __SIF_PY_MODEL_H__ */

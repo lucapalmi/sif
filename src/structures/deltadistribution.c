@@ -8,7 +8,7 @@
 
 #define __TAG "delta"
 
-sif_delta_distribution_t* __sif_delta_distribution_alloc(
+sif_delta_distribution_t* sif_delta_distribution_alloc(
   uint32_t n_radii, uint32_t n_bins) {
 
   sif_delta_distribution_t* dist = calloc(1, sizeof(sif_delta_distribution_t));

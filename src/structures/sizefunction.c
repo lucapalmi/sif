@@ -6,7 +6,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-sif_size_function_t* __sif_size_function_alloc(uint32_t n_bins) {
+sif_size_function_t* sif_size_function_alloc(uint32_t n_bins) {
 
   sif_size_function_t* vsf = calloc(1, sizeof(sif_size_function_t));
   if (!vsf) {
@@ -44,7 +44,7 @@ void sif_size_function_free(sif_size_function_t* vsf) {
   free(vsf);
 }
 
-void __sif_edges_from_centers(
+void sif_edges_from_centers(
   const real_t* centers, uint32_t n, real_t* edges) {
 
   for (uint32_t i = 1; i < n; i++)

@@ -107,6 +107,7 @@ set(SOURCES
     src/model/sizefunction.c
     src/model/excursionset.c
     src/model/ep_upcrossing.c
+    src/model/ep_emu.c
 
   # io
     src/io/core_io.c
@@ -116,6 +117,7 @@ set(SOURCES
 
   # math
     src/math/fft.c
+    src/math/nn.c
 
   # utils
     src/utils/timer.c

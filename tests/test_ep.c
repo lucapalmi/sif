@@ -209,9 +209,9 @@ static void test_cholesky(void) {
 
   double* cov = __model_covariance(radii, n, -0.5, 1.5);
 
-  ep_factor_t f;
-  CHECK(ep_factor_init(&f, n) == SIF_OK, "factor allocation failed");
-  CHECK(ep_cholesky(&f, cov, radii, n) == SIF_OK,
+  sif_ep_factor_t f;
+  CHECK(sif_ep_factor_init(&f, n) == SIF_OK, "factor allocation failed");
+  CHECK(sif_ep_cholesky(&f, cov, radii, n) == SIF_OK,
     "factorization of a positive definite covariance failed");
 
   /* Offsets describe the buffer they index. */
@@ -259,9 +259,9 @@ static void test_cholesky(void) {
         s += Lj[q] * Lm[q];
 
       const uint32_t a = n - 1 - j, b = n - 1 - m;
-      const double expect = ep_cov_get(cov, a, b);
-      const double scale = sqrt(ep_cov_get(cov, a, a) *
-                                ep_cov_get(cov, b, b));
+      const double expect = sif_ep_cov_get(cov, a, b);
+      const double scale = sqrt(sif_ep_cov_get(cov, a, a) *
+                                sif_ep_cov_get(cov, b, b));
       const double rel = fabs(s - expect) / scale;
       if (rel > worst)
         worst = rel;
@@ -281,11 +281,11 @@ static void test_cholesky(void) {
     for (size_t i = 0; i < SIF_COV_SIZE(m); i++)
       ones[i] = 1.0;
 
-    ep_factor_t g;
-    ep_factor_init(&g, m);
-    CHECK(ep_cholesky(&g, ones, radii, m) == SIF_OK,
+    sif_ep_factor_t g;
+    sif_ep_factor_init(&g, m);
+    CHECK(sif_ep_cholesky(&g, ones, radii, m) == SIF_OK,
       "the jitter failed to rescue a rank-one covariance");
-    ep_factor_free(&g);
+    sif_ep_factor_free(&g);
     sif_free_aligned(ones);
   }
 
@@ -298,14 +298,14 @@ static void test_cholesky(void) {
     double bad[3] = {1.0, 2.0, 1.0}; /* [[1, 2], [2, 1]], eigenvalues 3 and -1 */
     const real_t two_radii[2] = {1.0f, 2.0f};
 
-    ep_factor_t g;
-    ep_factor_init(&g, 2);
-    CHECK(ep_cholesky(&g, bad, two_radii, 2) == SIF_ERR_RANGE,
+    sif_ep_factor_t g;
+    sif_ep_factor_init(&g, 2);
+    CHECK(sif_ep_cholesky(&g, bad, two_radii, 2) == SIF_ERR_RANGE,
       "an indefinite covariance was accepted by the factorization");
-    ep_factor_free(&g);
+    sif_ep_factor_free(&g);
   }
 
-  ep_factor_free(&f);
+  sif_ep_factor_free(&f);
   sif_free_aligned(cov);
   free(radii);
 }
@@ -488,7 +488,7 @@ static real_t* __model_barrier(const double* cov, uint32_t n, double alpha,
 
   real_t* b = malloc(n * sizeof(real_t));
   for (uint32_t i = 0; i < n; i++) {
-    const double sigma = sqrt(ep_cov_get(cov, i, i));
+    const double sigma = sqrt(sif_ep_cov_get(cov, i, i));
     b[i] = (real_t)(alpha * (1.0 + pow(beta / sigma, gamma)));
   }
   return b;
@@ -633,7 +633,7 @@ static void test_marginal_bound(void) {
     for (uint32_t a = n; a-- > 0;) {
       cum += c[a];
 
-      const double sigma = sqrt(ep_cov_get(cov, a, a));
+      const double sigma = sqrt(sif_ep_cov_get(cov, a, a));
       const double p = __tail((double)barrier[a] / sigma);
       const double expect = (double)n_paths * p;
       const double sd = sqrt(expect * (1.0 - p));
@@ -989,11 +989,11 @@ static void test_covariance_properties(void) {
      * semi-definite by construction, so this is not a hope but an assertion
      * that the construction is what it claims to be.
      */
-    ep_factor_t f;
-    ep_factor_init(&f, n);
-    CHECK(ep_cholesky(&f, a, radii, n) == SIF_OK,
+    sif_ep_factor_t f;
+    sif_ep_factor_init(&f, n);
+    CHECK(sif_ep_cholesky(&f, a, radii, n) == SIF_OK,
       "a covariance built from a positive P(k) failed to factorize");
-    ep_factor_free(&f);
+    sif_ep_factor_free(&f);
   }
 
   sif_free_aligned(a);

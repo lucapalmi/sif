@@ -225,7 +225,7 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
   const uint32_t N = grid->n_cells;
   const real_t idx = (real_t)N / (real_t)grid->box_length;
 
-  int32_t n_slabs = system_get_max_threads();
+  int32_t n_slabs = sif_system_get_max_threads();
   n_slabs = ((int)N < n_slabs) ? (int)N : n_slabs;
 
   grid_slab_t* slabs = __grid_slabs_alloc(N, n_slabs);

@@ -11,8 +11,8 @@ int sif_parallel_pread(int fd, void* dest, size_t total_bytes, off_t base_offset
 
   #pragma omp parallel
   {
-    int tid = system_get_thread_num();
-    int num_t = system_get_num_threads();
+    int tid = sif_system_get_thread_num();
+    int num_t = sif_system_get_num_threads();
 
     /* Distribute the byte load across threads */
     size_t chunk = total_bytes / num_t;

@@ -124,4 +124,88 @@ NODISCARD real_t* sif_multiplicity_function_ep(const real_t* radii,
   uint32_t n_radii, const double* cov, const real_t* barrier, uint64_t n_paths,
   uint64_t seed, uint64_t* counts, sif_option_t opt);
 
+/*
+ * @brief Report on where an emulated call sat relative to what the emulator
+ * was trained over. Optional; pass NULL to sif_multiplicity_function_ep_emu if
+ * the answer is all that is wanted.
+ *
+ * Leaving the trained region is not an error and does not fail the call. It
+ * costs accuracy -- around 0.33% against the usual 0.13% at the edge that was
+ * measured -- and a sampler should be able to notice that without parsing the
+ * log or aborting a chain over one proposal.
+ */
+typedef struct {
+  /* Zero if either check below fired. */
+  int in_domain;
+
+  /* Bins with at least one input outside the range the fit covered. */
+  uint32_t n_bins_outside;
+
+  /* B / sigma at the LARGEST radius, and the fraction of walks that therefore
+   * begin already above the barrier. The walk starts there, so that fraction
+   * never enters any bin; above a per cent the emulator was measured to be
+   * unreliable. This one is the caller's to fix, by extending the radius grid
+   * outward -- no amount of training would help. */
+  real_t nu_origin;
+  real_t first_step_mass;
+
+  /* Expected relative error, from the trainer's held-out validation: the
+   * in-domain figure when in_domain is set, and the measured out-of-domain one
+   * otherwise. */
+  real_t expected_error;
+} sif_emu_domain_t;
+
+/*
+ * @brief The same multiplicity function as sif_multiplicity_function_ep,
+ * emulated: no random walks, no paths, well under a millisecond.
+ *
+ * A semi-analytic up-crossing rate corrected by a small trained network. The
+ * correction multiplies a hazard rather than the multiplicity itself, and the
+ * result is rebuilt through the survival recursion, so it is non-negative and
+ * integrates to at most one whatever the network predicts.
+ *
+ * @note Takes `sigma`, not the packed covariance that
+ * sif_multiplicity_function_ep needs. That is deliberate rather than an
+ * oversight: the emulator reads only the diagonal, so it needs n numbers where
+ * the Monte Carlo needs n(n+1)/2, and its cost is linear rather than quadratic
+ * in the radius count.
+ *
+ * @note Returns the answer the Monte Carlo CONVERGES to, not the answer it
+ * gives on the caller's grid. Those differ: a first-crossing walk sampled at 50
+ * radii sits about 1% from its own continuum limit. Comparing the two on a
+ * coarse grid shows a disagreement larger than either method's error, and the
+ * emulator is the one to trust. The emulated result moves by under 0.25%
+ * between 64 and 256 radii.
+ *
+ * @note Trained over CDM-like spectra and Sheth-Mo-Tormen barriers. Other
+ * spectral families are outside the contract, and the `domain` report does not
+ * reliably catch them: a per-feature range check passes power-law spectra that
+ * are several per cent wrong, because what distinguishes them is the shape of
+ * the whole trajectory rather than any pointwise value.
+ *
+ * @param radii Smoothing radii, strictly positive and strictly increasing, at
+ * least 3. Extend the grid outward far enough that few walks start above the
+ * barrier; `domain` reports whether that was achieved.
+ * @param n_radii Number of radii
+ * @param sigma R.m.s. density contrast per radius, strictly positive. Take it
+ * from sif_delta_covariance_pk so the barrier and the walk share one variance.
+ * @param barrier n_radii barrier heights, in the ascending order of radii,
+ * finite and compared as an upcrossing exactly as the Monte Carlo does
+ * @param deriv_variance n_radii entries: <(d delta / dS)^2> from
+ * sif_delta_covariance_pk. REQUIRED, unlike the Monte Carlo path, which has no
+ * use for it: differencing it off a covariance converges only at first order,
+ * which would make the answer depend on how finely `radii` was sampled -- the
+ * one property this entry point exists to avoid.
+ * @param domain Optional report; pass NULL to skip
+ * @param opt Reserved; pass SIF_DEFAULT
+ *
+ * @return Newly allocated array of n_radii - 1 values on the same bin centres
+ * as sif_multiplicity_function_ep, released with sif_free_aligned, or NULL on
+ * invalid input. An input outside the trained region is NOT invalid: the answer
+ * is returned, `domain` records it, and the log names the quantity responsible.
+ */
+NODISCARD real_t* sif_multiplicity_function_ep_emu(const real_t* radii,
+  uint32_t n_radii, const real_t* sigma, const real_t* barrier,
+  const double* deriv_variance, sif_emu_domain_t* domain, sif_option_t opt);
+
 #endif /* __SIF_MODEL_EXCURSIONSET_H__ */

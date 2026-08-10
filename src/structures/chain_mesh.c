@@ -194,8 +194,8 @@ static int _sif_chain_mesh_create(
 /* PASS 1: Count particles per cell (Run-Length Encoded Atomics) */
 #pragma omp parallel
   {
-    int tid = system_get_thread_num();
-    int num_threads = system_get_num_threads();
+    int tid = sif_system_get_thread_num();
+    int num_threads = sif_system_get_num_threads();
     uint64_t chunk_size = n_p / num_threads;
     uint64_t start_i = tid * chunk_size;
     uint64_t end_i = (tid == num_threads - 1) ? n_p : start_i + chunk_size;
@@ -245,8 +245,8 @@ static int _sif_chain_mesh_create(
 
 #pragma omp parallel
   {
-    int tid = system_get_thread_num();
-    int num_threads = system_get_num_threads();
+    int tid = sif_system_get_thread_num();
+    int num_threads = sif_system_get_num_threads();
     uint64_t chunk_size = n_p / num_threads;
     uint64_t start_i = tid * chunk_size;
     uint64_t end_i = (tid == num_threads - 1) ? n_p : start_i + chunk_size;

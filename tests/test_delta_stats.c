@@ -173,10 +173,10 @@ static inline int32_t kvec(uint32_t i, uint32_t n) {
  * only up to the Nyquist-plane power -- negligible for a well-smoothed field,
  * which is the point.
  */
-static real_t* derivative_field(fft_workspace_t* ws, uint32_t n,
-  filter_type_t filter, real_t radius, int axis) {
+static real_t* derivative_field(sif_fft_workspace_t* ws, uint32_t n,
+  sif_filter_type_t filter, real_t radius, int axis) {
 
-  if (fft_apply_filter(ws, filter, radius, BOX_LENGTH) != SIF_OK)
+  if (sif_fft_apply_filter(ws, filter, radius, BOX_LENGTH) != SIF_OK)
     return NULL;
 
   const uint32_t z_dim = n / 2 + 1;
@@ -220,7 +220,7 @@ static real_t* derivative_field(fft_workspace_t* ws, uint32_t n,
     }
   }
 
-  return fft_grid_backward(ws);
+  return sif_fft_grid_backward(ws);
 }
 
 /*
@@ -238,9 +238,9 @@ static void test_moments_match_field(
   uint32_t n, sif_option_t shuffle, const char* label) {
   printf("k-space vs real-space moments, n=%u (%s)\n", n, label);
 
-  /* The library owns the FFTW manager: fft_manager_finalize tears FFTW down
+  /* The library owns the FFTW manager: sif_fft_manager_finalize tears FFTW down
    * process-wide, so a test must never create and destroy one of its own. */
-  fft_manager_t* mgr = get_system_state()->fft_mgr;
+  sif_fft_manager_t* mgr = sif_get_system_state()->fft_mgr;
   sif_grid_t* grid = sif_grid_alloc(n, BOX_LENGTH);
   CHECK(mgr && grid, "setup failed");
   if (!mgr || !grid) {
@@ -251,28 +251,28 @@ static void test_moments_match_field(
 
   fill_field(grid->delta, n, BOX_LENGTH);
 
-  fft_workspace_t* ws = fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
   if (!ws) {
     sif_grid_free(grid);
     return;
   }
 
-  fft_grid_forward(ws, grid);
+  sif_fft_grid_forward(ws, grid);
 
   if (shuffle == SIF_DELTA_SHUFFLE_PHASES) {
-    CHECK(fft_randomize_phases(ws, 1234, false) == SIF_OK, "shuffle failed");
+    CHECK(sif_fft_randomize_phases(ws, 1234, false) == SIF_OK, "shuffle failed");
   } else if (shuffle == SIF_DELTA_SHUFFLE_GAUSSIAN) {
-    CHECK(fft_randomize_phases(ws, 1234, true) == SIF_OK, "shuffle failed");
+    CHECK(sif_fft_randomize_phases(ws, 1234, true) == SIF_OK, "shuffle failed");
   }
 
-  CHECK(fft_workspace_init_backward(ws, mgr) == SIF_OK, "init_backward failed");
+  CHECK(sif_fft_workspace_init_backward(ws, mgr) == SIF_OK, "init_backward failed");
 
   const real_t radius = 25.0f;
   const uint64_t total = (uint64_t)n * n * n;
 
   double predicted[3], high_k[3];
-  CHECK(fft_spectral_moments(ws, FILTER_GAUSSIAN, radius, BOX_LENGTH, 2, 0,
+  CHECK(sif_fft_spectral_moments(ws, FILTER_GAUSSIAN, radius, BOX_LENGTH, 2, 0,
           predicted, high_k) == SIF_OK,
     "moment evaluation failed");
 
@@ -323,7 +323,7 @@ static void test_moments_match_field(
     }
   }
 
-  fft_workspace_free(ws);
+  sif_fft_workspace_free(ws);
   sif_grid_free(grid);
 }
 
@@ -335,7 +335,7 @@ static void test_moments_match_field(
 static void test_shuffle_preserves_power(uint32_t n) {
   printf("phase shuffle preserves |delta_k|, n=%u\n", n);
 
-  fft_manager_t* mgr = get_system_state()->fft_mgr;
+  sif_fft_manager_t* mgr = sif_get_system_state()->fft_mgr;
   sif_grid_t* grid = sif_grid_alloc(n, BOX_LENGTH);
   if (!mgr || !grid) {
     CHECK(0, "setup failed");
@@ -344,14 +344,14 @@ static void test_shuffle_preserves_power(uint32_t n) {
 
   fill_field(grid->delta, n, BOX_LENGTH);
 
-  fft_workspace_t* ws = fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
   if (!ws) {
     sif_grid_free(grid);
     return;
   }
 
-  fft_grid_forward(ws, grid);
+  sif_fft_grid_forward(ws, grid);
 
   const uint64_t complex_cells = (uint64_t)n * n * (n / 2 + 1);
   double* before = malloc(complex_cells * sizeof(double));
@@ -374,7 +374,7 @@ static void test_shuffle_preserves_power(uint32_t n) {
       power += before[i] * before[i];
     const double rms = sqrt(power / (double)complex_cells);
 
-    CHECK(fft_randomize_phases(ws, 99, false) == SIF_OK, "shuffle failed");
+    CHECK(sif_fft_randomize_phases(ws, 99, false) == SIF_OK, "shuffle failed");
 
     uint64_t bad = 0, moved = 0;
     double power_after = 0.0;
@@ -406,7 +406,7 @@ static void test_shuffle_preserves_power(uint32_t n) {
     free(before);
   }
 
-  fft_workspace_free(ws);
+  sif_fft_workspace_free(ws);
   sif_grid_free(grid);
 }
 
@@ -695,7 +695,7 @@ static void test_radius_guards(uint32_t n) {
 static void test_pk_matches_field(uint32_t n) {
   printf("theory integral vs field sum, n=%u\n", n);
 
-  fft_manager_t* mgr = get_system_state()->fft_mgr;
+  sif_fft_manager_t* mgr = sif_get_system_state()->fft_mgr;
   sif_grid_t* grid = sif_grid_alloc(n, BOX_LENGTH);
   if (!mgr || !grid) {
     CHECK(0, "setup failed");
@@ -703,13 +703,13 @@ static void test_pk_matches_field(uint32_t n) {
   }
   fill_field(grid->delta, n, BOX_LENGTH);
 
-  fft_workspace_t* ws = fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
   if (!ws) {
     sif_grid_free(grid);
     return;
   }
-  fft_grid_forward(ws, grid);
+  sif_fft_grid_forward(ws, grid);
 
   /* Bin |delta_k|^2 into a spherically averaged P(k) on the box's own mode
    * spacing. P(k) = |delta_k|^2 * V / N^6 in this convention. */
@@ -816,7 +816,7 @@ static void test_pk_matches_field(uint32_t n) {
 
   free(p_sum);
   free(p_cnt);
-  fft_workspace_free(ws);
+  sif_fft_workspace_free(ws);
   sif_grid_free(grid);
 }
 

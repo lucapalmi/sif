@@ -421,7 +421,7 @@ sif_size_function_t* sif_size_function_bbks(
   double* ln_r = malloc((size_t)n * sizeof(double));
   double* ln_c = malloc((size_t)n * sizeof(double));
   double* slope = malloc((size_t)n * sizeof(double));
-  sif_size_function_t* out = __sif_size_function_alloc(n);
+  sif_size_function_t* out = sif_size_function_alloc(n);
 
   if (!ln_r || !ln_c || !slope || !out) {
     SIF_LOG_ERROR(__TAG, "failed to allocate the size function");
@@ -441,7 +441,7 @@ sif_size_function_t* sif_size_function_bbks(
   out->r_max = moments->radii[n - 1];
 
   memcpy(out->r_centers, moments->radii, (size_t)n * sizeof(real_t));
-  __sif_edges_from_centers(moments->radii, n, out->r_edges);
+  sif_edges_from_centers(moments->radii, n, out->r_edges);
 
   /*
    * Differentiated as C * dlnC/dlnR rather than by differencing C directly.

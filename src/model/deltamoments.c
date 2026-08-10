@@ -94,7 +94,7 @@ sif_delta_moments_t* sif_delta_moments_pk(const real_t* k,
   const bool gaussian =
     (opt & __SIF_DELTA_FILTER_MASK) == SIF_DELTA_FILTER_GAUSSIAN;
 
-  sif_delta_moments_t* m = __sif_delta_moments_alloc(n_radii, order);
+  sif_delta_moments_t* m = sif_delta_moments_alloc(n_radii, order);
   if (!m)
     return NULL;
 

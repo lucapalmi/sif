@@ -12,18 +12,18 @@
  * so the two passes agree on chunk boundaries regardless of the team size. */
 #define __FINDER_SCAN_CHUNKS 256
 
-SIF_DEFINE_QUICKSORT(__sort_candidates, candidate_t, a.delta < b.delta)
+SIF_DEFINE_QUICKSORT(__sort_candidates, sif_candidate_t, a.delta < b.delta)
 
 /* --- 1. Base Utilities --- */
 
-PURE_FUNCTION inline uint64_t __get_flat_index(
+PURE_FUNCTION inline uint64_t sif_get_flat_index(
   uint32_t n, uint32_t ix, uint32_t iy, uint32_t iz) {
   return (uint64_t)ix * n * n + (uint64_t)iy * n + (uint64_t)iz;
 }
 
 /* --- 2. Candidate scanning --- */
 
-void sif_candidate_buffer_free(candidate_buffer_t* buf) {
+void sif_candidate_buffer_free(sif_candidate_buffer_t* buf) {
   if (!buf)
     return;
   sif_free_aligned(buf->items);
@@ -62,7 +62,7 @@ static inline uint8_t __is_local_minimum(const real_t* delta, uint64_t i,
         if (dx == 0 && dy == 0 && dz == 0)
           continue;
         int32_t nz = sif_wrap_pbc((int32_t)iz + dz, N, p2_mask);
-        if (delta[__get_flat_index(N, nx, ny, nz)] <= center_val)
+        if (delta[sif_get_flat_index(N, nx, ny, nz)] <= center_val)
           return 0;
       }
     }
@@ -90,7 +90,7 @@ static inline uint8_t __cell_is_candidate(const real_t* delta,
 
 int sif_finder_scan_candidates(const sif_grid_t* grid,
   const sif_bitmask_t* mask, real_t threshold, uint8_t require_minimum,
-  candidate_buffer_t* buf) {
+  sif_candidate_buffer_t* buf) {
 
   const uint64_t total_cells = grid->total_cells;
   const uint32_t N = grid->n_cells;
@@ -146,8 +146,8 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
 
   if (n_candidates > buf->capacity) {
     const uint64_t new_capacity = (uint64_t)((double)n_candidates * 1.2) + 1;
-    candidate_t* items =
-      sif_malloc_aligned(new_capacity * sizeof(candidate_t));
+    sif_candidate_t* items =
+      sif_malloc_aligned(new_capacity * sizeof(sif_candidate_t));
     if (!items) {
       SIF_LOG_ERROR("finder",
         "failed to allocate %" PRIu64 " candidates", new_capacity);
@@ -158,7 +158,7 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
     buf->capacity = new_capacity;
   }
 
-  candidate_t* candidates = buf->items;
+  sif_candidate_t* candidates = buf->items;
 
   /* pass 2: write, each chunk into its own reserved span */
 #pragma omp parallel for schedule(static, 1)
@@ -185,7 +185,7 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
 }
 
 void sif_finder_log_radius(const char* tag, real_t radius,
-  const finder_radius_stats_t* stats, uint64_t total_voids, double elapsed_s) {
+  const sif_finder_radius_stats_t* stats, uint64_t total_voids, double elapsed_s) {
 
   SIF_LOG_TRACE(tag, "initial candidates:        %7" PRIu64,
     stats->n_candidates);
@@ -211,7 +211,7 @@ void sif_finder_log_radius(const char* tag, real_t radius,
 
 /* --- 3. Geometry --- */
 
-HOT_LOOP void __refine_center_hessian(const sif_grid_t* grid, uint32_t ix,
+HOT_LOOP void sif_refine_center_hessian(const sif_grid_t* grid, uint32_t ix,
   uint32_t iy, uint32_t iz, real_t* cx, real_t* cy, real_t* cz) {
 
   const uint32_t N = grid->n_cells;
@@ -274,37 +274,37 @@ HOT_LOOP void __refine_center_hessian(const sif_grid_t* grid, uint32_t ix,
  * can miss overlaps that do not touch a pole, which is why the exact mesh
  * check still runs on everything that survives.
  */
-HOT_LOOP PURE_FUNCTION uint8_t __check_overlap_cells(const sif_bitmask_t* mask,
+HOT_LOOP PURE_FUNCTION uint8_t sif_check_overlap_cells(const sif_bitmask_t* mask,
   uint32_t n_cells, uint32_t p2_mask, uint32_t ix, uint32_t iy, uint32_t iz, uint32_t r) {
 
   uint32_t x_nord = sif_wrap_pbc(ix + r, n_cells, p2_mask);
-  if (sif_bitmask_get(mask, __get_flat_index(n_cells, x_nord, iy, iz)))
+  if (sif_bitmask_get(mask, sif_get_flat_index(n_cells, x_nord, iy, iz)))
     return 1;
 
   uint32_t x_south = sif_wrap_pbc((int32_t)ix - r, n_cells, p2_mask);
-  if (sif_bitmask_get(mask, __get_flat_index(n_cells, x_south, iy, iz)))
+  if (sif_bitmask_get(mask, sif_get_flat_index(n_cells, x_south, iy, iz)))
     return 1;
 
   uint32_t y_nord = sif_wrap_pbc(iy + r, n_cells, p2_mask);
-  if (sif_bitmask_get(mask, __get_flat_index(n_cells, ix, y_nord, iz)))
+  if (sif_bitmask_get(mask, sif_get_flat_index(n_cells, ix, y_nord, iz)))
     return 1;
 
   uint32_t y_south = sif_wrap_pbc((int32_t)iy - r, n_cells, p2_mask);
-  if (sif_bitmask_get(mask, __get_flat_index(n_cells, ix, y_south, iz)))
+  if (sif_bitmask_get(mask, sif_get_flat_index(n_cells, ix, y_south, iz)))
     return 1;
 
   uint32_t z_nord = sif_wrap_pbc(iz + r, n_cells, p2_mask);
-  if (sif_bitmask_get(mask, __get_flat_index(n_cells, ix, iy, z_nord)))
+  if (sif_bitmask_get(mask, sif_get_flat_index(n_cells, ix, iy, z_nord)))
     return 1;
 
   uint32_t z_south = sif_wrap_pbc((int32_t)iz - r, n_cells, p2_mask);
-  if (sif_bitmask_get(mask, __get_flat_index(n_cells, ix, iy, z_south)))
+  if (sif_bitmask_get(mask, sif_get_flat_index(n_cells, ix, iy, z_south)))
     return 1;
 
   return 0;
 }
 
-HOT_LOOP uint8_t __check_overlap_mesh(const sif_catalog_t* cat, real_t cx,
+HOT_LOOP uint8_t sif_check_overlap_mesh(const sif_catalog_t* cat, real_t cx,
   real_t cy, real_t cz, real_t r, real_t max_r, real_t box_length,
   const sif_cell_linked_list_t* cll, uint32_t p2_mask, real_t overlap_fraction) {
 
@@ -408,7 +408,7 @@ HOT_LOOP uint8_t __check_overlap_mesh(const sif_catalog_t* cat, real_t cx,
 
 /* --- 4. Marking --- */
 
-HOT_LOOP void __mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy,
+HOT_LOOP void sif_mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy,
   real_t cz, real_t r_true, uint32_t n_cells, uint32_t p2_mask,
   real_t cell_length) {
 
@@ -461,7 +461,7 @@ HOT_LOOP void __mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy,
         if (dxy2 + dist_z * dist_z <= r2) {
           const uint32_t wrap_z = sif_wrap_pbc(global_z, n_cells, p2_mask);
           sif_bitmask_set_atomic(
-            mask, __get_flat_index(n_cells, wrap_x, wrap_y, wrap_z));
+            mask, sif_get_flat_index(n_cells, wrap_x, wrap_y, wrap_z));
         }
       }
     }

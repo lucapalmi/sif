@@ -29,7 +29,7 @@ typedef struct {
   double*   chol;       /* n_packed entries */
   uint64_t* row_offset; /* n + 1 entries; row_offset[n] == n_packed */
   uint64_t  n_packed;
-} ep_factor_t;
+} sif_ep_factor_t;
 
 /*
  * @brief Allocates a factor for n rows, zero-filled.
@@ -39,9 +39,9 @@ typedef struct {
  *
  * @return SIF_OK, or SIF_ERR_ALLOC with the struct left safe to free.
  */
-int ep_factor_init(ep_factor_t* f, uint32_t n);
+int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n);
 
-void ep_factor_free(ep_factor_t* f);
+void sif_ep_factor_free(sif_ep_factor_t* f);
 
 /*
  * @brief Factorizes a packed covariance into walk order.
@@ -56,7 +56,7 @@ void ep_factor_free(ep_factor_t* f);
  * @return SIF_OK, or SIF_ERR_RANGE if a pivot is not positive, having logged
  * the offending radius and the correlation that explains it.
  */
-int ep_cholesky(ep_factor_t* f, const double* cov,
+int sif_ep_cholesky(sif_ep_factor_t* f, const double* cov,
   const real_t* radii, uint32_t n);
 
 /*
@@ -64,7 +64,7 @@ int ep_cholesky(ep_factor_t* f, const double* cov,
  *
  * Symmetric in its arguments, so callers need not order them.
  */
-static inline double ep_cov_get(
+static inline double sif_ep_cov_get(
   const double* cov, uint32_t i, uint32_t j) {
   return (i >= j) ? cov[SIF_COV_INDEX(i, j)] : cov[SIF_COV_INDEX(j, i)];
 }
@@ -88,10 +88,10 @@ typedef struct {
   double* y;      /* (dB/dS - mu) / Sigma, how fast the barrier runs away from
                    * the walk, in units of the walk's own slope scatter */
   double* f_up;   /* the up-crossing rate itself, per unit S */
-} ep_features_t;
+} sif_ep_features_t;
 
-int ep_features_init(ep_features_t* f, uint32_t n);
-void ep_features_free(ep_features_t* f);
+int sif_ep_features_init(sif_ep_features_t* f, uint32_t n);
+void sif_ep_features_free(sif_ep_features_t* f);
 
 /*
  * @brief Fills the local description from a covariance and a barrier.
@@ -107,8 +107,54 @@ void ep_features_free(ep_features_t* f);
  *
  * @return SIF_OK, or SIF_ERR_RANGE if the covariance is not a covariance.
  */
-int ep_features_fill(ep_features_t* f, const real_t* radii, uint32_t n,
+int sif_ep_features_fill(sif_ep_features_t* f, const real_t* radii, uint32_t n,
   const double* cov, const real_t* barrier, const double* deriv_variance);
+
+/*
+ * @brief The same, from the covariance DIAGONAL alone.
+ *
+ * Everything above the diagonal is dead weight to this calculation: the local
+ * description reads S(R, R) and nothing else. The emulator therefore never
+ * builds a covariance at all, and this is the entry point it uses.
+ *
+ * @param S n entries, sigma^2 per radius, strictly positive and descending
+ * with the index
+ * @param deriv_variance REQUIRED here, unlike above: with no off-diagonal
+ * elements there is nothing to difference as a fallback.
+ */
+int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
+  uint32_t n, const double* S, const real_t* barrier,
+  const double* deriv_variance);
+
+/*
+ * @brief Per-bin integrated hazard of the up-crossing rate, n - 1 entries.
+ *
+ * Integrates the LOG-LINEAR interpolant of the rate across each bin rather
+ * than the rate itself. The rate carries exp(-nu^2/2) and so varies
+ * exponentially across a bin; a trapezoid on that makes the answer depend on
+ * how finely the caller sampled the radii, which is exactly what this whole
+ * model exists to avoid.
+ */
+void sif_ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam);
+
+/*
+ * @brief Survival recursion: per-bin hazards to a multiplicity function.
+ *
+ * @param alive0 Fraction of walks still walking when the largest radius is
+ * reached. Walks that begin ABOVE the barrier cross on the first step and
+ * never enter any bin, so this is 1 - (1 - Phi(nu at the largest radius)), a
+ * quantity that is exactly analytic and must not be left at one.
+ *
+ * A hazard rather than a rate: 1 - exp(-Lambda) is bounded in [0, 1] whatever
+ * a correction does to Lambda, so the survival can never leave [0, 1] and the
+ * multiplicity can never come out negative. Structural, not a clamp -- and the
+ * reason the emulator corrects a hazard rather than the multiplicity itself.
+ */
+void sif_ep_survival(const double* lam, const real_t* radii, uint32_t n_bins,
+  double alive0, real_t* out);
+
+/* 1 - Phi(x), the upper tail of the standard normal. */
+double sif_ep_upper_tail(double x);
 
 /*
  * @brief First-crossing multiplicity from the up-crossing rate alone.
@@ -122,7 +168,7 @@ int ep_features_fill(ep_features_t* f, const real_t* radii, uint32_t n,
  * @return Newly allocated array of n - 1 values on the bin centres, released
  * with sif_free_aligned, or NULL on failure.
  */
-NODISCARD real_t* ep_multiplicity_upcrossing(const ep_features_t* f,
+NODISCARD real_t* sif_ep_multiplicity_upcrossing(const sif_ep_features_t* f,
   const real_t* radii, uint32_t n);
 
 #endif /* __SIF_EP_INTERNAL_H__ */

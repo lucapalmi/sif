@@ -9,7 +9,7 @@
 
 #define __TAG "delta"
 
-sif_delta_moments_t* __sif_delta_moments_alloc(uint32_t n_radii, uint8_t order) {
+sif_delta_moments_t* sif_delta_moments_alloc(uint32_t n_radii, uint8_t order) {
 
   sif_delta_moments_t* m = calloc(1, sizeof(sif_delta_moments_t));
   if (!m) {

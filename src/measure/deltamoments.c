@@ -81,13 +81,13 @@ sif_delta_moments_t* sif_delta_moments_grid(
   if (__validate_order(order) != SIF_OK)
     return NULL;
 
-  if (__sif_delta_validate_radii(grid, radii, n_radii) != SIF_OK)
+  if (sif_delta_validate_radii(grid, radii, n_radii) != SIF_OK)
     return NULL;
 
-  if (__sif_delta_validate_options(opt) != SIF_OK)
+  if (sif_delta_validate_options(opt) != SIF_OK)
     return NULL;
 
-  const filter_type_t filter = __sif_delta_filter(opt);
+  const sif_filter_type_t filter = sif_delta_filter(opt);
 
   if (filter == FILTER_TOP_HAT && order >= 2) {
     SIF_LOG_INFO(__TAG,
@@ -96,7 +96,7 @@ sif_delta_moments_t* sif_delta_moments_grid(
       "to SIF_DELTA_FILTER_GAUSSIAN");
   }
 
-  sif_delta_moments_t* m = __sif_delta_moments_alloc(n_radii, order);
+  sif_delta_moments_t* m = sif_delta_moments_alloc(n_radii, order);
   if (!m)
     return NULL;
 
@@ -107,7 +107,7 @@ sif_delta_moments_t* sif_delta_moments_grid(
     order, n_radii, grid->n_cells,
     filter == FILTER_GAUSSIAN ? "Gaussian" : "top-hat");
 
-  fft_workspace_t* ws = __sif_delta_prepare_spectrum(grid, seed, opt);
+  sif_fft_workspace_t* ws = sif_delta_prepare_spectrum(grid, seed, opt);
   if (!ws) {
     sif_delta_moments_free(m);
     return NULL;
@@ -118,10 +118,10 @@ sif_delta_moments_t* sif_delta_moments_grid(
 
   for (uint32_t k = 0; k < n_radii; k++) {
     /* Every order shares one pass over the spectrum. */
-    if (fft_spectral_moments(ws, filter, radii[k], grid->box_length, order,
+    if (sif_fft_spectral_moments(ws, filter, radii[k], grid->box_length, order,
           n_tracers, sigma_sq, high_k) != SIF_OK) {
       SIF_LOG_ERROR(__TAG, "failed to evaluate the moments at radius %u", k);
-      fft_workspace_free(ws);
+      sif_fft_workspace_free(ws);
       sif_delta_moments_free(m);
       return NULL;
     }
@@ -129,7 +129,7 @@ sif_delta_moments_t* sif_delta_moments_grid(
     __store(m, k, sigma_sq, high_k);
   }
 
-  fft_workspace_free(ws);
+  sif_fft_workspace_free(ws);
 
   SIF_LOG_INFO(__TAG, "sigma_0..sigma_%u measured from the field", order);
 

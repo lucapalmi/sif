@@ -5,7 +5,7 @@
 
 #include <stdbool.h>
 
-int __sif_delta_validate_radii(
+int sif_delta_validate_radii(
   const sif_grid_t* grid, const real_t* radii, uint32_t n_radii) {
 
   const real_t min_radius = (real_t)(__SIF_DELTA_MIN_CELLS_PER_RADIUS *
@@ -37,13 +37,13 @@ int __sif_delta_validate_radii(
   return SIF_OK;
 }
 
-filter_type_t __sif_delta_filter(sif_option_t opt) {
+sif_filter_type_t sif_delta_filter(sif_option_t opt) {
   return (opt & __SIF_DELTA_FILTER_MASK) == SIF_DELTA_FILTER_GAUSSIAN
            ? FILTER_GAUSSIAN
            : FILTER_TOP_HAT;
 }
 
-int __sif_delta_validate_options(sif_option_t opt) {
+int sif_delta_validate_options(sif_option_t opt) {
   const uint32_t shuffle = opt & __SIF_DELTA_SHUFFLE_MASK;
 
   if (shuffle != SIF_DELTA_SHUFFLE_NONE &&
@@ -63,23 +63,23 @@ int __sif_delta_validate_options(sif_option_t opt) {
   return SIF_OK;
 }
 
-fft_workspace_t* __sif_delta_prepare_spectrum(
+sif_fft_workspace_t* sif_delta_prepare_spectrum(
   const sif_grid_t* grid, uint64_t seed, sif_option_t opt) {
 
-  system_state_t* state = get_system_state();
+  sif_system_state_t* state = sif_get_system_state();
 
-  fft_workspace_t* ws = fft_workspace_alloc(state->fft_mgr, grid->n_cells);
+  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(state->fft_mgr, grid->n_cells);
   if (!ws) {
     SIF_LOG_ERROR(__SIF_DELTA_TAG, "failed to allocate the FFT workspace");
     return NULL;
   }
 
-  fft_grid_forward(ws, grid);
+  sif_fft_grid_forward(ws, grid);
 
   if (!(opt & SIF_DELTA_KEEP_CIC_WINDOW)) {
-    if (fft_deconvolve_cic(ws) != SIF_OK) {
+    if (sif_fft_deconvolve_cic(ws) != SIF_OK) {
       SIF_LOG_ERROR(__SIF_DELTA_TAG, "failed to deconvolve the CIC window");
-      fft_workspace_free(ws);
+      sif_fft_workspace_free(ws);
       return NULL;
     }
   }
@@ -87,9 +87,9 @@ fft_workspace_t* __sif_delta_prepare_spectrum(
   const uint32_t shuffle = opt & __SIF_DELTA_SHUFFLE_MASK;
   if (shuffle != SIF_DELTA_SHUFFLE_NONE) {
     const bool resample = (shuffle == SIF_DELTA_SHUFFLE_GAUSSIAN);
-    if (fft_randomize_phases(ws, seed, resample) != SIF_OK) {
+    if (sif_fft_randomize_phases(ws, seed, resample) != SIF_OK) {
       SIF_LOG_ERROR(__SIF_DELTA_TAG, "failed to randomize the phases");
-      fft_workspace_free(ws);
+      sif_fft_workspace_free(ws);
       return NULL;
     }
   }

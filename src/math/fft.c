@@ -20,8 +20,8 @@ static inline uint64_t __fft_complex_count(uint32_t n) {
   return (uint64_t)n * n * (uint64_t)(n / 2 + 1);
 }
 
-fft_manager_t* fft_manager_init(bool skip_tuning, const char* wisdom_dir) {
-  fft_manager_t* mgr = malloc(sizeof(fft_manager_t));
+sif_fft_manager_t* sif_fft_manager_init(bool skip_tuning, const char* wisdom_dir) {
+  sif_fft_manager_t* mgr = malloc(sizeof(sif_fft_manager_t));
   if (!mgr)
     return NULL;
 
@@ -37,7 +37,7 @@ fft_manager_t* fft_manager_init(bool skip_tuning, const char* wisdom_dir) {
   return mgr;
 }
 
-void fft_manager_finalize(fft_manager_t* mgr) {
+void sif_fft_manager_finalize(sif_fft_manager_t* mgr) {
   if (!mgr)
     return;
 
@@ -52,13 +52,13 @@ void fft_manager_finalize(fft_manager_t* mgr) {
   free(mgr);
 }
 
-fft_workspace_t* fft_workspace_alloc(fft_manager_t* mgr, uint32_t n_cells) {
+sif_fft_workspace_t* sif_fft_workspace_alloc(sif_fft_manager_t* mgr, uint32_t n_cells) {
   if (!mgr || n_cells == 0) {
     SIF_LOG_ERROR("fft_context", "invalid manager or grid size");
     return NULL;
   }
 
-  fft_workspace_t* ws = malloc(sizeof(fft_workspace_t));
+  sif_fft_workspace_t* ws = malloc(sizeof(sif_fft_workspace_t));
   if (!ws)
     return NULL;
 
@@ -80,13 +80,13 @@ fft_workspace_t* fft_workspace_alloc(fft_manager_t* mgr, uint32_t n_cells) {
 
   const uint64_t complex_cells = __fft_complex_count(n_cells);
 
-  real_fftw_plan_with_nthreads(system_get_max_threads());
+  real_fftw_plan_with_nthreads(sif_system_get_max_threads());
 
-  ws->delta_k = real_fftw_malloc(complex_cells * sizeof(real_complex_t));
+  ws->delta_k = real_fftw_malloc(complex_cells * sizeof(sif_real_complex_t));
   if (!ws->delta_k) {
     SIF_LOG_ERROR("fft_context",
       "failed to allocate the spectrum buffer (%" PRIu64 " bytes)",
-      complex_cells * sizeof(real_complex_t));
+      complex_cells * sizeof(sif_real_complex_t));
     free(ws);
     return NULL;
   }
@@ -94,7 +94,7 @@ fft_workspace_t* fft_workspace_alloc(fft_manager_t* mgr, uint32_t n_cells) {
   /* Planning with FFTW_MEASURE overwrites its input, so plan against a scratch
    * buffer rather than the caller's density field. */
   real_t* dummy_real_forward =
-    real_fftw_malloc(complex_cells * sizeof(real_complex_t));
+    real_fftw_malloc(complex_cells * sizeof(sif_real_complex_t));
   if (!dummy_real_forward) {
     SIF_LOG_ERROR("fft_context", "failed to allocate the planning scratch");
     real_fftw_free(ws->delta_k);
@@ -116,7 +116,7 @@ fft_workspace_t* fft_workspace_alloc(fft_manager_t* mgr, uint32_t n_cells) {
   return ws;
 }
 
-int fft_workspace_init_backward(fft_workspace_t* ws, fft_manager_t* mgr) {
+int sif_fft_workspace_init_backward(sif_fft_workspace_t* ws, sif_fft_manager_t* mgr) {
   if (!ws || !mgr)
     return SIF_ERR_INVALID;
 
@@ -125,11 +125,11 @@ int fft_workspace_init_backward(fft_workspace_t* ws, fft_manager_t* mgr) {
 
   const uint64_t complex_cells = __fft_complex_count(ws->n_cells);
 
-  ws->delta_k_cpy = sif_malloc_aligned(complex_cells * sizeof(real_complex_t));
+  ws->delta_k_cpy = sif_malloc_aligned(complex_cells * sizeof(sif_real_complex_t));
   if (!ws->delta_k_cpy) {
     SIF_LOG_ERROR("fft_context",
       "failed to allocate the real-space buffer (%" PRIu64 " bytes)",
-      complex_cells * sizeof(real_complex_t));
+      complex_cells * sizeof(sif_real_complex_t));
     return SIF_ERR_ALLOC;
   }
 
@@ -146,7 +146,7 @@ int fft_workspace_init_backward(fft_workspace_t* ws, fft_manager_t* mgr) {
   return SIF_OK;
 }
 
-real_t* fft_workspace_take_real_buffer(fft_workspace_t* ws) {
+real_t* sif_fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
   if (!ws || !ws->delta_k_cpy)
     return NULL;
 
@@ -162,7 +162,7 @@ real_t* fft_workspace_take_real_buffer(fft_workspace_t* ws) {
   return buffer;
 }
 
-void fft_workspace_free(fft_workspace_t* ws) {
+void sif_fft_workspace_free(sif_fft_workspace_t* ws) {
   if (!ws) {
     SIF_LOG_WARNING("fft_context", "cannot free a NULL workspace");
     return;
@@ -200,11 +200,11 @@ static inline uint64_t __get_flat_complex_index(
 
 /*
  * Builds the radial filter lookup table, indexed directly by the integer |k|^2.
- * Shared by fft_apply_filter and fft_filtered_variance so the two can never
+ * Shared by sif_fft_apply_filter and fft_filtered_variance so the two can never
  * disagree about what the filter actually is.
  */
 static real_t* __fft_build_filter_lut(
-  filter_type_t filter, real_t r, real_t box_length, uint32_t n_cells) {
+  sif_filter_type_t filter, real_t r, real_t box_length, uint32_t n_cells) {
 
   const uint32_t N_half = n_cells >> 1;
   const uint32_t max_k2 = 3 * N_half * N_half;
@@ -239,8 +239,8 @@ static real_t* __fft_build_filter_lut(
   return lut;
 }
 
-int fft_apply_filter(
-  fft_workspace_t* ws, filter_type_t filter, real_t r, real_t box_length) {
+int sif_fft_apply_filter(
+  sif_fft_workspace_t* ws, sif_filter_type_t filter, real_t r, real_t box_length) {
 
   if (!ws || !ws->delta_k_cpy) {
     SIF_LOG_ERROR("fft_context",
@@ -252,7 +252,7 @@ int fft_apply_filter(
 
   if (filter == FILTER_NONE) {
     memcpy(
-      ws->delta_k_cpy, ws->delta_k, complex_cells * sizeof(real_complex_t));
+      ws->delta_k_cpy, ws->delta_k, complex_cells * sizeof(sif_real_complex_t));
     SIF_LOG_TRACE("fft_context", "no filter applied");
     return SIF_OK;
   }
@@ -300,13 +300,13 @@ int fft_apply_filter(
   return SIF_OK;
 }
 
-void fft_grid_forward(fft_workspace_t* ws, const sif_grid_t* grid) {
+void sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
   real_fftw_execute_dft_r2c(
     ws->forward_plan, (real_t*)grid->delta, ws->delta_k);
   SIF_LOG_TRACE("fft_context", "forward fft on cubic grid executed");
 }
 
-real_t* fft_grid_backward(fft_workspace_t* ws) {
+real_t* sif_fft_grid_backward(sif_fft_workspace_t* ws) {
   if (!ws || !ws->backward_plan || !ws->delta_k_cpy) {
     SIF_LOG_ERROR("fft_context", "the backward stage is not initialized");
     return NULL;
@@ -353,7 +353,7 @@ static inline double __fft_sinc(double x) {
   return sin(x) / x;
 }
 
-int fft_deconvolve_cic(fft_workspace_t* ws) {
+int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws) {
   if (!ws || !ws->delta_k) {
     SIF_LOG_ERROR("fft_context", "no spectrum to deconvolve");
     return SIF_ERR_INVALID;
@@ -443,8 +443,8 @@ static inline real_t __fft_amp_real(
   return (real_t)(a * sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2));
 }
 
-int fft_randomize_phases(
-  fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes) {
+int sif_fft_randomize_phases(
+  sif_fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes) {
 
   if (!ws || !ws->delta_k) {
     SIF_LOG_ERROR("fft_context", "no spectrum to randomize");
@@ -557,7 +557,7 @@ int fft_randomize_phases(
 
 /* --- Fourier-space spectral moments --- */
 
-int fft_spectral_moments(const fft_workspace_t* ws, filter_type_t filter,
+int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t filter,
   real_t r, real_t box_length, uint8_t max_order, uint64_t n_tracers,
   double* sigma_sq, double* high_k_fraction) {
 
@@ -591,7 +591,7 @@ int fft_spectral_moments(const fft_workspace_t* ws, filter_type_t filter,
    * require a newer OpenMP than the rest of the library assumes.
    */
   const int n_threads =
-    system_get_max_threads() > 0 ? system_get_max_threads() : 1;
+    sif_system_get_max_threads() > 0 ? sif_system_get_max_threads() : 1;
   const size_t stride = 3 * (size_t)n_moments;
 
   double* scratch = calloc((size_t)n_threads * stride, sizeof(double));
@@ -606,7 +606,7 @@ int fft_spectral_moments(const fft_workspace_t* ws, filter_type_t filter,
 
 #pragma omp parallel num_threads(n_threads)
   {
-    double* local = scratch + (size_t)system_get_thread_num() * stride;
+    double* local = scratch + (size_t)sif_system_get_thread_num() * stride;
     double* l_sum = local;
     double* l_win = local + n_moments;
     double* l_high = local + 2 * n_moments;

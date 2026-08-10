@@ -31,7 +31,7 @@ static void fill_random(real_t* d, uint64_t n, unsigned seed) {
 static void test_roundtrip(uint32_t n) {
   printf("fft round-trip, n=%u\n", n);
 
-  fft_manager_t* mgr = fft_manager_init(true /* ESTIMATE */, NULL);
+  sif_fft_manager_t* mgr = sif_fft_manager_init(true /* ESTIMATE */, NULL);
   CHECK(mgr != NULL, "manager init failed");
   if (!mgr)
     return;
@@ -39,7 +39,7 @@ static void test_roundtrip(uint32_t n) {
   sif_grid_t* grid = sif_grid_alloc(n, 100.0f);
   CHECK(grid != NULL, "grid alloc failed");
   if (!grid) {
-    fft_manager_finalize(mgr);
+    sif_fft_manager_finalize(mgr);
     return;
   }
 
@@ -48,25 +48,25 @@ static void test_roundtrip(uint32_t n) {
   fill_random(grid->delta, total, 12345);
   memcpy(reference, grid->delta, total * sizeof(real_t));
 
-  fft_workspace_t* ws = fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
 
   if (ws) {
-    fft_grid_forward(ws, grid);
+    sif_fft_grid_forward(ws, grid);
     sif_free_aligned(grid->delta);
     grid->delta = NULL;
 
-    CHECK(fft_workspace_init_backward(ws, mgr) == SIF_OK,
+    CHECK(sif_fft_workspace_init_backward(ws, mgr) == SIF_OK,
       "init_backward failed");
 
     /* Filtering must be rejected before the backward stage exists. */
-    CHECK(fft_apply_filter(ws, (filter_type_t)99, 1.0f, 100.0f) ==
+    CHECK(sif_fft_apply_filter(ws, (sif_filter_type_t)99, 1.0f, 100.0f) ==
             SIF_ERR_INVALID,
       "an unsupported filter should be rejected");
 
-    CHECK(fft_apply_filter(ws, FILTER_NONE, 0, 0) == SIF_OK,
+    CHECK(sif_fft_apply_filter(ws, FILTER_NONE, 0, 0) == SIF_OK,
       "FILTER_NONE failed");
-    grid->delta = fft_grid_backward(ws);
+    grid->delta = sif_fft_grid_backward(ws);
     CHECK(grid->delta != NULL, "backward returned NULL");
 
     if (grid->delta) {
@@ -87,21 +87,21 @@ static void test_roundtrip(uint32_t n) {
     }
 
     /* Ownership handoff: the workspace must relinquish the buffer. */
-    real_t* taken = fft_workspace_take_real_buffer(ws);
+    real_t* taken = sif_fft_workspace_take_real_buffer(ws);
     CHECK(taken == grid->delta, "take_real_buffer returned a different pointer");
     CHECK(ws->delta_k_cpy == NULL, "workspace still references the buffer");
-    CHECK(fft_workspace_take_real_buffer(ws) == NULL,
+    CHECK(sif_fft_workspace_take_real_buffer(ws) == NULL,
       "a second take should return NULL");
-    CHECK(fft_grid_backward(ws) == NULL,
+    CHECK(sif_fft_grid_backward(ws) == NULL,
       "backward after take should fail cleanly");
 
-    fft_workspace_free(ws); /* must not free the taken buffer */
+    sif_fft_workspace_free(ws); /* must not free the taken buffer */
     CHECK(grid->delta[0] == grid->delta[0], "buffer freed out from under us");
   }
 
   free(reference);
   sif_grid_free(grid);
-  fft_manager_finalize(mgr);
+  sif_fft_manager_finalize(mgr);
   printf("  ok\n");
 }
 
@@ -110,7 +110,7 @@ static void test_roundtrip(uint32_t n) {
 static void test_tophat_preserves_constant(uint32_t n) {
   printf("top-hat on a constant field, n=%u\n", n);
 
-  fft_manager_t* mgr = fft_manager_init(true, NULL);
+  sif_fft_manager_t* mgr = sif_fft_manager_init(true, NULL);
   sif_grid_t* grid = sif_grid_alloc(n, 100.0f);
   if (!mgr || !grid) {
     CHECK(0, "setup failed");
@@ -122,16 +122,16 @@ static void test_tophat_preserves_constant(uint32_t n) {
   for (uint64_t i = 0; i < total; i++)
     grid->delta[i] = value;
 
-  fft_workspace_t* ws = fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
   if (ws) {
-    fft_grid_forward(ws, grid);
+    sif_fft_grid_forward(ws, grid);
     sif_free_aligned(grid->delta);
     grid->delta = NULL;
 
-    CHECK(fft_workspace_init_backward(ws, mgr) == SIF_OK, "init_backward");
-    CHECK(fft_apply_filter(ws, FILTER_TOP_HAT, 12.0f, 100.0f) == SIF_OK,
+    CHECK(sif_fft_workspace_init_backward(ws, mgr) == SIF_OK, "init_backward");
+    CHECK(sif_fft_apply_filter(ws, FILTER_TOP_HAT, 12.0f, 100.0f) == SIF_OK,
       "top-hat filter failed");
-    grid->delta = fft_grid_backward(ws);
+    grid->delta = sif_fft_grid_backward(ws);
 
     double max_err = 0.0;
     for (uint64_t i = 0; i < total; i++) {
@@ -143,12 +143,12 @@ static void test_tophat_preserves_constant(uint32_t n) {
       max_err);
     printf("  max deviation from constant: %.3g\n", max_err);
 
-    grid->delta = fft_workspace_take_real_buffer(ws);
-    fft_workspace_free(ws);
+    grid->delta = sif_fft_workspace_take_real_buffer(ws);
+    sif_fft_workspace_free(ws);
   }
 
   sif_grid_free(grid);
-  fft_manager_finalize(mgr);
+  sif_fft_manager_finalize(mgr);
   printf("  ok\n");
 }
 

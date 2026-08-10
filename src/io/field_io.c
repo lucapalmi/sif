@@ -239,14 +239,14 @@ int sif_field_read_ascii(sif_field_t* field, const char* filepath,
     return 1;
   }
 
-  col_target_t targets[32];
-  int n_cols = str_decode_format(fmt, targets, 32);
+  sif_col_target_t targets[32];
+  int n_cols = sif_str_decode_format(fmt, targets, 32);
 
   uint8_t requires_mass = 0;
   uint8_t requires_velocity = 0;
   for (int i = 0; i < n_cols; i++) {
-    if (targets[i] == COL_M) requires_mass = 1;
-    if (targets[i] == COL_VX || targets[i] == COL_VY || targets[i] == COL_VZ)
+    if (targets[i] == SIF_COL_M) requires_mass = 1;
+    if (targets[i] == SIF_COL_VX || targets[i] == SIF_COL_VY || targets[i] == SIF_COL_VZ)
       requires_velocity = 1;
   }
 
@@ -305,17 +305,17 @@ int sif_field_read_ascii(sif_field_t* field, const char* filepath,
     real_t val = 0.0;
 
     for (int col = 0; col < n_cols; col++) {
-      if (!str_extract_next_real(&cursor, delimiter, &val)) break;
+      if (!sif_str_extract_next_real(&cursor, delimiter, &val)) break;
 
       switch (targets[col]) {
-      case COL_X: field->x[loaded] = val; break;
-      case COL_Y: field->y[loaded] = val; break;
-      case COL_Z: field->z[loaded] = val; break;
-      case COL_VX: if (field->vx) field->vx[loaded] = val; break;
-      case COL_VY: if (field->vy) field->vy[loaded] = val; break;
-      case COL_VZ: if (field->vz) field->vz[loaded] = val; break;
-      case COL_M: if (field->masses) field->masses[loaded] = val; break;
-      case COL_IGNORE: break;
+      case SIF_COL_X: field->x[loaded] = val; break;
+      case SIF_COL_Y: field->y[loaded] = val; break;
+      case SIF_COL_Z: field->z[loaded] = val; break;
+      case SIF_COL_VX: if (field->vx) field->vx[loaded] = val; break;
+      case SIF_COL_VY: if (field->vy) field->vy[loaded] = val; break;
+      case SIF_COL_VZ: if (field->vz) field->vz[loaded] = val; break;
+      case SIF_COL_M: if (field->masses) field->masses[loaded] = val; break;
+      case SIF_COL_IGNORE: break;
       }
     }
     loaded++;

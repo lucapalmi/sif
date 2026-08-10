@@ -360,3 +360,109 @@ PyObject* py_sif_multiplicity_function_ep(
   return Py_BuildValue("(NN)", mult_arr, counts_arr);
 }
 
+
+/*
+ * The emulator. Deliberately a different signature from the walk above: it
+ * reads only the covariance DIAGONAL, so it takes sigma where the Monte Carlo
+ * takes the packed triangle, and its cost is linear rather than quadratic in
+ * the radius count.
+ */
+PyObject* py_sif_multiplicity_function_ep_emu(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+
+  (void)self;
+
+  PyObject *radii_obj, *sigma_obj, *barrier_obj, *dvar_obj;
+  int return_domain = 0;
+
+  static char* kwlist[] = {
+    "radii", "sigma", "barrier", "deriv_variance", "return_domain", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOO|p", kwlist, &radii_obj,
+        &sigma_obj, &barrier_obj, &dvar_obj, &return_domain)) {
+    return NULL;
+  }
+
+  PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
+  if (!radii_arr)
+    return NULL;
+
+  /* One at a time, and bail on the first failure: calling into the C API
+   * again with an exception already set can mask the original error and
+   * trips the assertions in a debug build of Python. */
+  PyArrayObject* sigma_arr = NULL;
+  PyArrayObject* barrier_arr = NULL;
+  PyArrayObject* dvar_arr = NULL;
+
+  sigma_arr = py_sif_as_real_array(sigma_obj, "sigma");
+  if (!sigma_arr)
+    goto fail;
+
+  barrier_arr = py_sif_as_real_array(barrier_obj, "barrier");
+  if (!barrier_arr)
+    goto fail;
+
+  dvar_arr = py_sif_as_double_array(dvar_obj, "deriv_variance");
+  if (!dvar_arr)
+    goto fail;
+
+  const npy_intp n = PyArray_SIZE(radii_arr);
+
+  if (PyArray_SIZE(sigma_arr) != n || PyArray_SIZE(barrier_arr) != n ||
+      PyArray_SIZE(dvar_arr) != n) {
+    PyErr_SetString(PyExc_ValueError,
+      "sigma, barrier and deriv_variance must each have one entry per radius");
+    goto fail;
+  }
+
+  sif_emu_domain_t domain;
+  real_t* values = NULL;
+
+  Py_BEGIN_ALLOW_THREADS values = sif_multiplicity_function_ep_emu(
+    (const real_t*)PyArray_DATA(radii_arr), (uint32_t)n,
+    (const real_t*)PyArray_DATA(sigma_arr),
+    (const real_t*)PyArray_DATA(barrier_arr),
+    (const double*)PyArray_DATA(dvar_arr), &domain, SIF_DEFAULT);
+  Py_END_ALLOW_THREADS
+
+    Py_DECREF(radii_arr);
+  Py_DECREF(sigma_arr);
+  Py_DECREF(barrier_arr);
+  Py_DECREF(dvar_arr);
+
+  if (!values) {
+    PyErr_SetString(PyExc_RuntimeError,
+      "failed to evaluate the emulated multiplicity function; see the sif log");
+    return NULL;
+  }
+
+  PyObject* mult_arr = py_sif_owned_array(values, n - 1);
+  if (!mult_arr)
+    return NULL;
+
+  if (!return_domain)
+    return mult_arr;
+
+  /* A dict rather than a tuple: these are five unrelated numbers, and a
+   * caller reading domain["in_domain"] cannot get the order wrong. */
+  PyObject* d = Py_BuildValue("{s:O,s:I,s:d,s:d,s:d}",
+    "in_domain", domain.in_domain ? Py_True : Py_False,
+    "n_bins_outside", (unsigned int)domain.n_bins_outside,
+    "nu_origin", (double)domain.nu_origin,
+    "first_step_mass", (double)domain.first_step_mass,
+    "expected_error", (double)domain.expected_error);
+
+  if (!d) {
+    Py_DECREF(mult_arr);
+    return NULL;
+  }
+
+  return Py_BuildValue("(NN)", mult_arr, d);
+
+fail:
+  Py_XDECREF(radii_arr);
+  Py_XDECREF(sigma_arr);
+  Py_XDECREF(barrier_arr);
+  Py_XDECREF(dvar_arr);
+  return NULL;
+}

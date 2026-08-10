@@ -22,6 +22,7 @@ set(SIF_TESTS
   test_delta_stats  # Fourier delta PDF, spectral moments, phase shuffle
   test_vsf_models   # SvdW / Vdn size functions and the sigma slope
   test_ep           # correlated walks, Cholesky, first-crossing multiplicity
+  test_ep_emu       # the emulator against its Python reference, and invariants
   test_finders      # end-to-end: both finders on a synthetic field
 )
 

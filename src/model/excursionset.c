@@ -27,7 +27,7 @@ static inline uint64_t __roundup(uint64_t v, uint64_t m) {
 
 /* --- The factor --- */
 
-int ep_factor_init(ep_factor_t* f, uint32_t n) {
+int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n) {
 
   f->n = n;
   f->chol = NULL;
@@ -59,7 +59,7 @@ int ep_factor_init(ep_factor_t* f, uint32_t n) {
   return SIF_OK;
 }
 
-void ep_factor_free(ep_factor_t* f) {
+void sif_ep_factor_free(sif_ep_factor_t* f) {
   if (!f)
     return;
   sif_free_aligned(f->chol);
@@ -84,16 +84,16 @@ static void __report_pivot_failure(
 
   double worst = 0.0;
   if (a > 0) {
-    const double c = ep_cov_get(cov, a, a - 1) /
-                     sqrt(ep_cov_get(cov, a, a) *
-                          ep_cov_get(cov, a - 1, a - 1));
+    const double c = sif_ep_cov_get(cov, a, a - 1) /
+                     sqrt(sif_ep_cov_get(cov, a, a) *
+                          sif_ep_cov_get(cov, a - 1, a - 1));
     if (fabs(c) > worst)
       worst = fabs(c);
   }
   if (a + 1 < n) {
-    const double c = ep_cov_get(cov, a + 1, a) /
-                     sqrt(ep_cov_get(cov, a, a) *
-                          ep_cov_get(cov, a + 1, a + 1));
+    const double c = sif_ep_cov_get(cov, a + 1, a) /
+                     sqrt(sif_ep_cov_get(cov, a, a) *
+                          sif_ep_cov_get(cov, a + 1, a + 1));
     if (fabs(c) > worst)
       worst = fabs(c);
   }
@@ -115,14 +115,14 @@ static void __report_pivot_failure(
   }
 }
 
-int ep_cholesky(ep_factor_t* f, const double* cov,
+int sif_ep_cholesky(sif_ep_factor_t* f, const double* cov,
   const real_t* radii, uint32_t n) {
 
   /* Walk index j is ascending index n - 1 - j, so the walk starts at the
    * largest radius, where sigma is smallest. */
   double trace = 0.0;
   for (uint32_t i = 0; i < n; i++)
-    trace += ep_cov_get(cov, i, i);
+    trace += sif_ep_cov_get(cov, i, i);
   const double jitter = __SIF_EP_JITTER * trace / (double)n;
 
   for (uint32_t j = 0; j < n; j++) {
@@ -131,12 +131,12 @@ int ep_cholesky(ep_factor_t* f, const double* cov,
 
     for (uint32_t m = 0; m < j; m++) {
       const double* Lm = f->chol + f->row_offset[m];
-      const double s = ep_cov_get(cov, aj, n - 1 - m);
+      const double s = sif_ep_cov_get(cov, aj, n - 1 - m);
       Lj[m] = (s - __dot(Lj, Lm, m)) / Lm[m];
     }
 
     const double piv =
-      ep_cov_get(cov, aj, aj) + jitter - __dot(Lj, Lj, j);
+      sif_ep_cov_get(cov, aj, aj) + jitter - __dot(Lj, Lj, j);
 
     /* A sign check before the sqrt, not an isnan/isinf test after it: the
      * release build carries -ffast-math, under which the compiler may fold
@@ -196,11 +196,11 @@ static int __validate(const real_t* radii, uint32_t n_radii, const double* cov,
         i, (double)radii[i], (double)radii[i - 1]);
       return SIF_ERR_INVALID;
     }
-    if (!(ep_cov_get(cov, i, i) > 0.0)) {
+    if (!(sif_ep_cov_get(cov, i, i) > 0.0)) {
       SIF_LOG_ERROR(__TAG,
         "the covariance diagonal at radius %u (%g) is %g, must be strictly "
         "positive",
-        i, (double)radii[i], ep_cov_get(cov, i, i));
+        i, (double)radii[i], sif_ep_cov_get(cov, i, i));
       return SIF_ERR_INVALID;
     }
     if (!isfinite((double)barrier[i])) {
@@ -393,13 +393,13 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
 
   const uint32_t n = n_radii;
 
-  ep_factor_t f;
-  if (ep_factor_init(&f, n) != SIF_OK) {
-    ep_factor_free(&f);
+  sif_ep_factor_t f;
+  if (sif_ep_factor_init(&f, n) != SIF_OK) {
+    sif_ep_factor_free(&f);
     return NULL;
   }
-  if (ep_cholesky(&f, cov, radii, n) != SIF_OK) {
-    ep_factor_free(&f);
+  if (sif_ep_cholesky(&f, cov, radii, n) != SIF_OK) {
+    sif_ep_factor_free(&f);
     return NULL;
   }
 
@@ -412,7 +412,7 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
     SIF_LOG_ERROR(__TAG, "failed to allocate the walk buffers");
     sif_free_aligned(barrier_walk);
     sif_free_aligned(total);
-    ep_factor_free(&f);
+    sif_ep_factor_free(&f);
     return NULL;
   }
 
@@ -502,7 +502,7 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
   }
 
   sif_free_aligned(barrier_walk);
-  ep_factor_free(&f);
+  sif_ep_factor_free(&f);
 
   if (alloc_failed) {
     SIF_LOG_ERROR(__TAG, "a worker failed to allocate its walk buffers");
