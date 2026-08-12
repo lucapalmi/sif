@@ -104,7 +104,12 @@ static int __ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
   }
 
-  sif_fft_grid_forward(ctx->fft_ws, grid);
+  /* Must succeed before the field is released: on failure the caller's grid
+   * has to come back untouched. */
+  if (sif_fft_grid_forward(ctx->fft_ws, grid) != SIF_OK) {
+    SIF_LOG_ERROR(__TAG, "the forward FFT failed");
+    return SIF_ERR_ALLOC;
+  }
 
   /* The density field is no longer needed: from here on the finder works out
    * of the FFT workspace's real-space buffer, which saves a full grid. */
@@ -159,7 +164,6 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
     return NULL;
   }
 
-  const uint8_t require_min = (options & SIF_FINDER_CENTER_IS_MINIMUM) ? 1 : 0;
   const real_t max_radius = ctx.sorted_radii[0];
 
   sif_timer_t timer;
@@ -178,8 +182,8 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
     }
     grid->delta = sif_fft_grid_backward(ctx.fft_ws);
 
-    if (sif_finder_scan_candidates(grid, ctx.mask, threshold, require_min,
-          &ctx.candidates) != SIF_OK) {
+    if (sif_finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates) !=
+        SIF_OK) {
       failed = 1;
       break;
     }
@@ -208,12 +212,9 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const real_t* radii,
         continue;
       }
 
-      real_t cx = (real_t)ix * grid->cell_length;
-      real_t cy = (real_t)iy * grid->cell_length;
-      real_t cz = (real_t)iz * grid->cell_length;
-
-      if (options & SIF_FINDER_REFINE_CENTER_HESSIAN)
-        sif_refine_center_hessian(grid, ix, iy, iz, &cx, &cy, &cz);
+      const real_t cx = (real_t)ix * grid->cell_length;
+      const real_t cy = (real_t)iy * grid->cell_length;
+      const real_t cz = (real_t)iz * grid->cell_length;
 
       if (sif_check_overlap_mesh(ctx.cat, cx, cy, cz, radius, max_radius,
             grid->box_length, ctx.cll, grid->p2_mask, overlap_fraction)) {

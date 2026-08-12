@@ -38,7 +38,7 @@ int main(void) {
   }
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+  sif_field_assign_positions(f, x, y, z);
 
   /* One void at the box center. */
   const real_t vx = 50.0f, vy = 50.0f, vz = 50.0f, vr = 10.0f;

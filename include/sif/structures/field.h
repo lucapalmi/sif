@@ -4,15 +4,21 @@
 #include "sif/core/macros.h"
 #include <stdint.h>
 
-#define __FIELD_STATE_OWNS_POSITIONS  (1u << 0)
-#define __FIELD_STATE_OWNS_MASSES     (1u << 1)
-#define __FIELD_STATE_OWNS_INDICES    (1u << 2)
-#define __FIELD_STATE_MORTON_SORTED   (1u << 3)
-#define __FIELD_STATE_BOUNDS_VALID    (1u << 4)
-#define __FIELD_STATE_OWNS_VELOCITIES (1u << 5)
-
-#define FIELD_OWNS   (uint8_t)0
-#define FIELD_POINTS (uint8_t)1
+/*
+ * A field always owns every buffer it points at.
+ *
+ * There used to be a borrowing mode (FIELD_POINTS) alongside per-array
+ * ownership bits. It could not be honoured: assigning masses or velocities to a
+ * sorted field silently took ownership anyway so the incoming data could be
+ * permuted, and sif_field_sort_morton reallocates unconditionally, which
+ * detached the field from the caller's arrays with no diagnostic. What is left
+ * describes the state of the data, not who frees it.
+ *
+ * To fill a field without paying for a copy, reserve the arrays and write into
+ * field->x and friends directly; that is what the readers do.
+ */
+#define __FIELD_STATE_MORTON_SORTED (1u << 0)
+#define __FIELD_STATE_BOUNDS_VALID  (1u << 1)
 
 /* Bits per axis in the 3D Morton code. Three of these must fit in a uint64. */
 #define SIF_MORTON_BITS 21
@@ -77,6 +83,16 @@ typedef struct {
 NODISCARD sif_field_t* sif_field_alloc(uint64_t n_particles);
 
 /*
+ * @brief Per-array stride inside a packed x/y/z block
+ *
+ * Each sub-array of a unified block starts on a cache line, so a block holds
+ * 3 * sif_field_padded_n(n) elements rather than 3 * n. Anything that lays out
+ * its own block the same way (the chain mesh, the readers) has to agree on
+ * this, so it lives here rather than being open-coded per call site.
+ */
+PURE_FUNCTION uint64_t sif_field_padded_n(uint64_t n_particles);
+
+/*
  * @brief Frees a field
  *
  * @param field The field to free
@@ -84,51 +100,77 @@ NODISCARD sif_field_t* sif_field_alloc(uint64_t n_particles);
 void sif_field_free(sif_field_t* field);
 
 /*
- * @brief Assign positiions to the particles in a field
+ * @brief Allocate the position arrays without filling them
+ *
+ * Sized from field->n_particles, which must be set. Writing straight into
+ * field->x, field->y and field->z afterwards is the zero-copy way to populate a
+ * field. A no-op if the arrays already exist.
+ *
+ * @return SIF_OK on success, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC
+ * on failure
+ */
+int sif_field_reserve_positions(sif_field_t* field);
+
+/*
+ * @brief Allocate the velocity arrays without filling them. See
+ * sif_field_reserve_positions.
+ */
+int sif_field_reserve_velocities(sif_field_t* field);
+
+/*
+ * @brief Allocate the mass array without filling it. See
+ * sif_field_reserve_positions.
+ */
+int sif_field_reserve_masses(sif_field_t* field);
+
+/*
+ * @brief Copy positions into the field
  *
  * @param field The field
  * @param x X-axis positions
  * @param y Y-axis positions
  * @param z Z-axis positions
- * @param opt Specify if the field owns or references the positions
+ *
+ * @note Invalidates the bounds and the Morton order, and drops the permutation
+ * a previous sort had recorded: it no longer describes this data.
+ *
+ * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
+ * on failure
  */
-void sif_field_assign_positions(
-  sif_field_t* field, real_t* x, real_t* y, real_t* z, uint8_t opt);
+int sif_field_assign_positions(
+  sif_field_t* field, const real_t* x, const real_t* y, const real_t* z);
 
 /*
- * @brief Assign velocities to the particles in a field
+ * @brief Copy velocities into the field
  *
  * @param field The field
  * @param vx X-axis velocities, indexed as the positions were BEFORE any Morton
  * sort (i.e. in the caller's original particle order)
  * @param vy Y-axis velocities
  * @param vz Z-axis velocities
- * @param opt Specify if the field owns or references the velocities
  *
  * @note If the field has already been Morton-sorted the incoming arrays are
- * permuted into the field's current order, and the field necessarily takes
- * ownership of the copy (FIELD_POINTS is upgraded to FIELD_OWNS, since a
- * borrowed array cannot be reordered in place).
+ * permuted into the field's current order on the way in, so that every particle
+ * keeps its own velocity.
  *
  * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
  * on failure
  */
 int sif_field_assign_velocities(
-  sif_field_t* field, real_t* vx, real_t* vy, real_t* vz, uint8_t opt);
+  sif_field_t* field, const real_t* vx, const real_t* vy, const real_t* vz);
 
 /*
- * @brief Assign per-particle masses to a field
+ * @brief Copy per-particle masses into the field
  *
  * @param field The field
  * @param masses Masses in the caller's original particle order
- * @param opt Specify if the field owns or references the masses
  *
  * @note Same permutation rule as sif_field_assign_velocities.
  *
  * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
  * on failure
  */
-int sif_field_assign_masses(sif_field_t* field, real_t* masses, uint8_t opt);
+int sif_field_assign_masses(sif_field_t* field, const real_t* masses);
 
 /*
  * @brief Computes and caches the bounding box and center of the field.

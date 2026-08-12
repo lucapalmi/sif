@@ -125,18 +125,21 @@ static PyObject* sifField_from_numpy(
 
   self->field->n_particles = (uint64_t)n_particles;
 
-  real_t* x_data = (real_t*)PyArray_DATA(xs_arr);
-  real_t* y_data = (real_t*)PyArray_DATA(ys_arr);
-  real_t* z_data = (real_t*)PyArray_DATA(zs_arr);
-  sif_field_assign_positions(self->field, x_data, y_data, z_data, FIELD_OWNS);
+  const real_t* x_data = (const real_t*)PyArray_DATA(xs_arr);
+  const real_t* y_data = (const real_t*)PyArray_DATA(ys_arr);
+  const real_t* z_data = (const real_t*)PyArray_DATA(zs_arr);
+
+  int status = sif_field_assign_positions(self->field, x_data, y_data, z_data);
+
+  if (status == SIF_OK && has_velocities) {
+    const real_t* vx_data = (const real_t*)PyArray_DATA(vxs_arr);
+    const real_t* vy_data = (const real_t*)PyArray_DATA(vys_arr);
+    const real_t* vz_data = (const real_t*)PyArray_DATA(vzs_arr);
+    status =
+      sif_field_assign_velocities(self->field, vx_data, vy_data, vz_data);
+  }
 
   if (has_velocities) {
-    real_t* vx_data = (real_t*)PyArray_DATA(vxs_arr);
-    real_t* vy_data = (real_t*)PyArray_DATA(vys_arr);
-    real_t* vz_data = (real_t*)PyArray_DATA(vzs_arr);
-    sif_field_assign_velocities(
-      self->field, vx_data, vy_data, vz_data, FIELD_OWNS);
-
     Py_DECREF(vxs_arr);
     Py_DECREF(vys_arr);
     Py_DECREF(vzs_arr);
@@ -145,6 +148,14 @@ static PyObject* sifField_from_numpy(
   Py_DECREF(xs_arr);
   Py_DECREF(ys_arr);
   Py_DECREF(zs_arr);
+
+  /* The copy is what makes the field independent of the caller's arrays, so a
+   * failure here has to surface rather than leave a half-populated field. */
+  if (status != SIF_OK) {
+    PyErr_SetString(PyExc_MemoryError, "failed to copy particles into the field");
+    return NULL;
+  }
+
   Py_RETURN_NONE;
 }
 

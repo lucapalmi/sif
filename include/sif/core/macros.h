@@ -18,16 +18,9 @@ typedef uint32_t sif_option_t;
 
 /* --- FINDER OPTIONS --- */
 
-#define SIF_FINDER_CENTER_IS_MINIMUM     (1u << 8)
-#define SIF_FINDER_REFINE_CENTER_HESSIAN (1u << 9)
-#define SIF_FINDER_PRESERVE_GRID         (1u << 15)
+#define SIF_FINDER_PRESERVE_GRID (1u << 15)
 
-/* Bits 10-14 are free. They used to carry SIF_FINDER_MARKING_FAST and the
- * RMIN_FACTOR / NOISE_TOLERANCE families; all three were removed because
- * their "default" variant encoded to 0 and therefore never reached the
- * dispatch, so the documented defaults were never the ones in effect. The
- * values that were actually running are now the fixed constants in
- * rescaled_spherical_finder.c. */
+/* Bits 8-14 are free. */
 
 /* --- PROFILES OPTIONS --- */
 

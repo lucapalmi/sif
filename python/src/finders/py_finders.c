@@ -1,7 +1,7 @@
 #include "py_finders.h"
 
 #include "structures/py_catalog.h"
-#include "structures/py_field.h"
+#include "structures/py_chain_mesh.h"
 #include "structures/py_grid.h"
 #include <numpy/arrayobject.h>
 
@@ -12,25 +12,21 @@
 
 /* --- Rescaled Spherical Finder Wrapper --- */
 PyObject* py_sif_finder_rescaled_spherical(PyObject* self, PyObject* args, PyObject* kwds) {
-  PyObject *grid_obj = NULL, *field_obj = NULL, *radii_obj = NULL;
+  PyObject *grid_obj = NULL, *mesh_obj = NULL, *radii_obj = NULL;
   double threshold;
   double overlap_frac = 0.0;
 
   /* Optional keyword arguments with safe defaults */
-  int center_is_min = 0;
-  int refine_hessian = 0;
   int preserve_grid = 0;
 
-  static char* kwlist[] = {"grid", "field", "radii", "threshold",
-    "center_is_minimum", "refine_center_hessian", "overlap_fraction",
-    "preserve_grid", NULL};
+  static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
+    "overlap_fraction", "preserve_grid", NULL};
 
   /* The '|' character denotes that everything after it is optional.
    * 'p' safely converts a Python boolean to a C int (1 or 0). */
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|ppdp", kwlist,
-        &sifGridType, &grid_obj, &sifFieldType, &field_obj, &radii_obj,
-        &threshold, &center_is_min, &refine_hessian, &overlap_frac,
-        &preserve_grid)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dp", kwlist,
+        &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
+        &threshold, &overlap_frac, &preserve_grid)) {
     return NULL;
   }
 
@@ -53,24 +49,23 @@ PyObject* py_sif_finder_rescaled_spherical(PyObject* self, PyObject* args, PyObj
   real_t* radii_data = (real_t*)PyArray_DATA(radii_arr);
 
   sif_grid_t* c_grid = ((sifGridObject*)grid_obj)->grid;
-  sif_field_t* c_field = ((sifFieldObject*)field_obj)->field;
+  const sif_chain_mesh_t* c_mesh = ((sifChainMeshObject*)mesh_obj)->mesh;
 
   /* --- Parse Options to Bitmask --- */
   sif_option_t options = 0;
 
-  if (center_is_min)
-    options |= SIF_FINDER_CENTER_IS_MINIMUM;
-  if (refine_hessian)
-    options |= SIF_FINDER_REFINE_CENTER_HESSIAN;
   if (preserve_grid)
     options |= SIF_FINDER_PRESERVE_GRID;
 
   /* Execute the algorithm. The GIL is released: this runs for minutes to
    * hours across every core, and holding it would freeze the interpreter and
-   * swallow Ctrl-C. Nothing below touches Python state. */
+   * swallow Ctrl-C. Nothing below touches Python state.
+   *
+   * The mesh is borrowed for the duration; mesh_obj is kept alive by the
+   * caller's reference for the whole call, so it cannot be collected here. */
   sif_catalog_t* res_catalog = NULL;
   Py_BEGIN_ALLOW_THREADS
-  res_catalog = sif_finder_rescaled_spherical(c_grid, c_field, radii_data,
+  res_catalog = sif_finder_rescaled_spherical(c_grid, c_mesh, radii_data,
     (uint32_t)n_radii, (real_t)threshold, (real_t)overlap_frac, options);
   Py_END_ALLOW_THREADS
 
@@ -101,16 +96,13 @@ PyObject* py_sif_finder_spherical(
   double overlap_frac = 0.0;
 
   /* Optional keyword arguments with safe defaults */
-  int center_is_min = 0;
-  int refine_hessian = 0;
   int preserve_grid = 0;
 
-  static char* kwlist[] = {"grid", "radii", "threshold", "center_is_minimum",
-    "refine_center_hessian", "overlap_fraction", "preserve_grid", NULL};
+  static char* kwlist[] = {"grid", "radii", "threshold", "overlap_fraction",
+    "preserve_grid", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Od|ppdp", kwlist,
-        &sifGridType, &grid_obj, &radii_obj, &threshold, &center_is_min,
-        &refine_hessian, &overlap_frac, &preserve_grid)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Od|dp", kwlist, &sifGridType,
+        &grid_obj, &radii_obj, &threshold, &overlap_frac, &preserve_grid)) {
     return NULL;
   }
 
@@ -132,10 +124,6 @@ PyObject* py_sif_finder_spherical(
   /* --- Parse Options to Bitmask --- */
   sif_option_t options = 0;
 
-  if (center_is_min)
-    options |= SIF_FINDER_CENTER_IS_MINIMUM;
-  if (refine_hessian)
-    options |= SIF_FINDER_REFINE_CENTER_HESSIAN;
   if (preserve_grid)
     options |= SIF_FINDER_PRESERVE_GRID;
 

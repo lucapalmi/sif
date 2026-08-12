@@ -43,7 +43,7 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
 }
 
 /* Number of real_t per cache line, used to pad each sub-array of a block. */
-static inline uint64_t __field_padded_n(uint64_t n_particles) {
+PURE_FUNCTION uint64_t sif_field_padded_n(uint64_t n_particles) {
   const uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
   return (n_particles + align_elements - 1) & ~(align_elements - 1);
 }
@@ -54,64 +54,120 @@ void sif_field_free(sif_field_t* field) {
     return;
   }
 
-  if (field->state_flags & __FIELD_STATE_OWNS_POSITIONS) {
-    sif_free_aligned(field->_position_block);
-  }
-  if (field->state_flags & __FIELD_STATE_OWNS_VELOCITIES) {
-    sif_free_aligned(field->_velocity_block);
-  }
-  if (field->state_flags & __FIELD_STATE_OWNS_MASSES) {
-    sif_free_aligned(field->masses);
-  }
-  if (field->state_flags & __FIELD_STATE_OWNS_INDICES) {
-    sif_free_aligned(field->original_indices);
-  }
+  sif_free_aligned(field->_position_block);
+  sif_free_aligned(field->_velocity_block);
+  sif_free_aligned(field->masses);
+  sif_free_aligned(field->original_indices);
 
   free(field);
 }
 
-void sif_field_assign_positions(
-  sif_field_t* field, real_t* x, real_t* y, real_t* z, uint8_t opt) {
+/*
+ * Carves a 3 x padded_n block into three cache-line aligned views.
+ */
+static int __field_reserve_block(uint64_t n_particles, real_t** block,
+  real_t** a, real_t** b, real_t** c, const char* what) {
 
-  if (!x || !y || !z) {
+  const uint64_t padded_n = sif_field_padded_n(n_particles);
+
+  real_t* fresh = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
+  if (!fresh) {
+    SIF_LOG_ERROR("field", "failed to allocate the %s block", what);
+    return SIF_ERR_ALLOC;
+  }
+
+  *block = fresh;
+  *a = fresh;
+  *b = fresh + padded_n;
+  *c = fresh + (2 * padded_n);
+
+  return SIF_OK;
+}
+
+int sif_field_reserve_positions(sif_field_t* field) {
+  if (!field || field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "invalid or empty field");
+    return SIF_ERR_INVALID;
+  }
+
+  if (field->_position_block)
+    return SIF_OK;
+
+  return __field_reserve_block(field->n_particles, &field->_position_block,
+    &field->x, &field->y, &field->z, "position");
+}
+
+int sif_field_reserve_velocities(sif_field_t* field) {
+  if (!field || field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "invalid or empty field");
+    return SIF_ERR_INVALID;
+  }
+
+  if (field->_velocity_block)
+    return SIF_OK;
+
+  return __field_reserve_block(field->n_particles, &field->_velocity_block,
+    &field->vx, &field->vy, &field->vz, "velocity");
+}
+
+int sif_field_reserve_masses(sif_field_t* field) {
+  if (!field || field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "invalid or empty field");
+    return SIF_ERR_INVALID;
+  }
+
+  if (field->masses)
+    return SIF_OK;
+
+  field->masses = sif_malloc_aligned(field->n_particles * sizeof(real_t));
+  if (!field->masses) {
+    SIF_LOG_ERROR("field", "failed to allocate the mass array");
+    return SIF_ERR_ALLOC;
+  }
+
+  return SIF_OK;
+}
+
+int sif_field_assign_positions(
+  sif_field_t* field, const real_t* x, const real_t* y, const real_t* z) {
+
+  if (!field || !x || !y || !z) {
     SIF_LOG_ERROR("field", "invalid positions");
-    return;
+    return SIF_ERR_INVALID;
   }
 
-  if (field->state_flags & __FIELD_STATE_OWNS_POSITIONS) {
-    sif_free_aligned(field->_position_block);
-    field->_position_block = NULL;
+  if (field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "cannot assign positions to an empty field");
+    return SIF_ERR_INVALID;
   }
+
+  real_t *new_block = NULL, *new_x = NULL, *new_y = NULL, *new_z = NULL;
+  if (__field_reserve_block(field->n_particles, &new_block, &new_x, &new_y,
+        &new_z, "position") != SIF_OK)
+    return SIF_ERR_ALLOC;
+
+  memcpy(new_x, x, field->n_particles * sizeof(real_t));
+  memcpy(new_y, y, field->n_particles * sizeof(real_t));
+  memcpy(new_z, z, field->n_particles * sizeof(real_t));
+
+  /* Only release the old block once the replacement is secured. */
+  sif_free_aligned(field->_position_block);
+
+  field->_position_block = new_block;
+  field->x = new_x;
+  field->y = new_y;
+  field->z = new_z;
+
+  /* The stored permutation described the previous positions, so it is now
+   * meaningless; leaving it in place would let a later assign_masses gather
+   * through a permutation that no longer belongs to this data. */
+  sif_free_aligned(field->original_indices);
+  field->original_indices = NULL;
 
   field->state_flags &= ~__FIELD_STATE_BOUNDS_VALID;
   field->state_flags &= ~__FIELD_STATE_MORTON_SORTED;
 
-  if (opt == FIELD_OWNS) {
-    uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
-    uint64_t padded_n =
-      (field->n_particles + align_elements - 1) & ~(align_elements - 1);
-
-    field->_position_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
-    if (!field->_position_block) {
-      SIF_LOG_ERROR("field", "failed to allocate unified position block");
-      return;
-    }
-
-    field->x = field->_position_block;
-    field->y = field->_position_block + padded_n;
-    field->z = field->_position_block + (2 * padded_n);
-
-    memcpy(field->x, x, field->n_particles * sizeof(real_t));
-    memcpy(field->y, y, field->n_particles * sizeof(real_t));
-    memcpy(field->z, z, field->n_particles * sizeof(real_t));
-
-    field->state_flags |= __FIELD_STATE_OWNS_POSITIONS;
-  } else {
-    field->x = x;
-    field->y = y;
-    field->z = z;
-    field->state_flags &= ~__FIELD_STATE_OWNS_POSITIONS;
-  }
+  return SIF_OK;
 }
 
 /*
@@ -124,124 +180,87 @@ static inline int __field_needs_permutation(const sif_field_t* field) {
 }
 
 int sif_field_assign_velocities(
-  sif_field_t* field, real_t* vx, real_t* vy, real_t* vz, uint8_t opt) {
+  sif_field_t* field, const real_t* vx, const real_t* vy, const real_t* vz) {
 
   if (!field || !vx || !vy || !vz) {
     SIF_LOG_ERROR("field", "invalid velocities");
     return SIF_ERR_INVALID;
   }
 
+  if (field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "cannot assign velocities to an empty field");
+    return SIF_ERR_INVALID;
+  }
+
   /* Velocities never invalidate the Morton order or the bounds, but if the
    * positions have already been permuted the incoming arrays are in the wrong
-   * order and must be gathered through the stored permutation. Referencing
-   * them in place would silently pair every particle with someone else's
+   * order and must be gathered through the stored permutation. Copying them
+   * straight in would silently pair every particle with someone else's
    * velocity. */
   const int permute = __field_needs_permutation(field);
 
-  if (permute && opt == FIELD_POINTS) {
-    SIF_LOG_TRACE("field",
-      "field is Morton-sorted, taking ownership of the velocities so they can "
-      "be reordered");
-    opt = FIELD_OWNS;
-  }
+  real_t *new_block = NULL, *new_vx = NULL, *new_vy = NULL, *new_vz = NULL;
+  if (__field_reserve_block(field->n_particles, &new_block, &new_vx, &new_vy,
+        &new_vz, "velocity") != SIF_OK)
+    return SIF_ERR_ALLOC;
 
-  real_t* new_block = NULL;
-  real_t *new_vx = NULL, *new_vy = NULL, *new_vz = NULL;
-
-  if (opt == FIELD_OWNS) {
-    const uint64_t padded_n = __field_padded_n(field->n_particles);
-
-    new_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
-    if (!new_block) {
-      SIF_LOG_ERROR("field", "failed to allocate unified velocity block");
-      return SIF_ERR_ALLOC;
-    }
-
-    new_vx = new_block;
-    new_vy = new_block + padded_n;
-    new_vz = new_block + (2 * padded_n);
-
-    if (permute) {
-      const uint64_t* perm = field->original_indices;
+  if (permute) {
+    const uint64_t* perm = field->original_indices;
 #pragma omp parallel for schedule(static)
-      for (uint64_t i = 0; i < field->n_particles; i++) {
-        const uint64_t src = perm[i];
-        new_vx[i] = vx[src];
-        new_vy[i] = vy[src];
-        new_vz[i] = vz[src];
-      }
-    } else {
-      memcpy(new_vx, vx, field->n_particles * sizeof(real_t));
-      memcpy(new_vy, vy, field->n_particles * sizeof(real_t));
-      memcpy(new_vz, vz, field->n_particles * sizeof(real_t));
+    for (uint64_t i = 0; i < field->n_particles; i++) {
+      const uint64_t src = perm[i];
+      new_vx[i] = vx[src];
+      new_vy[i] = vy[src];
+      new_vz[i] = vz[src];
     }
+  } else {
+    memcpy(new_vx, vx, field->n_particles * sizeof(real_t));
+    memcpy(new_vy, vy, field->n_particles * sizeof(real_t));
+    memcpy(new_vz, vz, field->n_particles * sizeof(real_t));
   }
 
   /* Only release the old block once the replacement is secured. */
-  if (field->state_flags & __FIELD_STATE_OWNS_VELOCITIES)
-    sif_free_aligned(field->_velocity_block);
+  sif_free_aligned(field->_velocity_block);
 
-  if (opt == FIELD_OWNS) {
-    field->_velocity_block = new_block;
-    field->vx = new_vx;
-    field->vy = new_vy;
-    field->vz = new_vz;
-    field->state_flags |= __FIELD_STATE_OWNS_VELOCITIES;
-  } else {
-    field->_velocity_block = NULL;
-    field->vx = vx;
-    field->vy = vy;
-    field->vz = vz;
-    field->state_flags &= ~__FIELD_STATE_OWNS_VELOCITIES;
-  }
+  field->_velocity_block = new_block;
+  field->vx = new_vx;
+  field->vy = new_vy;
+  field->vz = new_vz;
 
   return SIF_OK;
 }
 
-int sif_field_assign_masses(sif_field_t* field, real_t* masses, uint8_t opt) {
+int sif_field_assign_masses(sif_field_t* field, const real_t* masses) {
   if (!field || !masses) {
     SIF_LOG_ERROR("field", "invalid masses");
     return SIF_ERR_INVALID;
   }
 
+  if (field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "cannot assign masses to an empty field");
+    return SIF_ERR_INVALID;
+  }
+
   const int permute = __field_needs_permutation(field);
 
-  if (permute && opt == FIELD_POINTS) {
-    SIF_LOG_TRACE("field",
-      "field is Morton-sorted, taking ownership of the masses so they can be "
-      "reordered");
-    opt = FIELD_OWNS;
+  real_t* new_masses =
+    sif_malloc_aligned(field->n_particles * sizeof(real_t));
+  if (!new_masses) {
+    SIF_LOG_ERROR("field", "failed to allocate the mass array");
+    return SIF_ERR_ALLOC;
   }
 
-  real_t* new_masses = NULL;
-
-  if (opt == FIELD_OWNS) {
-    new_masses = sif_malloc_aligned(field->n_particles * sizeof(real_t));
-    if (!new_masses) {
-      SIF_LOG_ERROR("field", "failed to allocate the mass array");
-      return SIF_ERR_ALLOC;
-    }
-
-    if (permute) {
-      const uint64_t* perm = field->original_indices;
+  if (permute) {
+    const uint64_t* perm = field->original_indices;
 #pragma omp parallel for schedule(static)
-      for (uint64_t i = 0; i < field->n_particles; i++)
-        new_masses[i] = masses[perm[i]];
-    } else {
-      memcpy(new_masses, masses, field->n_particles * sizeof(real_t));
-    }
-  }
-
-  if (field->state_flags & __FIELD_STATE_OWNS_MASSES)
-    sif_free_aligned(field->masses);
-
-  if (opt == FIELD_OWNS) {
-    field->masses = new_masses;
-    field->state_flags |= __FIELD_STATE_OWNS_MASSES;
+    for (uint64_t i = 0; i < field->n_particles; i++)
+      new_masses[i] = masses[perm[i]];
   } else {
-    field->masses = masses;
-    field->state_flags &= ~__FIELD_STATE_OWNS_MASSES;
+    memcpy(new_masses, masses, field->n_particles * sizeof(real_t));
   }
+
+  sif_free_aligned(field->masses);
+  field->masses = new_masses;
 
   return SIF_OK;
 }
@@ -466,7 +485,7 @@ int sif_field_sort_morton(sif_field_t* field) {
     return SIF_ERR_ALLOC;
   }
 
-  const uint64_t padded_n = __field_padded_n(field->n_particles);
+  const uint64_t padded_n = sif_field_padded_n(field->n_particles);
 
   /* Allocate new blocks */
   real_t* new_pos_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
@@ -531,14 +550,10 @@ int sif_field_sort_morton(sif_field_t* field) {
 
   sif_free_aligned(sort_array);
 
-  if (field->state_flags & __FIELD_STATE_OWNS_POSITIONS)
-    sif_free_aligned(field->_position_block);
-  if (field->state_flags & __FIELD_STATE_OWNS_VELOCITIES)
-    sif_free_aligned(field->_velocity_block);
-  if (field->state_flags & __FIELD_STATE_OWNS_MASSES)
-    sif_free_aligned(field->masses);
-  if (field->state_flags & __FIELD_STATE_OWNS_INDICES)
-    sif_free_aligned(field->original_indices);
+  sif_free_aligned(field->_position_block);
+  sif_free_aligned(field->_velocity_block);
+  sif_free_aligned(field->masses);
+  sif_free_aligned(field->original_indices);
 
   field->_position_block = new_pos_block;
   field->x = new_x;
@@ -553,14 +568,7 @@ int sif_field_sort_morton(sif_field_t* field) {
   field->masses = new_masses;
   field->original_indices = new_indices;
 
-  field->state_flags |= __FIELD_STATE_OWNS_POSITIONS;
-  field->state_flags |= __FIELD_STATE_OWNS_INDICES;
   field->state_flags |= __FIELD_STATE_MORTON_SORTED;
-
-  if (new_vel_block)
-    field->state_flags |= __FIELD_STATE_OWNS_VELOCITIES;
-  if (new_masses)
-    field->state_flags |= __FIELD_STATE_OWNS_MASSES;
 
   /* Reordering does not move the bounding box, so the cached bounds stay
    * valid. */

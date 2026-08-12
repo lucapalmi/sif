@@ -182,43 +182,24 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
   sif_field_t* field = sif_field_alloc(header.n_particles);
   if (!field) return NULL;
 
-  uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
-  uint64_t padded_n = (header.n_particles + align_elements - 1) & ~(align_elements - 1);
-
-  field->_position_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
-  if (!field->_position_block) {
+  /* Reserve, then read straight into the field's own arrays: the file never
+   * goes through an intermediate copy. */
+  if (sif_field_reserve_positions(field) != SIF_OK) {
     SIF_LOG_ERROR("xfield", "OOM allocating position block");
     sif_field_free(field);
     return NULL;
   }
 
-  field->x = field->_position_block;
-  field->y = field->_position_block + padded_n;
-  field->z = field->_position_block + (2 * padded_n);
-  field->state_flags |= __FIELD_STATE_OWNS_POSITIONS;
-
-  if (header.has_velocities) {
-    field->_velocity_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
-    if (!field->_velocity_block) {
-      SIF_LOG_ERROR("xfield", "OOM allocating velocity block");
-      sif_field_free(field);
-      return NULL;
-    }
-
-    field->vx = field->_velocity_block;
-    field->vy = field->_velocity_block + padded_n;
-    field->vz = field->_velocity_block + (2 * padded_n);
-    field->state_flags |= __FIELD_STATE_OWNS_VELOCITIES;
+  if (header.has_velocities && sif_field_reserve_velocities(field) != SIF_OK) {
+    SIF_LOG_ERROR("xfield", "OOM allocating velocity block");
+    sif_field_free(field);
+    return NULL;
   }
 
-  if (header.has_masses) {
-    field->masses = sif_malloc_aligned(header.n_particles * sizeof(real_t));
-    if (!field->masses) {
-      SIF_LOG_ERROR("xfield", "OOM allocating masses block");
-      sif_field_free(field);
-      return NULL;
-    }
-    field->state_flags |= __FIELD_STATE_OWNS_MASSES;
+  if (header.has_masses && sif_field_reserve_masses(field) != SIF_OK) {
+    SIF_LOG_ERROR("xfield", "OOM allocating masses block");
+    sif_field_free(field);
+    return NULL;
   }
 
   if (sif_field_read_into(filepath, field) != 0) {
@@ -260,33 +241,16 @@ int sif_field_read_ascii(sif_field_t* field, const char* filepath,
       (unsigned long long)field->n_particles);
   }
 
-  /* Ensure the field arrays are allocated */
-  if (!(field->state_flags & __FIELD_STATE_OWNS_POSITIONS)) {
-    uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
-    uint64_t padded_n = (field->n_particles + align_elements - 1) & ~(align_elements - 1);
+  /* Ensure the field arrays are allocated. Reserving is a no-op when they
+   * already are, so re-reading into a populated field is safe. */
+  if (sif_field_reserve_positions(field) != SIF_OK)
+    return 1;
 
-    field->_position_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
-    field->x = field->_position_block;
-    field->y = field->_position_block + padded_n;
-    field->z = field->_position_block + (2 * padded_n);
-    field->state_flags |= __FIELD_STATE_OWNS_POSITIONS;
-  }
+  if (requires_velocity && sif_field_reserve_velocities(field) != SIF_OK)
+    return 1;
 
-  if (requires_velocity && !(field->state_flags & __FIELD_STATE_OWNS_VELOCITIES)) {
-    uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
-    uint64_t padded_n = (field->n_particles + align_elements - 1) & ~(align_elements - 1);
-
-    field->_velocity_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
-    field->vx = field->_velocity_block;
-    field->vy = field->_velocity_block + padded_n;
-    field->vz = field->_velocity_block + (2 * padded_n);
-    field->state_flags |= __FIELD_STATE_OWNS_VELOCITIES;
-  }
-
-  if (requires_mass && !(field->state_flags & __FIELD_STATE_OWNS_MASSES)) {
-    field->masses = sif_malloc_aligned(field->n_particles * sizeof(real_t));
-    field->state_flags |= __FIELD_STATE_OWNS_MASSES;
-  }
+  if (requires_mass && sif_field_reserve_masses(field) != SIF_OK)
+    return 1;
 
   FILE* f = fopen(filepath, "r");
   if (!f) {

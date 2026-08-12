@@ -80,8 +80,6 @@ sif_fft_workspace_t* sif_fft_workspace_alloc(sif_fft_manager_t* mgr, uint32_t n_
 
   const uint64_t complex_cells = __fft_complex_count(n_cells);
 
-  real_fftw_plan_with_nthreads(sif_system_get_max_threads());
-
   ws->delta_k = real_fftw_malloc(complex_cells * sizeof(sif_real_complex_t));
   if (!ws->delta_k) {
     SIF_LOG_ERROR("fft_context",
@@ -91,29 +89,55 @@ sif_fft_workspace_t* sif_fft_workspace_alloc(sif_fft_manager_t* mgr, uint32_t n_
     return NULL;
   }
 
-  /* Planning with FFTW_MEASURE overwrites its input, so plan against a scratch
-   * buffer rather than the caller's density field. */
-  real_t* dummy_real_forward =
-    real_fftw_malloc(complex_cells * sizeof(sif_real_complex_t));
-  if (!dummy_real_forward) {
-    SIF_LOG_ERROR("fft_context", "failed to allocate the planning scratch");
-    real_fftw_free(ws->delta_k);
-    free(ws);
-    return NULL;
-  }
+  /* The forward plan is created on first use, see __fft_ensure_forward_plan. */
+  return ws;
+}
 
-  ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-    n_cells, n_cells, n_cells, dummy_real_forward, ws->delta_k, mgr->flags);
-  real_fftw_free(dummy_real_forward);
+/*
+ * Plans the forward transform against the buffers it will actually run on.
+ *
+ * Deferring the plan to the first transform is what keeps the workspace down
+ * to a single spectrum-sized allocation. FFTW_MEASURE overwrites its planning
+ * input, so planning at construction time needed a throwaway scratch buffer as
+ * large as the spectrum itself -- a second 42 GiB at n_cells = 2250, alive at
+ * exactly the moment the caller is still holding the density field. Planning
+ * here instead lets the caller's own field be the input, at the price of
+ * restricting the planner to modes that leave that input intact: a tuned plan
+ * when wisdom for this size exists, FFTW_ESTIMATE otherwise.
+ *
+ * That trade is one-sided in our favour. The forward transform runs once per
+ * workspace, and FFTW_MEASURE pays for its better plan by executing the
+ * transform repeatedly while planning -- more than an untuned plan costs for a
+ * single execution. The backward plan, which runs once per radius, still
+ * measures (it plans against its own freshly allocated buffer).
+ *
+ * FFTW_WISDOM_ONLY returns NULL rather than measuring when no wisdom applies,
+ * so neither branch can touch `in`.
+ */
+static int __fft_ensure_forward_plan(
+  sif_fft_workspace_t* ws, const real_t* in) {
+
+  if (ws->forward_plan)
+    return SIF_OK;
+
+  const uint32_t n = ws->n_cells;
+
+  real_fftw_plan_with_nthreads(sif_system_get_max_threads());
+
+  ws->forward_plan = real_fftw_plan_dft_r2c_3d(n, n, n, (real_t*)in,
+    ws->delta_k, ws->mgr->flags | FFTW_WISDOM_ONLY);
+
+  if (!ws->forward_plan) {
+    ws->forward_plan = real_fftw_plan_dft_r2c_3d(
+      n, n, n, (real_t*)in, ws->delta_k, FFTW_ESTIMATE);
+  }
 
   if (!ws->forward_plan) {
     SIF_LOG_ERROR("fft_context", "failed to create the forward plan");
-    real_fftw_free(ws->delta_k);
-    free(ws);
-    return NULL;
+    return SIF_ERR_ALLOC;
   }
 
-  return ws;
+  return SIF_OK;
 }
 
 int sif_fft_workspace_init_backward(sif_fft_workspace_t* ws, sif_fft_manager_t* mgr) {
@@ -300,10 +324,20 @@ int sif_fft_apply_filter(
   return SIF_OK;
 }
 
-void sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
+int sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
+  if (!ws || !ws->delta_k || !grid || !grid->delta) {
+    SIF_LOG_ERROR("fft_context", "invalid workspace or grid");
+    return SIF_ERR_INVALID;
+  }
+
+  if (__fft_ensure_forward_plan(ws, grid->delta) != SIF_OK)
+    return SIF_ERR_ALLOC;
+
   real_fftw_execute_dft_r2c(
     ws->forward_plan, (real_t*)grid->delta, ws->delta_k);
   SIF_LOG_TRACE("fft_context", "forward fft on cubic grid executed");
+
+  return SIF_OK;
 }
 
 real_t* sif_fft_grid_backward(sif_fft_workspace_t* ws) {

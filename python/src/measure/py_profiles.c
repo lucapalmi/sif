@@ -173,9 +173,9 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
   sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
   sifFieldObject* field = (sifFieldObject*)field_obj;
 
-  /* Test for the presence of velocities, not for ownership of them: a field
-     holding borrowed velocities (FIELD_POINTS) has vx set but the OWNS flag
-     clear, and used to be rejected here. */
+  /* Test for the presence of velocities. This used to test an ownership flag
+     instead, which rejected perfectly valid fields; the flags are gone and a
+     field either has velocities or it does not. */
   if (compute_velocity && !field->field->vx) {
     PyErr_SetString(PyExc_ValueError,
       "Cannot compute velocity profiles: field missing raw velocities.");

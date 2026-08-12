@@ -94,6 +94,10 @@ void sif_fft_manager_finalize(sif_fft_manager_t* mgr);
 /*
  * @brief Allocates a fft workspace
  *
+ * Allocates the spectrum buffer only. The forward plan is created lazily by
+ * the first sif_fft_grid_forward, against the caller's own density field, so
+ * that planning never needs a scratch buffer the size of the spectrum.
+ *
  * @param mgr The global fft manager
  * @param n_cells the number of cells for the fft
  *
@@ -149,10 +153,17 @@ int sif_fft_apply_filter(
 /*
  * @brief Execute the real-to-complex fft
  *
+ * Creates the forward plan on the first call, planning against grid->delta
+ * itself. The plan is then reused, so every later call must pass a buffer with
+ * the same alignment (everything sif allocates is cache-line aligned).
+ *
  * @param ws The fft workspace
- * @param grid The real-space cubic grid to transform
+ * @param grid The real-space cubic grid to transform. Not modified.
+ *
+ * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
+ * if the plan could not be created
  */
-void sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
+int sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
 
 /*
  * @brief Divide out the Cloud-In-Cell assignment window from delta_k

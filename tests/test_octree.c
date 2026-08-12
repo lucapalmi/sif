@@ -81,7 +81,7 @@ static void run(const char* label, real_t sx, real_t sy, real_t sz,
   }
 
   sif_field_t* f = sif_field_alloc(n_p);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+  sif_field_assign_positions(f, x, y, z);
 
   sif_octree_t* tree = sif_octree_alloc(256);
   CHECK(tree != NULL, "octree alloc failed");

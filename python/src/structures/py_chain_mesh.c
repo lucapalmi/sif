@@ -22,7 +22,13 @@ static int sifChainMesh_init(
   int allocate_masses = 0;
   int allocate_velocities = 0;
 
-  int allocate_original_idx = 1;
+  /* Off by default. The map back to field indices costs 8 bytes per particle
+   * -- 25 GiB at 3.4e9 tracers -- and the only thing that reads it is
+   * find_nearest, which nothing consuming a caller-supplied mesh calls: the
+   * finder never touches it, and the tessellation and profile routines build
+   * their own mesh with it enabled. Ask for it when you want mesh.original_idx
+   * itself. */
+  int allocate_original_idx = 0;
 
   static char* kwlist[] = {"n_cells", "box_length", "field",
     "allocate_masses", "allocate_velocities", "allocate_original_idx", NULL};
@@ -164,7 +170,9 @@ static PyGetSetDef sifChainMesh_getset[] = {
   {"vy", sifChainMesh_get_vy, NULL, "Y velocities", NULL},
   {"vz", sifChainMesh_get_vz, NULL, "Z velocities", NULL},
   {"masses", sifChainMesh_get_masses, NULL, "Masses", NULL},
-  {"original_idx", sifChainMesh_get_original_idx, NULL, "Original indices",
+  {"original_idx", sifChainMesh_get_original_idx, NULL,
+    "Map from mesh order back to field order, or None unless the mesh was "
+    "built with allocate_original_idx=True",
     NULL},
   {"cell_offsets", sifChainMesh_get_cell_offsets, NULL, "Cell offsets", NULL},
   {NULL}};

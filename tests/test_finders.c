@@ -4,12 +4,13 @@
  * Builds a uniform field with four evacuated spheres carved out, runs the full
  * pipeline (CIC -> overdensity -> finder) and asserts that each finder
  * recovers exactly those four voids, at the right places and with sensible
- * radii. Exercises the option combinations that take different code paths.
+ * radii. Exercises the options that take different code paths.
  */
 #include "sif/core/system.h"
 #include "sif/finder/rescaled_spherical_finder.h"
 #include "sif/finder/spherical_finder.h"
 #include "sif/structures/catalog.h"
+#include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
 
@@ -37,6 +38,12 @@ static int failures = 0;
 #define N_P    60000
 
 #define CELL (BOX / (real_t)N_GRID)
+
+/* Mesh resolution for the rescaled finder. The finder used to pick this
+ * itself; now that the caller owns the mesh, sif_finder_suggest_mesh_cells
+ * does, which also keeps this test honest about the recommended path. */
+#define MESH_CELLS \
+  sif_finder_suggest_mesh_cells(N_P, BOX, radii[0])
 
 static uint64_t rng_state = 0x243F6A8885A308D3ULL;
 static double next_uniform(void) {
@@ -144,7 +151,7 @@ static void run_case(const char* label, sif_option_t opts, real_t overlap) {
   /* --- spherical finder --- */
   {
     sif_field_t* f = sif_field_alloc(N_P);
-    sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+    sif_field_assign_positions(f, x, y, z);
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
     sif_grid_assign_cic(g, f);
     sif_grid_compute_overdensity(g);
@@ -163,20 +170,27 @@ static void run_case(const char* label, sif_option_t opts, real_t overlap) {
   /* --- rescaled spherical finder --- */
   {
     sif_field_t* f = sif_field_alloc(N_P);
-    sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+    sif_field_assign_positions(f, x, y, z);
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
     sif_grid_assign_cic(g, f);
     sif_grid_compute_overdensity(g);
 
+    /* The finder borrows the mesh, so the field it was built from is dead
+     * weight from here on and is released before the run. */
+    sif_chain_mesh_t* mesh =
+      sif_chain_mesh_alloc(MESH_CELLS, BOX, f, false, false, false);
+    CHECK(mesh != NULL, "chain mesh construction failed");
+    sif_field_free(f);
+
     sif_catalog_t* cat = sif_finder_rescaled_spherical(
-      g, f, radii, n_radii, -0.7f, overlap, opts);
+      g, mesh, radii, n_radii, -0.7f, overlap, opts);
     /* Rescaling grows the void until the enclosed density crosses the
      * threshold, which overshoots the geometric hole edge somewhat. */
     check_catalog("rescaled ", cat, 0.9f, 1.5f);
     sif_catalog_free(cat);
 
+    sif_chain_mesh_free(mesh);
     sif_grid_free(g);
-    sif_field_free(f);
   }
 
   free(x);
@@ -192,14 +206,10 @@ int main(void) {
   sif_init(&cfg);
 
   run_case("defaults", 0, 0.0f);
-  run_case("minimum + hessian",
-    SIF_FINDER_CENTER_IS_MINIMUM | SIF_FINDER_REFINE_CENTER_HESSIAN, 0.0f);
 
 #if !SIF_TEST_INSTRUMENTED
-  /* Each case is a full pipeline run; under a sanitizer two is enough to
-     cover the distinct code paths without a multi-minute test. */
-  run_case("center_is_minimum", SIF_FINDER_CENTER_IS_MINIMUM, 0.0f);
-  run_case("refine_center_hessian", SIF_FINDER_REFINE_CENTER_HESSIAN, 0.0f);
+  /* Each case is a full pipeline run; under a sanitizer the default case alone
+     is enough to cover the pipeline without a multi-minute test. */
   run_case("overlap 0.2", 0, 0.2f);
   run_case("preserve_grid", SIF_FINDER_PRESERVE_GRID, 0.0f);
 #endif

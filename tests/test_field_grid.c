@@ -58,15 +58,15 @@ static void test_velocity_permutation(void) {
   }
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+  sif_field_assign_positions(f, x, y, z);
 
   CHECK(sif_field_sort_morton(f) == SIF_OK, "sort_morton failed");
   CHECK((f->state_flags & __FIELD_STATE_MORTON_SORTED) != 0, "flag not set");
 
   /* Assign in ORIGINAL order, after the sort. */
-  CHECK(sif_field_assign_velocities(f, vx, vy, vz, FIELD_OWNS) == SIF_OK,
+  CHECK(sif_field_assign_velocities(f, vx, vy, vz) == SIF_OK,
     "assign_velocities failed");
-  CHECK(sif_field_assign_masses(f, m, FIELD_OWNS) == SIF_OK,
+  CHECK(sif_field_assign_masses(f, m) == SIF_OK,
     "assign_masses failed");
 
   int mismatched = 0;
@@ -79,10 +79,15 @@ static void test_velocity_permutation(void) {
   CHECK(mismatched == 0, "%d particles carry the wrong velocity/mass",
     mismatched);
 
-  /* A borrowed assignment must be upgraded to owned, otherwise it could not
-   * have been reordered. */
-  CHECK((f->state_flags & __FIELD_STATE_OWNS_VELOCITIES) != 0,
-    "velocities should be owned after a permuted assignment");
+  /* The permutation is applied on the way in, so the caller's arrays are left
+   * in their original order. */
+  int caller_disturbed = 0;
+  for (uint64_t i = 0; i < N_P; i++) {
+    if (vx[i] != x[i] || vy[i] != y[i] || vz[i] != z[i] || m[i] != x[i])
+      caller_disturbed++;
+  }
+  CHECK(caller_disturbed == 0, "%d caller entries were modified",
+    caller_disturbed);
 
   sif_field_free(f);
   free(x); free(y); free(z); free(vx); free(vy); free(vz); free(m);
@@ -99,8 +104,8 @@ static void test_sort_permutes_everything(void) {
   make_positions(x, y, z);
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
-  CHECK(sif_field_assign_velocities(f, x, y, z, FIELD_OWNS) == SIF_OK,
+  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_velocities(f, x, y, z) == SIF_OK,
     "assign_velocities failed");
   CHECK(sif_field_sort_morton(f) == SIF_OK, "sort failed");
 
@@ -134,7 +139,7 @@ static void test_require_helpers(void) {
   make_positions(x, y, z);
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+  sif_field_assign_positions(f, x, y, z);
 
   CHECK(sif_field_require_bounds(f) == SIF_OK, "require_bounds failed");
   CHECK(sif_field_require_bounds(f) == SIF_OK, "require_bounds not idempotent");
@@ -174,8 +179,8 @@ static void test_cic_mass(void) {
     m[i] = 2.0f; /* uniform but != 1, so ignoring masses is detectable */
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
-  sif_field_assign_masses(f, m, FIELD_OWNS);
+  sif_field_assign_positions(f, x, y, z);
+  sif_field_assign_masses(f, m);
 
   const uint32_t n = 16;
   sif_grid_t* g = sif_grid_alloc(n, BOX);
@@ -216,7 +221,7 @@ static void test_cic_rejects_out_of_box(void) {
   x[7] = BOX + 5.0f; /* used to underflow the local slab index */
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z, FIELD_OWNS);
+  sif_field_assign_positions(f, x, y, z);
 
   sif_grid_t* g = sif_grid_alloc(16, BOX);
   sif_grid_assign_cic(g, f);

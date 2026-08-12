@@ -32,88 +32,20 @@ void sif_candidate_buffer_free(sif_candidate_buffer_t* buf) {
   buf->capacity = 0;
 }
 
-/*
- * True when cell `i` is strictly lower than all 26 of its neighbours.
- *
- * The interior fast path walks precomputed flat offsets; boundary cells fall
- * back to per-axis periodic wrapping.
- */
-static inline uint8_t __is_local_minimum(const real_t* delta, uint64_t i,
-  real_t center_val, uint32_t N, uint32_t p2_mask, uint32_t p2_shift,
-  const int64_t* neighbor_offsets) {
-
-  uint32_t iz = sif_fast_mod(i, N, p2_mask);
-  uint32_t iy = sif_fast_mod(sif_fast_div(i, N, p2_shift), N, p2_mask);
-  uint32_t ix = sif_fast_div(i, (uint64_t)N * N, p2_shift ? 2 * p2_shift : 0);
-
-  if (ix > 0 && ix < N - 1 && iy > 0 && iy < N - 1 && iz > 0 && iz < N - 1) {
-    for (int n = 0; n < 26; n++) {
-      if (delta[i + neighbor_offsets[n]] <= center_val)
-        return 0;
-    }
-    return 1;
-  }
-
-  for (int32_t dx = -1; dx <= 1; dx++) {
-    int32_t nx = sif_wrap_pbc((int32_t)ix + dx, N, p2_mask);
-    for (int32_t dy = -1; dy <= 1; dy++) {
-      int32_t ny = sif_wrap_pbc((int32_t)iy + dy, N, p2_mask);
-      for (int32_t dz = -1; dz <= 1; dz++) {
-        if (dx == 0 && dy == 0 && dz == 0)
-          continue;
-        int32_t nz = sif_wrap_pbc((int32_t)iz + dz, N, p2_mask);
-        if (delta[sif_get_flat_index(N, nx, ny, nz)] <= center_val)
-          return 0;
-      }
-    }
-  }
-  return 1;
-}
-
 /* Shared predicate for both passes, so they can never disagree. */
 static inline uint8_t __cell_is_candidate(const real_t* delta,
-  const sif_bitmask_t* mask, uint64_t i, real_t threshold,
-  uint8_t require_minimum, uint32_t N, uint32_t p2_mask, uint32_t p2_shift,
-  const int64_t* neighbor_offsets) {
+  const sif_bitmask_t* mask, uint64_t i, real_t threshold) {
 
-  const real_t center_val = delta[i];
-
-  if (center_val > threshold || sif_bitmask_get(mask, i))
-    return 0;
-
-  if (!require_minimum)
-    return 1;
-
-  return __is_local_minimum(
-    delta, i, center_val, N, p2_mask, p2_shift, neighbor_offsets);
+  return delta[i] <= threshold && !sif_bitmask_get(mask, i);
 }
 
 int sif_finder_scan_candidates(const sif_grid_t* grid,
-  const sif_bitmask_t* mask, real_t threshold, uint8_t require_minimum,
-  sif_candidate_buffer_t* buf) {
+  const sif_bitmask_t* mask, real_t threshold, sif_candidate_buffer_t* buf) {
 
   const uint64_t total_cells = grid->total_cells;
-  const uint32_t N = grid->n_cells;
-  const uint32_t p2_mask = grid->p2_mask;
-  const uint32_t p2_shift = grid->p2_shift;
   const real_t* g_delta = SIF_ASSUME_ALIGNED(grid->delta);
 
   buf->count = 0;
-
-  int64_t neighbor_offsets[26];
-  if (require_minimum) {
-    int n_idx = 0;
-    for (int32_t dx = -1; dx <= 1; dx++) {
-      for (int32_t dy = -1; dy <= 1; dy++) {
-        for (int32_t dz = -1; dz <= 1; dz++) {
-          if (dx == 0 && dy == 0 && dz == 0)
-            continue;
-          neighbor_offsets[n_idx++] =
-            (int64_t)dx * N * N + (int64_t)dy * N + dz;
-        }
-      }
-    }
-  }
 
   uint64_t chunk_offsets[__FINDER_SCAN_CHUNKS] = {0};
   const uint64_t chunk = total_cells / __FINDER_SCAN_CHUNKS;
@@ -126,10 +58,8 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
       (c == __FINDER_SCAN_CHUNKS - 1) ? total_cells : start + chunk;
 
     uint64_t local = 0;
-    for (uint64_t i = start; i < end; i++) {
-      local += __cell_is_candidate(g_delta, mask, i, threshold, require_minimum,
-        N, p2_mask, p2_shift, neighbor_offsets);
-    }
+    for (uint64_t i = start; i < end; i++)
+      local += __cell_is_candidate(g_delta, mask, i, threshold);
     chunk_offsets[c] = local;
   }
 
@@ -146,6 +76,17 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
 
   if (n_candidates > buf->capacity) {
     const uint64_t new_capacity = (uint64_t)((double)n_candidates * 1.2) + 1;
+
+    /* Pass 2 rewrites every entry, so nothing in the old buffer is worth
+     * carrying over. Releasing it first keeps the high-water mark at one
+     * buffer instead of two, which on a 2250^3 grid is the difference between
+     * ~10 and ~19 GiB at a 5% candidate rate. The cost is that a failure here
+     * leaves the buffer empty rather than stale, so count and capacity are
+     * cleared to match: the caller aborts the run either way. */
+    sif_free_aligned(buf->items);
+    buf->items = NULL;
+    buf->capacity = 0;
+
     sif_candidate_t* items =
       sif_malloc_aligned(new_capacity * sizeof(sif_candidate_t));
     if (!items) {
@@ -153,7 +94,6 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
         "failed to allocate %" PRIu64 " candidates", new_capacity);
       return SIF_ERR_ALLOC;
     }
-    sif_free_aligned(buf->items);
     buf->items = items;
     buf->capacity = new_capacity;
   }
@@ -169,8 +109,7 @@ int sif_finder_scan_candidates(const sif_grid_t* grid,
 
     uint64_t w = chunk_offsets[c];
     for (uint64_t i = start; i < end; i++) {
-      if (__cell_is_candidate(g_delta, mask, i, threshold, require_minimum, N,
-            p2_mask, p2_shift, neighbor_offsets)) {
+      if (__cell_is_candidate(g_delta, mask, i, threshold)) {
         candidates[w].flat_idx = i;
         candidates[w].delta = g_delta[i];
         w++;
@@ -210,62 +149,6 @@ void sif_finder_log_radius(const char* tag, real_t radius,
 }
 
 /* --- 3. Geometry --- */
-
-HOT_LOOP void sif_refine_center_hessian(const sif_grid_t* grid, uint32_t ix,
-  uint32_t iy, uint32_t iz, real_t* cx, real_t* cy, real_t* cz) {
-
-  const uint32_t N = grid->n_cells;
-  const uint32_t mask = grid->p2_mask;
-  const uint32_t shift = grid->p2_shift;
-  const real_t* d = grid->delta;
-
-  real_t dx = 0.5f * (d[sif_fast_get_flat_index(N, shift, sif_wrap_pbc(ix + 1, N, mask), iy, iz)] -
-                       d[sif_fast_get_flat_index(N, shift, sif_wrap_pbc(ix - 1, N, mask), iy, iz)]);
-  real_t dy = 0.5f * (d[sif_fast_get_flat_index(N, shift, ix, sif_wrap_pbc(iy + 1, N, mask), iz)] -
-                       d[sif_fast_get_flat_index(N, shift, ix, sif_wrap_pbc(iy - 1, N, mask), iz)]);
-  real_t dz = 0.5f * (d[sif_fast_get_flat_index(N, shift, ix, iy, sif_wrap_pbc(iz + 1, N, mask))] -
-                       d[sif_fast_get_flat_index(N, shift, ix, iy, sif_wrap_pbc(iz - 1, N, mask))]);
-
-  real_t dxx = d[sif_fast_get_flat_index(N, shift, sif_wrap_pbc(ix + 1, N, mask), iy, iz)] -
-               2.0f * d[sif_fast_get_flat_index(N, shift, ix, iy, iz)] +
-               d[sif_fast_get_flat_index(N, shift, sif_wrap_pbc(ix - 1, N, mask), iy, iz)];
-  real_t dyy = d[sif_fast_get_flat_index(N, shift, ix, sif_wrap_pbc(iy + 1, N, mask), iz)] -
-               2.0f * d[sif_fast_get_flat_index(N, shift, ix, iy, iz)] +
-               d[sif_fast_get_flat_index(N, shift, ix, sif_wrap_pbc(iy - 1, N, mask), iz)];
-  real_t dzz = d[sif_fast_get_flat_index(N, shift, ix, iy, sif_wrap_pbc(iz + 1, N, mask))] -
-               2.0f * d[sif_fast_get_flat_index(N, shift, ix, iy, iz)] +
-               d[sif_fast_get_flat_index(N, shift, ix, iy, sif_wrap_pbc(iz - 1, N, mask))];
-
-  if (dxx > 1e-6) {
-    real_t shift_x = dx / dxx;
-    shift_x = (shift_x > 0.5f) ? 0.5f : ((shift_x < -0.5f) ? -0.5f : shift_x);
-    *cx -= shift_x * grid->cell_length;
-  }
-  if (dyy > 1e-6) {
-    real_t shift_y = dy / dyy;
-    shift_y = (shift_y > 0.5f) ? 0.5f : ((shift_y < -0.5f) ? -0.5f : shift_y);
-    *cy -= shift_y * grid->cell_length;
-  }
-  if (dzz > 1e-6) {
-    real_t shift_z = dz / dzz;
-    shift_z = (shift_z > 0.5f) ? 0.5f : ((shift_z < -0.5f) ? -0.5f : shift_z);
-    *cz -= shift_z * grid->cell_length;
-  }
-
-  real_t box_L = grid->box_length;
-  if (*cx < 0.0f)
-    *cx += box_L;
-  if (*cx >= box_L)
-    *cx -= box_L;
-  if (*cy < 0.0f)
-    *cy += box_L;
-  if (*cy >= box_L)
-    *cy -= box_L;
-  if (*cz < 0.0f)
-    *cz += box_L;
-  if (*cz >= box_L)
-    *cz -= box_L;
-}
 
 /*
  * Cheap rejection probe: samples the mask at the six axis poles of the shrunk
@@ -430,7 +313,7 @@ HOT_LOOP void sif_mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy,
 #pragma omp parallel for schedule(static) if (span > 24)
   for (int32_t dx = -cell_radius; dx <= cell_radius; dx++) {
     const int32_t global_x = center_ix + dx;
-    const real_t px = (global_x + 0.5f) * cell_length;
+    const real_t px = (real_t)global_x * cell_length;
     real_t dist_x = REAL_ABS(px - cx);
     dist_x = (dist_x > half_box) ? box_length - dist_x : dist_x;
     const real_t dx2 = dist_x * dist_x;
@@ -442,7 +325,7 @@ HOT_LOOP void sif_mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy,
 
     for (int32_t dy = -cell_radius; dy <= cell_radius; dy++) {
       const int32_t global_y = center_iy + dy;
-      const real_t py = (global_y + 0.5f) * cell_length;
+      const real_t py = (real_t)global_y * cell_length;
       real_t dist_y = REAL_ABS(py - cy);
       dist_y = (dist_y > half_box) ? box_length - dist_y : dist_y;
       const real_t dxy2 = dx2 + dist_y * dist_y;
@@ -454,7 +337,7 @@ HOT_LOOP void sif_mark_sphere(sif_bitmask_t* mask, real_t cx, real_t cy,
 
       for (int32_t dz = -cell_radius; dz <= cell_radius; dz++) {
         const int32_t global_z = center_iz + dz;
-        const real_t pz = (global_z + 0.5f) * cell_length;
+        const real_t pz = (real_t)global_z * cell_length;
         real_t dist_z = REAL_ABS(pz - cz);
         dist_z = (dist_z > half_box) ? box_length - dist_z : dist_z;
 

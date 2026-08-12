@@ -212,7 +212,7 @@ static void test_chain_mesh(void) {
       }
 
   sif_field_t* field = sif_field_alloc(n_p);
-  sif_field_assign_positions(field, x, y, z, FIELD_POINTS);
+  sif_field_assign_positions(field, x, y, z);
 
   sif_chain_mesh_t* mesh =
     sif_chain_mesh_alloc(8, box, field, false, false, true);
@@ -265,14 +265,16 @@ static void test_chain_mesh(void) {
     sif_chain_mesh_free(no_idx);
   }
 
-  /* Out-of-range coordinates are rejected, not silently folded. */
-  x[10] = box + 1.0f;
+  /* Out-of-range coordinates are rejected, not silently folded. The field owns
+   * its positions, so the corruption has to go into its copy: writing to the
+   * caller's x[] would not reach the mesh. */
+  field->x[10] = box + 1.0f;
   CHECK(sif_chain_mesh_alloc(8, box, field, false, false, true) == NULL,
     "a particle outside the box should be rejected");
-  x[10] = -1.0f;
+  field->x[10] = -1.0f;
   CHECK(sif_chain_mesh_alloc(8, box, field, false, false, true) == NULL,
     "a negative coordinate should be rejected");
-  x[10] = 0.0f / 0.0f; /* NaN */
+  field->x[10] = 0.0f / 0.0f; /* NaN */
   CHECK(sif_chain_mesh_alloc(8, box, field, false, false, true) == NULL,
     "a NaN coordinate should be rejected");
 

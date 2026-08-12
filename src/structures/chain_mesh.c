@@ -84,10 +84,9 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, real_t box_length,
   mesh->cell_length = box_length / (real_t)n_cells;
   mesh->n_particles = n_particles;
 
-  /* Calculate padded length to preserve cache-line alignment for sub-arrays */
-  uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
-  uint64_t padded_n =
-    (n_particles + align_elements - 1) & ~(align_elements - 1);
+  /* Padded so each sub-array of the block starts on a cache line, exactly as
+   * the field lays its own out. */
+  uint64_t padded_n = sif_field_padded_n(n_particles);
 
   /* 1. Unified Position Block */
   mesh->_position_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));

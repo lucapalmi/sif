@@ -22,11 +22,6 @@ static inline uint32_t sif_fast_div(uint64_t val, uint32_t n, uint32_t shift) {
   return shift ? (uint32_t)(val >> shift) : (uint32_t)(val / n);
 }
 
-static inline uint64_t sif_fast_get_flat_index(uint32_t n, uint32_t shift, uint32_t ix, uint32_t iy, uint32_t iz) {
-  if (shift) return ((uint64_t)ix << (2 * shift)) | ((uint64_t)iy << shift) | (uint64_t)iz;
-  return (uint64_t)ix * n * n + (uint64_t)iy * n + iz;
-}
-
 uint64_t sif_get_flat_index(uint32_t n, uint32_t ix, uint32_t iy, uint32_t iz);
 
 /*
@@ -69,15 +64,11 @@ void sif_candidate_buffer_free(sif_candidate_buffer_t* buf);
  * @brief Collects every unmasked cell at or below `threshold`, sorted by
  * increasing delta (deepest underdensity first).
  *
- * @param require_minimum Keep only cells that are a strict local minimum of
- * their 26-neighborhood.
- *
  * @return SIF_OK on success (buf->count may legitimately be 0),
  * SIF_ERR_ALLOC if the buffer could not grow
  */
 int sif_finder_scan_candidates(const sif_grid_t* grid,
-  const sif_bitmask_t* mask, real_t threshold, uint8_t require_minimum,
-  sif_candidate_buffer_t* buf);
+  const sif_bitmask_t* mask, real_t threshold, sif_candidate_buffer_t* buf);
 
 /* --- Per-radius reporting --- */
 
@@ -98,9 +89,6 @@ void sif_finder_log_radius(const char* tag, real_t radius,
   const sif_finder_radius_stats_t* stats, uint64_t total_voids, double elapsed_s);
 
 /* --- Geometry --- */
-
-void sif_refine_center_hessian(const sif_grid_t* grid, uint32_t ix, uint32_t iy,
-  uint32_t iz, real_t* cx, real_t* cy, real_t* cz);
 
 uint8_t sif_check_overlap_cells(const sif_bitmask_t* mask, uint32_t n_cells,
   uint32_t p2_mask, uint32_t ix, uint32_t iy, uint32_t iz, uint32_t r);
