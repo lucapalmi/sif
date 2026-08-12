@@ -9,6 +9,7 @@
 #include "sif/io/catalog_io.h"
 
 #include <numpy/arrayobject.h>
+#include <stdio.h>
 #include <string.h>
 
 /* --- Field I/O --- */
@@ -86,9 +87,11 @@ PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
 
 PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
-  static char* kwlist[] = {"filepath", NULL};
+  int wrap = 0;
+  static char* kwlist[] = {"filepath", "wrap", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "s|p", kwlist, &filepath, &wrap)) {
     return NULL;
   }
 
@@ -102,6 +105,31 @@ PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
 
   if (!field) {
     return PyErr_Format(PyExc_IOError, "Failed to read .xfield from %s", filepath);
+  }
+
+  /* Off by default: folding coordinates is only ever right for a field that is
+   * periodic in this box, and doing it unasked would turn a wrong box length --
+   * which the binning validators currently catch loudly -- into a silently
+   * meaningless density field. The box used is the file's own, so this cannot
+   * paper over a box the caller got wrong; that one is still checked where the
+   * caller supplies it. */
+  if (wrap) {
+    int status = SIF_OK;
+    Py_BEGIN_ALLOW_THREADS
+    status = sif_field_wrap_periodic(field, (real_t)box_length, NULL, NULL);
+    Py_END_ALLOW_THREADS
+
+    if (status != SIF_OK) {
+      sif_field_free(field);
+      /* PyErr_Format has no float conversion, so the box has to be rendered
+       * before it gets there. */
+      char detail[512];
+      snprintf(detail, sizeof(detail),
+        "wrap=True, but %s declares a box length of %g, which cannot be "
+        "wrapped into", filepath, box_length);
+      PyErr_SetString(PyExc_ValueError, detail);
+      return NULL;
+    }
   }
 
   sifFieldObject* obj = (sifFieldObject*)sifFieldType.tp_alloc(&sifFieldType, 0);

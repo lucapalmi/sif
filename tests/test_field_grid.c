@@ -241,12 +241,102 @@ static void test_cic_rejects_out_of_box(void) {
   printf("  ok\n");
 }
 
+/*
+ * The wrap has to satisfy the binning contract exactly, not approximately: its
+ * whole purpose is to turn a field the validators reject into one they accept.
+ */
+static void test_wrap_periodic(void) {
+  printf("periodic wrap\n");
+
+  real_t *x = malloc(N_P * sizeof(real_t)), *y = malloc(N_P * sizeof(real_t)),
+         *z = malloc(N_P * sizeof(real_t));
+  make_positions(x, y, z);
+
+  /* The rounding artifact this exists for: stored exactly on the edge. */
+  x[3] = BOX;
+  y[9] = BOX;
+
+  /* A negative small enough that -eps + BOX is not representable and rounds
+   * back to BOX. Without the final clamp the wrap would return it still out of
+   * range, which is the trap the implementation guards. */
+  z[11] = -1e-6f;
+
+  /* Genuinely outside, in both directions. */
+  x[21] = BOX * 2.5f;
+  y[33] = -BOX * 1.5f;
+
+  sif_field_t* f = sif_field_alloc(N_P);
+  sif_field_assign_positions(f, x, y, z);
+
+  /* A stale bounds cache must not survive the move. */
+  CHECK(sif_field_require_bounds(f) == SIF_OK, "require_bounds failed");
+
+  uint64_t boundary = 0, wrapped = 0;
+  CHECK(sif_field_wrap_periodic(f, BOX, &boundary, &wrapped) == SIF_OK,
+    "wrap_periodic failed");
+
+  CHECK(boundary == 2, "expected 2 boundary folds, got %llu",
+    (unsigned long long)boundary);
+  CHECK(wrapped == 3, "expected 3 genuine wraps, got %llu",
+    (unsigned long long)wrapped);
+
+  CHECK(f->x[3] == 0.0f, "x on the edge should fold to 0, got %g",
+    (double)f->x[3]);
+  CHECK(f->y[9] == 0.0f, "y on the edge should fold to 0, got %g",
+    (double)f->y[9]);
+
+  /* The clamp case: whatever it lands on, it must be inside the box. */
+  CHECK(z[11] + BOX == BOX, "test premise: -1e-6 + BOX should round to BOX");
+  CHECK(f->z[11] >= 0.0f && f->z[11] < BOX,
+    "a tiny negative must land inside the box, got %g", (double)f->z[11]);
+
+  CHECK((f->state_flags & __FIELD_STATE_BOUNDS_VALID) == 0,
+    "the bounds cache should be invalidated by a wrap");
+
+  /* The contract itself: every coordinate now satisfies what the CIC and the
+   * chain mesh require. */
+  uint64_t bad = 0;
+  for (uint64_t i = 0; i < N_P; i++) {
+    if (!(f->x[i] >= 0.0f && f->x[i] < BOX) ||
+        !(f->y[i] >= 0.0f && f->y[i] < BOX) ||
+        !(f->z[i] >= 0.0f && f->z[i] < BOX))
+      bad++;
+  }
+  CHECK(bad == 0, "%llu coordinates still outside the box after wrapping",
+    (unsigned long long)bad);
+
+  /* And the field the validators used to reject now assigns. */
+  sif_grid_t* g = sif_grid_alloc(16, BOX);
+  sif_grid_assign_cic(g, f);
+  double sum = 0.0;
+  for (uint64_t i = 0; i < g->total_cells; i++)
+    sum += (double)g->delta[i];
+  CHECK(sum > 0.0, "a wrapped field should assign, got total mass %g", sum);
+  sif_grid_free(g);
+
+  /* Idempotent: a field already inside the box is left alone. */
+  boundary = wrapped = 1;
+  CHECK(sif_field_wrap_periodic(f, BOX, &boundary, &wrapped) == SIF_OK,
+    "second wrap failed");
+  CHECK(boundary == 0 && wrapped == 0,
+    "wrapping an in-box field should move nothing, got %llu/%llu",
+    (unsigned long long)boundary, (unsigned long long)wrapped);
+
+  CHECK(sif_field_wrap_periodic(f, 0.0f, NULL, NULL) == SIF_ERR_INVALID,
+    "a non-positive box should be rejected");
+
+  sif_field_free(f);
+  free(x); free(y); free(z);
+  printf("  ok\n");
+}
+
 int main(void) {
   test_velocity_permutation();
   test_sort_permutes_everything();
   test_require_helpers();
   test_cic_mass();
   test_cic_rejects_out_of_box();
+  test_wrap_periodic();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

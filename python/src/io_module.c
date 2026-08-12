@@ -6,7 +6,13 @@ static PyMethodDef io_methods[] = {
    "Writes arrays to a highly optimized .xfield binary format."},
    
   {"read_field",  (PyCFunction)pysif_read_field,  METH_VARARGS | METH_KEYWORDS,
-   "Reads an .xfield binary directly into memory."},
+   "read_field(filepath, wrap=False) -> Field\n\n"
+   "Reads an .xfield binary directly into memory. wrap=True folds every\n"
+   "coordinate into [0, box_length) using the box the file itself declares,\n"
+   "which is the short way to clear the single-precision rounding that puts\n"
+   "a handful of particles exactly on the box edge. It is off by default:\n"
+   "folding is only correct for a genuinely periodic field. Use\n"
+   "Field.wrap(box_length) instead when you want the counts back."},
 
   {"read_field_header", (PyCFunction)pysif_read_field_header,
    METH_VARARGS | METH_KEYWORDS,

@@ -265,6 +265,96 @@ int sif_field_assign_masses(sif_field_t* field, const real_t* masses) {
   return SIF_OK;
 }
 
+/*
+ * Folds one coordinate into [0, box_length).
+ *
+ * The final clamp is not redundant. For a small negative coordinate the
+ * correction x + box_length is not representable in single precision -- near a
+ * box of 2000 the neighbouring floats are ~1e-4 apart -- so it rounds back up
+ * to exactly box_length and the value would leave this function still out of
+ * range, which is the bug it was called to fix.
+ */
+static inline real_t __wrap_coordinate(real_t v, real_t box_length,
+  uint64_t* boundary, uint64_t* wrapped) {
+
+  if (v >= 0.0f && v < box_length)
+    return v;
+
+  /* Leaves NaN untouched and uncounted: it fails both comparisons above and
+   * every one below, and no fold makes it a position. */
+  if (!(v >= 0.0f) && !(v < box_length))
+    return v;
+
+  if (v == box_length) {
+    (*boundary)++;
+    return 0.0f;
+  }
+
+  (*wrapped)++;
+
+  real_t w = REAL_FMOD(v, box_length);
+  if (w < 0.0f)
+    w += box_length;
+  if (w >= box_length)
+    w = 0.0f;
+
+  return w;
+}
+
+int sif_field_wrap_periodic(sif_field_t* field, real_t box_length,
+  uint64_t* n_boundary, uint64_t* n_wrapped) {
+
+  if (!field || !field->x || !field->y || !field->z ||
+      field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "invalid or empty field");
+    return SIF_ERR_INVALID;
+  }
+
+  if (!(box_length > 0.0f)) {
+    SIF_LOG_ERROR("field", "invalid box length %g", (double)box_length);
+    return SIF_ERR_INVALID;
+  }
+
+  uint64_t boundary = 0;
+  uint64_t wrapped = 0;
+
+#pragma omp parallel for schedule(static) reduction(+ : boundary, wrapped)
+  for (uint64_t i = 0; i < field->n_particles; i++) {
+    field->x[i] = __wrap_coordinate(field->x[i], box_length, &boundary, &wrapped);
+    field->y[i] = __wrap_coordinate(field->y[i], box_length, &boundary, &wrapped);
+    field->z[i] = __wrap_coordinate(field->z[i], box_length, &boundary, &wrapped);
+  }
+
+  /* Positions moved, so anything derived from them is stale. The Morton order
+   * is dropped for the same reason: a wrapped particle jumps to the opposite
+   * corner, which is exactly the case the curve orders by. */
+  if (boundary > 0 || wrapped > 0) {
+    field->state_flags &= ~__FIELD_STATE_BOUNDS_VALID;
+    field->state_flags &= ~__FIELD_STATE_MORTON_SORTED;
+  }
+
+  if (wrapped > 0) {
+    SIF_LOG_WARNING("field",
+      "wrapped %" PRIu64 " coordinates that were genuinely outside [0, %g); "
+      "if this is not a small number, the box length is probably wrong and the "
+      "folded field is meaningless",
+      wrapped, (double)box_length);
+  }
+
+  if (boundary > 0) {
+    SIF_LOG_INFO("field",
+      "folded %" PRIu64 " coordinates sitting exactly on the box edge to 0",
+      boundary);
+  }
+
+  if (n_boundary)
+    *n_boundary = boundary;
+  if (n_wrapped)
+    *n_wrapped = wrapped;
+
+  return SIF_OK;
+}
+
 int sif_field_compute_bounds(sif_field_t* field) {
   if (!field || !field->x || field->n_particles == 0) {
     SIF_LOG_ERROR("field", "invalid or empty field");

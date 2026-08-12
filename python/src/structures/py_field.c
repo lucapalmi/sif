@@ -159,6 +159,40 @@ static PyObject* sifField_from_numpy(
   Py_RETURN_NONE;
 }
 
+static PyObject* sifField_wrap(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  sifFieldObject* self = (sifFieldObject*)self_obj;
+
+  double box_length;
+  static char* kwlist[] = {"box_length", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "d", kwlist, &box_length)) {
+    return NULL;
+  }
+
+  uint64_t boundary = 0, wrapped = 0;
+  int status = SIF_OK;
+
+  /* One pass over every coordinate: worth dropping the GIL at the particle
+   * counts this is meant for. */
+  Py_BEGIN_ALLOW_THREADS
+  status = sif_field_wrap_periodic(
+    self->field, (real_t)box_length, &boundary, &wrapped);
+  Py_END_ALLOW_THREADS
+
+  if (status != SIF_OK) {
+    PyErr_SetString(PyExc_ValueError,
+      "failed to wrap the field: it must hold positions and box_length must "
+      "be positive");
+    return NULL;
+  }
+
+  return Py_BuildValue("{s:K,s:K}",
+    "boundary", (unsigned long long)boundary,
+    "wrapped", (unsigned long long)wrapped);
+}
+
 static PyObject* sifField_sort_morton(PyObject* self_obj, PyObject* args) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
   sif_field_sort_morton(self->field);
@@ -187,6 +221,15 @@ static PyGetSetDef sifField_getset[] = {
 static PyMethodDef sifField_methods[] = {
   {"from_numpy", (PyCFunction)sifField_from_numpy, METH_VARARGS | METH_KEYWORDS,
     "Load particles and optional velocities from NumPy arrays."},
+  {"wrap", (PyCFunction)sifField_wrap, METH_VARARGS | METH_KEYWORDS,
+    "wrap(box_length) -> dict\n\n"
+    "Fold every coordinate into [0, box_length) periodically, in place.\n"
+    "Returns {'boundary': n, 'wrapped': n}: 'boundary' counts coordinates\n"
+    "that sat exactly on the box edge, which is the single-precision\n"
+    "rounding artifact this exists for, and 'wrapped' counts coordinates\n"
+    "that were genuinely outside. A large 'wrapped' means the box length is\n"
+    "wrong and the folded field is meaningless -- check it rather than\n"
+    "proceeding. Only correct for a field that is periodic in this box."},
   {"sort_morton", (PyCFunction)sifField_sort_morton, METH_NOARGS,
     "Compute bounds and sort particles by Morton code."},
   {"compute_bounds", (PyCFunction)sifField_compute_bounds, METH_NOARGS,

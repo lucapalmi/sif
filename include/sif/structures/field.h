@@ -173,6 +173,40 @@ int sif_field_assign_velocities(
 int sif_field_assign_masses(sif_field_t* field, const real_t* masses);
 
 /*
+ * @brief Folds every coordinate into [0, box_length) periodically
+ *
+ * Everything that bins the field -- the CIC assignment, the chain mesh --
+ * requires coordinates strictly inside the box, and rejects the field
+ * otherwise. The common reason a periodic snapshot fails that check is not bad
+ * data but rounding: in single precision the representable values near the box
+ * edge are spaced ~1e-4 apart at a box of 2000, so any coordinate within half
+ * that of the edge lands on exactly box_length when it is stored. Those
+ * particles are one ULP from the origin, not out of bounds.
+ *
+ * Wrapping is only ever correct for a field that really is periodic in this
+ * box, so it is never applied implicitly; call this when you know it is.
+ *
+ * The two populations are counted separately because they mean different
+ * things. A handful of boundary folds is the expected rounding artifact. A
+ * large `n_wrapped` means the coordinates were not in this box to begin with --
+ * the box length is wrong, or the data was never wrapped -- and folding them
+ * produces a silently meaningless density field rather than an error.
+ *
+ * NaN cannot be repaired here and is left alone; the binning validators reject
+ * it, and it is counted in neither total.
+ *
+ * @param field The field, modified in place
+ * @param box_length The periodic box the field lives in
+ * @param n_boundary Optional; coordinates that sat exactly on box_length
+ * @param n_wrapped Optional; coordinates that were genuinely outside the box
+ *
+ * @return SIF_OK on success, SIF_ERR_INVALID on an empty or positionless field
+ * or a non-positive box
+ */
+int sif_field_wrap_periodic(sif_field_t* field, real_t box_length,
+  uint64_t* n_boundary, uint64_t* n_wrapped);
+
+/*
  * @brief Computes and caches the bounding box and center of the field.
  *
  * Recomputes unconditionally. Prefer sif_field_require_bounds unless you
