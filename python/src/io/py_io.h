@@ -6,6 +6,7 @@
 /* Module-level functional entry points for discrete file formats */
 PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_field_header(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_write_grid(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_grid(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_field_ascii(PyObject* self, PyObject* args, PyObject* kwds);

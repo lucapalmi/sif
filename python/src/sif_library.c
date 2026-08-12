@@ -121,6 +121,21 @@ PyMODINIT_FUNC PyInit_pysif(void) {
     return NULL;
   }
 
+  /* The NumPy scalar type matching real_t, so callers can write
+   * np.zeros(n, dtype=pysif.real) and get arrays the bindings take without a
+   * conversion copy. It is the type object (np.float32 / np.float64) rather
+   * than a dtype instance, which also makes pysif.real(value) work as a cast. */
+  PyObject* real_type = PyArray_TypeObjectFromType(NPY_REAL_T);
+  if (!real_type) {
+    Py_DECREF(m);
+    return NULL;
+  }
+  if (PyModule_AddObject(m, "real", real_type) < 0) {
+    Py_DECREF(real_type);
+    Py_DECREF(m);
+    return NULL;
+  }
+
   PyObject* sys_modules = PyImport_GetModuleDict();
 
   /* 2. Initialize and Attach Submodules */

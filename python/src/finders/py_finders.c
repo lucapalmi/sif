@@ -4,11 +4,64 @@
 #include "structures/py_chain_mesh.h"
 #include "structures/py_grid.h"
 #include <numpy/arrayobject.h>
+#include <stdio.h>
 
 #include "sif/core/macros.h"
 #include "sif/core/system.h"
 #include "sif/finder/rescaled_spherical_finder.h"
 #include "sif/finder/spherical_finder.h"
+
+/* --- Mesh Sizing Helper --- */
+PyObject* py_sif_finder_suggest_mesh_cells(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+
+  unsigned long long n_particles;
+  double box_length;
+  double max_radius = 0.0;
+
+  static char* kwlist[] = {
+    "n_particles", "box_length", "max_radius", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Kd|d", kwlist, &n_particles,
+        &box_length, &max_radius)) {
+    return NULL;
+  }
+
+  /* The C helper folds every failure into a 0 return, which as a Python value
+   * is a footgun: it would reach ChainMesh and fail there with an unrelated
+   * message. The two ways it can happen are separated out here so each says
+   * what is actually wrong. */
+  /* PyErr_Format has no float conversion, so anything carrying a double has to
+   * be rendered before it gets there. */
+  char detail[256];
+
+  if (n_particles == 0 || !(box_length > 0.0)) {
+    snprintf(detail, sizeof(detail),
+      "need n_particles > 0 and box_length > 0, got n_particles=%llu, "
+      "box_length=%g", n_particles, box_length);
+    PyErr_SetString(PyExc_ValueError, detail);
+    return NULL;
+  }
+
+  if (max_radius > 0.0 && 2.0 * max_radius >= box_length) {
+    snprintf(detail, sizeof(detail),
+      "a search sphere of %g (twice max_radius) does not fit in a box of %g, "
+      "so no mesh resolution can hold it", 2.0 * max_radius, box_length);
+    PyErr_SetString(PyExc_ValueError, detail);
+    return NULL;
+  }
+
+  const uint32_t n_cells = sif_finder_suggest_mesh_cells(
+    (uint64_t)n_particles, (real_t)box_length, (real_t)max_radius);
+
+  if (n_cells == 0) {
+    PyErr_SetString(PyExc_ValueError,
+      "no usable mesh resolution for this geometry");
+    return NULL;
+  }
+
+  return PyLong_FromUnsignedLong(n_cells);
+}
 
 /* --- Rescaled Spherical Finder Wrapper --- */
 PyObject* py_sif_finder_rescaled_spherical(PyObject* self, PyObject* args, PyObject* kwds) {

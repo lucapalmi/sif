@@ -9,6 +9,7 @@
 #include "sif/io/catalog_io.h"
 
 #include <numpy/arrayobject.h>
+#include <string.h>
 
 /* --- Field I/O --- */
 
@@ -111,6 +112,42 @@ PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
   
   obj->field = field;
   return (PyObject*)obj;
+}
+
+PyObject* pysif_read_field_header(PyObject* self, PyObject* args, PyObject* kwds) {
+  const char* filepath;
+  static char* kwlist[] = {"filepath", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath)) {
+    return NULL;
+  }
+
+  FILE* file = fopen(filepath, "rb");
+  if (!file) {
+    return PyErr_Format(PyExc_IOError, "Failed to open %s", filepath);
+  }
+
+  sif_xfield_header_t header;
+  const size_t got = fread(&header, sizeof(header), 1, file);
+  fclose(file);
+
+  if (got != 1) {
+    return PyErr_Format(
+      PyExc_IOError, "%s is too short to hold an .xfield header", filepath);
+  }
+
+  if (strncmp(header.magic, __SIF_XFIELD_MAGIC, 4) != 0) {
+    return PyErr_Format(PyExc_ValueError, "%s is not an .xfield file", filepath);
+  }
+
+  /* box_length is the reason this exists: it lives in the file, not in
+   * sif_field_t, so reading the field is not a way to recover it. */
+  return Py_BuildValue("{s:K,s:d,s:O,s:O,s:I}",
+    "n_particles", (unsigned long long)header.n_particles,
+    "box_length", header.box_length,
+    "has_masses", header.has_masses ? Py_True : Py_False,
+    "has_velocities", header.has_velocities ? Py_True : Py_False,
+    "version", (unsigned int)header.version);
 }
 
 /* --- Grid I/O --- */

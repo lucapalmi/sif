@@ -5,9 +5,19 @@ static PyMethodDef io_methods[] = {
   {"write_field", (PyCFunction)pysif_write_field, METH_VARARGS | METH_KEYWORDS, 
    "Writes arrays to a highly optimized .xfield binary format."},
    
-  {"read_field",  (PyCFunction)pysif_read_field,  METH_VARARGS | METH_KEYWORDS, 
+  {"read_field",  (PyCFunction)pysif_read_field,  METH_VARARGS | METH_KEYWORDS,
    "Reads an .xfield binary directly into memory."},
-   
+
+  {"read_field_header", (PyCFunction)pysif_read_field_header,
+   METH_VARARGS | METH_KEYWORDS,
+   "read_field_header(filepath) -> dict\n\n"
+   "Reads only the 64-byte .xfield header: n_particles, box_length,\n"
+   "has_masses, has_velocities, version. Costs one small read rather than\n"
+   "the whole file, so it can size a grid or a chain mesh before committing\n"
+   "to loading the tracers. box_length is stored in the file and not in the\n"
+   "field itself, so this is the only way to recover it."},
+
+
   {"write_grid",  (PyCFunction)pysif_write_grid,  METH_VARARGS | METH_KEYWORDS, 
    "Serializes a discrete density grid to an .xgrid binary."},
    

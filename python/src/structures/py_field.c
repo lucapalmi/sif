@@ -171,6 +171,18 @@ static PyObject* sifField_compute_bounds(PyObject* self_obj, PyObject* args) {
   Py_RETURN_NONE;
 }
 
+/* --- Properties (Getters) --- */
+
+static PyObject* sifField_get_n_particles(PyObject* self_obj, void* closure) {
+  sifFieldObject* self = (sifFieldObject*)self_obj;
+  return PyLong_FromUnsignedLongLong(self->field->n_particles);
+}
+
+static PyGetSetDef sifField_getset[] = {
+  {"n_particles", sifField_get_n_particles, NULL,
+    "Number of particles currently held by the field", NULL},
+  {NULL}};
+
 /* --- Method Definition Array --- */
 static PyMethodDef sifField_methods[] = {
   {"from_numpy", (PyCFunction)sifField_from_numpy, METH_VARARGS | METH_KEYWORDS,
@@ -192,6 +204,7 @@ PyTypeObject sifFieldType = {
   .tp_flags = Py_TPFLAGS_DEFAULT,
   .tp_doc = "SIF particle field object.",
   .tp_methods = sifField_methods,
+  .tp_getset = sifField_getset,
   .tp_init = sifField_init,
   .tp_new = PyType_GenericNew,
 };
