@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * End-to-end check for both void finders.
  *
@@ -17,6 +23,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "test_util.h"
 
@@ -35,15 +42,14 @@ static int failures = 0;
 /* NOT scaled under sanitizers: the finder needs a physically meaningful
  * density field, and thinning the particles would make the voids undetectable.
  * The instrumented build drops option cases instead (see main). */
-#define N_P    60000
+#define N_P 60000
 
-#define CELL (BOX / (real_t)N_GRID)
+#define CELL (BOX / (sif_real)N_GRID)
 
 /* Mesh resolution for the rescaled finder. The finder used to pick this
  * itself; now that the caller owns the mesh, sif_finder_suggest_mesh_cells
  * does, which also keeps this test honest about the recommended path. */
-#define MESH_CELLS \
-  sif_finder_suggest_mesh_cells(N_P, BOX, radii[0])
+#define MESH_CELLS sif_finder_suggest_mesh_cells(N_P, BOX, radii[0])
 
 static uint64_t rng_state = 0x243F6A8885A308D3ULL;
 static double next_uniform(void) {
@@ -52,17 +58,19 @@ static double next_uniform(void) {
          (double)0x20000000000000ULL;
 }
 
-typedef struct { double x, y, z, r; } hole_t;
+typedef struct {
+  double x, y, z, r;
+} hole_t;
 
 static const hole_t holes[] = {
-  { 50.0,  50.0,  50.0, 26.0},
-  {150.0, 140.0,  60.0, 21.0},
-  { 70.0, 160.0, 150.0, 18.0},
-  {160.0,  40.0, 170.0, 15.0},
+  {50.0, 50.0, 50.0, 26.0},
+  {150.0, 140.0, 60.0, 21.0},
+  {70.0, 160.0, 150.0, 18.0},
+  {160.0, 40.0, 170.0, 15.0},
 };
 static const int n_holes = (int)(sizeof(holes) / sizeof(holes[0]));
 
-static const real_t radii[] = {30.0f, 25.0f, 20.0f, 16.0f, 13.0f, 10.0f};
+static const sif_real radii[] = {30.0f, 25.0f, 20.0f, 16.0f, 13.0f, 10.0f};
 static const uint32_t n_radii = (uint32_t)(sizeof(radii) / sizeof(radii[0]));
 
 static int inside_a_hole(double x, double y, double z) {
@@ -74,7 +82,7 @@ static int inside_a_hole(double x, double y, double z) {
   return 0;
 }
 
-static void make_field(real_t* x, real_t* y, real_t* z) {
+static void make_field(sif_real* x, sif_real* y, sif_real* z) {
   rng_state = 0x243F6A8885A308D3ULL;
   uint64_t n = 0;
   while (n < N_P) {
@@ -84,9 +92,9 @@ static void make_field(real_t* x, real_t* y, real_t* z) {
     /* Keep a 3% residual inside the holes so they are underdense, not empty. */
     if (inside_a_hole(px, py, pz) && next_uniform() > 0.03)
       continue;
-    x[n] = (real_t)px;
-    y[n] = (real_t)py;
-    z[n] = (real_t)pz;
+    x[n] = (sif_real)px;
+    y[n] = (sif_real)py;
+    z[n] = (sif_real)pz;
     n++;
   }
 }
@@ -96,7 +104,7 @@ static void make_field(real_t* x, real_t* y, real_t* z) {
  * centers to grid cells, so allow a couple of cells of slack.
  */
 static void check_catalog(const char* label, const sif_catalog_t* cat,
-  real_t r_lo_factor, real_t r_hi_factor) {
+  sif_real r_lo_factor, sif_real r_hi_factor) {
 
   CHECK(cat != NULL, "%s: finder returned NULL", label);
   if (!cat)
@@ -116,7 +124,10 @@ static void check_catalog(const char* label, const sif_catalog_t* cat,
       const double dy = (double)cat->cy[i] - holes[h].y;
       const double dz = (double)cat->cz[i] - holes[h].z;
       const double d = sqrt(dx * dx + dy * dy + dz * dz);
-      if (d < best_d) { best_d = d; best = h; }
+      if (d < best_d) {
+        best_d = d;
+        best = h;
+      }
     }
 
     CHECK(best_d <= 2.0 * (double)CELL,
@@ -130,7 +141,8 @@ static void check_catalog(const char* label, const sif_catalog_t* cat,
       matched[best] = 1;
 
       const double r = (double)cat->radii[i];
-      CHECK(r >= r_lo_factor * holes[best].r && r <= r_hi_factor * holes[best].r,
+      CHECK(
+        r >= r_lo_factor * holes[best].r && r <= r_hi_factor * holes[best].r,
         "%s: void on hole %d has r = %.2f, expected within [%.2f, %.2f]", label,
         best, r, r_lo_factor * holes[best].r, r_hi_factor * holes[best].r);
     }
@@ -140,12 +152,12 @@ static void check_catalog(const char* label, const sif_catalog_t* cat,
     CHECK(matched[h] == 1, "%s: hole %d was not recovered", label, h);
 }
 
-static void run_case(const char* label, sif_option_t opts, real_t overlap) {
+static void run_case(const char* label, sif_option opts, sif_real overlap) {
   printf("%s\n", label);
 
-  real_t* x = malloc(N_P * sizeof(real_t));
-  real_t* y = malloc(N_P * sizeof(real_t));
-  real_t* z = malloc(N_P * sizeof(real_t));
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
   make_field(x, y, z);
 
   /* --- spherical finder --- */
@@ -154,7 +166,13 @@ static void run_case(const char* label, sif_option_t opts, real_t overlap) {
     sif_field_assign_positions(f, x, y, z);
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
     sif_grid_assign_cic(g, f);
-    sif_grid_compute_overdensity(g);
+    sif_grid_to_density_contrast(g);
+
+    /* Snapshot the input so the grid-restoration contract can be checked:
+     * the finder smooths in place, so a correct run has to put the original
+     * field back unless SIF_FINDER_CONSUME_GRID was asked for. */
+    sif_real* before = malloc((size_t)g->total_cells * sizeof(sif_real));
+    memcpy(before, g->values, (size_t)g->total_cells * sizeof(sif_real));
 
     sif_catalog_t* cat =
       sif_finder_spherical(g, radii, n_radii, -0.7f, overlap, opts);
@@ -162,6 +180,19 @@ static void run_case(const char* label, sif_option_t opts, real_t overlap) {
      * it always lands at or below the true hole radius. */
     check_catalog("spherical", cat, 0.55f, 1.05f);
     sif_catalog_free(cat);
+
+    if (!(opts & SIF_FINDER_CONSUME_GRID)) {
+      /* Round trip through the FFT, so exact equality is not on offer. */
+      sif_real worst = 0.0f;
+      for (uint64_t i = 0; i < g->total_cells; i++) {
+        const sif_real d = SIF_REAL_ABS(g->values[i] - before[i]);
+        if (d > worst)
+          worst = d;
+      }
+      CHECK(worst < 1e-3f, "grid should be restored (worst drift %g)",
+        (double)worst);
+    }
+    free(before);
 
     sif_grid_free(g);
     sif_field_free(f);
@@ -173,7 +204,7 @@ static void run_case(const char* label, sif_option_t opts, real_t overlap) {
     sif_field_assign_positions(f, x, y, z);
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
     sif_grid_assign_cic(g, f);
-    sif_grid_compute_overdensity(g);
+    sif_grid_to_density_contrast(g);
 
     /* The finder borrows the mesh, so the field it was built from is dead
      * weight from here on and is released before the run. */
@@ -201,8 +232,10 @@ static void run_case(const char* label, sif_option_t opts, real_t overlap) {
 
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
-  sif_config_t cfg = {.fft_config = &fftcfg, .omp_config = NULL,
-                      .verbose = false, .log_level = 3 /* WARNING */};
+  sif_config_t cfg = {.fft_config = &fftcfg,
+    .omp_config = NULL,
+    .verbose = false,
+    .log_level = 3 /* WARNING */};
   sif_init(&cfg);
 
   run_case("defaults", 0, 0.0f);
@@ -211,7 +244,7 @@ int main(void) {
   /* Each case is a full pipeline run; under a sanitizer the default case alone
      is enough to cover the pipeline without a multi-minute test. */
   run_case("overlap 0.2", 0, 0.2f);
-  run_case("preserve_grid", SIF_FINDER_PRESERVE_GRID, 0.0f);
+  run_case("consume_grid", SIF_FINDER_CONSUME_GRID, 0.0f);
 #endif
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,

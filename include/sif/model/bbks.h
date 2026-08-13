@@ -1,13 +1,64 @@
-#ifndef __SIF_MODEL_BBKS_H__
-#define __SIF_MODEL_BBKS_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file bbks.h
+ * @brief Peak statistics of a Gaussian random field, after Bardeen, Bond,
+ * Kaiser & Szalay (1986).
+ *
+ * The number density of maxima depends on the field only through its spectral
+ * moments, which is what makes it the natural prediction to hold a
+ * phase-randomized surrogate against: everything BBKS knows about a field
+ * survives phase randomization, so any disagreement with a directly counted
+ * catalogue is phase information.
+ *
+ * Follows the presentation of Wu, Phys. Dark Universe 30 (2020) 100654,
+ * eqs. (17)-(19).
+ */
+
+#ifndef SIF_MODEL_BBKS_H
+#define SIF_MODEL_BBKS_H
 
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/deltamoments.h"
-#include "sif/structures/sizefunction.h"
+#include "sif/structures/delta_moments.h"
+#include "sif/structures/size_function.h"
 
-/*
+/**
+ * @brief Spectral parameter gamma = sigma_1^2 / (sigma_0 sigma_2), one value
+ * per smoothing radius.
+ *
+ * Measures how narrow the field's power is in k: it approaches 1 for a field
+ * dominated by a single scale and falls towards 0 for a broad spectrum. BBKS
+ * expresses the peak density through gamma and R_star rather than through the
+ * moments directly.
+ *
+ * @param moments Moment set with order >= 2.
+ * @return Newly allocated array of n_radii values, released with
+ * sif_free_aligned(), or NULL if the moments do not reach order 2. Radii where
+ * sigma_0 or sigma_2 vanish are left at zero and warned about.
+ */
+SIF_NODISCARD sif_real* sif_bbks_gamma(const sif_delta_moments_t* moments);
+
+/**
+ * @brief Coherence scale R_star = sqrt(3) sigma_1 / sigma_2, one value per
+ * smoothing radius.
+ *
+ * The characteristic separation between peaks of the smoothed field, and the
+ * length that sets the normalization of the BBKS number density.
+ *
+ * @param moments Moment set with order >= 2.
+ * @return Newly allocated array of n_radii lengths, released with
+ * sif_free_aligned(), or NULL if the moments do not reach order 2. Radii where
+ * sigma_2 vanishes are left at zero and warned about.
+ */
+SIF_NODISCARD sif_real* sif_bbks_r_star(const sif_delta_moments_t* moments);
+
+/**
  * @brief The BBKS G function.
  *
  * @param gamma Spectral parameter, strictly inside (0, 1)
@@ -17,9 +68,9 @@
  *
  * @return G(gamma, w), or 0 for gamma outside (0, 1).
  */
-real_t sif_g_bbks(real_t gamma, real_t w, sif_option_t opt);
+sif_real sif_bbks_g(sif_real gamma, sif_real w, sif_option opt);
 
-/*
+/**
  * @brief Differential number density of maxima of a Gaussian field, per unit
  * volume per unit nu (BBKS 1986 eq. 4.3).
  *
@@ -35,10 +86,10 @@ real_t sif_g_bbks(real_t gamma, real_t w, sif_option_t opt);
  * @return Newly allocated array of `size` densities, released with
  * sif_free_aligned, or NULL on invalid input.
  */
-NODISCARD real_t* sif_differential_number_density_bbks(const real_t* nu,
-  const real_t* gamma, const real_t* r_star, uint32_t size, sif_option_t opt);
+SIF_NODISCARD sif_real* sif_bbks_number_density_differential(const sif_real* nu,
+  const sif_real* gamma, const sif_real* r_star, uint32_t size, sif_option opt);
 
-/*
+/**
  * @brief Number density of Gaussian-field maxima above a density threshold,
  * one value per smoothing radius.
  *
@@ -60,10 +111,10 @@ NODISCARD real_t* sif_differential_number_density_bbks(const real_t* nu,
  * @return Newly allocated array of n_radii densities, released with
  * sif_free_aligned, or NULL on invalid input.
  */
-NODISCARD real_t* sif_cumulative_number_density_bbks(
-  real_t delta, const sif_delta_moments_t* moments, sif_option_t opt);
+SIF_NODISCARD sif_real* sif_bbks_number_density_cumulative(
+  sif_real delta, const sif_delta_moments_t* moments, sif_option opt);
 
-/*
+/**
  * @brief Number density of Gaussian-field structures per unit radius, one
  * value per smoothing radius: the size function implied by the cumulative
  * density above a threshold.
@@ -89,7 +140,7 @@ NODISCARD real_t* sif_cumulative_number_density_bbks(
  * @return Newly allocated size function with n_bins = n_radii, released with
  * sif_size_function_free, or NULL on invalid input.
  */
-NODISCARD sif_size_function_t* sif_size_function_bbks(
-  real_t delta, const sif_delta_moments_t* moments, sif_option_t opt);
+SIF_NODISCARD sif_size_function_t* sif_size_function_bbks(
+  sif_real delta, const sif_delta_moments_t* moments, sif_option opt);
 
-#endif /* __SIF_MODEL_BBKS_H__ */
+#endif /* SIF_MODEL_BBKS_H */

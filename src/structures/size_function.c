@@ -1,4 +1,10 @@
-#include "sif/structures/sizefunction.h"
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#include "sif/structures/size_function.h"
 
 #include "results_internal.h"
 #include "sif/utils/logger.h"
@@ -6,7 +12,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-sif_size_function_t* sif_size_function_alloc(uint32_t n_bins) {
+sif_size_function_t* sif__size_function_alloc(uint32_t n_bins) {
 
   sif_size_function_t* vsf = calloc(1, sizeof(sif_size_function_t));
   if (!vsf) {
@@ -16,11 +22,11 @@ sif_size_function_t* sif_size_function_alloc(uint32_t n_bins) {
 
   vsf->n_bins = n_bins;
 
-  vsf->r_edges = malloc(((size_t)n_bins + 1) * sizeof(real_t));
-  vsf->r_centers = malloc((size_t)n_bins * sizeof(real_t));
+  vsf->r_edges = malloc(((size_t)n_bins + 1) * sizeof(sif_real));
+  vsf->r_centers = malloc((size_t)n_bins * sizeof(sif_real));
   vsf->counts = calloc(n_bins, sizeof(uint64_t));
-  vsf->vsf = calloc(n_bins, sizeof(real_t));
-  vsf->err = calloc(n_bins, sizeof(real_t));
+  vsf->vsf = calloc(n_bins, sizeof(sif_real));
+  vsf->err = calloc(n_bins, sizeof(sif_real));
 
   if (!vsf->r_edges || !vsf->r_centers || !vsf->counts || !vsf->vsf ||
       !vsf->err) {
@@ -44,15 +50,15 @@ void sif_size_function_free(sif_size_function_t* vsf) {
   free(vsf);
 }
 
-void sif_edges_from_centers(
-  const real_t* centers, uint32_t n, real_t* edges) {
+void sif__edges_from_centers(
+  const sif_real* centers, uint32_t n, sif_real* edges) {
 
   for (uint32_t i = 1; i < n; i++)
-    edges[i] = (real_t)sqrt((double)centers[i - 1] * (double)centers[i]);
+    edges[i] = (sif_real)sqrt((double)centers[i - 1] * (double)centers[i]);
 
   /* Extrapolate the outer two, which reproduces the exact midpoints when the
    * radii are geometrically spaced. */
-  edges[0] = (real_t)((double)centers[0] * centers[0] / (double)edges[1]);
+  edges[0] = (sif_real)((double)centers[0] * centers[0] / (double)edges[1]);
   edges[n] =
-    (real_t)((double)centers[n - 1] * centers[n - 1] / (double)edges[n - 1]);
+    (sif_real)((double)centers[n - 1] * centers[n - 1] / (double)edges[n - 1]);
 }

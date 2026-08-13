@@ -1,208 +1,355 @@
-#ifndef __SIF_MACROS_H__
-#define __SIF_MACROS_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file macros.h
+ * @brief Library-wide types, option flags, status codes and compiler hints.
+ *
+ * Every translation unit in sif includes this header, directly or otherwise.
+ * It is organised in sections:
+ *
+ *   1. option flags     the bit fields passed as sif_option
+ *   2. scalar type      sif_real and its math wrappers
+ *   3. compiler hints   attribute wrappers with neutral fallbacks
+ *   4. status codes     SIF_OK and the SIF_ERR_* family
+ *   5. assertions       debug-only invariant checks
+ *   6. atomics          relaxed read-modify-write on a uint64_t
+ *   7. log levels
+ */
+
+#ifndef SIF_CORE_MACROS_H
+#define SIF_CORE_MACROS_H
 
 #include <float.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdint.h>
 
-/* configuration */
+/* ------------------------------------------------------------------ */
+/* 1. option flags                                                     */
+/* ------------------------------------------------------------------ */
 
-typedef uint32_t sif_option_t;
+/**
+ * @brief Bit field of behaviour flags accepted by most entry points.
+ *
+ * Flags from different families occupy different bit ranges and are combined
+ * with `|`. Passing SIF_DEFAULT selects every family's default, which is
+ * always the zero-valued member.
+ */
+typedef uint32_t sif_option;
 
+/** @brief Every option at its default. */
 #define SIF_DEFAULT 0u
 
+/**
+ * @defgroup opt_pbc Boundary conditions
+ * @brief Whether the box wraps at its faces.
+ * @{
+ */
 #define SIF_PBC_PERIODIC (0u << 0)
 #define SIF_PBC_OPEN     (1u << 0)
-#define __SIF_PBC_MASK   (1u << 0)
+#define SIF__PBC_MASK    (1u << 0)
+/** @} */
 
-/* --- FINDER OPTIONS --- */
+/**
+ * @defgroup opt_finder Finder options
+ * @brief Bit 15. Bits 8-14 are free.
+ * @{
+ */
+/**
+ * Leave the grid holding the field smoothed at the last radius, instead of
+ * restoring the input.
+ *
+ * A finder smooths the grid in place at every radius, so the input is gone by
+ * the time it finishes. By default it is transformed back at the end; this flag
+ * skips that, saving one inverse FFT for a caller that is going to discard the
+ * grid anyway.
+ */
+#define SIF_FINDER_CONSUME_GRID (1u << 15)
+/** @} */
 
-#define SIF_FINDER_PRESERVE_GRID (1u << 15)
-
-/* Bits 8-14 are free. */
-
-/* --- PROFILES OPTIONS --- */
-
+/**
+ * @defgroup opt_profiles Profile algorithm
+ * @brief Which estimator computes the radial profiles.
+ * @{
+ */
 #define SIF_PROFILES_ALGO_MESH    (0u << 8)
 #define SIF_PROFILES_ALGO_VORONOI (1u << 8)
-#define __SIF_PROFILES_ALGO_MASK  (1u << 8)
+#define SIF__PROFILES_ALGO_MASK   (1u << 8)
+/** @} */
 
-/* --- SIZE FUNCTION OPTIONS --- */
+/**
+ * @defgroup opt_spherical Spherical-evolution mapping
+ * @brief How the linear and non-linear density contrasts of a void are mapped
+ * onto each other.
+ *
+ * B94 is the Bernardeau (1994) fit, closed form and accurate to 0.2%; EXACT
+ * root-finds the Einstein-de Sitter expansion solution.
+ *
+ * @note Bit 9 is free. Bits 8-9 used to select between a histogram, a KDE and
+ * an auto-binned histogram; the VSF is now always a plain histogram, and bit 8
+ * has since been taken by this mapping.
+ * @{
+ */
+#define SIF_SPHERICAL_B94   (0u << 8)
+#define SIF_SPHERICAL_EXACT (1u << 8)
+#define SIF__SPHERICAL_MASK (1u << 8)
+/** @} */
 
-/* Bit 9 is free. Bits 8-9 used to select between a histogram, a KDE and an
- * auto-binned histogram; the VSF is now always a plain histogram, and bit 8
- * has since been taken by the spherical-evolution mapping below. */
-
-/* How the linear and non-linear density contrasts of a void are mapped onto
- * each other. B94 is the Bernardeau (1994) fit, closed form and accurate to
- * 0.2%; EXACT root-finds the Einstein-de Sitter expansion solution. */
-#define SIF_SPHERICAL_B94    (0u << 8)
-#define SIF_SPHERICAL_EXACT  (1u << 8)
-#define __SIF_SPHERICAL_MASK (1u << 8)
-
+/**
+ * @defgroup opt_vsf_bin Void size function binning
+ * @brief Spacing of the radius bins.
+ * @{
+ */
 #define SIF_VSF_BIN_LN     (0u << 10)
 #define SIF_VSF_BIN_LINEAR (1u << 10)
-#define __SIF_VSF_BIN_MASK (1u << 10)
+#define SIF__VSF_BIN_MASK  (1u << 10)
+/** @} */
 
-/* --- VSF COMBINATION OPTIONS --- */
-
+/**
+ * @defgroup opt_vsf_merge Void size function combination
+ * @brief How several size functions are merged into one.
+ * @{
+ */
 #define SIF_VSF_MERGE_MEAN   (0u << 12)
 #define SIF_VSF_MERGE_MEDIAN (1u << 12)
 #define SIF_VSF_MERGE_STITCH (2u << 12)
-#define __SIF_VSF_MERGE_MASK (3u << 12)
+#define SIF__VSF_MERGE_MASK  (3u << 12)
+/** @} */
 
-/* --- DELTA STATISTICS OPTIONS --- */
-
-/* Surrogate field generation. PHASES keeps every |delta_k| and randomizes only
- * the phase, so the realized P(k) is bit-for-bit the input's and any change in
- * the PDF is attributable to phase information alone. GAUSSIAN additionally
- * resamples the amplitudes from the Rayleigh distribution implied by |delta_k|,
- * which is the correct surrogate when the comparison is against a Gaussian
- * random field *ensemble* rather than against this one realization. */
+/**
+ * @defgroup opt_delta_shuffle Surrogate field generation
+ * @brief How the surrogate field for a PDF comparison is generated.
+ *
+ * PHASES keeps every |delta_k| and randomizes only the phase, so the realized
+ * P(k) is bit-for-bit the input's and any change in the PDF is attributable to
+ * phase information alone. GAUSSIAN additionally resamples the amplitudes from
+ * the Rayleigh distribution implied by |delta_k|, which is the correct
+ * surrogate when the comparison is against a Gaussian random field *ensemble*
+ * rather than against this one realization.
+ * @{
+ */
 #define SIF_DELTA_SHUFFLE_NONE     (0u << 8)
 #define SIF_DELTA_SHUFFLE_PHASES   (1u << 8)
 #define SIF_DELTA_SHUFFLE_GAUSSIAN (2u << 8)
-#define __SIF_DELTA_SHUFFLE_MASK   (3u << 8)
+#define SIF__DELTA_SHUFFLE_MASK    (3u << 8)
+/** @} */
 
-/* The CIC assignment in sif_grid_assign_cic convolves the field with its own
+/**
+ * @brief Skip deconvolution of the CIC assignment window.
+ *
+ * The CIC assignment in sif_grid_assign_cic convolves the field with its own
  * window, which has to come back out before the top-hat is applied or the
- * field is smoothed twice. Deconvolution is therefore the default; the flag
- * disables it for grids that were not built by CIC. */
+ * field is smoothed twice. Deconvolution is therefore the default; this flag
+ * disables it for grids that were not built by CIC.
+ */
 #define SIF_DELTA_KEEP_CIC_WINDOW (1u << 10)
 
-/* Smoothing window, applied to both the PDF and the spectral moments. They
- * have to share one window: gamma and R_star describe the field whose PDF is
- * being measured, and mixing a top-hat histogram with Gaussian-window moments
- * would describe two different fields.
+/**
+ * @defgroup opt_delta_filter Smoothing window
+ * @brief Window applied to both the PDF and the spectral moments.
+ *
+ * They have to share one window: gamma and R_star describe the field whose PDF
+ * is being measured, and mixing a top-hat histogram with Gaussian-window
+ * moments would describe two different fields.
  *
  * The top-hat is the natural window for counts in spheres, but its W^2 decays
  * only as k^-4, so the k^4-weighted sigma_2 sum does not converge and is cut
  * off by the grid instead of by the field. Use the Gaussian whenever sigma_2
- * has to carry meaning. */
+ * has to carry meaning.
+ * @{
+ */
 #define SIF_DELTA_FILTER_TOP_HAT  (0u << 11)
 #define SIF_DELTA_FILTER_GAUSSIAN (1u << 11)
-#define __SIF_DELTA_FILTER_MASK   (1u << 11)
+#define SIF__DELTA_FILTER_MASK    (1u << 11)
+/** @} */
 
-/* --- BBKS PEAK STATISTICS OPTIONS --- */
-
-/* Which G(gamma, w) to evaluate. FITTED is the BBKS analytic approximation,
- * fast and closed-form but calibrated for a limited gamma band. EXACT
- * quadratures the defining integral, which costs a few hundred evaluations of
- * the curvature weight per point and is correct everywhere. */
+/**
+ * @defgroup opt_bbks_g BBKS curvature integral
+ * @brief Which G(gamma, w) to evaluate.
+ *
+ * FITTED is the BBKS analytic approximation, fast and closed-form but
+ * calibrated for a limited gamma band. EXACT quadratures the defining integral,
+ * which costs a few hundred evaluations of the curvature weight per point and
+ * is correct everywhere.
+ * @{
+ */
 #define SIF_BBKS_G_FITTED (0u << 8)
 #define SIF_BBKS_G_EXACT  (1u << 8)
-#define __SIF_BBKS_G_MASK (1u << 8)
+#define SIF__BBKS_G_MASK  (1u << 8)
+/** @} */
 
-/* --- TESSELLATION OPTIONS --- */
-
+/**
+ * @defgroup opt_tess Tessellation method
+ * @brief How the seed points of the tessellation are placed.
+ * @{
+ */
 #define SIF_TESS_METHOD_RANDOM (0u << 8)
 #define SIF_TESS_METHOD_VOXEL  (1u << 8)
-#define __SIF_TESS_METHOD_MASK (1u << 8)
+#define SIF__TESS_METHOD_MASK  (1u << 8)
+/** @} */
 
-/* real_t type */
+/* ------------------------------------------------------------------ */
+/* 2. scalar type                                                      */
+/* ------------------------------------------------------------------ */
 
-#ifdef __SIF_USE_DOUBLE
+/**
+ * @brief The library's floating-point type: double if SIF_USE_DOUBLE is
+ * defined at configure time, float otherwise.
+ *
+ * Use sif_real for every physical quantity, and the SIF_REAL_* wrappers below
+ * rather than the libm functions directly: calling cos() on a float build
+ * promotes to double and back on every evaluation, and calling cosf() on a
+ * double build silently discards precision.
+ */
+#ifdef SIF_USE_DOUBLE
 
-typedef double real_t;
-#  define REAL_MAX_VAL        DBL_MAX
-#  define REAL_MIN_VAL        DBL_MIN
-#  define REAL_ABS(x)         fabs(x)
-#  define REAL_CEIL(x)        ceil(x)
-#  define REAL_FLOOR(x)       floor(x)
-#  define REAL_ROUND(x)       round(x)
-#  define REAL_FMOD(x, y)     fmod(x, y)
-#  define REAL_MIN(x, y)      fmin(x, y)
-#  define REAL_MAX(x, y)      fmax(x, y)
-#  define REAL_COS(x)         cos(x)
-#  define REAL_SIN(x)         sin(x)
-#  define REAL_TAN(x)         tan(x)
-#  define REAL_ACOS(x)        acos(x)
-#  define REAL_ASIN(x)        asin(x)
-#  define REAL_ATAN(x)        atan(x)
-#  define REAL_ATAN2(y, x)    atan2(y, x)
-#  define REAL_SQRT(x)        sqrt(x)
-#  define REAL_POW(x, y)      pow(x, y)
-#  define REAL_EXP(x)         exp(x)
-#  define REAL_LOG(x)         log(x)
-#  define REAL_LOG10(x)       log10(x)
-#  define REAL_COPYSIGN(x, y) copysign(x, y)
+typedef double sif_real;
+#  define SIF_REAL_MAX_VAL          DBL_MAX
+#  define SIF_REAL_MIN_VAL          DBL_MIN
+#  define SIF_REAL_ABS(x)           fabs(x)
+#  define SIF_REAL_CEIL(x)          ceil(x)
+#  define SIF_REAL_FLOOR(x)         floor(x)
+#  define SIF_REAL_ROUND(x)         round(x)
+#  define SIF_REAL_FMOD(x, y)       fmod(x, y)
+#  define SIF_REAL_MIN(x, y)        fmin(x, y)
+#  define SIF_REAL_MAX(x, y)        fmax(x, y)
+#  define SIF_REAL_COS(x)           cos(x)
+#  define SIF_REAL_SIN(x)           sin(x)
+#  define SIF_REAL_TAN(x)           tan(x)
+#  define SIF_REAL_ACOS(x)          acos(x)
+#  define SIF_REAL_ASIN(x)          asin(x)
+#  define SIF_REAL_ATAN(x)          atan(x)
+#  define SIF_REAL_ATAN2(y, x)      atan2(y, x)
+#  define SIF_REAL_SQRT(x)          sqrt(x)
+#  define SIF_REAL_POW(x, y)        pow(x, y)
+#  define SIF_REAL_EXP(x)           exp(x)
+#  define SIF_REAL_LOG(x)           log(x)
+#  define SIF_REAL_LOG10(x)         log10(x)
+#  define SIF_REAL_COPYSIGN(x, y)   copysign(x, y)
+#  define SIF_REAL_NEXT_AFTER(x, y) nextafter(x, y)
+
+/** printf conversion that round-trips a sif_real exactly: 17 significant
+ *  digits are enough to recover any double, 9 any float. */
+#  define SIF_PRI_REAL "%.17g"
+/** scanf conversion matching sif_real. Getting this wrong is silent: scanf
+ *  writes through a pointer whose type it cannot check. */
+#  define SIF_SCN_REAL "%lf"
 
 #else
 
-typedef float real_t;
-#  define REAL_MAX_VAL        FLT_MAX
-#  define REAL_MIN_VAL        FLT_MIN /* Smallest positive normalized value */
-#  define REAL_ABS(x)         fabsf(x)
-#  define REAL_CEIL(x)        ceilf(x)
-#  define REAL_FLOOR(x)       floorf(x)
-#  define REAL_ROUND(x)       roundf(x)
-#  define REAL_FMOD(x, y)     fmodf(x, y)
-#  define REAL_MIN(x, y)      fminf(x, y)
-#  define REAL_MAX(x, y)      fmaxf(x, y)
-#  define REAL_COS(x)         cosf(x)
-#  define REAL_SIN(x)         sinf(x)
-#  define REAL_TAN(x)         tanf(x)
-#  define REAL_ACOS(x)        acosf(x)
-#  define REAL_ASIN(x)        asinf(x)
-#  define REAL_ATAN(x)        atanf(x)
-#  define REAL_ATAN2(y, x)    atan2f(y, x)
-#  define REAL_SQRT(x)        sqrtf(x)
-#  define REAL_POW(x, y)      powf(x, y)
-#  define REAL_EXP(x)         expf(x)
-#  define REAL_LOG(x)         logf(x)
-#  define REAL_LOG10(x)       log10f(x)
-#  define REAL_COPYSIGN(x, y) copysignf(x, y)
+typedef float sif_real;
+#  define SIF_REAL_MAX_VAL          FLT_MAX
+#  define SIF_REAL_MIN_VAL          FLT_MIN /* smallest positive normalized */
+#  define SIF_REAL_ABS(x)           fabsf(x)
+#  define SIF_REAL_CEIL(x)          ceilf(x)
+#  define SIF_REAL_FLOOR(x)         floorf(x)
+#  define SIF_REAL_ROUND(x)         roundf(x)
+#  define SIF_REAL_FMOD(x, y)       fmodf(x, y)
+#  define SIF_REAL_MIN(x, y)        fminf(x, y)
+#  define SIF_REAL_MAX(x, y)        fmaxf(x, y)
+#  define SIF_REAL_COS(x)           cosf(x)
+#  define SIF_REAL_SIN(x)           sinf(x)
+#  define SIF_REAL_TAN(x)           tanf(x)
+#  define SIF_REAL_ACOS(x)          acosf(x)
+#  define SIF_REAL_ASIN(x)          asinf(x)
+#  define SIF_REAL_ATAN(x)          atanf(x)
+#  define SIF_REAL_ATAN2(y, x)      atan2f(y, x)
+#  define SIF_REAL_SQRT(x)          sqrtf(x)
+#  define SIF_REAL_POW(x, y)        powf(x, y)
+#  define SIF_REAL_EXP(x)           expf(x)
+#  define SIF_REAL_LOG(x)           logf(x)
+#  define SIF_REAL_LOG10(x)         log10f(x)
+#  define SIF_REAL_COPYSIGN(x, y)   copysignf(x, y)
+#  define SIF_REAL_NEXT_AFTER(x, y) nextafterf(x, y)
+
+#  define SIF_PRI_REAL "%.9g"
+#  define SIF_SCN_REAL "%f"
+
+/* Selects the float entry points in the vendored predicates. The leading
+ * underscores break this guide's naming rules deliberately: the name is read
+ * by vendor/predicates/predicates.c, and upstream's spelling wins there. */
 #  define __PREDICATES_USE_FLOAT
 
 #endif
 
-#ifndef __SIF_CACHE_LINE
-#  define __SIF_CACHE_LINE 64
+/** @brief Pi at sif_real precision.
+ *
+ * Defined here rather than taken from M_PI, which is not in C99 and whose
+ * fallbacks are easy to get wrong: a float literal used in a double build
+ * silently costs eight digits.
+ */
+#define SIF_PI ((sif_real)3.14159265358979323846)
+
+/** @brief Assumed cache-line size, in bytes. Override at configure time. */
+#ifndef SIF_CACHE_LINE
+#  define SIF_CACHE_LINE 64
 #endif
 
-#ifndef M_PI
-#  define M_PI 3.14159265358979323846f
-#endif
+/* ------------------------------------------------------------------ */
+/* 3. compiler hints                                                   */
+/* ------------------------------------------------------------------ */
 
-/* compiler hints */
-
-#define PRAGMA_HELPER(x) _Pragma(#x)
+/** @brief Emits a _Pragma from a macro argument. */
+#define SIF_PRAGMA_HELPER(x) _Pragma(#x)
 
 #if defined(__GNUC__) || defined(__clang__)
 
-#  define NODISCARD     __attribute__((warn_unused_result))
-#  define PURE_FUNCTION __attribute__((pure))
-#  define HOT_LOOP      __attribute__((hot))
-#  define ALIGN_T       __attribute__((aligned(__SIF_CACHE_LINE)))
+/** @brief Warn if the return value is discarded. */
+#  define SIF_NODISCARD __attribute__((warn_unused_result))
+/** @brief No side effects; result depends only on the arguments and memory. */
+#  define SIF_PURE_FUNCTION __attribute__((pure))
+/** @brief Hint that a function sits on a hot path. */
+#  define SIF_HOT_LOOP __attribute__((hot))
+/** @brief Align an object on a cache line. */
+#  define SIF_ALIGN_T __attribute__((aligned(SIF_CACHE_LINE)))
 
 #else
 
-#  define NODISCARD
-#  define PURE_FUNCTION
-#  define HOT_LOOP
-#  define ALIGN_64
-#  define ALIGN_T
+#  define SIF_NODISCARD
+#  define SIF_PURE_FUNCTION
+#  define SIF_HOT_LOOP
+#  define SIF_ALIGN_T
 
 #endif
 
-/* status codes
- *
- * Functions that can fail for a reason the caller may want to distinguish
- * return an int: SIF_OK on success, a negative SIF_ERR_* otherwise.
- * Allocators keep returning a pointer (NULL on failure). */
+/* ------------------------------------------------------------------ */
+/* 4. status codes                                                     */
+/* ------------------------------------------------------------------ */
 
-#define SIF_OK           0
+/**
+ * @defgroup status Status codes
+ * @brief Returned by functions that can fail for a distinguishable reason.
+ *
+ * Such functions return an int: SIF_OK on success, a negative SIF_ERR_*
+ * otherwise. Allocators keep returning a pointer, NULL on failure.
+ * @{
+ */
+#define SIF_OK          0
 #define SIF_ERR_ALLOC   (-1)
 #define SIF_ERR_INVALID (-2)
 #define SIF_ERR_RANGE   (-3)
+/** A file could not be opened, read, written, or failed validation. */
+#define SIF_ERR_IO (-4)
+/** @} */
 
-/* debug-only invariant checks
+/* ------------------------------------------------------------------ */
+/* 5. assertions                                                       */
+/* ------------------------------------------------------------------ */
+
+/**
+ * @brief Debug-only invariant check. Compiles to nothing by default.
  *
  * Enabled by configuring with -DSIF_DEBUG_CHECKS. Deliberately NOT keyed off
  * NDEBUG: the release preset never defines it, and these guards sit in the
- * hottest loops in the library. */
-
+ * hottest loops in the library.
+ *
+ * @warning The condition is not evaluated in a normal build. It must never
+ * carry a side effect.
+ */
 #ifdef SIF_DEBUG_CHECKS
 #  include <assert.h>
 #  define SIF_ASSERT(cond) assert(cond)
@@ -210,27 +357,48 @@ typedef float real_t;
 #  define SIF_ASSERT(cond) ((void)0)
 #endif
 
-/* relaxed atomic read-modify-write on a uint64_t word */
+/* ------------------------------------------------------------------ */
+/* 6. atomics                                                          */
+/* ------------------------------------------------------------------ */
 
+/**
+ * @defgroup atomics Relaxed atomics
+ * @brief Read-modify-write on a uint64_t word, relaxed ordering.
+ *
+ * Relaxed is sufficient wherever these are used: the words are bitmask lanes
+ * whose bits are set independently, so only atomicity of the individual
+ * update matters, not its order relative to any other memory operation.
+ *
+ * SIF_HAS_ATOMIC_BUILTINS is 0 where the compiler provides no such builtins,
+ * and callers must serialize the update themselves.
+ * @{
+ */
 #if defined(__GNUC__) || defined(__clang__)
-#  define SIF_ATOMIC_LOAD_U64(p)      __atomic_load_n((p), __ATOMIC_RELAXED)
-#  define SIF_ATOMIC_OR_U64(p, v)     __atomic_fetch_or((p), (v), __ATOMIC_RELAXED)
-#  define SIF_ATOMIC_AND_U64(p, v)    __atomic_fetch_and((p), (v), __ATOMIC_RELAXED)
-#  define SIF_HAS_ATOMIC_BUILTINS     1
+#  define SIF_ATOMIC_LOAD_U64(p)  __atomic_load_n((p), __ATOMIC_RELAXED)
+#  define SIF_ATOMIC_OR_U64(p, v) __atomic_fetch_or((p), (v), __ATOMIC_RELAXED)
+#  define SIF_ATOMIC_AND_U64(p, v)                                             \
+    __atomic_fetch_and((p), (v), __ATOMIC_RELAXED)
+#  define SIF_HAS_ATOMIC_BUILTINS 1
 #else
-#  define SIF_HAS_ATOMIC_BUILTINS     0
+#  define SIF_HAS_ATOMIC_BUILTINS 0
 #endif
+/** @} */
 
-#define __SIF_RESCALED_SPHERICAL_FINDER_RADIAL_BIN_SIZE 0.1f
-#define __SIF_RESCALED_SPHERICAL_FINDER_MAX_BINS        2048
+/* ------------------------------------------------------------------ */
+/* 7. log levels                                                       */
+/* ------------------------------------------------------------------ */
 
-#define __SIF_PROFILE_GRID_DIM 100
-
+/**
+ * @defgroup log_levels Log levels
+ * @brief Verbosity threshold, set through sif_config_t::log_level.
+ * @{
+ */
 #define SIF_LOG_LEVEL_TRACE   0
 #define SIF_LOG_LEVEL_DEBUG   1
 #define SIF_LOG_LEVEL_INFO    2
 #define SIF_LOG_LEVEL_WARNING 3
 #define SIF_LOG_LEVEL_ERROR   4
 #define SIF_LOG_LEVEL_NONE    5
+/** @} */
 
-#endif /* __SIF_MACROS_H__ */
+#endif /* SIF_CORE_MACROS_H */

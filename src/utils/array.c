@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/utils/array.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -6,18 +12,18 @@
 
 /* --- Allocation & Initialization --- */
 
-real_t* sif_array_zeros(uint64_t size) {
+sif_real* sif_array_zeros(uint64_t size) {
   if (size == 0)
     return NULL;
   /* calloc_aligned already memsets to 0 extremely fast */
-  return sif_calloc_aligned(size, sizeof(real_t));
+  return sif_calloc_aligned(size, sizeof(sif_real));
 }
 
-real_t* sif_array_full(uint64_t size, real_t fill_value) {
+sif_real* sif_array_full(uint64_t size, sif_real fill_value) {
   if (size == 0)
     return NULL;
 
-  real_t* arr = sif_malloc_aligned(size * sizeof(real_t));
+  sif_real* arr = sif_malloc_aligned(size * sizeof(sif_real));
   if (!arr) {
     SIF_LOG_ERROR("array", "failed to allocate array of size %llu",
       (unsigned long long)size);
@@ -32,15 +38,15 @@ real_t* sif_array_full(uint64_t size, real_t fill_value) {
   return arr;
 }
 
-real_t* sif_array_ones(uint64_t size) { return sif_array_full(size, 1.0f); }
+sif_real* sif_array_ones(uint64_t size) { return sif_array_full(size, 1.0f); }
 
 /* --- Ranges & Sequences --- */
 
-real_t* sif_array_linspace(real_t start, real_t stop, uint64_t num) {
+sif_real* sif_array_linspace(sif_real start, sif_real stop, uint64_t num) {
   if (num == 0)
     return NULL;
 
-  real_t* arr = sif_malloc_aligned(num * sizeof(real_t));
+  sif_real* arr = sif_malloc_aligned(num * sizeof(sif_real));
   if (!arr) {
     SIF_LOG_ERROR("array", "failed to allocate linspace array");
     return NULL;
@@ -51,11 +57,11 @@ real_t* sif_array_linspace(real_t start, real_t stop, uint64_t num) {
     return arr;
   }
 
-  real_t step = (stop - start) / (real_t)(num - 1);
+  sif_real step = (stop - start) / (sif_real)(num - 1);
 
 #pragma omp parallel for simd schedule(static)
   for (uint64_t i = 0; i < num; i++) {
-    arr[i] = start + ((real_t)i * step);
+    arr[i] = start + ((sif_real)i * step);
   }
 
   /* Force exact boundary on the last element to prevent floating point drift */
@@ -64,8 +70,8 @@ real_t* sif_array_linspace(real_t start, real_t stop, uint64_t num) {
   return arr;
 }
 
-real_t* sif_array_arange(
-  real_t start, real_t stop, real_t step, uint64_t* out_size) {
+sif_real* sif_array_arange(
+  sif_real start, sif_real stop, sif_real step, uint64_t* out_size) {
   if (out_size)
     *out_size = 0;
 
@@ -78,11 +84,11 @@ real_t* sif_array_arange(
   }
 
   /* Calculate required size */
-  uint64_t size = (uint64_t)REAL_CEIL((stop - start) / step);
+  uint64_t size = (uint64_t)SIF_REAL_CEIL((stop - start) / step);
   if (out_size)
     *out_size = size;
 
-  real_t* arr = sif_malloc_aligned(size * sizeof(real_t));
+  sif_real* arr = sif_malloc_aligned(size * sizeof(sif_real));
   if (!arr) {
     SIF_LOG_ERROR("array", "failed to allocate arange array");
     return NULL;
@@ -90,50 +96,50 @@ real_t* sif_array_arange(
 
 #pragma omp parallel for simd schedule(static)
   for (uint64_t i = 0; i < size; i++) {
-    arr[i] = start + ((real_t)i * step);
+    arr[i] = start + ((sif_real)i * step);
   }
 
   return arr;
 }
 
-real_t* sif_array_logspace(
-  real_t start, real_t stop, uint64_t num, real_t base) {
+sif_real* sif_array_logspace(
+  sif_real start, sif_real stop, uint64_t num, sif_real base) {
   if (num == 0)
     return NULL;
 
-  real_t* arr = sif_malloc_aligned(num * sizeof(real_t));
+  sif_real* arr = sif_malloc_aligned(num * sizeof(sif_real));
   if (!arr) {
     SIF_LOG_ERROR("array", "failed to allocate logspace array");
     return NULL;
   }
 
   if (num == 1) {
-    arr[0] = REAL_POW(base, start);
+    arr[0] = SIF_REAL_POW(base, start);
     return arr;
   }
 
-  real_t step = (stop - start) / (real_t)(num - 1);
+  sif_real step = (stop - start) / (sif_real)(num - 1);
 
 #pragma omp parallel for simd schedule(static)
   for (uint64_t i = 0; i < num; i++) {
     /* Calculate the linear exponent, then raise to the base */
-    real_t exponent = start + ((real_t)i * step);
-    arr[i] = REAL_POW(base, exponent);
+    sif_real exponent = start + ((sif_real)i * step);
+    arr[i] = SIF_REAL_POW(base, exponent);
   }
 
   /* Force exact boundary on the last element to prevent floating point drift */
-  arr[num - 1] = REAL_POW(base, stop);
+  arr[num - 1] = SIF_REAL_POW(base, stop);
 
   return arr;
 }
 
 /* --- Basic Reductions --- */
 
-real_t sif_array_sum(const real_t* arr, uint64_t size) {
+sif_real sif_array_sum(const sif_real* arr, uint64_t size) {
   if (!arr || size == 0)
     return 0.0f;
 
-  real_t total = 0.0f;
+  sif_real total = 0.0f;
 #pragma omp parallel for simd reduction(+ : total)
   for (uint64_t i = 0; i < size; i++) {
     total += arr[i];
@@ -141,11 +147,11 @@ real_t sif_array_sum(const real_t* arr, uint64_t size) {
   return total;
 }
 
-real_t sif_array_min(const real_t* arr, uint64_t size) {
+sif_real sif_array_min(const sif_real* arr, uint64_t size) {
   if (!arr || size == 0)
     return 0.0f;
 
-  real_t min_val = arr[0];
+  sif_real min_val = arr[0];
 #pragma omp parallel for simd reduction(min : min_val)
   for (uint64_t i = 1; i < size; i++) {
     if (arr[i] < min_val)
@@ -154,11 +160,11 @@ real_t sif_array_min(const real_t* arr, uint64_t size) {
   return min_val;
 }
 
-real_t sif_array_max(const real_t* arr, uint64_t size) {
+sif_real sif_array_max(const sif_real* arr, uint64_t size) {
   if (!arr || size == 0)
     return 0.0f;
 
-  real_t max_val = arr[0];
+  sif_real max_val = arr[0];
 #pragma omp parallel for simd reduction(max : max_val)
   for (uint64_t i = 1; i < size; i++) {
     if (arr[i] > max_val)

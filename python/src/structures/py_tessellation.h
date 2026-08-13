@@ -1,17 +1,19 @@
-#ifndef __SIF_PY_TESSELLATION_H__
-#define __SIF_PY_TESSELLATION_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_PY_STRUCTURES_PY_TESSELLATION_H
+#define SIF_PY_STRUCTURES_PY_TESSELLATION_H
 
 #include "py_common.h"
 #include "sif/structures/tessellation.h"
 
 typedef struct {
-  PyObject_HEAD 
-  sif_tessellation_t* tess;
+  PyObject_HEAD sif_tessellation_t* tess;
 } sifTessellationObject;
 
 extern PyTypeObject sifTessellationType;
 
-/* Expose the free function for the module */
-PyObject* py_sif_tessellation_build(PyObject* self, PyObject* args, PyObject* kwds);
-
-#endif /* __SIF_PY_TESSELLATION_H__ */
+#endif /* SIF_PY_STRUCTURES_PY_TESSELLATION_H */

@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_cell_linked_list.h"
 #include <numpy/arrayobject.h>
 
@@ -12,9 +18,10 @@ static void sifCellLinkedList_dealloc(PyObject* self_obj) {
   Py_TYPE(self)->tp_free(self_obj);
 }
 
-static int sifCellLinkedList_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
+static int sifCellLinkedList_init(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
   uint32_t n_cells;
-  /* "d" writes a full double, so this must not be a real_t. */
+  /* "d" writes a full double, so this must not be a sif_real. */
   double box_length_in;
   unsigned long long initial_capacity = 1024;
   int periodic = 1;
@@ -26,10 +33,10 @@ static int sifCellLinkedList_init(PyObject* self_obj, PyObject* args, PyObject* 
     return -1;
   }
 
-  sif_option_t opt = periodic ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
+  sif_option opt = periodic ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
 
   sif_cell_linked_list_t* tmp = sif_cell_linked_list_alloc(
-    n_cells, (real_t)box_length_in, (uint64_t)initial_capacity, opt);
+    n_cells, (sif_real)box_length_in, (uint64_t)initial_capacity, opt);
   if (!tmp) {
     PyErr_SetString(PyExc_ValueError,
       "Failed to allocate sif.cell_linked_list (check n_cells, box_length and "
@@ -44,27 +51,32 @@ static int sifCellLinkedList_init(PyObject* self_obj, PyObject* args, PyObject* 
 
 /* --- Properties (Getters) --- */
 
-static PyObject* sifCellLinkedList_get_n_cells(PyObject* self_obj, void* closure) {
+static PyObject* sifCellLinkedList_get_n_cells(
+  PyObject* self_obj, void* closure) {
   sifCellLinkedListObject* self = (sifCellLinkedListObject*)self_obj;
   return PyLong_FromUnsignedLong(self->cll->n_cells);
 }
 
-static PyObject* sifCellLinkedList_get_total_cells(PyObject* self_obj, void* closure) {
+static PyObject* sifCellLinkedList_get_total_cells(
+  PyObject* self_obj, void* closure) {
   sifCellLinkedListObject* self = (sifCellLinkedListObject*)self_obj;
   return PyLong_FromUnsignedLongLong(self->cll->total_cells);
 }
 
-static PyObject* sifCellLinkedList_get_inv_cell_length(PyObject* self_obj, void* closure) {
+static PyObject* sifCellLinkedList_get_inv_cell_length(
+  PyObject* self_obj, void* closure) {
   sifCellLinkedListObject* self = (sifCellLinkedListObject*)self_obj;
   return PyFloat_FromDouble((double)self->cll->inv_cell_length);
 }
 
-static PyObject* sifCellLinkedList_get_capacity(PyObject* self_obj, void* closure) {
+static PyObject* sifCellLinkedList_get_capacity(
+  PyObject* self_obj, void* closure) {
   sifCellLinkedListObject* self = (sifCellLinkedListObject*)self_obj;
   return PyLong_FromUnsignedLongLong(self->cll->capacity);
 }
 
-static PyObject* sifCellLinkedList_get_periodic(PyObject* self_obj, void* closure) {
+static PyObject* sifCellLinkedList_get_periodic(
+  PyObject* self_obj, void* closure) {
   sifCellLinkedListObject* self = (sifCellLinkedListObject*)self_obj;
   return PyBool_FromLong((long)self->cll->periodic);
 }
@@ -102,13 +114,20 @@ static PyObject* sifCellLinkedList_get_next(PyObject* self_obj, void* closure) {
 }
 
 static PyGetSetDef sifCellLinkedList_getset[] = {
-  {"n_cells", sifCellLinkedList_get_n_cells, NULL, "Dimension of the coarse grid", NULL},
-  {"total_cells", sifCellLinkedList_get_total_cells, NULL, "Total number of cells", NULL},
-  {"inv_cell_length", sifCellLinkedList_get_inv_cell_length, NULL, "Inverse of the cell length", NULL},
-  {"capacity", sifCellLinkedList_get_capacity, NULL, "Capacity of the item array", NULL},
-  {"periodic", sifCellLinkedList_get_periodic, NULL, "True if out-of-box coordinates wrap, False if they clamp", NULL},
-  {"head", sifCellLinkedList_get_head, NULL, "1D NumPy array of head indices", NULL},
-  {"next", sifCellLinkedList_get_next, NULL, "1D NumPy array of next indices", NULL},
+  {"n_cells", sifCellLinkedList_get_n_cells, NULL,
+    "Dimension of the coarse grid", NULL},
+  {"total_cells", sifCellLinkedList_get_total_cells, NULL,
+    "Total number of cells", NULL},
+  {"inv_cell_length", sifCellLinkedList_get_inv_cell_length, NULL,
+    "Inverse of the cell length", NULL},
+  {"capacity", sifCellLinkedList_get_capacity, NULL,
+    "Capacity of the item array", NULL},
+  {"periodic", sifCellLinkedList_get_periodic, NULL,
+    "True if out-of-box coordinates wrap, False if they clamp", NULL},
+  {"head", sifCellLinkedList_get_head, NULL, "1D NumPy array of head indices",
+    NULL},
+  {"next", sifCellLinkedList_get_next, NULL, "1D NumPy array of next indices",
+    NULL},
   {NULL}};
 
 /* --- Methods --- */
@@ -119,7 +138,8 @@ static PyObject* sifCellLinkedList_ensure_capacity(
   unsigned long long required_capacity;
 
   static char* kwlist[] = {"required_capacity", NULL};
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "K", kwlist, &required_capacity)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "K", kwlist, &required_capacity)) {
     return NULL;
   }
 
@@ -152,7 +172,7 @@ static PyObject* sifCellLinkedList_insert(
   }
 
   int status = sif_cell_linked_list_insert(
-    self->cll, (uint64_t)item_idx, (real_t)cx, (real_t)cy, (real_t)cz);
+    self->cll, (uint64_t)item_idx, (sif_real)cx, (sif_real)cy, (sif_real)cz);
 
   if (status != SIF_OK) {
     PyErr_Format(PyExc_IndexError,
@@ -174,13 +194,25 @@ static PyMethodDef sifCellLinkedList_methods[] = {
 /* --- Type Object --- */
 
 PyTypeObject sifCellLinkedListType = {
-  PyVarObject_HEAD_INIT(NULL, 0)
-  .tp_name = "pysif.structures.CellLinkedList", /* Updated Namespace and Capitalized */
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+    "pysif.CellLinkedList", /* Updated Namespace and Capitalized */
   .tp_basicsize = sizeof(sifCellLinkedListObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifCellLinkedList_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "SIF cell linked list object.",
+  .tp_doc =
+    "CellLinkedList(n_cells, box_length, initial_capacity=1, options=0)\n"
+    "--\n\n"
+    "A spatial bin built from linked lists, one per cell.\n\n"
+    "Where ChainMesh sorts a fixed set of particles, this takes items\n"
+    "one at a time and never moves an existing entry, which is what a\n"
+    "finder needs while it is still accepting voids.\n\n"
+    "Args:\n"
+    "    n_cells: Cells per side.\n"
+    "    box_length: Physical side length of the box.\n"
+    "    initial_capacity: Items to make room for up front.\n"
+    "    options: Boundary convention, SIF_PBC_PERIODIC (default) or\n"
+    "        SIF_PBC_OPEN.",
   .tp_methods = sifCellLinkedList_methods,
   .tp_getset = sifCellLinkedList_getset,
   .tp_init = sifCellLinkedList_init,

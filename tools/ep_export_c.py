@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 """
 Emits the trained emulator as a C header of static const tables.
 
@@ -24,7 +29,7 @@ import numpy as np
 
 from ep_model import FEATURE_NAMES, EPEmulator
 
-GUARD = "__SIF_MODEL_EP_EMU_WEIGHTS_H__"
+GUARD = "SIF__MODEL_EP_EMU_WEIGHTS_H"
 PREFIX = "SIF_EP_EMU"
 
 
@@ -88,7 +93,13 @@ def main():
     arrays[f"{PREFIX}_BOX_HI"] = emu.box[1]
 
     out = []
-    out.append(f"""#ifndef {GUARD}
+    out.append(f"""/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef {GUARD}
 #define {GUARD}
 
 /*
@@ -123,7 +134,7 @@ def main():
     # The network descriptor itself.
     layer_lines = []
     for i, (W, b) in enumerate(emu.layers):
-        act = "SIF_NN_LINEAR" if i == n_layers - 1 else "SIF_NN_TANH"
+        act = "SIF__NN_LINEAR" if i == n_layers - 1 else "SIF__NN_TANH"
         layer_lines.append(
             f"    {{{W.shape[0]}u, {W.shape[1]}u, {PREFIX}_W{i}, "
             f"{PREFIX}_B{i}, {act}}}")

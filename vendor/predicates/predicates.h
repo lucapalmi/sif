@@ -1,3 +1,13 @@
+/* Declarations for Jonathan Richard Shewchuk's robust geometric predicates,
+ * placed in the public domain by their author. See predicates.c for the
+ * original notice and the accompanying paper.
+ *
+ * This header is not part of the original distribution: it declares only the
+ * entry points sif uses, and selects the float or double set to match the
+ * precision sif was configured with. Like the code it declares, it carries no
+ * restrictions of its own.
+ */
+
 #ifndef PREDICATES_H
 #define PREDICATES_H
 

@@ -1,3 +1,8 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 cmake_minimum_required(VERSION 3.15...3.27)
 project(pysif VERSION 0.1.0 LANGUAGES C)
 
@@ -24,7 +29,7 @@ set(PYTHON_SOURCES
     ${CMAKE_SOURCE_DIR}/src/measure_module.c
     ${CMAKE_SOURCE_DIR}/src/model_module.c
     ${CMAKE_SOURCE_DIR}/src/io_module.c
-    ${CMAKE_SOURCE_DIR}/src/structures_module.c
+    ${CMAKE_SOURCE_DIR}/src/types_register.c
     ${CMAKE_SOURCE_DIR}/src/finders_module.c
 
     # Measure Submodule
@@ -49,10 +54,10 @@ set(PYTHON_SOURCES
     ${CMAKE_SOURCE_DIR}/src/structures/py_size_function.c
 
     # Model Submodule
-    ${CMAKE_SOURCE_DIR}/src/model/py_deltamoments.c
+    ${CMAKE_SOURCE_DIR}/src/model/py_delta_moments.c
     ${CMAKE_SOURCE_DIR}/src/model/py_bbks.c
-    ${CMAKE_SOURCE_DIR}/src/model/py_sizefunction.c
-    ${CMAKE_SOURCE_DIR}/src/model/py_excursionset.c
+    ${CMAKE_SOURCE_DIR}/src/model/py_size_function.c
+    ${CMAKE_SOURCE_DIR}/src/model/py_excursion_set.c
 
     # Finders Submodule
     ${CMAKE_SOURCE_DIR}/src/finders/py_finders.c

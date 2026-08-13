@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 """
 Generates the P(k) tables the training set is built on. Runs LOCALLY, once.
 

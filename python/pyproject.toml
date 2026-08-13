@@ -1,3 +1,8 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 [build-system]
 requires = ["scikit-build-core>=0.5.0", "numpy>=1.20"]
 build-backend = "scikit_build_core.build"

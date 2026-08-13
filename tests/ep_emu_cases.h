@@ -1,5 +1,11 @@
-#ifndef __SIF_TESTS_EP_EMU_CASES_H__
-#define __SIF_TESTS_EP_EMU_CASES_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_TESTS_EP_EMU_CASES_H
+#define SIF_TESTS_EP_EMU_CASES_H
 
 /*
  * GENERATED FILE -- do not edit.
@@ -8,7 +14,7 @@
  * (sha256 3428f758c0c1a87e) on 2026-08-10.
  *
  * Reference values from the Python model the network was fitted with. The C
- * emulator must reproduce the multiplicity to the precision real_t can hold;
+ * emulator must reproduce the multiplicity to the precision sif_real can hold;
  * anything worse means a feature is being computed differently, which no
  * physical invariant would detect.
  */
@@ -543,4 +549,4 @@ static const double* const EP_EMU_EXPECT[] = {EP_EMU_EXPECT_0, EP_EMU_EXPECT_1, 
 static const double EP_EMU_NU_ORIGIN[] = {EP_EMU_NU_ORIGIN_0, EP_EMU_NU_ORIGIN_1, EP_EMU_NU_ORIGIN_2};
 static const int EP_EMU_IN_DOMAIN[] = {EP_EMU_IN_DOMAIN_0, EP_EMU_IN_DOMAIN_1, EP_EMU_IN_DOMAIN_2};
 
-#endif /* __SIF_TESTS_EP_EMU_CASES_H__ */
+#endif /* SIF_TESTS_EP_EMU_CASES_H */

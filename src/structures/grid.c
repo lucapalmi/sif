@@ -1,14 +1,20 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/structures/grid.h"
 
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/system_internal.h"
 #include "sif/core/settings.h"
-#include "core/get_system.h"
+#include "sif/io/grid_io.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
-#include "sif/io/grid_io.h"
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -17,13 +23,13 @@
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-static inline uint64_t __grid_get_flat_index(
+static inline uint64_t grid_flat_index(
   const sif_grid_t* grid, uint32_t ix, uint32_t iy, uint32_t iz) {
   return (uint64_t)ix * grid->n_cells * grid->n_cells +
          (uint64_t)iy * grid->n_cells + (uint64_t)iz;
 }
 
-sif_grid_t* sif_grid_alloc(uint32_t n_cells, real_t box_length) {
+sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length) {
 
   sif_grid_t* grid = malloc(sizeof(sif_grid_t));
   if (!grid) {
@@ -40,9 +46,10 @@ sif_grid_t* sif_grid_alloc(uint32_t n_cells, real_t box_length) {
   grid->p2_mask = ((n_cells & (n_cells - 1)) == 0) ? (n_cells - 1) : 0;
   grid->p2_shift = grid->p2_mask ? (uint32_t)__builtin_ctz(n_cells) : 0;
 
-  grid->delta = sif_calloc_aligned(grid->total_cells, sizeof(real_t));
-  if (!grid->delta) {
-    SIF_LOG_ERROR("grid", "failed to allocate delta field");
+  grid->content = SIF_GRID_EMPTY;
+  grid->values = sif_calloc_aligned(grid->total_cells, sizeof(sif_real));
+  if (!grid->values) {
+    SIF_LOG_ERROR("grid", "failed to allocate the cell array");
     free(grid);
     return NULL;
   }
@@ -55,9 +62,9 @@ void sif_grid_free(sif_grid_t* grid) {
   if (!grid)
     return;
 
-  /* delta may legitimately be NULL: a finder can have taken the buffer. The
+  /* values may legitimately be NULL: a finder can have taken the buffer. The
    * struct still has to be released. */
-  sif_free_aligned(grid->delta);
+  sif_free_aligned(grid->values);
   free(grid);
 
   SIF_LOG_TRACE("grid", "cubic grid destroyed");
@@ -66,27 +73,27 @@ void sif_grid_free(sif_grid_t* grid) {
 // CIC CONSTRUCTION
 
 typedef struct {
-  real_t* delta;
+  sif_real* values;
   uint32_t ix_start;
   uint32_t ix_end;
   uint32_t width;
   uint32_t n_cells;
 } grid_slab_t;
 
-PURE_FUNCTION static inline uint64_t __grid_slab_get_flat_index(
+SIF_PURE_FUNCTION static inline uint64_t grid_slab_flat_index(
   const grid_slab_t* slab, uint32_t local_ix, uint32_t iy, uint32_t iz) {
 
   return (uint64_t)local_ix * slab->n_cells * slab->n_cells +
          (uint64_t)iy * slab->n_cells + (uint64_t)iz;
 }
 
-static grid_slab_t* __grid_slabs_alloc(uint32_t n_cells, int n_threads) {
+static grid_slab_t* grid_slabs_alloc(uint32_t n_cells, int n_threads) {
   grid_slab_t* slabs = malloc(n_threads * sizeof(grid_slab_t));
   if (!slabs)
     return NULL;
 
   uint64_t total_slab_cells = 0;
-  uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
+  uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
 
   for (int t = 0; t < n_threads; t++) {
     uint32_t ix_start = (uint32_t)t * (n_cells / n_threads);
@@ -102,7 +109,7 @@ static grid_slab_t* __grid_slabs_alloc(uint32_t n_cells, int n_threads) {
   }
 
   /* 2. The Arena: One massive contiguous memory block */
-  real_t* arena = sif_calloc_aligned(total_slab_cells, sizeof(real_t));
+  sif_real* arena = sif_calloc_aligned(total_slab_cells, sizeof(sif_real));
   if (!arena) {
     free(slabs);
     return NULL;
@@ -121,23 +128,23 @@ static grid_slab_t* __grid_slabs_alloc(uint32_t n_cells, int n_threads) {
     uint64_t slab_cells = (uint64_t)(slabs[t].width + 1) * n_cells * n_cells;
     slab_cells = (slab_cells + align_elements - 1) & ~(align_elements - 1);
 
-    slabs[t].delta = arena + current_offset;
+    slabs[t].values = arena + current_offset;
     current_offset += slab_cells;
   }
 
   return slabs;
 }
 
-static void __grid_slabs_free(grid_slab_t* slabs, int n_threads) {
+static void grid_slabs_free(grid_slab_t* slabs, int n_threads) {
   if (slabs) {
-    if (n_threads > 0 && slabs[0].delta) {
-      sif_free_aligned(slabs[0].delta);
+    if (n_threads > 0 && slabs[0].values) {
+      sif_free_aligned(slabs[0].values);
     }
     free(slabs);
   }
 }
 
-static void __grid_cic_reduce_ghost_cells(grid_slab_t* slabs, int n_threads) {
+static void grid_cic_reduce_ghost_cells(grid_slab_t* slabs, int n_threads) {
   for (int t = 0; t < n_threads; t++) {
     grid_slab_t* slab = &slabs[t];
     grid_slab_t* slab_next = &slabs[(t + 1) % n_threads];
@@ -145,17 +152,16 @@ static void __grid_cic_reduce_ghost_cells(grid_slab_t* slabs, int n_threads) {
 
     for (uint32_t iy = 0; iy < N; iy++) {
       for (uint32_t iz = 0; iz < N; iz++) {
-        uint64_t ghost_idx =
-          __grid_slab_get_flat_index(slab, slab->width, iy, iz);
-        uint64_t target_idx = __grid_slab_get_flat_index(slab_next, 0, iy, iz);
-        slab_next->delta[target_idx] += slab->delta[ghost_idx];
+        uint64_t ghost_idx = grid_slab_flat_index(slab, slab->width, iy, iz);
+        uint64_t target_idx = grid_slab_flat_index(slab_next, 0, iy, iz);
+        slab_next->values[target_idx] += slab->values[ghost_idx];
       }
     }
   }
 }
 
-static void __grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
-  const grid_slab_t* slabs, int n_threads, real_t inv_cell_volume) {
+static void grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
+  const grid_slab_t* slabs, int n_threads, sif_real inv_cell_volume) {
 
 #pragma omp parallel for schedule(static)
   for (int t = 0; t < n_threads; t++) {
@@ -166,9 +172,9 @@ static void __grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
       uint32_t global_ix = slab->ix_start + local_ix;
       for (uint32_t iy = 0; iy < N; iy++) {
         for (uint32_t iz = 0; iz < N; iz++) {
-          uint64_t src = __grid_slab_get_flat_index(slab, local_ix, iy, iz);
-          uint64_t dst = __grid_get_flat_index(grid, global_ix, iy, iz);
-          grid->delta[dst] = slab->delta[src] * inv_cell_volume;
+          uint64_t src = grid_slab_flat_index(slab, local_ix, iy, iz);
+          uint64_t dst = grid_flat_index(grid, global_ix, iy, iz);
+          grid->values[dst] = slab->values[src] * inv_cell_volume;
         }
       }
     }
@@ -181,8 +187,8 @@ static void __grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
  * coordinates inside the box, so reject anything else up front rather than
  * letting the deposit pass underflow its local slab index.
  */
-static int __grid_validate_positions(const real_t* xs, const real_t* ys,
-  const real_t* zs, uint64_t n_particles, real_t box_length) {
+static int grid_validate_positions(const sif_real* xs, const sif_real* ys,
+  const sif_real* zs, uint64_t n_particles, sif_real box_length) {
 
   uint64_t n_bad = 0;
 
@@ -213,22 +219,22 @@ static int __grid_validate_positions(const real_t* xs, const real_t* ys,
  * The >= N branch only fires on the exact upper edge after rounding, and
  * wraps it periodically to cell 0.
  */
-static inline uint32_t __cic_cell_x(real_t x, real_t inv_cell, uint32_t N) {
+static inline uint32_t cic_cell_x(sif_real x, sif_real inv_cell, uint32_t N) {
   uint32_t ix = (uint32_t)(x * inv_cell);
   return (ix >= N) ? 0u : ix;
 }
 
-static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
-  const real_t* ys, const real_t* zs, const real_t* masses,
+static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
+  const sif_real* ys, const sif_real* zs, const sif_real* masses,
   uint64_t n_particles) {
 
   const uint32_t N = grid->n_cells;
-  const real_t idx = (real_t)N / (real_t)grid->box_length;
+  const sif_real idx = (sif_real)N / (sif_real)grid->box_length;
 
-  int32_t n_slabs = sif_system_get_max_threads();
+  int32_t n_slabs = sif__system_max_threads();
   n_slabs = ((int)N < n_slabs) ? (int)N : n_slabs;
 
-  grid_slab_t* slabs = __grid_slabs_alloc(N, n_slabs);
+  grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
   if (!slabs) {
     SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
     return;
@@ -244,7 +250,7 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
   if (!counts) {
     SIF_LOG_ERROR("grid_cic", "failed to allocate counts array");
     SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
-    __grid_slabs_free(slabs, n_slabs);
+    grid_slabs_free(slabs, n_slabs);
     return;
   }
 
@@ -258,7 +264,7 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
       (start + chunk_size > n_particles) ? n_particles : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
-      uint32_t ix = __cic_cell_x(xs[p], idx, N);
+      uint32_t ix = cic_cell_x(xs[p], idx, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
       counts[c * n_slabs + target_slab]++;
     }
@@ -283,7 +289,7 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
   if (!sorted_indices) {
     SIF_LOG_ERROR("grid_cic", "failed to allocate index array");
     free(counts);
-    __grid_slabs_free(slabs, n_slabs);
+    grid_slabs_free(slabs, n_slabs);
     return;
   }
 
@@ -294,7 +300,7 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
       (start + chunk_size > n_particles) ? n_particles : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
-      uint32_t ix = __cic_cell_x(xs[p], idx, N);
+      uint32_t ix = cic_cell_x(xs[p], idx, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
 
       uint64_t flat_idx = c * n_slabs + target_slab;
@@ -317,15 +323,15 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
     grid_slab_t* slab = &slabs[slab_idx];
     const uint32_t x0 = slab->ix_start;
 
-    real_t* s_delta = SIF_ASSUME_ALIGNED(slab->delta);
+    sif_real* s_values = SIF_ASSUME_ALIGNED(slab->values);
 
     for (uint64_t p = slab_start; p < slab_end; p++) {
       /* Indirect read: incredibly fast because xs, ys, zs are Morton-sorted! */
       uint64_t orig_p = sorted_indices[p];
 
-      const real_t cx = xs[orig_p] * idx;
-      const real_t cy = ys[orig_p] * idx;
-      const real_t cz = zs[orig_p] * idx;
+      const sif_real cx = xs[orig_p] * idx;
+      const sif_real cy = ys[orig_p] * idx;
+      const sif_real cz = zs[orig_p] * idx;
 
       /* Branchless bounds safety */
       uint32_t raw_cx = (uint32_t)cx, raw_cy = (uint32_t)cy,
@@ -341,47 +347,48 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
       const uint32_t lix = ix - x0;
       const uint32_t lix1 = lix + 1;
 
-      const real_t tx = cx - (real_t)raw_cx;
-      const real_t ty = cy - (real_t)raw_cy;
-      const real_t tz = cz - (real_t)raw_cz;
+      const sif_real tx = cx - (sif_real)raw_cx;
+      const sif_real ty = cy - (sif_real)raw_cy;
+      const sif_real tz = cz - (sif_real)raw_cz;
 
-      const real_t wx0 = 1.0f - tx, wx1 = tx;
-      const real_t wy0 = 1.0f - ty, wy1 = ty;
-      const real_t wz0 = 1.0f - tz, wz1 = tz;
+      const sif_real wx0 = 1.0f - tx, wx1 = tx;
+      const sif_real wy0 = 1.0f - ty, wy1 = ty;
+      const sif_real wz0 = 1.0f - tz, wz1 = tz;
 
       /* ALGEBRAIC REDUCTION: Drop from 24 multiplications to 14 */
-      const real_t w00 = wx0 * wy0;
-      const real_t w01 = wx0 * wy1;
-      const real_t w10 = wx1 * wy0;
-      const real_t w11 = wx1 * wy1;
+      const sif_real w00 = wx0 * wy0;
+      const sif_real w01 = wx0 * wy1;
+      const sif_real w10 = wx1 * wy0;
+      const sif_real w11 = wx1 * wy1;
 
       /* Per-particle mass when the field carries one, unit mass otherwise. */
-      const real_t particle_mass = masses ? masses[orig_p] : 1.0f;
+      const sif_real particle_mass = masses ? masses[orig_p] : 1.0f;
 
-      const real_t mz0 = particle_mass * wz0;
-      const real_t mz1 = particle_mass * wz1;
+      const sif_real mz0 = particle_mass * wz0;
+      const sif_real mz1 = particle_mass * wz1;
 
       /* 8 writes, exactly 1 multiplication each */
-      s_delta[__grid_slab_get_flat_index(slab, lix, iy, iz)] += w00 * mz0;
-      s_delta[__grid_slab_get_flat_index(slab, lix, iy, iz1)] += w00 * mz1;
-      s_delta[__grid_slab_get_flat_index(slab, lix, iy1, iz)] += w01 * mz0;
-      s_delta[__grid_slab_get_flat_index(slab, lix, iy1, iz1)] += w01 * mz1;
-      s_delta[__grid_slab_get_flat_index(slab, lix1, iy, iz)] += w10 * mz0;
-      s_delta[__grid_slab_get_flat_index(slab, lix1, iy, iz1)] += w10 * mz1;
-      s_delta[__grid_slab_get_flat_index(slab, lix1, iy1, iz)] += w11 * mz0;
-      s_delta[__grid_slab_get_flat_index(slab, lix1, iy1, iz1)] += w11 * mz1;
+      s_values[grid_slab_flat_index(slab, lix, iy, iz)] += w00 * mz0;
+      s_values[grid_slab_flat_index(slab, lix, iy, iz1)] += w00 * mz1;
+      s_values[grid_slab_flat_index(slab, lix, iy1, iz)] += w01 * mz0;
+      s_values[grid_slab_flat_index(slab, lix, iy1, iz1)] += w01 * mz1;
+      s_values[grid_slab_flat_index(slab, lix1, iy, iz)] += w10 * mz0;
+      s_values[grid_slab_flat_index(slab, lix1, iy, iz1)] += w10 * mz1;
+      s_values[grid_slab_flat_index(slab, lix1, iy1, iz)] += w11 * mz0;
+      s_values[grid_slab_flat_index(slab, lix1, iy1, iz1)] += w11 * mz1;
     }
   }
 
-  __grid_cic_reduce_ghost_cells(slabs, n_slabs);
+  grid_cic_reduce_ghost_cells(slabs, n_slabs);
 
-  const real_t inv_cell_vol =
-    1.0f / (real_t)(grid->cell_length * grid->cell_length * grid->cell_length);
-  __grid_cic_merge_slabs_to_grid(grid, slabs, n_slabs, inv_cell_vol);
+  const sif_real inv_cell_vol =
+    1.0f /
+    (sif_real)(grid->cell_length * grid->cell_length * grid->cell_length);
+  grid_cic_merge_slabs_to_grid(grid, slabs, n_slabs, inv_cell_vol);
 
   free(sorted_indices);
   free(counts);
-  __grid_slabs_free(slabs, n_slabs);
+  grid_slabs_free(slabs, n_slabs);
 
   SIF_LOG_TRACE("grid", "cic assignment completed");
 }
@@ -393,12 +400,12 @@ static void __grid_compute_cic(sif_grid_t* grid, const real_t* xs,
  *
  *   sif_setting_set("grid_cache_enabled", "1");
  */
-static int __grid_cache_enabled(void) {
+static int grid_cache_enabled(void) {
   const char* v = sif_setting_get("grid_cache_enabled", "0");
   if (!v)
     return 0;
-  return (v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' ||
-          v[0] == 'Y');
+  return (
+    v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
 }
 
 /*
@@ -407,7 +414,7 @@ static int __grid_cache_enabled(void) {
  * fields agreeing on n_particles, box, mass mode and those 5 positions would
  * collide. Good enough for "same run, same data" reuse, not a content hash.
  */
-static uint64_t __generate_field_hash(
+static uint64_t field_hash(
   const sif_grid_t* grid, const sif_field_t* field, uint8_t has_masses) {
   uint64_t hash = 0xcbf29ce484222325ULL;   // FNV offset basis
   const uint64_t prime = 0x100000001b3ULL; // FNV prime
@@ -423,7 +430,7 @@ static uint64_t __generate_field_hash(
   } while (0)
 
   HASH_VAL(grid->n_cells, uint32_t);
-  HASH_VAL(grid->box_length, real_t);
+  HASH_VAL(grid->box_length, sif_real);
   HASH_VAL(field->n_particles, uint64_t);
   HASH_VAL(has_masses, uint8_t);
 
@@ -432,34 +439,34 @@ static uint64_t __generate_field_hash(
       (field->n_particles * 3) / 4, field->n_particles - 1};
     for (int i = 0; i < 5; i++) {
       uint64_t idx = indices[i];
-      HASH_VAL(field->x[idx], real_t);
-      HASH_VAL(field->y[idx], real_t);
-      HASH_VAL(field->z[idx], real_t);
+      HASH_VAL(field->x[idx], sif_real);
+      HASH_VAL(field->y[idx], sif_real);
+      HASH_VAL(field->z[idx], sif_real);
     }
   }
 #undef HASH_VAL
   return hash;
 }
 
-void sif_grid_assign_cic(sif_grid_t* grid, sif_field_t* field) {
-  if (!grid || !field || !grid->delta) {
+void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
+  if (!grid || !field || !grid->values) {
     SIF_LOG_ERROR("grid_cic", "invalid grid or field");
     return;
   }
 
-  if (__grid_validate_positions(field->x, field->y, field->z,
-        field->n_particles, grid->box_length) != SIF_OK) {
+  if (grid_validate_positions(field->x, field->y, field->z, field->n_particles,
+        grid->box_length) != SIF_OK) {
     return;
   }
 
-  const int use_cache = __grid_cache_enabled();
+  const int use_cache = grid_cache_enabled();
 
   char cache_dir[512] = {0};
   char final_path[1024] = {0};
   uint64_t hash = 0;
 
   if (use_cache) {
-    hash = __generate_field_hash(grid, field, field->masses ? 1u : 0u);
+    hash = field_hash(grid, field, field->masses ? 1u : 0u);
 
     const char* cache_dir_setting = sif_setting_get("cache_directory", NULL);
     if (cache_dir_setting) {
@@ -476,7 +483,7 @@ void sif_grid_assign_cic(sif_grid_t* grid, sif_field_t* field) {
     snprintf(final_path, sizeof(final_path), "%s/grid_%llx.xgrid", cache_dir,
       (unsigned long long)hash);
 
-    if (sif_grid_read_into(final_path, grid) == 0) {
+    if (sif_grid_read_into(final_path, grid) == SIF_OK) {
       SIF_LOG_INFO("grid_cic", "loaded cached .xgrid from %s", final_path);
       return;
     }
@@ -484,8 +491,9 @@ void sif_grid_assign_cic(sif_grid_t* grid, sif_field_t* field) {
     SIF_LOG_TRACE("grid_cic", "grid is not cached. starting assignment");
   }
 
-  __grid_compute_cic(
+  grid_compute_cic(
     grid, field->x, field->y, field->z, field->masses, field->n_particles);
+  grid->content = SIF_GRID_MASS;
 
   if (!use_cache) {
     SIF_LOG_FLUSH();
@@ -511,9 +519,19 @@ void sif_grid_assign_cic(sif_grid_t* grid, sif_field_t* field) {
   SIF_LOG_FLUSH();
 }
 
-void sif_grid_compute_overdensity(sif_grid_t* grid) {
-  if (!grid || !grid->delta || grid->total_cells == 0) {
+void sif_grid_to_density_contrast(sif_grid_t* grid) {
+  if (!grid || !grid->values || grid->total_cells == 0) {
     SIF_LOG_ERROR("grid", "invalid or empty grid");
+    return;
+  }
+
+  /* Converting an already-converted grid computes (delta + 1) / mean - 1 over
+   * a mean that is now about zero. It does not fail, it just returns a field
+   * made of noise, so it is refused here rather than diagnosed later.
+   * SIF_GRID_EMPTY is left alone: that is a grid the caller filled itself, and
+   * only the caller knows what is in it. */
+  if (grid->content == SIF_GRID_DENSITY_CONTRAST) {
+    SIF_LOG_ERROR("grid", "this grid already holds a density contrast");
     return;
   }
 
@@ -522,24 +540,25 @@ void sif_grid_compute_overdensity(sif_grid_t* grid) {
   double total_mass = 0.0;
 #pragma omp parallel for schedule(static) reduction(+ : total_mass)
   for (uint64_t i = 0; i < total_cells; i++) {
-    total_mass += (double)grid->delta[i];
+    total_mass += (double)grid->values[i];
   }
 
   const double rho_mean = total_mass / (double)total_cells;
 
   if (!(rho_mean > 0.0)) {
     SIF_LOG_ERROR("grid",
-      "mean density is %g, cannot normalize to an overdensity field",
-      rho_mean);
+      "mean density is %g, cannot normalize to an overdensity field", rho_mean);
     return;
   }
 
-  const real_t rho_mean_inv = (real_t)(1.0 / rho_mean);
+  const sif_real rho_mean_inv = (sif_real)(1.0 / rho_mean);
 
   /* compute overdensity field */
-  real_t* d_ptr = SIF_ASSUME_ALIGNED(grid->delta);
+  sif_real* d_ptr = SIF_ASSUME_ALIGNED(grid->values);
 #pragma omp parallel for schedule(static)
   for (uint64_t i = 0; i < total_cells; i++) {
     d_ptr[i] = d_ptr[i] * rho_mean_inv - 1.0f;
   }
+
+  grid->content = SIF_GRID_DENSITY_CONTRAST;
 }

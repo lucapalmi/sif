@@ -1,3 +1,8 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 # sif test suite
 #
 # Each test is a self-contained executable that returns non-zero on failure,
@@ -15,6 +20,7 @@ file(MAKE_DIRECTORY "${SIF_TEST_HOME}")
 set(SIF_TESTS
   test_structures   # bitmask, catalog, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
+  test_io           # .xfield/.xgrid round trips, checksums, ASCII catalogues
   test_octree       # build integrity + nearest neighbour vs brute force
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count

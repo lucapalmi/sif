@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_profiles.h"
 
 #include "structures/py_catalog.h"
@@ -69,7 +75,7 @@ static PyObject* sifProfiles_get_ext(PyObject* self_obj, void* closure) {
 
 static PyObject* sifProfiles_get_r_edges(PyObject* self_obj, void* closure) {
   sifProfilesObject* self = (sifProfilesObject*)self_obj;
-  real_t* edges =
+  sif_real* edges =
     self->dens ? self->dens->r_edges : (self->vel ? self->vel->r_edges : NULL);
   uint32_t n_bins =
     self->dens ? self->dens->n_bins : (self->vel ? self->vel->n_bins : 0);
@@ -140,7 +146,14 @@ PyTypeObject sifProfilesType = {
   .tp_itemsize = 0,
   .tp_dealloc = sifProfiles_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "Unified void structural profiles container.",
+  .tp_doc =
+    "Profiles()\n"
+    "--\n\n"
+    "Stacked radial profiles of voids: density and radial velocity.\n\n"
+    "Returned by pysif.measure.profiles(). One row per void, binned in\n"
+    "radius scaled by that void's own radius, so profiles of\n"
+    "different-sized voids stack directly.\n\n"
+    "Not constructed directly.",
   .tp_getset = sifProfiles_getset,
   .tp_init = sifProfiles_init,
   .tp_new = PyType_GenericNew,
@@ -199,7 +212,7 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
   sif_velocity_profiles_t* vel_out = NULL;
 
   /* --- Python-Side Dispatcher --- */
-  if ((options & __SIF_PROFILES_ALGO_MASK) == SIF_PROFILES_ALGO_VORONOI) {
+  if ((options & SIF__PROFILES_ALGO_MASK) == SIF_PROFILES_ALGO_VORONOI) {
 
     if (tess_obj == NULL || tess_obj == Py_None) {
       PyErr_SetString(PyExc_ValueError,
@@ -211,7 +224,7 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
     if (!PyObject_TypeCheck(tess_obj, &sifTessellationType)) {
       PyErr_SetString(PyExc_TypeError,
         "The 'tessellation' argument must be a valid "
-        "pysif.structures.Tessellation object.");
+        "pysif.Tessellation object.");
       return NULL;
     }
 
@@ -219,17 +232,15 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
 
     /* The GIL is released for the duration: this is a long, purely numeric
        run across every core and nothing below touches Python state. */
-    Py_BEGIN_ALLOW_THREADS
-    sif_profiles_voronoi(cat->catalog, field->field, c_tess,
-      (real_t)box_length, (real_t)ext, n_bins, options, &dens_out,
+    Py_BEGIN_ALLOW_THREADS sif_profiles_voronoi(cat->catalog, field->field,
+      c_tess, (sif_real)box_length, (sif_real)ext, n_bins, options, &dens_out,
       compute_velocity ? &vel_out : NULL);
     Py_END_ALLOW_THREADS
 
   } else {
 
-    Py_BEGIN_ALLOW_THREADS
-    sif_profiles_mesh(cat->catalog, field->field, (real_t)box_length,
-      (real_t)ext, n_bins, options, &dens_out,
+    Py_BEGIN_ALLOW_THREADS sif_profiles_mesh(cat->catalog, field->field,
+      (sif_real)box_length, (sif_real)ext, n_bins, options, &dens_out,
       compute_velocity ? &vel_out : NULL);
     Py_END_ALLOW_THREADS
   }

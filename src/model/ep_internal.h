@@ -1,37 +1,47 @@
-#ifndef __SIF_EP_INTERNAL_H__
-#define __SIF_EP_INTERNAL_H__
-
-/*
- * Internals of the excursion-set first-crossing model. Not a public header;
- * the test suite includes it directly, the way test_fft includes math/fft.h,
- * to assert the factor's invariants without inferring them from a histogram.
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
  */
+
+/**
+ * @file ep_internal.h
+ * @brief Internals of the excursion-set first-crossing model. Private to the
+ * library.
+ *
+ * The test suite includes this directly, the way test_fft includes
+ * math/fft.h, to assert the factor's invariants rather than inferring them
+ * from a histogram.
+ */
+
+#ifndef SIF__MODEL_EP_INTERNAL_H
+#define SIF__MODEL_EP_INTERNAL_H
 
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/model/excursionset.h"
+#include "sif/model/excursion_set.h"
 
 /* Doubles per row of the factor, so each row starts on a cache line and the
  * walk's dot product runs over whole vectors with no masked tail. */
-#define __SIF_EP_ROW_PAD ((uint64_t)(__SIF_CACHE_LINE / (int)sizeof(double)))
+#define SIF__EP_ROW_PAD ((uint64_t)(SIF_CACHE_LINE / (int)sizeof(double)))
 
-/*
+/**
  * @brief Lower-triangular Cholesky factor of a covariance, L L^T = S.
  *
  * Stored in the DESCENDING radius order the walk runs in: row j is
  * radii[n - 1 - j]. Row-major, each row padded to a multiple of
- * __SIF_EP_ROW_PAD doubles and zero from the diagonal to the end of the
+ * SIF__EP_ROW_PAD doubles and zero from the diagonal to the end of the
  * padding.
  */
 typedef struct {
-  uint32_t  n;
-  double*   chol;       /* n_packed entries */
+  uint32_t n;
+  double* chol;         /* n_packed entries */
   uint64_t* row_offset; /* n + 1 entries; row_offset[n] == n_packed */
-  uint64_t  n_packed;
+  uint64_t n_packed;
 } sif_ep_factor_t;
 
-/*
+/**
  * @brief Allocates a factor for n rows, zero-filled.
  *
  * The zero fill is load-bearing: the factorization writes only up to each
@@ -39,11 +49,11 @@ typedef struct {
  *
  * @return SIF_OK, or SIF_ERR_ALLOC with the struct left safe to free.
  */
-int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n);
+int sif__ep_factor_init(sif_ep_factor_t* f, uint32_t n);
 
-void sif_ep_factor_free(sif_ep_factor_t* f);
+void sif__ep_factor_free(sif_ep_factor_t* f);
 
-/*
+/**
  * @brief Factorizes a packed covariance into walk order.
  *
  * Doubles as the test that the covariance is positive semi-definite.
@@ -56,22 +66,22 @@ void sif_ep_factor_free(sif_ep_factor_t* f);
  * @return SIF_OK, or SIF_ERR_RANGE if a pivot is not positive, having logged
  * the offending radius and the correlation that explains it.
  */
-int sif_ep_cholesky(sif_ep_factor_t* f, const double* cov,
-  const real_t* radii, uint32_t n);
+int sif__ep_cholesky(
+  sif_ep_factor_t* f, const double* cov, const sif_real* radii, uint32_t n);
 
-/*
+/**
  * @brief Reads S(i, j) from a packed lower triangle in ascending order.
  *
  * Symmetric in its arguments, so callers need not order them.
  */
-static inline double sif_ep_cov_get(
+static inline double sif__ep_cov_get(
   const double* cov, uint32_t i, uint32_t j) {
   return (i >= j) ? cov[SIF_COV_INDEX(i, j)] : cov[SIF_COV_INDEX(j, i)];
 }
 
 /* --- The up-crossing baseline --- */
 
-/*
+/**
  * @brief Local description of the walk at each smoothing radius.
  *
  * Everything the semi-analytic first-crossing rate needs, in the walk's own
@@ -90,10 +100,10 @@ typedef struct {
   double* f_up;   /* the up-crossing rate itself, per unit S */
 } sif_ep_features_t;
 
-int sif_ep_features_init(sif_ep_features_t* f, uint32_t n);
-void sif_ep_features_free(sif_ep_features_t* f);
+int sif__ep_features_init(sif_ep_features_t* f, uint32_t n);
+void sif__ep_features_free(sif_ep_features_t* f);
 
-/*
+/**
  * @brief Fills the local description from a covariance and a barrier.
  *
  * @param deriv_variance Optional, n entries: <(d delta / dS)^2> as
@@ -107,10 +117,11 @@ void sif_ep_features_free(sif_ep_features_t* f);
  *
  * @return SIF_OK, or SIF_ERR_RANGE if the covariance is not a covariance.
  */
-int sif_ep_features_fill(sif_ep_features_t* f, const real_t* radii, uint32_t n,
-  const double* cov, const real_t* barrier, const double* deriv_variance);
+int sif__ep_features_fill(sif_ep_features_t* f, const sif_real* radii,
+  uint32_t n, const double* cov, const sif_real* barrier,
+  const double* deriv_variance);
 
-/*
+/**
  * @brief The same, from the covariance DIAGONAL alone.
  *
  * Everything above the diagonal is dead weight to this calculation: the local
@@ -122,11 +133,11 @@ int sif_ep_features_fill(sif_ep_features_t* f, const real_t* radii, uint32_t n,
  * @param deriv_variance REQUIRED here, unlike above: with no off-diagonal
  * elements there is nothing to difference as a fallback.
  */
-int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
-  uint32_t n, const double* S, const real_t* barrier,
+int sif__ep_features_fill_diag(sif_ep_features_t* f, const sif_real* radii,
+  uint32_t n, const double* S, const sif_real* barrier,
   const double* deriv_variance);
 
-/*
+/**
  * @brief Per-bin integrated hazard of the up-crossing rate, n - 1 entries.
  *
  * Integrates the LOG-LINEAR interpolant of the rate across each bin rather
@@ -135,9 +146,9 @@ int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
  * how finely the caller sampled the radii, which is exactly what this whole
  * model exists to avoid.
  */
-void sif_ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam);
+void sif__ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam);
 
-/*
+/**
  * @brief Survival recursion: per-bin hazards to a multiplicity function.
  *
  * @param alive0 Fraction of walks still walking when the largest radius is
@@ -150,13 +161,13 @@ void sif_ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam);
  * multiplicity can never come out negative. Structural, not a clamp -- and the
  * reason the emulator corrects a hazard rather than the multiplicity itself.
  */
-void sif_ep_survival(const double* lam, const real_t* radii, uint32_t n_bins,
-  double alive0, real_t* out);
+void sif__ep_survival(const double* lam, const sif_real* radii, uint32_t n_bins,
+  double alive0, sif_real* out);
 
 /* 1 - Phi(x), the upper tail of the standard normal. */
-double sif_ep_upper_tail(double x);
+double sif__ep_upper_tail(double x);
 
-/*
+/**
  * @brief First-crossing multiplicity from the up-crossing rate alone.
  *
  * The Musso-Sheth approximation: the rate at which the walk crosses the
@@ -168,7 +179,7 @@ double sif_ep_upper_tail(double x);
  * @return Newly allocated array of n - 1 values on the bin centres, released
  * with sif_free_aligned, or NULL on failure.
  */
-NODISCARD real_t* sif_ep_multiplicity_upcrossing(const sif_ep_features_t* f,
-  const real_t* radii, uint32_t n);
+SIF_NODISCARD sif_real* sif__ep_multiplicity_upcrossing(
+  const sif_ep_features_t* f, const sif_real* radii, uint32_t n);
 
-#endif /* __SIF_EP_INTERNAL_H__ */
+#endif /* SIF__MODEL_EP_INTERNAL_H */

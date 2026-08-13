@@ -1,5 +1,15 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/utils/crc32.h"
 
+/* Precomputed remainders for every possible byte, so the checksum advances
+ * one byte per iteration instead of one bit. Laid out by hand; clang-format
+ * would reflow it into an unreadable block. */
+/* clang-format off */
 static const uint32_t crc32_table[256] = {
     0x00000000, 0x77073096, 0xee0e612c, 0x990951ba, 0x076dc419, 0x706af48f, 0xe963a535, 0x9e6495a3,
     0x0edb8832, 0x79dcb8a4, 0xe0d5e91e, 0x97d2d988, 0x09b64c2b, 0x7eb17cbd, 0xe7b82d07, 0x90bf1d91,
@@ -34,14 +44,20 @@ static const uint32_t crc32_table[256] = {
     0xbdbdf21c, 0xcabac28a, 0x53b39330, 0x24b4a3a6, 0xbad03605, 0xcdd70693, 0x54de5729, 0x23d967bf,
     0xb3667a2e, 0xc4614ab8, 0x5d681b02, 0x2a6f2b94, 0xb40bbe37, 0xc30c8ea1, 0x5a05df1b, 0x2d02ef8d
 };
+/* clang-format on */
+
+uint32_t sif_crc32_update(uint32_t crc, const void* data, size_t length) {
+  const uint8_t* ptr = (const uint8_t*)data;
+
+  for (size_t i = 0; i < length; i++) {
+    crc = crc32_table[(crc ^ ptr[i]) & 0xFF] ^ (crc >> 8);
+  }
+
+  return crc;
+}
+
+uint32_t sif_crc32_final(uint32_t crc) { return crc ^ 0xFFFFFFFFu; }
 
 uint32_t sif_crc32(const void* data, size_t length) {
-    uint32_t crc = 0xFFFFFFFF;
-    const uint8_t* ptr = (const uint8_t*)data;
-    
-    for (size_t i = 0; i < length; i++) {
-        crc = crc32_table[(crc ^ ptr[i]) & 0xFF] ^ (crc >> 8);
-    }
-    
-    return crc ^ 0xFFFFFFFF;
+  return sif_crc32_final(sif_crc32_update(SIF_CRC32_INIT, data, length));
 }

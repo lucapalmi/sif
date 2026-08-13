@@ -1,66 +1,98 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #define Py_MODULE_HEAD_UNIFIED
 #include "model/py_model.h"
 
 static PyMethodDef model_methods[] = {
   {"delta_moments_pk", (PyCFunction)py_sif_delta_moments_pk,
     METH_VARARGS | METH_KEYWORDS,
+    "delta_moments_pk(k, pk, radii, order, window='top_hat')"
+    "\n"
+    "--\n\n"
     "Evaluates the spectral moments sigma_0..sigma_order from a tabulated "
     "power spectrum, as the continuum integral.\n"
     "The theory counterpart of measure.delta_moments_grid: no box, no "
     "realization, no cosmic variance."},
 
-  {"g_bbks", (PyCFunction)py_sif_g_bbks, METH_VARARGS | METH_KEYWORDS,
+  {"bbks_g", (PyCFunction)py_sif_bbks_g, METH_VARARGS | METH_KEYWORDS,
+    "bbks_g(gamma, w, g='fitted')"
+    "\n"
+    "--\n\n"
     "The BBKS G(gamma, w) function, w = gamma * nu. Fitted form by default "
     "(BBKS 1986 eq. 4.4); g='exact' quadratures the defining integral "
     "(Wu 2020 eqs. 18-19)."},
 
-  {"differential_number_density_bbks",
-    (PyCFunction)py_sif_differential_number_density_bbks,
+  {"bbks_number_density_differential",
+    (PyCFunction)py_sif_bbks_number_density_differential,
     METH_VARARGS | METH_KEYWORDS,
+    "bbks_number_density_differential(nu, gamma, r_star, g='fitted')"
+    "\n"
+    "--\n\n"
     "Differential number density of maxima of a Gaussian field, per unit "
     "volume per unit nu (BBKS 1986 eq. 4.3).\n"
     "Takes parallel nu, gamma and r_star arrays; gamma and r_star come from "
     "the matching properties of a DeltaMoments."},
 
-  {"cumulative_number_density_bbks",
-    (PyCFunction)py_sif_cumulative_number_density_bbks,
+  {"bbks_number_density_cumulative",
+    (PyCFunction)py_sif_bbks_number_density_cumulative,
     METH_VARARGS | METH_KEYWORDS,
+    "bbks_number_density_cumulative(moments, delta, g='fitted')"
+    "\n"
+    "--\n\n"
     "Number density of Gaussian-field maxima above a density contrast, one "
     "value per smoothing radius of the given DeltaMoments (order >= 2).\n"
     "The threshold is converted per radius as nu_t = delta / sigma_0(R)."},
 
   {"size_function_bbks", (PyCFunction)py_sif_size_function_bbks,
     METH_VARARGS | METH_KEYWORDS,
+    "size_function_bbks(moments, delta, units='ln_r', g='fitted')"
+    "\n"
+    "--\n\n"
     "Size function of a Gaussian field above a density threshold, as a "
     "SizeFunction over the radii of the given DeltaMoments (order >= 2).\n"
     "units='ln_r' (default) puts -dC/dlnR in vsf, units='r' puts -dC/dR; "
     "options records which. Evaluated as a finite difference over the "
     "moments' radii, which must be strictly increasing."},
 
-  {"sigma_slope_pk", (PyCFunction)py_sif_sigma_slope_pk,
+  {"delta_sigma_slope_pk", (PyCFunction)py_sif_delta_sigma_slope_pk,
     METH_VARARGS | METH_KEYWORDS,
+    "delta_sigma_slope_pk(k, pk, radii, window='top_hat')"
+    "\n"
+    "--\n\n"
     "Logarithmic slope dln(sigma)/dln(R) from a tabulated power spectrum.\n"
     "Differentiates the window under the integral, so it is exact rather than "
     "a finite difference: the radii need not be ordered or finely spaced."},
 
-  {"delta_nonlinear", (PyCFunction)py_sif_delta_nonlinear,
+  {"spherical_map_nonlinear", (PyCFunction)py_sif_spherical_map_nonlinear,
     METH_VARARGS | METH_KEYWORDS,
+    "spherical_map_nonlinear(delta_linear, method='b94')"
+    "\n"
+    "--\n\n"
     "Non-linear density contrast a void of a given linear contrast evolves "
     "to.\n"
     "method='b94' (default) uses the Bernardeau (1994) fit, method='exact' "
     "solves the Einstein-de Sitter expansion by root-find. The expansion "
     "factor r_NL/r_L is (1 + delta_NL)**(-1/3); delta_L = -2.7 gives ~1.69."},
 
-  {"delta_linear", (PyCFunction)py_sif_delta_linear,
+  {"spherical_map_linear", (PyCFunction)py_sif_spherical_map_linear,
     METH_VARARGS | METH_KEYWORDS,
+    "spherical_map_linear(delta_nonlinear, method='b94')"
+    "\n"
+    "--\n\n"
     "Linear density contrast that evolves into a given non-linear one, the "
     "inverse of delta_nonlinear.\n"
     "Wanted when a barrier is quoted as an observed underdensity rather than "
     "as a linear threshold. Same method= choices."},
 
-  {"multiplicity_function_svdw",
-    (PyCFunction)py_sif_multiplicity_function_svdw,
+  {"svdw_multiplicity_function", (PyCFunction)py_sif_svdw_multiplicity_function,
     METH_VARARGS | METH_KEYWORDS,
+    "svdw_multiplicity_function(sigma, delta_v, delta_c)"
+    "\n"
+    "--\n\n"
     "Excursion-set void multiplicity function f_ln(sigma), Sheth & van de "
     "Weygaert (2004).\n"
     "Shared by the SvdW and Vdn size functions, which differ only in the "
@@ -68,6 +100,10 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_svdw", (PyCFunction)py_sif_size_function_svdw,
     METH_VARARGS | METH_KEYWORDS,
+    "size_function_svdw(k, pk, radii, delta_v, delta_c, units='ln_r', met"
+    "hod='b94')"
+    "\n"
+    "--\n\n"
     "Sheth & van de Weygaert void size function, as a SizeFunction over the "
     "given Eulerian radii.\n"
     "Number-conserving, so its void volume fraction exceeds one at large "
@@ -77,6 +113,9 @@ static PyMethodDef model_methods[] = {
 
   {"delta_covariance_pk", (PyCFunction)py_sif_delta_covariance_pk,
     METH_VARARGS | METH_KEYWORDS,
+    "delta_covariance_pk(k, pk, radii, window='top_hat')"
+    "\n"
+    "--\n\n"
     "Covariance of the smoothed field between every pair of smoothing radii, "
     "from a tabulated power spectrum.\n"
     "Returns (cov, sigma, high_k_fraction, deriv_variance). cov is the packed "
@@ -87,22 +126,32 @@ static PyMethodDef model_methods[] = {
     "depend on how finely radii was sampled. window='top_hat' (default) or "
     "'gaussian'. Requires a P(k) sampled on at least ~1000 log-spaced points."},
 
-  {"barrier_smt", (PyCFunction)py_sif_barrier_smt,
+  {"ep_barrier_smt", (PyCFunction)py_sif_ep_barrier_smt,
     METH_VARARGS | METH_KEYWORDS,
+    "ep_barrier_smt(sigma, alpha, beta, gamma)"
+    "\n"
+    "--\n\n"
     "Sheth-Mo-Tormen moving barrier, alpha * (1 + (beta/sigma)**gamma).\n"
     "Feed it the sigma returned by delta_covariance_pk, so the barrier and "
     "the walk share one variance."},
 
-  {"first_crossing_counts_ep", (PyCFunction)py_sif_first_crossing_counts_ep,
+  {"ep_first_crossing_counts", (PyCFunction)py_sif_ep_first_crossing_counts,
     METH_VARARGS | METH_KEYWORDS,
+    "ep_first_crossing_counts(radii, cov, barrier, n_paths, seed=0)"
+    "\n"
+    "--\n\n"
     "Raw first-crossing counts of a correlated random walk against a moving "
     "barrier, one per radius.\n"
     "radii ascending, cov the packed triangle from delta_covariance_pk, "
     "barrier one entry per radius. The result is a deterministic function of "
     "(seed, n_paths), independent of the thread count."},
 
-  {"multiplicity_function_ep", (PyCFunction)py_sif_multiplicity_function_ep,
+  {"ep_multiplicity_function", (PyCFunction)py_sif_ep_multiplicity_function,
     METH_VARARGS | METH_KEYWORDS,
+    "ep_multiplicity_function(radii, cov, barrier, n_paths, seed=0, retur"
+    "n_counts=False)"
+    "\n"
+    "--\n\n"
     "Void multiplicity function from the first crossing of a moving barrier "
     "by a correlated random walk.\n"
     "Returns len(radii) - 1 bin-centred values: a Monte Carlo can only place "
@@ -112,9 +161,13 @@ static PyMethodDef model_methods[] = {
     "len(radii) counts the multiplicity was built from. Prefer it to a second "
     "call to first_crossing_counts_ep, which would run the whole walk again."},
 
-  {"multiplicity_function_ep_emu",
-    (PyCFunction)py_sif_multiplicity_function_ep_emu,
+  {"ep_multiplicity_function_emu",
+    (PyCFunction)py_sif_ep_multiplicity_function_emu,
     METH_VARARGS | METH_KEYWORDS,
+    "ep_multiplicity_function_emu(radii, sigma, barrier, deriv_variance, "
+    "return_domain=False)"
+    "\n"
+    "--\n\n"
     "Emulated void multiplicity function: the same quantity as "
     "multiplicity_function_ep, without the random walks.\n"
     "A semi-analytic up-crossing rate corrected by a small trained network. "
@@ -132,6 +185,10 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,
     METH_VARARGS | METH_KEYWORDS,
+    "size_function_vdn(k, pk, radii, delta_v, delta_c, units='ln_r', meth"
+    "od='b94')"
+    "\n"
+    "--\n\n"
     "Volume-conserving (Vdn) void size function, as a SizeFunction over the "
     "given Eulerian radii.\n"
     "Identical to SvdW but divided by the Eulerian volume, which keeps the "
@@ -141,10 +198,16 @@ static PyMethodDef model_methods[] = {
 
 static struct PyModuleDef model_module = {PyModuleDef_HEAD_INIT,
   .m_name = "pysif.model",
-  .m_doc = "SIF sub-module for theoretical predictions.",
+  .m_doc = "Theoretical predictions.\n\n"
+           "Size functions from the BBKS peak statistics, the SvdW and Vdn\n"
+           "excursion-set models, and the excursion-set first-crossing\n"
+           "problem in both its Monte Carlo and emulated forms. Also the\n"
+           "spectral moments and covariance of a model power spectrum, and\n"
+           "the spherical-evolution map between linear and non-linear\n"
+           "density contrast.\n\n"
+           "These return the same containers pysif.measure fills, so a\n"
+           "prediction and a measurement can be compared directly.",
   .m_size = -1, .m_methods = model_methods};
 
 /* Submodule exporter called from the parent module initialization routing */
-PyObject* py_sif_init_model(void) {
-  return PyModule_Create(&model_module);
-}
+PyObject* py_sif_init_model(void) { return PyModule_Create(&model_module); }

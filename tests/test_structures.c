@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /* Smoke test for the four reworked data structures. */
 #include "sif/structures/bitmask.h"
 #include "sif/structures/catalog.h"
@@ -76,9 +82,10 @@ static void test_catalog(void) {
   /* Force several reallocations and check nothing is corrupted. */
   const uint64_t n = (uint64_t)SIF_TEST_SCALE(10000);
   for (uint64_t i = 0; i < n; i++) {
-    int st = sif_catalog_append(cat, (real_t)i, (real_t)(2 * i), (real_t)(3 * i),
-      (real_t)(i + 1));
-    CHECK(st == SIF_OK, "append %llu failed with %d", (unsigned long long)i, st);
+    int st = sif_catalog_append(cat, (sif_real)i, (sif_real)(2 * i),
+      (sif_real)(3 * i), (sif_real)(i + 1));
+    CHECK(
+      st == SIF_OK, "append %llu failed with %d", (unsigned long long)i, st);
   }
 
   CHECK(cat->n_voids == n, "n_voids = %llu, expected %llu",
@@ -86,8 +93,8 @@ static void test_catalog(void) {
 
   int corrupt = 0;
   for (uint64_t i = 0; i < n; i++) {
-    if (cat->cx[i] != (real_t)i || cat->cy[i] != (real_t)(2 * i) ||
-        cat->cz[i] != (real_t)(3 * i) || cat->radii[i] != (real_t)(i + 1))
+    if (cat->cx[i] != (sif_real)i || cat->cy[i] != (sif_real)(2 * i) ||
+        cat->cz[i] != (sif_real)(3 * i) || cat->radii[i] != (sif_real)(i + 1))
       corrupt++;
   }
   CHECK(corrupt == 0, "%d entries corrupted across regrowth", corrupt);
@@ -105,12 +112,13 @@ static void test_catalog(void) {
   CHECK(cat->capacity == n, "trim left capacity %llu, expected %llu",
     (unsigned long long)cat->capacity, (unsigned long long)n);
   CHECK(cat->n_voids == n, "trim changed n_voids");
-  CHECK(cat->cx[n - 1] == (real_t)(n - 1), "trim corrupted the last entry");
+  CHECK(cat->cx[n - 1] == (sif_real)(n - 1), "trim corrupted the last entry");
   CHECK(sif_catalog_trim(cat) == SIF_OK, "second trim should be a no-op");
 
   sif_catalog_free(cat);
 
-  /* An empty catalog is a legitimate result: it must still allocate and trim. */
+  /* An empty catalog is a legitimate result: it must still allocate and trim.
+   */
   sif_catalog_t* empty = sif_catalog_alloc(0);
   CHECK(empty != NULL, "alloc(0) returned NULL");
   if (empty) {
@@ -132,7 +140,7 @@ static void test_cll(void) {
   printf("cell_linked_list\n");
 
   const uint32_t n_cells = 8;
-  const real_t box = 80.0f;
+  const sif_real box = 80.0f;
 
   sif_cell_linked_list_t* pbc =
     sif_cell_linked_list_alloc(n_cells, box, 16, SIF_PBC_PERIODIC);
@@ -145,7 +153,8 @@ static void test_cll(void) {
   /* A point one box to the right of cell 1 must land in cell 1. */
   CHECK(sif_cell_linked_list_insert(pbc, 0, 15.0f, 15.0f, 15.0f) == SIF_OK,
     "in-box insert failed");
-  CHECK(sif_cell_linked_list_insert(pbc, 1, 15.0f + box, 15.0f, 15.0f) == SIF_OK,
+  CHECK(
+    sif_cell_linked_list_insert(pbc, 1, 15.0f + box, 15.0f, 15.0f) == SIF_OK,
     "wrapped insert failed");
 
   uint64_t cell_1 = 1ull * n_cells * n_cells + 1ull * n_cells + 1ull;
@@ -175,8 +184,8 @@ static void test_cll(void) {
   CHECK(open != NULL, "open alloc returned NULL");
   if (open) {
     CHECK(open->periodic == 0, "open flag not clear");
-    CHECK(sif_cell_linked_list_insert(open, 0, 15.0f + box, 5.0f, 5.0f) ==
-            SIF_OK,
+    CHECK(
+      sif_cell_linked_list_insert(open, 0, 15.0f + box, 5.0f, 5.0f) == SIF_OK,
       "open insert failed");
     uint64_t clamped = 7ull * n_cells * n_cells + 0ull * n_cells + 0ull;
     CHECK(open->head[clamped] == 0, "open boundary did not clamp to cell 7");
@@ -194,20 +203,20 @@ static void test_chain_mesh(void) {
   printf("chain_mesh\n");
 
   const uint64_t n_p = 4096;
-  const real_t box = 100.0f;
+  const sif_real box = 100.0f;
 
-  real_t* x = malloc(n_p * sizeof(real_t));
-  real_t* y = malloc(n_p * sizeof(real_t));
-  real_t* z = malloc(n_p * sizeof(real_t));
+  sif_real* x = malloc(n_p * sizeof(sif_real));
+  sif_real* y = malloc(n_p * sizeof(sif_real));
+  sif_real* z = malloc(n_p * sizeof(sif_real));
 
   /* 16^3 lattice spanning [0, box) */
   uint64_t idx = 0;
   for (int i = 0; i < 16; i++)
     for (int j = 0; j < 16; j++)
       for (int k = 0; k < 16; k++) {
-        x[idx] = (real_t)(i * 6.25);
-        y[idx] = (real_t)(j * 6.25);
-        z[idx] = (real_t)(k * 6.25);
+        x[idx] = (sif_real)(i * 6.25);
+        y[idx] = (sif_real)(j * 6.25);
+        z[idx] = (sif_real)(k * 6.25);
         idx++;
       }
 
@@ -243,25 +252,24 @@ static void test_chain_mesh(void) {
     uint64_t wrapped =
       sif_chain_mesh_find_nearest_pbc(mesh, box - 0.01f, 0.0f, 0.0f);
     CHECK(wrapped < n_p, "pbc query past the far face failed");
-    CHECK(x[wrapped] == 0.0f || x[wrapped] == (real_t)(15 * 6.25),
-      "pbc query did not pick a boundary particle (x=%g)",
-      (double)x[wrapped]);
+    CHECK(x[wrapped] == 0.0f || x[wrapped] == (sif_real)(15 * 6.25),
+      "pbc query did not pick a boundary particle (x=%g)", (double)x[wrapped]);
 
     sif_chain_mesh_free(mesh);
   }
 
-  /* A mesh built without original_idx must refuse to answer queries rather
+  /* A mesh built without original_indices must refuse to answer queries rather
    * than dereference NULL. */
   sif_chain_mesh_t* no_idx =
     sif_chain_mesh_alloc(8, box, field, false, false, false);
-  CHECK(no_idx != NULL, "alloc without original_idx failed");
+  CHECK(no_idx != NULL, "alloc without original_indices failed");
   if (no_idx) {
-    CHECK(sif_chain_mesh_find_nearest_pbc(no_idx, 1.0f, 1.0f, 1.0f) ==
-            UINT64_MAX,
-      "query without original_idx should return UINT64_MAX");
-    CHECK(sif_chain_mesh_find_nearest_open(no_idx, 1.0f, 1.0f, 1.0f) ==
-            UINT64_MAX,
-      "query without original_idx should return UINT64_MAX");
+    CHECK(
+      sif_chain_mesh_find_nearest_pbc(no_idx, 1.0f, 1.0f, 1.0f) == UINT64_MAX,
+      "query without original_indices should return UINT64_MAX");
+    CHECK(
+      sif_chain_mesh_find_nearest_open(no_idx, 1.0f, 1.0f, 1.0f) == UINT64_MAX,
+      "query without original_indices should return UINT64_MAX");
     sif_chain_mesh_free(no_idx);
   }
 

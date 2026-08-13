@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_catalog.h"
 #include <numpy/arrayobject.h>
 
@@ -42,7 +48,7 @@ static PyObject* sifCatalog_get_centers(PyObject* self_obj, void* closure) {
   if (!array)
     return NULL;
 
-  real_t* data = (real_t*)PyArray_DATA((PyArrayObject*)array);
+  sif_real* data = (sif_real*)PyArray_DATA((PyArrayObject*)array);
 
   /* Interleave the C Struct-of-Arrays into a Python Nx3 array */
   for (uint64_t i = 0; i < self->catalog->n_voids; i++) {
@@ -87,19 +93,25 @@ static PyGetSetDef sifCatalog_getset[] = {
 
 /* --- Methods --- */
 
-static PyMethodDef sifCatalog_methods[] = {
-  {NULL, NULL, 0, NULL}};
+static PyMethodDef sifCatalog_methods[] = {{NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */
 
 PyTypeObject sifCatalogType = {
-  PyVarObject_HEAD_INIT(NULL, 0)
-  .tp_name = "pysif.structures.Catalog", /* Updated Namespace and Capitalized */
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+    "pysif.Catalog", /* Updated Namespace and Capitalized */
   .tp_basicsize = sizeof(sifCatalogObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifCatalog_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "SIF void catalog object.",
+  .tp_doc = "Catalog(capacity=0)\n"
+            "--\n\n"
+            "A list of voids: centre and radius, one entry each.\n\n"
+            "What a finder produces and what pysif.measure consumes. Read one\n"
+            "back with pysif.io.read_catalog_ascii().\n\n"
+            "Args:\n"
+            "    capacity: Voids to make room for up front; it grows as\n"
+            "        needed.",
   .tp_methods = sifCatalog_methods,
   .tp_getset = sifCatalog_getset,
   .tp_init = sifCatalog_init,

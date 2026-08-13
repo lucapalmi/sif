@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/structures/cell_linked_list.h"
 
 #include "sif/utils/align.h"
@@ -7,17 +13,18 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Item ids are stored as int32_t (-1 marks "empty"), so this is the hard cap. */
-#define __CLL_MAX_CAPACITY ((uint64_t)INT32_MAX)
+/* Item ids are stored as int32_t (-1 marks "empty"), so this is the hard cap.
+ */
+#define CLL_MAX_CAPACITY ((uint64_t)INT32_MAX)
 
 /*
  * Maps one physical coordinate onto a cell index, honoring the boundary
  * convention the list was created with.
  */
-static inline uint32_t __cll_axis_index(
-  const sif_cell_linked_list_t* cll, real_t c) {
+static inline uint32_t cll_axis_index(
+  const sif_cell_linked_list_t* cll, sif_real c) {
 
-  int32_t i = (int32_t)REAL_FLOOR(c * cll->inv_cell_length);
+  int32_t i = (int32_t)SIF_REAL_FLOOR(c * cll->inv_cell_length);
   const int32_t n = (int32_t)cll->n_cells;
 
   if (cll->periodic) {
@@ -35,7 +42,7 @@ static inline uint32_t __cll_axis_index(
 }
 
 sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
-  real_t box_length, uint64_t initial_capacity, sif_option_t opt) {
+  sif_real box_length, uint64_t initial_capacity, sif_option opt) {
 
   if (n_cells == 0 || !(box_length > 0.0f)) {
     SIF_LOG_ERROR("cell_linked_list",
@@ -47,10 +54,10 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
   if (initial_capacity == 0)
     initial_capacity = 1;
 
-  if (initial_capacity > __CLL_MAX_CAPACITY) {
+  if (initial_capacity > CLL_MAX_CAPACITY) {
     SIF_LOG_ERROR("cell_linked_list",
       "requested capacity %" PRIu64 " exceeds the int32 item limit %" PRIu64,
-      initial_capacity, __CLL_MAX_CAPACITY);
+      initial_capacity, CLL_MAX_CAPACITY);
     return NULL;
   }
 
@@ -65,9 +72,9 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
   cll->n_cells = n_cells;
   cll->total_cells = (uint64_t)n_cells * n_cells * n_cells;
   cll->box_length = box_length;
-  cll->inv_cell_length = (real_t)n_cells / box_length;
+  cll->inv_cell_length = (sif_real)n_cells / box_length;
   cll->capacity = initial_capacity;
-  cll->periodic = ((opt & __SIF_PBC_MASK) == SIF_PBC_PERIODIC) ? 1u : 0u;
+  cll->periodic = ((opt & SIF__PBC_MASK) == SIF_PBC_PERIODIC) ? 1u : 0u;
 
   cll->head = sif_malloc_aligned(cll->total_cells * sizeof(int32_t));
   cll->next = sif_malloc_aligned(cll->capacity * sizeof(int32_t));
@@ -111,18 +118,18 @@ int sif_cell_linked_list_ensure_capacity(
   if (required_capacity <= cll->capacity)
     return SIF_OK;
 
-  if (required_capacity > __CLL_MAX_CAPACITY) {
+  if (required_capacity > CLL_MAX_CAPACITY) {
     SIF_LOG_ERROR("cell_linked_list",
       "required capacity %" PRIu64 " exceeds the int32 item limit %" PRIu64,
-      required_capacity, __CLL_MAX_CAPACITY);
+      required_capacity, CLL_MAX_CAPACITY);
     return SIF_ERR_RANGE;
   }
 
   uint64_t new_capacity = cll->capacity << 1;
   if (new_capacity < required_capacity)
     new_capacity = required_capacity;
-  if (new_capacity > __CLL_MAX_CAPACITY)
-    new_capacity = __CLL_MAX_CAPACITY;
+  if (new_capacity > CLL_MAX_CAPACITY)
+    new_capacity = CLL_MAX_CAPACITY;
 
   int32_t* new_next = sif_malloc_aligned(new_capacity * sizeof(int32_t));
   if (!new_next) {
@@ -145,7 +152,7 @@ int sif_cell_linked_list_ensure_capacity(
 }
 
 int sif_cell_linked_list_insert(sif_cell_linked_list_t* cll, uint64_t item_idx,
-  real_t cx, real_t cy, real_t cz) {
+  sif_real cx, sif_real cy, sif_real cz) {
 
   if (!cll)
     return SIF_ERR_INVALID;
@@ -157,9 +164,9 @@ int sif_cell_linked_list_insert(sif_cell_linked_list_t* cll, uint64_t item_idx,
     return SIF_ERR_RANGE;
   }
 
-  const uint32_t ix = __cll_axis_index(cll, cx);
-  const uint32_t iy = __cll_axis_index(cll, cy);
-  const uint32_t iz = __cll_axis_index(cll, cz);
+  const uint32_t ix = cll_axis_index(cll, cx);
+  const uint32_t iy = cll_axis_index(cll, cy);
+  const uint32_t iz = cll_axis_index(cll, cz);
 
   const uint64_t flat_idx = (uint64_t)ix * cll->n_cells * cll->n_cells +
                             (uint64_t)iy * cll->n_cells + (uint64_t)iz;

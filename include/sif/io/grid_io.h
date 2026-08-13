@@ -1,51 +1,89 @@
-#ifndef __SIF_GRID_IO_H__
-#define __SIF_GRID_IO_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file grid_io.h
+ * @brief Reading and writing grids: the .xgrid binary format.
+ *
+ * Same shape as .xfield -- a fixed 64-byte header followed by the cell values
+ * in host byte order -- and the same trade: fast and layout-compatible with
+ * memory, portable only between machines that agree on endianness and on the
+ * precision sif was built with.
+ *
+ * Since version 2 the header carries a CRC32 of the cell data, which the
+ * reader verifies. Version 1 files are still accepted, unvalidated.
+ *
+ * This is also the format the optional CIC cache uses; see
+ * sif_grid_assign_cic().
+ */
+
+#ifndef SIF_IO_GRID_IO_H
+#define SIF_IO_GRID_IO_H
 
 #include "sif/core/macros.h"
 #include "sif/structures/grid.h"
 
 #include <stdint.h>
 
-#define __SIF_XGRID_MAGIC "XGRD"
-#define __SIF_XGRID_VERSION 1
+/** @brief Magic number at the start of every .xgrid file. */
+#define SIF_XGRID_MAGIC "XGRD"
+/** @brief Version of the .xgrid layout this build reads and writes. */
+#define SIF_XGRID_VERSION 2
 
-/*
- * @brief 64-byte rigid header for the .xgrid binary format.
+/**
+ * @brief The 64-byte header of an .xgrid file.
  */
 typedef struct {
-  char magic[4];             /* "XGRD" */
-  uint32_t version;          /* Format version */
-  uint32_t n_cells;          /* Number of cells per side */
-  uint32_t is_double;        /* 1 if real_t is 64-bit, 0 if 32-bit */
-  uint64_t total_cells;      /* Total cells (n_cells^3) */
-  double box_length;         /* Simulation box size (fixed double for ABI safety) */
-  char padding[32];          /* Reserved space to maintain exactly 64 bytes */
+  char magic[4];        /**< #SIF_XGRID_MAGIC. */
+  uint32_t version;     /**< #SIF_XGRID_VERSION. */
+  uint32_t n_cells;     /**< Cells per side. */
+  uint32_t is_double;   /**< 1 if written with a 64-bit sif_real. */
+  uint64_t total_cells; /**< n_cells^3. */
+  double box_length;    /**< Simulation box size. */
+  /** CRC32 of the cell data that follows. Zero in a version 1 file, which
+   *  carried no checksum. */
+  uint32_t crc32;
+  /** What the cells hold, as a #sif_grid_content_t. Written since version 2;
+   *  a version 1 file has 0 here, which reads as SIF_GRID_EMPTY -- correct,
+   *  since such a file does not say. */
+  uint32_t content;
+  char padding[24]; /**< Reserved, to hold the header at 64 bytes. */
 } sif_xgrid_header_t;
 
-/*
- * @brief Allocates and reads an .xgrid binary into memory.
+/**
+ * @brief Read an .xgrid file into a newly allocated grid.
  *
- * @param filepath Path to the input .xgrid file
- * @return Allocated and populated sif_grid_t (NULL on failure)
+ * @param filepath Path to the input file.
+ * @return The grid, owned by the caller and released with sif_grid_free().
+ * NULL on failure, including a precision mismatch.
  */
-NODISCARD sif_grid_t* sif_grid_read(const char* filepath);
+SIF_NODISCARD sif_grid_t* sif_grid_read(const char* filepath);
 
-/*
- * @brief Reads an .xgrid binary directly into an existing, pre-allocated grid.
+/**
+ * @brief Read an .xgrid file into a grid that already exists.
  *
- * @param filepath Path to the input .xgrid file
- * @param grid Pre-allocated grid to read into
- * @return 0 on success, non-zero on failure
+ * @param filepath Path to the input file.
+ * @param grid Grid to fill. Its geometry must match the file's.
+ * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO on any
+ * file error -- including a geometry or precision mismatch, or a failed
+ * checksum, which are rejected rather than adapted to.
  */
 int sif_grid_read_into(const char* filepath, sif_grid_t* grid);
 
-/*
- * @brief Dumps an sif_grid_t to disk in the .xgrid format.
+/**
+ * @brief Write a grid to an .xgrid file.
  *
- * @param filepath Path for the output .xgrid file
- * @param grid The grid to write
- * @return 0 on success, non-zero on failure
+ * @param filepath Path to the output file.
+ * @param grid Grid to write.
+ * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO if the
+ * file could not be written.
+ *
+ * @note Writes whatever the cells currently hold, masses or density contrast,
+ * and records which in the header so a reader gets it back.
  */
 int sif_grid_write(const char* filepath, const sif_grid_t* grid);
 
-#endif /* __SIF_GRID_IO_H__ */
+#endif /* SIF_IO_GRID_IO_H */

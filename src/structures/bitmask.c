@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/structures/bitmask.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -25,8 +31,8 @@ sif_bitmask_t* sif_bitmask_alloc(uint64_t n_bits) {
   mask->words = sif_calloc_aligned(mask->n_words, sizeof(uint64_t));
 
   if (!mask->words) {
-    SIF_LOG_ERROR("bitmask", "failed to allocate %" PRIu64 " mask words",
-      mask->n_words);
+    SIF_LOG_ERROR(
+      "bitmask", "failed to allocate %" PRIu64 " mask words", mask->n_words);
     free(mask);
     return NULL;
   }

@@ -1,3 +1,8 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 cmake_minimum_required(VERSION 3.15)
 project(sif VERSION 0.0.0 LANGUAGES C)
 
@@ -85,9 +90,9 @@ set(SOURCES
     src/structures/octree.c
     src/structures/tessellation.c
     src/structures/bitmask.c
-    src/structures/deltadistribution.c
-    src/structures/deltamoments.c
-    src/structures/sizefunction.c
+    src/structures/delta_distribution.c
+    src/structures/delta_moments.c
+    src/structures/size_function.c
 
   # finder
     src/finder/spherical_finder.c
@@ -96,16 +101,16 @@ set(SOURCES
 
   # measure
     src/measure/profiles.c
-    src/measure/sizefunction.c
+    src/measure/size_function.c
     src/measure/delta_common.c
-    src/measure/deltadistribution.c
-    src/measure/deltamoments.c
+    src/measure/delta_distribution.c
+    src/measure/delta_moments.c
 
   # model
-    src/model/deltamoments.c
+    src/model/delta_moments.c
     src/model/bbks.c
-    src/model/sizefunction.c
-    src/model/excursionset.c
+    src/model/size_function.c
+    src/model/excursion_set.c
     src/model/ep_upcrossing.c
     src/model/ep_emu.c
 
@@ -122,7 +127,7 @@ set(SOURCES
   # utils
     src/utils/timer.c
     src/utils/logger.c
-    src/utils/stringy.c
+    src/utils/str.c
     src/utils/align.c
     src/utils/array.c
     src/utils/crc32.c

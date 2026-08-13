@@ -1,13 +1,20 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_size_function.h"
 
+#include "sif/measure/size_function.h"
 #include "structures/py_catalog.h"
 #include "structures/py_size_function.h"
-#include "sif/measure/sizefunction.h"
 #include <numpy/arrayobject.h>
 
 /* --- Functional API Implementation --- */
 
-PyObject* py_sif_size_function_catalog(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* py_sif_size_function_catalog(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* cat_obj;
   double box_length;
   uint32_t n_bins;
@@ -24,7 +31,7 @@ PyObject* py_sif_size_function_catalog(PyObject* self, PyObject* args, PyObject*
     return NULL;
   }
 
-  sif_option_t options = 0;
+  sif_option options = 0;
 
   if (strcmp(bin_str, "linear") == 0) {
     options |= SIF_VSF_BIN_LINEAR;
@@ -37,12 +44,11 @@ PyObject* py_sif_size_function_catalog(PyObject* self, PyObject* args, PyObject*
   sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
 
   sif_size_function_t* tmp = NULL;
-  Py_BEGIN_ALLOW_THREADS
-  tmp = sif_size_function_catalog(cat->catalog, (real_t)box_length, n_bins,
-    options, (real_t)r_min, (real_t)r_max);
+  Py_BEGIN_ALLOW_THREADS tmp = sif_size_function_catalog(cat->catalog,
+    (sif_real)box_length, n_bins, options, (sif_real)r_min, (sif_real)r_max);
   Py_END_ALLOW_THREADS
 
-  if (!tmp) {
+    if (!tmp) {
     PyErr_SetString(PyExc_RuntimeError, "Failed to compute size function");
     return NULL;
   }
@@ -143,8 +149,8 @@ PyObject* py_sif_size_function_combine(
       PyObject* pmin = PySequence_GetItem(tup, 0);
       PyObject* pmax = PySequence_GetItem(tup, 1);
 
-      domains_arr[i].min = (real_t)PyFloat_AsDouble(pmin);
-      domains_arr[i].max = (real_t)PyFloat_AsDouble(pmax);
+      domains_arr[i].min = (sif_real)PyFloat_AsDouble(pmin);
+      domains_arr[i].max = (sif_real)PyFloat_AsDouble(pmax);
 
       Py_DECREF(pmin);
       Py_DECREF(pmax);
@@ -159,7 +165,7 @@ PyObject* py_sif_size_function_combine(
   }
 
   /* 3. Parse Options */
-  sif_option_t options = 0;
+  sif_option options = 0;
 
   if (strcmp(method_str, "mean") == 0)
     options |= SIF_VSF_MERGE_MEAN;

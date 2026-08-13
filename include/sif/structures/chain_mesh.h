@@ -1,13 +1,34 @@
-#ifndef __SIF_CHAIN_MESH_H__
-#define __SIF_CHAIN_MESH_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file chain_mesh.h
+ * @brief Uniform spatial bin over a periodic box, for neighbour queries.
+ *
+ * Particles are copied into cell order at construction, so the members of a
+ * cell occupy one contiguous run of the payload arrays and a query that visits
+ * a cell reads straight through memory. That copy is the whole point: an index
+ * into the original field would cost a random access per particle, which at
+ * these sizes dominates the distance arithmetic.
+ *
+ * Cell membership is found by truncation, so the mesh is only useful when the
+ * cells are comparable to the search radius -- too few and every query scans
+ * the box, too many and the shell walk visits mostly empty cells.
+ */
+
+#ifndef SIF_STRUCTURES_CHAIN_MESH_H
+#define SIF_STRUCTURES_CHAIN_MESH_H
 
 #include "sif/core/macros.h"
 #include "sif/structures/field.h"
 #include <stdbool.h>
 #include <stdint.h>
 
-/*
- * @brief Represents a 3D cubic chain mesh
+/**
+ * @brief A 3D cubic chain mesh.
  *
  * @note The mesh is anchored at the origin: all particle coordinates, and all
  * query coordinates, must lie in [0, box_length) on every axis. This is
@@ -15,69 +36,92 @@
  * translate into box-local coordinates first.
  */
 typedef struct {
-  uint32_t n_cells;
-  uint64_t total_cells;
-  real_t box_length;
-  real_t cell_length;
+  uint32_t n_cells;     /**< Cells per side. */
+  uint64_t total_cells; /**< n_cells^3. */
+  sif_real box_length;  /**< Physical side length of the box. */
+  sif_real cell_length; /**< Physical side length of one cell. */
 
-  real_t* _position_block;
-  real_t* _velocity_block;
+  /** Backing store for x/y/z. Owned; not for callers. */
+  sif_real* _position_block;
+  /** Backing store for vx/vy/vz. Owned; not for callers. */
+  sif_real* _velocity_block;
 
-  /* Sorted contiguous payload arrays */
-  real_t* x;
-  real_t* y;
-  real_t* z;
+  sif_real* x; /**< Positions, reordered so each cell is contiguous. */
+  sif_real* y;
+  sif_real* z;
 
-  real_t* vx;
-  real_t* vy;
-  real_t* vz;
+  sif_real* vx; /**< Velocities in the same order, or NULL if not requested. */
+  sif_real* vy;
+  sif_real* vz;
 
-  real_t* masses;
-  uint64_t* original_idx;
+  /** Masses in the same order, or NULL if not requested. */
+  sif_real* masses;
+  /** Index of each particle in the source field, or NULL if not requested. */
+  uint64_t* original_indices;
 
   uint64_t n_particles;
+  /**
+   * Where each cell's run begins, with #total_cells + 1 entries: cell `c`
+   * occupies `[cell_offsets[c], cell_offsets[c + 1])`, so an empty cell is one
+   * whose two offsets are equal and no separate count is needed.
+   */
   uint64_t* cell_offsets;
 } sif_chain_mesh_t;
 
-/*
- * @brief Allocates and populates a new 3D cubic chain mesh
+/**
+ * @brief Allocate a chain mesh and bin a field into it.
  *
- * @param n_cells Number of cells in the grid
- * @param box_length The physical size of the box
- * @param field The particle field to bin. Every coordinate must be in
+ * Only the payloads that are asked for are copied, since each one costs a full
+ * pass over the field and as much memory again.
+ *
+ * @param n_cells Cells per side.
+ * @param box_length Physical side length of the box.
+ * @param field Particle field to bin. Every coordinate must be in
  * [0, box_length); the call fails if any particle lies outside.
- * @param allocate_masses Boolean flag to allocate mass tracking array
- * @param allocate_velocities Boolean flag to allocate velocity tracking arrays
- * @param allocate_original_idx Allocate the map back to field indices.
- * Required by the find_nearest queries.
- *
- * @return Pointer to the populated mesh, NULL on invalid input or failure
+ * @param allocate_masses Copy the per-particle masses.
+ * @param allocate_velocities Copy the velocities.
+ * @param allocate_original_indices Keep the map back to field indices.
+ * Required by the find_nearest queries, which return one of these.
+ * @return The mesh, owned by the caller and released with
+ * sif_chain_mesh_free(). NULL on invalid input or allocation failure.
  */
-NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
-  real_t box_length, const sif_field_t* field, bool allocate_masses,
-  bool allocate_velocities, bool allocate_original_idx);
+SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
+  sif_real box_length, const sif_field_t* field, bool allocate_masses,
+  bool allocate_velocities, bool allocate_original_indices);
 
-/*
- * @brief Frees a 3D cubic chain mesh (NULL is a no-op)
+/**
+ * @brief Release a chain mesh and everything it owns.
+ * @param mesh Mesh to free. NULL is accepted and ignored.
  */
 void sif_chain_mesh_free(sif_chain_mesh_t* mesh);
 
-/*
- * @brief Finds the index of the nearest particle using open boundaries.
+/**
+ * @brief Index of the particle nearest a point, with open boundaries.
  *
- * @return The index of the nearest particle in the original field, or
- * UINT64_MAX if the mesh is empty or was built without original indices.
+ * Walks cell shells outward from the query point and stops once the nearest
+ * candidate found is closer than the nearest possible point of the next shell,
+ * so the answer is exact rather than restricted to the starting cell.
+ *
+ * @param mesh The mesh, built with `allocate_original_indices`.
+ * @param px,py,pz Query point, in [0, box_length) on every axis.
+ * @return Index into the original field, or UINT64_MAX if the mesh is empty or
+ * was built without original indices.
  */
 uint64_t sif_chain_mesh_find_nearest_open(
-  const sif_chain_mesh_t* mesh, real_t px, real_t py, real_t pz);
+  const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);
 
-/*
- * @brief Finds the index of the nearest particle using periodic boundaries.
+/**
+ * @brief Index of the particle nearest a point, with periodic boundaries.
  *
- * @return The index of the nearest particle in the original field, or
- * UINT64_MAX if the mesh is empty or was built without original indices.
+ * As sif_chain_mesh_find_nearest_open(), except that separations are taken
+ * through the nearest periodic image and the shell walk wraps at the faces.
+ *
+ * @param mesh The mesh, built with `allocate_original_indices`.
+ * @param px,py,pz Query point, in [0, box_length) on every axis.
+ * @return Index into the original field, or UINT64_MAX if the mesh is empty or
+ * was built without original indices.
  */
 uint64_t sif_chain_mesh_find_nearest_pbc(
-  const sif_chain_mesh_t* mesh, real_t px, real_t py, real_t pz);
+  const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);
 
-#endif /* __SIF_CHAIN_MESH_H__ */
+#endif /* SIF_STRUCTURES_CHAIN_MESH_H */

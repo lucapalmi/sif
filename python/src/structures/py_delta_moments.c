@@ -1,6 +1,17 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_delta_moments.h"
 
 #include "py_delta_common.h"
+
+/* gamma and R_star are BBKS quantities derived from a moment set; they live
+ * in the model module, not with the container. */
+#include "sif/model/bbks.h"
+
 #include <numpy/arrayobject.h>
 
 static void sifDeltaMoments_dealloc(PyObject* self_obj) {
@@ -106,8 +117,8 @@ static PyObject* sifDeltaMoments_get_offsets(
  * combinations of three moments rather than moments. They surface here as
  * derived properties, each returning a fresh array.
  */
-static PyObject* __derived(PyObject* self_obj,
-  real_t* (*compute)(const sif_delta_moments_t*), const char* what) {
+static PyObject* derived_array(PyObject* self_obj,
+  sif_real* (*compute)(const sif_delta_moments_t*), const char* what) {
 
   sifDeltaMomentsObject* self = (sifDeltaMomentsObject*)self_obj;
   if (!self->moments)
@@ -120,7 +131,7 @@ static PyObject* __derived(PyObject* self_obj,
     return NULL;
   }
 
-  real_t* values = compute(self->moments);
+  sif_real* values = compute(self->moments);
   if (!values) {
     PyErr_Format(
       PyExc_RuntimeError, "failed to compute %s; see the sif log", what);
@@ -131,11 +142,11 @@ static PyObject* __derived(PyObject* self_obj,
 }
 
 static PyObject* sifDeltaMoments_get_gamma(PyObject* self_obj, void* closure) {
-  return __derived(self_obj, sif_gamma_moments, "gamma");
+  return derived_array(self_obj, sif_bbks_gamma, "gamma");
 }
 
 static PyObject* sifDeltaMoments_get_r_star(PyObject* self_obj, void* closure) {
-  return __derived(self_obj, sif_r_star_moments, "r_star");
+  return derived_array(self_obj, sif_bbks_r_star, "r_star");
 }
 
 /*
@@ -159,7 +170,7 @@ static PyObject* sifDeltaMoments_moment(PyObject* self_obj, PyObject* args) {
     return NULL;
   }
 
-  const real_t* values =
+  const sif_real* values =
     sif_delta_moments_sigma(self->moments, (uint8_t)order);
   if (!values) {
     PyErr_Format(PyExc_RuntimeError, "order %d was not computed", order);
@@ -207,7 +218,18 @@ PyTypeObject sifDeltaMomentsType = {
   .tp_itemsize = 0,
   .tp_dealloc = sifDeltaMoments_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "Spectral moments sigma_0..sigma_order of the smoothed field.",
+  .tp_doc =
+    "DeltaMoments()\n"
+    "--\n\n"
+    "Spectral moments sigma_0..sigma_order at several smoothing\n"
+    "radii.\n\n"
+    "Returned by pysif.measure.delta_moments_grid() (measured from a\n"
+    "field) or pysif.model.delta_moments_pk() (integrated from a model\n"
+    "spectrum). The orders are held together because they are only\n"
+    "meaningful together: sigma_0 and sigma_2 describe the same field\n"
+    "only if they came from the same radii and the same window.\n\n"
+    "Ask the producer for order 0 if only sigma_0 is wanted.\n\n"
+    "Not constructed directly.",
   .tp_methods = sifDeltaMoments_methods,
   .tp_getset = sifDeltaMoments_getset,
   .tp_init = sifDeltaMoments_init,

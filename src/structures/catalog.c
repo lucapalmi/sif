@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/structures/catalog.h"
 
 #include <stdlib.h>
@@ -6,13 +12,13 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 
-/* Number of real_t views packed into the arena: cx, cy, cz, radii */
-#define __CATALOG_N_VIEWS 4
+/* Number of sif_real views packed into the arena: cx, cy, cz, radii */
+#define CATALOG_N_VIEWS 4
 
 /* Each view starts on a cache-line boundary, so the per-view stride is the
- * capacity rounded up to a whole number of real_t per cache line. */
-static inline uint64_t __catalog_stride(uint64_t capacity) {
-  const uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
+ * capacity rounded up to a whole number of sif_real per cache line. */
+static inline uint64_t catalog_stride(uint64_t capacity) {
+  const uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
   return (capacity + align_elements - 1) & ~(align_elements - 1);
 }
 
@@ -20,13 +26,13 @@ static inline uint64_t __catalog_stride(uint64_t capacity) {
  * Allocates one arena for `capacity` voids and hands out the four views.
  * Returns NULL on failure without touching the outputs.
  */
-static real_t* __catalog_block_alloc(uint64_t capacity, real_t** out_cx,
-  real_t** out_cy, real_t** out_cz, real_t** out_radii) {
+static sif_real* catalog_block_alloc(uint64_t capacity, sif_real** out_cx,
+  sif_real** out_cy, sif_real** out_cz, sif_real** out_radii) {
 
-  const uint64_t stride = __catalog_stride(capacity);
+  const uint64_t stride = catalog_stride(capacity);
 
-  real_t* block =
-    sif_malloc_aligned(__CATALOG_N_VIEWS * stride * sizeof(real_t));
+  sif_real* block =
+    sif_malloc_aligned(CATALOG_N_VIEWS * stride * sizeof(sif_real));
   if (!block)
     return NULL;
 
@@ -42,11 +48,11 @@ static real_t* __catalog_block_alloc(uint64_t capacity, real_t** out_cx,
  * Moves the stored voids into a freshly allocated arena of `new_capacity` and
  * swaps it in. On failure the catalog is left exactly as it was.
  */
-static int __catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
-  real_t *new_cx, *new_cy, *new_cz, *new_radii;
+static int catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
+  sif_real *new_cx, *new_cy, *new_cz, *new_radii;
 
-  real_t* new_block = __catalog_block_alloc(
-    new_capacity, &new_cx, &new_cy, &new_cz, &new_radii);
+  sif_real* new_block =
+    catalog_block_alloc(new_capacity, &new_cx, &new_cy, &new_cz, &new_radii);
 
   if (!new_block) {
     SIF_LOG_ERROR("void_catalog",
@@ -59,10 +65,10 @@ static int __catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
     (catalog->n_voids < new_capacity) ? catalog->n_voids : new_capacity;
 
   if (n > 0) {
-    memcpy(new_cx, catalog->cx, n * sizeof(real_t));
-    memcpy(new_cy, catalog->cy, n * sizeof(real_t));
-    memcpy(new_cz, catalog->cz, n * sizeof(real_t));
-    memcpy(new_radii, catalog->radii, n * sizeof(real_t));
+    memcpy(new_cx, catalog->cx, n * sizeof(sif_real));
+    memcpy(new_cy, catalog->cy, n * sizeof(sif_real));
+    memcpy(new_cz, catalog->cz, n * sizeof(sif_real));
+    memcpy(new_radii, catalog->radii, n * sizeof(sif_real));
   }
 
   sif_free_aligned(catalog->_block);
@@ -92,7 +98,7 @@ sif_catalog_t* sif_catalog_alloc(uint64_t initial_capacity) {
   cat->n_voids = 0;
   cat->capacity = initial_capacity;
 
-  cat->_block = __catalog_block_alloc(
+  cat->_block = catalog_block_alloc(
     initial_capacity, &cat->cx, &cat->cy, &cat->cz, &cat->radii);
 
   if (!cat->_block) {
@@ -116,13 +122,13 @@ void sif_catalog_free(sif_catalog_t* catalog) {
 }
 
 int sif_catalog_append(
-  sif_catalog_t* catalog, real_t x, real_t y, real_t z, real_t r) {
+  sif_catalog_t* catalog, sif_real x, sif_real y, sif_real z, sif_real r) {
 
   if (!catalog)
     return SIF_ERR_INVALID;
 
   if (catalog->n_voids >= catalog->capacity) {
-    int status = __catalog_resize(catalog, catalog->capacity << 1);
+    int status = catalog_resize(catalog, catalog->capacity << 1);
     if (status != SIF_OK)
       return status;
 
@@ -149,11 +155,12 @@ int sif_catalog_trim(sif_catalog_t* catalog) {
   const uint64_t target = (catalog->n_voids > 0) ? catalog->n_voids : 1;
 
   if (target == catalog->capacity) {
-    SIF_LOG_TRACE("void_catalog", "catalog already exact, no trimming required");
+    SIF_LOG_TRACE(
+      "void_catalog", "catalog already exact, no trimming required");
     return SIF_OK;
   }
 
-  int status = __catalog_resize(catalog, target);
+  int status = catalog_resize(catalog, target);
   if (status != SIF_OK) {
     /* Not fatal: the catalog is still correct, just larger than necessary. */
     SIF_LOG_WARNING(

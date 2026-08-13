@@ -1,5 +1,11 @@
-#ifndef __SIF_TEST_UTIL_H__
-#define __SIF_TEST_UTIL_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_TESTS_TEST_UTIL_H
+#define SIF_TESTS_TEST_UTIL_H
 
 /*
  * Sanitizer builds run these tests 50-100x slower, and several of them carry
@@ -30,4 +36,4 @@
 #  define SIF_TEST_SCALE(n) (n)
 #endif
 
-#endif /* __SIF_TEST_UTIL_H__ */
+#endif /* SIF_TESTS_TEST_UTIL_H */

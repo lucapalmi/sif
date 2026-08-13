@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * Excursion-set first crossing: the covariance across smoothing scales, the
  * correlated random walk it induces, and the multiplicity function built from
@@ -15,9 +21,9 @@
  */
 #include "model/ep_internal.h"
 #include "sif/core/system.h"
-#include "sif/model/deltamoments.h"
-#include "sif/model/excursionset.h"
-#include "sif/structures/deltamoments.h"
+#include "sif/model/delta_moments.h"
+#include "sif/model/excursion_set.h"
+#include "sif/structures/delta_moments.h"
 #include "sif/utils/align.h"
 #include "sif/utils/random.h"
 #include "test_util.h"
@@ -42,7 +48,7 @@ static int failures = 0;
   } while (0)
 
 /* Standard normal CDF, for the expected bucket occupancies. */
-static double __phi(double x) { return 0.5 * erfc(-x / sqrt(2.0)); }
+static double phi(double x) { return 0.5 * erfc(-x / sqrt(2.0)); }
 
 /*
  * The Gaussian generator is the one piece of genuinely new numerical code with
@@ -55,9 +61,9 @@ static double __phi(double x) { return 0.5 * erfc(-x / sqrt(2.0)); }
  * multiples of the sampling error, but a failure is a real regression and not
  * a bad draw.
  */
-#define __N_BUCKETS 40
-#define __BUCKET_LO (-4.0)
-#define __BUCKET_HI 4.0
+#define N_BUCKETS 40
+#define BUCKET_LO (-4.0)
+#define BUCKET_HI 4.0
 
 static void test_gaussian_generator(void) {
   printf("Gaussian generator\n");
@@ -70,11 +76,11 @@ static void test_gaussian_generator(void) {
 
   double s1 = 0.0, s2 = 0.0, s3 = 0.0, s4 = 0.0;
   double cross = 0.0; /* sum of z0 * z1, to catch a correlated pair */
-  uint64_t hist[__N_BUCKETS] = {0};
+  uint64_t hist[N_BUCKETS] = {0};
   uint64_t outside = 0;
   uint64_t nonfinite = 0;
 
-  const double width = (__BUCKET_HI - __BUCKET_LO) / __N_BUCKETS;
+  const double width = (BUCKET_HI - BUCKET_LO) / N_BUCKETS;
 
   for (uint64_t p = 0; p < n_pairs; p++) {
     double z[2];
@@ -96,16 +102,17 @@ static void test_gaussian_generator(void) {
       s3 += x2 * x;
       s4 += x2 * x2;
 
-      if (x < __BUCKET_LO || x >= __BUCKET_HI) {
+      if (x < BUCKET_LO || x >= BUCKET_HI) {
         outside++;
       } else {
-        hist[(int)((x - __BUCKET_LO) / width)]++;
+        hist[(int)((x - BUCKET_LO) / width)]++;
       }
     }
   }
 
-  CHECK(nonfinite == 0, "%llu of %llu deviates were not finite; log(0) is not "
-                        "being guarded against",
+  CHECK(nonfinite == 0,
+    "%llu of %llu deviates were not finite; log(0) is not "
+    "being guarded against",
     (unsigned long long)nonfinite, (unsigned long long)n);
 
   /* Central moments from the raw sums. The mean is O(1/sqrt(n)) from zero, so
@@ -147,14 +154,14 @@ static void test_gaussian_generator(void) {
   /* Chi-square over the body of the distribution, plus one category for both
    * tails together. Catches a shape error the first four moments can miss. */
   double chi2 = 0.0;
-  for (int b = 0; b < __N_BUCKETS; b++) {
-    const double lo = __BUCKET_LO + b * width;
-    const double expect = dn * (__phi(lo + width) - __phi(lo));
+  for (int b = 0; b < N_BUCKETS; b++) {
+    const double lo = BUCKET_LO + b * width;
+    const double expect = dn * (phi(lo + width) - phi(lo));
     const double d = (double)hist[b] - expect;
     chi2 += d * d / expect;
   }
   {
-    const double expect = dn * (__phi(__BUCKET_LO) + (1.0 - __phi(__BUCKET_HI)));
+    const double expect = dn * (phi(BUCKET_LO) + (1.0 - phi(BUCKET_HI)));
     const double d = (double)outside - expect;
     chi2 += d * d / expect;
   }
@@ -162,7 +169,7 @@ static void test_gaussian_generator(void) {
   /* 40 degrees of freedom: mean 40, sd sqrt(80) ~ 8.9. 100 is roughly six
    * sigma out, far enough that only a real defect reaches it. */
   CHECK(chi2 < 100.0, "chi-square over %d buckets is %.1f, expected ~%d",
-    __N_BUCKETS + 1, chi2, __N_BUCKETS);
+    N_BUCKETS + 1, chi2, N_BUCKETS);
 
   printf("  n = %llu, mean %.2e, var %.6f, skew %.2e, kurt %.5f, chi2 %.1f\n",
     (unsigned long long)n, mean, var, skew, kurt, chi2);
@@ -176,8 +183,8 @@ static void test_gaussian_generator(void) {
  * the neighbour correlation exactly the way sampling the radii more finely
  * would. Caller frees with sif_free_aligned.
  */
-static double* __model_covariance(
-  const real_t* radii, uint32_t n, double slope, double corr_length) {
+static double* model_covariance(
+  const sif_real* radii, uint32_t n, double slope, double corr_length) {
 
   double* cov = sif_malloc_aligned(SIF_COV_SIZE(n) * sizeof(double));
   if (!cov)
@@ -203,15 +210,15 @@ static void test_cholesky(void) {
   printf("Cholesky factor\n");
 
   const uint32_t n = 64;
-  real_t* radii = malloc(n * sizeof(real_t));
+  sif_real* radii = malloc(n * sizeof(sif_real));
   for (uint32_t i = 0; i < n; i++)
-    radii[i] = (real_t)(2.0 * pow(30.0 / 2.0, (double)i / (n - 1.0)));
+    radii[i] = (sif_real)(2.0 * pow(30.0 / 2.0, (double)i / (n - 1.0)));
 
-  double* cov = __model_covariance(radii, n, -0.5, 1.5);
+  double* cov = model_covariance(radii, n, -0.5, 1.5);
 
   sif_ep_factor_t f;
-  CHECK(sif_ep_factor_init(&f, n) == SIF_OK, "factor allocation failed");
-  CHECK(sif_ep_cholesky(&f, cov, radii, n) == SIF_OK,
+  CHECK(sif__ep_factor_init(&f, n) == SIF_OK, "factor allocation failed");
+  CHECK(sif__ep_cholesky(&f, cov, radii, n) == SIF_OK,
     "factorization of a positive definite covariance failed");
 
   /* Offsets describe the buffer they index. */
@@ -259,9 +266,9 @@ static void test_cholesky(void) {
         s += Lj[q] * Lm[q];
 
       const uint32_t a = n - 1 - j, b = n - 1 - m;
-      const double expect = sif_ep_cov_get(cov, a, b);
-      const double scale = sqrt(sif_ep_cov_get(cov, a, a) *
-                                sif_ep_cov_get(cov, b, b));
+      const double expect = sif__ep_cov_get(cov, a, b);
+      const double scale =
+        sqrt(sif__ep_cov_get(cov, a, a) * sif__ep_cov_get(cov, b, b));
       const double rel = fabs(s - expect) / scale;
       if (rel > worst)
         worst = rel;
@@ -282,10 +289,10 @@ static void test_cholesky(void) {
       ones[i] = 1.0;
 
     sif_ep_factor_t g;
-    sif_ep_factor_init(&g, m);
-    CHECK(sif_ep_cholesky(&g, ones, radii, m) == SIF_OK,
+    sif__ep_factor_init(&g, m);
+    CHECK(sif__ep_cholesky(&g, ones, radii, m) == SIF_OK,
       "the jitter failed to rescue a rank-one covariance");
-    sif_ep_factor_free(&g);
+    sif__ep_factor_free(&g);
     sif_free_aligned(ones);
   }
 
@@ -295,32 +302,33 @@ static void test_cholesky(void) {
    * over.
    */
   {
-    double bad[3] = {1.0, 2.0, 1.0}; /* [[1, 2], [2, 1]], eigenvalues 3 and -1 */
-    const real_t two_radii[2] = {1.0f, 2.0f};
+    double bad[3] = {
+      1.0, 2.0, 1.0}; /* [[1, 2], [2, 1]], eigenvalues 3 and -1 */
+    const sif_real two_radii[2] = {1.0f, 2.0f};
 
     sif_ep_factor_t g;
-    sif_ep_factor_init(&g, 2);
-    CHECK(sif_ep_cholesky(&g, bad, two_radii, 2) == SIF_ERR_RANGE,
+    sif__ep_factor_init(&g, 2);
+    CHECK(sif__ep_cholesky(&g, bad, two_radii, 2) == SIF_ERR_RANGE,
       "an indefinite covariance was accepted by the factorization");
-    sif_ep_factor_free(&g);
+    sif__ep_factor_free(&g);
   }
 
-  sif_ep_factor_free(&f);
+  sif__ep_factor_free(&f);
   sif_free_aligned(cov);
   free(radii);
 }
 
 /* Log-spaced radii; the values are immaterial to a hand-built covariance, but
  * the ordering they declare is not. */
-static real_t* __log_radii(uint32_t n, double lo, double hi) {
-  real_t* r = malloc(n * sizeof(real_t));
+static sif_real* log_radii(uint32_t n, double lo, double hi) {
+  sif_real* r = malloc(n * sizeof(sif_real));
   for (uint32_t i = 0; i < n; i++)
-    r[i] = (real_t)(lo * pow(hi / lo, (double)i / (n - 1.0)));
+    r[i] = (sif_real)(lo * pow(hi / lo, (double)i / (n - 1.0)));
   return r;
 }
 
 /* Probability that a standard normal is at or above b. */
-static double __tail(double b) { return 0.5 * erfc(b / sqrt(2.0)); }
+static double tail(double b) { return 0.5 * erfc(b / sqrt(2.0)); }
 
 /*
  * Two correlated steps, where the answer is an exact rational.
@@ -340,12 +348,12 @@ static void test_two_step_exact(void) {
   printf("two correlated steps against the orthant probability\n");
 
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(2000000);
-  const real_t radii[2] = {5.0f, 10.0f};
+  const sif_real radii[2] = {5.0f, 10.0f};
   const double cov[3] = {1.0, 0.5, 1.0};
-  const real_t barrier[2] = {0.0f, 0.0f};
+  const sif_real barrier[2] = {0.0f, 0.0f};
 
-  uint64_t* c =
-    sif_first_crossing_counts_ep(radii, 2, cov, barrier, n_paths, 12345u, SIF_DEFAULT);
+  uint64_t* c = sif_ep_first_crossing_counts(
+    radii, 2, cov, barrier, n_paths, 12345u, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on a valid two-step problem");
   if (!c)
     return;
@@ -389,18 +397,18 @@ static void test_geometric(void) {
   const uint32_t n = 20;
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(2000000);
   const double b = 0.5;
-  const double p = __tail(b);
+  const double p = tail(b);
 
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  real_t* barrier = malloc(n * sizeof(real_t));
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  sif_real* barrier = malloc(n * sizeof(sif_real));
   double* cov = sif_calloc_aligned(SIF_COV_SIZE(n), sizeof(double));
 
   for (uint32_t i = 0; i < n; i++) {
-    barrier[i] = (real_t)b;
+    barrier[i] = (sif_real)b;
     cov[SIF_COV_INDEX(i, i)] = 1.0;
   }
 
-  uint64_t* c = sif_first_crossing_counts_ep(
+  uint64_t* c = sif_ep_first_crossing_counts(
     radii, n, cov, barrier, n_paths, 777u, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on an identity covariance");
 
@@ -440,21 +448,21 @@ static void test_degenerate(void) {
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(1000000);
   const double b = 0.3;
 
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  real_t* barrier = malloc(n * sizeof(real_t));
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  sif_real* barrier = malloc(n * sizeof(sif_real));
   double* cov = sif_malloc_aligned(SIF_COV_SIZE(n) * sizeof(double));
 
   for (uint32_t i = 0; i < n; i++)
-    barrier[i] = (real_t)b;
+    barrier[i] = (sif_real)b;
   for (size_t i = 0; i < SIF_COV_SIZE(n); i++)
     cov[i] = 1.0;
 
-  uint64_t* c = sif_first_crossing_counts_ep(
+  uint64_t* c = sif_ep_first_crossing_counts(
     radii, n, cov, barrier, n_paths, 99u, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on a rank-one covariance");
 
   if (c) {
-    const double expect = __tail(b);
+    const double expect = tail(b);
     const double got = (double)c[n - 1] / (double)n_paths;
     const double se = sqrt(expect * (1.0 - expect) / (double)n_paths);
     CHECK(fabs(got - expect) < 5.0 * se,
@@ -483,13 +491,13 @@ static void test_degenerate(void) {
  * gamma], rising towards small sigma. Built here rather than in the library
  * because the barrier is the caller's to choose.
  */
-static real_t* __model_barrier(const double* cov, uint32_t n, double alpha,
-  double beta, double gamma) {
+static sif_real* model_barrier(
+  const double* cov, uint32_t n, double alpha, double beta, double gamma) {
 
-  real_t* b = malloc(n * sizeof(real_t));
+  sif_real* b = malloc(n * sizeof(sif_real));
   for (uint32_t i = 0; i < n; i++) {
-    const double sigma = sqrt(sif_ep_cov_get(cov, i, i));
-    b[i] = (real_t)(alpha * (1.0 + pow(beta / sigma, gamma)));
+    const double sigma = sqrt(sif__ep_cov_get(cov, i, i));
+    b[i] = (sif_real)(alpha * (1.0 + pow(beta / sigma, gamma)));
   }
   return b;
 }
@@ -507,9 +515,9 @@ static void test_thread_independence(void) {
   const uint32_t n = 32;
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(400000);
 
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  double* cov = __model_covariance(radii, n, -0.5, 1.5);
-  real_t* barrier = __model_barrier(cov, n, 0.2, 0.1, 0.87);
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  double* cov = model_covariance(radii, n, -0.5, 1.5);
+  sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
   const int threads[3] = {1, 4, 3};
   uint64_t* ref = NULL;
@@ -517,7 +525,7 @@ static void test_thread_independence(void) {
 
   for (int t = 0; t < 3; t++) {
     omp_set_num_threads(threads[t]);
-    uint64_t* c = sif_first_crossing_counts_ep(
+    uint64_t* c = sif_ep_first_crossing_counts(
       radii, n, cov, barrier, n_paths, 2024u, SIF_DEFAULT);
     CHECK(c != NULL, "the walk returned NULL at %d threads", threads[t]);
     if (!c)
@@ -567,14 +575,14 @@ static void test_convergence(void) {
   const uint64_t n1 = (uint64_t)SIF_TEST_SCALE(250000);
   const uint64_t n2 = 4 * n1;
 
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  double* cov = __model_covariance(radii, n, -0.5, 1.5);
-  real_t* barrier = __model_barrier(cov, n, 0.2, 0.1, 0.87);
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  double* cov = model_covariance(radii, n, -0.5, 1.5);
+  sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
   uint64_t* a =
-    sif_first_crossing_counts_ep(radii, n, cov, barrier, n1, 5u, SIF_DEFAULT);
+    sif_ep_first_crossing_counts(radii, n, cov, barrier, n1, 5u, SIF_DEFAULT);
   uint64_t* b =
-    sif_first_crossing_counts_ep(radii, n, cov, barrier, n2, 5u, SIF_DEFAULT);
+    sif_ep_first_crossing_counts(radii, n, cov, barrier, n2, 5u, SIF_DEFAULT);
 
   CHECK(a && b, "the walk returned NULL during the convergence check");
 
@@ -615,11 +623,11 @@ static void test_marginal_bound(void) {
   const uint32_t n = 40;
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(500000);
 
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  double* cov = __model_covariance(radii, n, -0.5, 1.5);
-  real_t* barrier = __model_barrier(cov, n, 0.2, 0.1, 0.87);
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  double* cov = model_covariance(radii, n, -0.5, 1.5);
+  sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
-  uint64_t* c = sif_first_crossing_counts_ep(
+  uint64_t* c = sif_ep_first_crossing_counts(
     radii, n, cov, barrier, n_paths, 31337u, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on the realistic setup");
 
@@ -633,8 +641,8 @@ static void test_marginal_bound(void) {
     for (uint32_t a = n; a-- > 0;) {
       cum += c[a];
 
-      const double sigma = sqrt(sif_ep_cov_get(cov, a, a));
-      const double p = __tail((double)barrier[a] / sigma);
+      const double sigma = sqrt(sif__ep_cov_get(cov, a, a));
+      const double p = tail((double)barrier[a] / sigma);
       const double expect = (double)n_paths * p;
       const double sd = sqrt(expect * (1.0 - p));
 
@@ -672,15 +680,15 @@ static void test_binning(void) {
   const uint32_t n = 32;
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(400000);
 
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  double* cov = __model_covariance(radii, n, -0.5, 1.5);
-  real_t* barrier = __model_barrier(cov, n, 0.2, 0.1, 0.87);
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  double* cov = model_covariance(radii, n, -0.5, 1.5);
+  sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
-  uint64_t* c = sif_first_crossing_counts_ep(
+  uint64_t* c = sif_ep_first_crossing_counts(
     radii, n, cov, barrier, n_paths, 4242u, SIF_DEFAULT);
 
   uint64_t* c_out = calloc(n, sizeof(uint64_t));
-  real_t* f = sif_multiplicity_function_ep(
+  sif_real* f = sif_ep_multiplicity_function(
     radii, n, cov, barrier, n_paths, 4242u, c_out, SIF_DEFAULT);
 
   CHECK(c && c_out && f, "the counts or the multiplicity returned NULL");
@@ -749,37 +757,39 @@ static void test_guards(void) {
   printf("input validation\n");
 
   const uint32_t n = 8;
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  double* cov = __model_covariance(radii, n, -0.5, 1.5);
-  real_t* barrier = __model_barrier(cov, n, 0.2, 0.1, 0.87);
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  double* cov = model_covariance(radii, n, -0.5, 1.5);
+  sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
   uint64_t* r;
 
-  r = sif_first_crossing_counts_ep(NULL, n, cov, barrier, 100, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(NULL, n, cov, barrier, 100, 1u, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
 
-  r = sif_first_crossing_counts_ep(radii, n, NULL, barrier, 100, 1u, SIF_DEFAULT);
+  r =
+    sif_ep_first_crossing_counts(radii, n, NULL, barrier, 100, 1u, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL covariance was accepted");
   sif_free_aligned(r);
 
-  r = sif_first_crossing_counts_ep(radii, n, cov, NULL, 100, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(radii, n, cov, NULL, 100, 1u, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL barrier was accepted");
   sif_free_aligned(r);
 
-  r = sif_first_crossing_counts_ep(radii, 1, cov, barrier, 100, 1u, SIF_DEFAULT);
+  r =
+    sif_ep_first_crossing_counts(radii, 1, cov, barrier, 100, 1u, SIF_DEFAULT);
   CHECK(r == NULL, "a single radius was accepted");
   sif_free_aligned(r);
 
-  r = sif_first_crossing_counts_ep(radii, n, cov, barrier, 0, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(radii, n, cov, barrier, 0, 1u, SIF_DEFAULT);
   CHECK(r == NULL, "zero paths were accepted");
   sif_free_aligned(r);
 
   {
-    real_t* descending = malloc(n * sizeof(real_t));
+    sif_real* descending = malloc(n * sizeof(sif_real));
     for (uint32_t i = 0; i < n; i++)
       descending[i] = radii[n - 1 - i];
-    r = sif_first_crossing_counts_ep(
+    r = sif_ep_first_crossing_counts(
       descending, n, cov, barrier, 100, 1u, SIF_DEFAULT);
     CHECK(r == NULL,
       "descending radii were accepted; the reference silently produced a "
@@ -789,11 +799,11 @@ static void test_guards(void) {
   }
 
   {
-    real_t* zeroed = malloc(n * sizeof(real_t));
+    sif_real* zeroed = malloc(n * sizeof(sif_real));
     for (uint32_t i = 0; i < n; i++)
       zeroed[i] = radii[i];
     zeroed[0] = 0.0f;
-    r = sif_first_crossing_counts_ep(
+    r = sif_ep_first_crossing_counts(
       zeroed, n, cov, barrier, 100, 1u, SIF_DEFAULT);
     CHECK(r == NULL, "a zero radius was accepted");
     sif_free_aligned(r);
@@ -801,9 +811,9 @@ static void test_guards(void) {
   }
 
   {
-    double* flat = __model_covariance(radii, n, -0.5, 1.5);
+    double* flat = model_covariance(radii, n, -0.5, 1.5);
     flat[SIF_COV_INDEX(0, 0)] = 0.0;
-    r = sif_first_crossing_counts_ep(
+    r = sif_ep_first_crossing_counts(
       radii, n, flat, barrier, 100, 1u, SIF_DEFAULT);
     CHECK(r == NULL, "a zero covariance diagonal was accepted");
     sif_free_aligned(r);
@@ -813,9 +823,9 @@ static void test_guards(void) {
   {
     /* Indefinite: a correlation above one. Rejected by the factorization
      * rather than by validation, so this exercises that path end to end. */
-    double* bad = __model_covariance(radii, n, -0.5, 1.5);
+    double* bad = model_covariance(radii, n, -0.5, 1.5);
     bad[SIF_COV_INDEX(1, 0)] *= 50.0;
-    r = sif_first_crossing_counts_ep(
+    r = sif_ep_first_crossing_counts(
       radii, n, bad, barrier, 100, 1u, SIF_DEFAULT);
     CHECK(r == NULL, "an indefinite covariance was accepted");
     sif_free_aligned(r);
@@ -823,7 +833,7 @@ static void test_guards(void) {
   }
 
   {
-    real_t* f = sif_multiplicity_function_ep(
+    sif_real* f = sif_ep_multiplicity_function(
       radii, 1, cov, barrier, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(f == NULL, "the multiplicity accepted a single radius");
     sif_free_aligned(f);
@@ -840,12 +850,12 @@ static void test_guards(void) {
 
 #define N_K 4000
 
-static void __power_law(real_t* k, real_t* pk, double slope) {
+static void power_law(sif_real* k, sif_real* pk, double slope) {
   const double lo = log(1e-8), hi = log(1e3);
   for (uint32_t i = 0; i < N_K; i++) {
     const double lk = lo + (hi - lo) * i / (N_K - 1.0);
-    k[i] = (real_t)exp(lk);
-    pk[i] = (real_t)pow(exp(lk), slope);
+    k[i] = (sif_real)exp(lk);
+    pk[i] = (sif_real)pow(exp(lk), slope);
   }
 }
 
@@ -862,28 +872,28 @@ static void __power_law(real_t* k, real_t* pk, double slope) {
 static void test_covariance_diagonal(void) {
   printf("covariance diagonal vs sigma_0 from the moments\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
-  __power_law(k, pk, -2.0);
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
+  power_law(k, pk, -2.0);
 
   const uint32_t n = 24;
-  real_t* radii = __log_radii(n, 1.0, 40.0);
-  real_t* sigma = malloc(n * sizeof(real_t));
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  sif_real* sigma = malloc(n * sizeof(sif_real));
 
-  const sif_option_t windows[2] = {
+  const sif_option windows[2] = {
     SIF_DELTA_FILTER_TOP_HAT, SIF_DELTA_FILTER_GAUSSIAN};
   const char* names[2] = {"top-hat", "Gaussian"};
 
   for (int w = 0; w < 2; w++) {
-    double* cov =
-      sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, NULL, windows[w]);
+    double* cov = sif_delta_covariance_pk(
+      k, pk, N_K, radii, n, sigma, NULL, NULL, windows[w]);
     sif_delta_moments_t* m =
       sif_delta_moments_pk(k, pk, N_K, radii, n, 0, windows[w]);
 
     CHECK(cov && m, "%s: covariance or moments returned NULL", names[w]);
 
     if (cov && m) {
-      const real_t* s0 = sif_delta_moments_sigma(m, 0);
+      const sif_real* s0 = sif_delta_moments_sigma(m, 0);
       double worst = 0.0, worst_sigma = 0.0;
 
       for (uint32_t i = 0; i < n; i++) {
@@ -894,7 +904,8 @@ static void test_covariance_diagonal(void) {
           worst = rel;
 
         /* And the out-param is the sqrt of that same diagonal. */
-        const double srel = fabs((double)sigma[i] - (double)s0[i]) / (double)s0[i];
+        const double srel =
+          fabs((double)sigma[i] - (double)s0[i]) / (double)s0[i];
         if (srel > worst_sigma)
           worst_sigma = srel;
       }
@@ -934,20 +945,22 @@ static void test_covariance_diagonal(void) {
 static void test_covariance_properties(void) {
   printf("covariance invariants\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
   const double slope = -2.0;
-  __power_law(k, pk, slope);
+  power_law(k, pk, slope);
 
   const uint32_t n = 20;
-  real_t* radii = __log_radii(n, 4.0, 20.0);
-  real_t* scaled = malloc(n * sizeof(real_t));
+  sif_real* radii = log_radii(n, 4.0, 20.0);
+  sif_real* scaled = malloc(n * sizeof(sif_real));
   const double lambda = 2.0;
   for (uint32_t i = 0; i < n; i++)
-    scaled[i] = (real_t)(lambda * (double)radii[i]);
+    scaled[i] = (sif_real)(lambda * (double)radii[i]);
 
-  double* a = sif_delta_covariance_pk(k, pk, N_K, radii, n, NULL, NULL, NULL, SIF_DEFAULT);
-  double* b = sif_delta_covariance_pk(k, pk, N_K, scaled, n, NULL, NULL, NULL, SIF_DEFAULT);
+  double* a = sif_delta_covariance_pk(
+    k, pk, N_K, radii, n, NULL, NULL, NULL, SIF_DEFAULT);
+  double* b = sif_delta_covariance_pk(
+    k, pk, N_K, scaled, n, NULL, NULL, NULL, SIF_DEFAULT);
 
   CHECK(a && b, "the covariance returned NULL");
 
@@ -990,10 +1003,10 @@ static void test_covariance_properties(void) {
      * that the construction is what it claims to be.
      */
     sif_ep_factor_t f;
-    sif_ep_factor_init(&f, n);
-    CHECK(sif_ep_cholesky(&f, a, radii, n) == SIF_OK,
+    sif__ep_factor_init(&f, n);
+    CHECK(sif__ep_cholesky(&f, a, radii, n) == SIF_OK,
       "a covariance built from a positive P(k) failed to factorize");
-    sif_ep_factor_free(&f);
+    sif__ep_factor_free(&f);
   }
 
   sif_free_aligned(a);
@@ -1030,15 +1043,15 @@ static void test_covariance_properties(void) {
 static void test_deriv_variance(void) {
   printf("derivative variance and Gamma^2\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
-  __power_law(k, pk, -2.0);
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
+  power_law(k, pk, -2.0);
 
   /* --- self-similarity, and the bound --- */
   {
     const uint32_t n = 24;
-    real_t* radii = __log_radii(n, 2.0, 30.0);
-    real_t* sigma = malloc(n * sizeof(real_t));
+    sif_real* radii = log_radii(n, 2.0, 30.0);
+    sif_real* sigma = malloc(n * sizeof(sif_real));
     double* dvar = malloc(n * sizeof(double));
 
     double* cov = sif_delta_covariance_pk(
@@ -1102,10 +1115,10 @@ static void test_deriv_variance(void) {
     const uint32_t n_c = 40;
     const uint32_t n_f = 4 * (n_c - 1) + 1; /* fine[4i] == coarse[i] */
 
-    real_t* rc = __log_radii(n_c, 2.0, 30.0);
-    real_t* rf = __log_radii(n_f, 2.0, 30.0);
-    real_t* sc = malloc(n_c * sizeof(real_t));
-    real_t* sf = malloc(n_f * sizeof(real_t));
+    sif_real* rc = log_radii(n_c, 2.0, 30.0);
+    sif_real* rf = log_radii(n_f, 2.0, 30.0);
+    sif_real* sc = malloc(n_c * sizeof(sif_real));
+    sif_real* sf = malloc(n_f * sizeof(sif_real));
     double* dc = malloc(n_c * sizeof(double));
     double* df = malloc(n_f * sizeof(double));
 
@@ -1183,12 +1196,12 @@ static void test_barrier_smt(void) {
   printf("Sheth-Mo-Tormen barrier\n");
 
   const uint32_t n = 16;
-  real_t* sigma = malloc(n * sizeof(real_t));
+  sif_real* sigma = malloc(n * sizeof(sif_real));
   for (uint32_t i = 0; i < n; i++)
-    sigma[i] = (real_t)(0.1 * pow(30.0, (double)i / (n - 1.0)));
+    sigma[i] = (sif_real)(0.1 * pow(30.0, (double)i / (n - 1.0)));
 
   /* gamma = 0 collapses the bracket to 1 + 1. */
-  real_t* flat = sif_barrier_smt(sigma, n, 0.7f, 0.4f, 0.0f);
+  sif_real* flat = sif_ep_barrier_smt(sigma, n, 0.7f, 0.4f, 0.0f);
   CHECK(flat != NULL, "the barrier returned NULL");
   if (flat) {
     double worst = 0.0;
@@ -1197,13 +1210,13 @@ static void test_barrier_smt(void) {
       if (rel > worst)
         worst = rel;
     }
-    CHECK(worst < 1e-6, "gamma = 0 did not give a constant 2 alpha (%.3e)",
-      worst);
+    CHECK(
+      worst < 1e-6, "gamma = 0 did not give a constant 2 alpha (%.3e)", worst);
   }
 
   /* With gamma > 0 the barrier falls as sigma rises, towards alpha. */
   const double alpha = 0.7;
-  real_t* moving = sif_barrier_smt(sigma, n, (real_t)alpha, 0.4f, 0.87f);
+  sif_real* moving = sif_ep_barrier_smt(sigma, n, (sif_real)alpha, 0.4f, 0.87f);
   if (moving) {
     int monotone = 1;
     for (uint32_t i = 1; i < n; i++)
@@ -1218,8 +1231,7 @@ static void test_barrier_smt(void) {
 
     /* Against the closed form, at one point, spelled out. */
     const uint32_t mid = n / 2;
-    const double expect =
-      alpha * (1.0 + pow(0.4 / (double)sigma[mid], 0.87));
+    const double expect = alpha * (1.0 + pow(0.4 / (double)sigma[mid], 0.87));
     CHECK(fabs((double)moving[mid] - expect) / expect < 1e-6,
       "barrier at sigma=%g is %g, expected %g", (double)sigma[mid],
       (double)moving[mid], expect);
@@ -1230,16 +1242,16 @@ static void test_barrier_smt(void) {
   }
 
   /* Guards. */
-  real_t* bad;
-  bad = sif_barrier_smt(NULL, n, 0.7f, 0.4f, 0.87f);
+  sif_real* bad;
+  bad = sif_ep_barrier_smt(NULL, n, 0.7f, 0.4f, 0.87f);
   CHECK(bad == NULL, "a NULL sigma was accepted");
   sif_free_aligned(bad);
 
-  bad = sif_barrier_smt(sigma, n, -0.7f, 0.4f, 0.87f);
+  bad = sif_ep_barrier_smt(sigma, n, -0.7f, 0.4f, 0.87f);
   CHECK(bad == NULL, "a negative alpha was accepted");
   sif_free_aligned(bad);
 
-  bad = sif_barrier_smt(sigma, n, 0.7f, -0.4f, 0.87f);
+  bad = sif_ep_barrier_smt(sigma, n, 0.7f, -0.4f, 0.87f);
   CHECK(bad == NULL,
     "a negative beta was accepted; (beta/sigma)^gamma is not real there");
   sif_free_aligned(bad);
@@ -1258,19 +1270,20 @@ static void test_barrier_smt(void) {
 static void test_pipeline(void) {
   printf("P(k) -> covariance -> sigma -> barrier -> multiplicity\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
-  __power_law(k, pk, -2.0);
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
+  power_law(k, pk, -2.0);
 
   /* Normalize so sigma lands where a barrier of order unity does something. */
   {
-    const real_t eight[1] = {8.0f};
-    real_t s8[1];
-    double* c = sif_delta_covariance_pk(k, pk, N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
+    const sif_real eight[1] = {8.0f};
+    sif_real s8[1];
+    double* c = sif_delta_covariance_pk(
+      k, pk, N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
     if (c) {
       const double scale = (0.8 / (double)s8[0]) * (0.8 / (double)s8[0]);
       for (uint32_t i = 0; i < N_K; i++)
-        pk[i] = (real_t)((double)pk[i] * scale);
+        pk[i] = (sif_real)((double)pk[i] * scale);
       sif_free_aligned(c);
     }
   }
@@ -1278,14 +1291,15 @@ static void test_pipeline(void) {
   const uint32_t n = 40;
   const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(400000);
 
-  real_t* radii = __log_radii(n, 1.0, 30.0);
-  real_t* sigma = malloc(n * sizeof(real_t));
+  sif_real* radii = log_radii(n, 1.0, 30.0);
+  sif_real* sigma = malloc(n * sizeof(sif_real));
 
-  double* cov =
-    sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, NULL, SIF_DEFAULT);
+  double* cov = sif_delta_covariance_pk(
+    k, pk, N_K, radii, n, sigma, NULL, NULL, SIF_DEFAULT);
   CHECK(cov != NULL, "the covariance returned NULL");
 
-  real_t* barrier = cov ? sif_barrier_smt(sigma, n, 0.3f, 0.2f, 0.87f) : NULL;
+  sif_real* barrier =
+    cov ? sif_ep_barrier_smt(sigma, n, 0.3f, 0.2f, 0.87f) : NULL;
   CHECK(barrier != NULL, "the barrier returned NULL");
 
   if (cov && barrier) {
@@ -1296,7 +1310,7 @@ static void test_pipeline(void) {
         falling = 0;
     CHECK(falling, "sigma does not decrease with radius");
 
-    real_t* f = sif_multiplicity_function_ep(
+    sif_real* f = sif_ep_multiplicity_function(
       radii, n, cov, barrier, n_paths, 1234u, NULL, SIF_DEFAULT);
     CHECK(f != NULL, "the multiplicity returned NULL on the real pipeline");
 
@@ -1334,27 +1348,30 @@ static void test_pipeline(void) {
 static void test_covariance_guards(void) {
   printf("covariance validation\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
-  __power_law(k, pk, -2.0);
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
+  power_law(k, pk, -2.0);
 
-  const real_t radii[3] = {2.0f, 8.0f, 20.0f};
+  const sif_real radii[3] = {2.0f, 8.0f, 20.0f};
   double* r;
 
-  r = sif_delta_covariance_pk(NULL, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
+  r = sif_delta_covariance_pk(
+    NULL, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL k was accepted");
   sif_free_aligned(r);
 
-  r = sif_delta_covariance_pk(k, pk, N_K, NULL, 3, NULL, NULL, NULL, SIF_DEFAULT);
+  r =
+    sif_delta_covariance_pk(k, pk, N_K, NULL, 3, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
 
-  r = sif_delta_covariance_pk(k, pk, N_K, radii, 0, NULL, NULL, NULL, SIF_DEFAULT);
+  r = sif_delta_covariance_pk(
+    k, pk, N_K, radii, 0, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "zero radii were accepted");
   sif_free_aligned(r);
 
   {
-    const real_t bad_radii[3] = {2.0f, 0.0f, 20.0f};
+    const sif_real bad_radii[3] = {2.0f, 0.0f, 20.0f};
     r = sif_delta_covariance_pk(
       k, pk, N_K, bad_radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero radius was accepted");
@@ -1364,17 +1381,18 @@ static void test_covariance_guards(void) {
   {
     /* Stricter than the moments, and deliberately so: the Gram accumulation
      * takes a square root of k^3 P(k). */
-    real_t saved = pk[10];
+    sif_real saved = pk[10];
     pk[10] = -1.0f;
-    r = sif_delta_covariance_pk(k, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
+    r = sif_delta_covariance_pk(
+      k, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a negative P(k) was accepted");
     sif_free_aligned(r);
     pk[10] = saved;
   }
 
   {
-    real_t* k_bad = malloc(N_K * sizeof(real_t));
-    memcpy(k_bad, k, N_K * sizeof(real_t));
+    sif_real* k_bad = malloc(N_K * sizeof(sif_real));
+    memcpy(k_bad, k, N_K * sizeof(sif_real));
     k_bad[10] = k_bad[9]; /* not strictly increasing */
     r = sif_delta_covariance_pk(
       k_bad, pk, N_K, radii, 3, NULL, NULL, NULL, SIF_DEFAULT);
@@ -1390,8 +1408,10 @@ static void test_covariance_guards(void) {
 }
 
 int main(void) {
-  sif_config_t cfg = {.fft_config = NULL, .omp_config = NULL, .verbose = false,
-                      .log_level = SIF_LOG_LEVEL_ERROR};
+  sif_config_t cfg = {.fft_config = NULL,
+    .omp_config = NULL,
+    .verbose = false,
+    .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 
   test_covariance_diagonal();

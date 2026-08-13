@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 """
 The training-set design: which cosmologies, which barriers, which radii.
 
@@ -39,7 +44,7 @@ COSMO_BOX = dict(
 # B(sigma) = alpha [1 + (beta / sigma)^gamma].
 # Endpoints are floored strictly positive: alpha = 0 puts the barrier at zero,
 # which every walk crosses on its first step, and beta = 0 is rejected by
-# sif_barrier_smt because (beta/sigma)^gamma is not real for a negative base.
+# sif_ep_barrier_smt because (beta/sigma)^gamma is not real for a negative base.
 BARRIER_BOX = dict(
     alpha=(0.05, 2.50),
     beta=(0.01, 1.50),

@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * Excursion-set void size functions, against Jennings, Li & Hu (2013).
  *
@@ -8,11 +14,11 @@
  * changes between them is which radius goes into the volume.
  */
 #include "sif/core/system.h"
-#include "sif/model/deltamoments.h"
-#include "sif/model/excursionset.h"
-#include "sif/model/sizefunction.h"
-#include "sif/structures/deltamoments.h"
-#include "sif/structures/sizefunction.h"
+#include "sif/model/delta_moments.h"
+#include "sif/model/excursion_set.h"
+#include "sif/model/size_function.h"
+#include "sif/structures/delta_moments.h"
+#include "sif/structures/size_function.h"
 #include "sif/utils/align.h"
 #include "test_util.h"
 
@@ -38,12 +44,12 @@ static int failures = 0;
  * window scale: sigma^2 picks up k^(2+n) dk, and at n = -2.5 the low-k tail
  * still carries percent-level weight at k = 1e-5.
  */
-static void power_law(real_t* k, real_t* pk, double slope) {
+static void power_law(sif_real* k, sif_real* pk, double slope) {
   const double lo = log(1e-8), hi = log(1e3);
   for (uint32_t i = 0; i < N_K; i++) {
     const double lk = lo + (hi - lo) * i / (N_K - 1.0);
-    k[i] = (real_t)exp(lk);
-    pk[i] = (real_t)pow(exp(lk), slope);
+    k[i] = (sif_real)exp(lk);
+    pk[i] = (sif_real)pow(exp(lk), slope);
   }
 }
 
@@ -55,12 +61,12 @@ static void power_law(real_t* k, real_t* pk, double slope) {
 static void test_sigma_slope_closed_form(void) {
   printf("sigma slope vs closed form\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
-  const real_t radii[4] = {2.0f, 8.0f, 20.0f, 50.0f};
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
+  const sif_real radii[4] = {2.0f, 8.0f, 20.0f, 50.0f};
 
   const double slopes[3] = {-2.5, -2.0, -1.0};
-  const sif_option_t windows[2] = {
+  const sif_option windows[2] = {
     SIF_DELTA_FILTER_TOP_HAT, SIF_DELTA_FILTER_GAUSSIAN};
   const char* names[2] = {"top-hat", "Gaussian"};
 
@@ -68,7 +74,8 @@ static void test_sigma_slope_closed_form(void) {
     for (int s = 0; s < 3; s++) {
       power_law(k, pk, slopes[s]);
 
-      real_t* got = sif_sigma_slope_pk(k, pk, N_K, radii, 4, windows[w]);
+      sif_real* got =
+        sif_delta_sigma_slope_pk(k, pk, N_K, radii, 4, windows[w]);
       CHECK(got != NULL, "slope returned NULL");
       if (!got)
         continue;
@@ -101,8 +108,8 @@ static void test_sigma_slope_closed_form(void) {
  * 0.03, and exp(-delta_v^2 / 2 sigma^2) then underflows single precision at
  * every radius.
  */
-static void normalize(real_t* k, real_t* pk, double target) {
-  const real_t eight[1] = {8.0f};
+static void normalize(sif_real* k, sif_real* pk, double target) {
+  const sif_real eight[1] = {8.0f};
   sif_delta_moments_t* m =
     sif_delta_moments_pk(k, pk, N_K, eight, 1, 0, SIF_DELTA_FILTER_TOP_HAT);
   if (!m)
@@ -116,30 +123,30 @@ static void normalize(real_t* k, real_t* pk, double target) {
 
   const double scale = (target / s8) * (target / s8);
   for (uint32_t i = 0; i < N_K; i++)
-    pk[i] = (real_t)((double)pk[i] * scale);
+    pk[i] = (sif_real)((double)pk[i] * scale);
 }
 
 /* The slope has to agree with a finite difference of sigma itself. */
 static void test_sigma_slope_vs_finite_difference(void) {
   printf("sigma slope vs finite difference of sigma\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
   power_law(k, pk, -2.0);
 
   const double r0 = 12.0, h = 1e-3;
-  const real_t probe[3] = {
-    (real_t)(r0 * exp(-h)), (real_t)r0, (real_t)(r0 * exp(h))};
+  const sif_real probe[3] = {
+    (sif_real)(r0 * exp(-h)), (sif_real)r0, (sif_real)(r0 * exp(h))};
 
   sif_delta_moments_t* m =
     sif_delta_moments_pk(k, pk, N_K, probe, 3, 0, SIF_DELTA_FILTER_TOP_HAT);
-  real_t* slope =
-    sif_sigma_slope_pk(k, pk, N_K, probe, 3, SIF_DELTA_FILTER_TOP_HAT);
+  sif_real* slope =
+    sif_delta_sigma_slope_pk(k, pk, N_K, probe, 3, SIF_DELTA_FILTER_TOP_HAT);
 
   CHECK(m && slope, "setup returned NULL");
 
   if (m && slope) {
-    const real_t* sigma = sif_delta_moments_sigma(m, 0);
+    const sif_real* sigma = sif_delta_moments_sigma(m, 0);
     const double fd =
       (log((double)sigma[2]) - log((double)sigma[0])) / (2.0 * h);
     const double rel = fabs(fd - (double)slope[1]) / fabs(fd);
@@ -168,20 +175,21 @@ static void test_delta_mapping(void) {
   printf("linear <-> non-linear density contrast\n");
 
   const double barriers[5] = {-2.7, -1.8, -1.24, -0.8, -0.5};
-  const sif_option_t methods[2] = {SIF_SPHERICAL_B94, SIF_SPHERICAL_EXACT};
+  const sif_option methods[2] = {SIF_SPHERICAL_B94, SIF_SPHERICAL_EXACT};
   const char* names[2] = {"B94", "exact"};
 
   for (int m = 0; m < 2; m++) {
     double worst_trip = 0.0;
 
     for (int i = 0; i < 5; i++) {
-      const real_t dnl = sif_delta_nonlinear((real_t)barriers[i], methods[m]);
+      const sif_real dnl =
+        sif_spherical_map_nonlinear((sif_real)barriers[i], methods[m]);
 
       CHECK(dnl < 0.0f && dnl > -1.0f,
         "%s: delta_L=%g gave delta_NL=%g, outside (-1, 0)", names[m],
         barriers[i], (double)dnl);
 
-      const real_t back = sif_delta_linear(dnl, methods[m]);
+      const sif_real back = sif_spherical_map_linear(dnl, methods[m]);
       const double rel = fabs((double)back - barriers[i]) / fabs(barriers[i]);
       if (rel > worst_trip)
         worst_trip = rel;
@@ -189,8 +197,8 @@ static void test_delta_mapping(void) {
 
     CHECK(worst_trip < 1e-5, "%s: the round trip is off by %.3e", names[m],
       worst_trip);
-    printf("  %-5s round trip worst relative error %.2e\n", names[m],
-      worst_trip);
+    printf(
+      "  %-5s round trip worst relative error %.2e\n", names[m], worst_trip);
   }
 
   /*
@@ -200,10 +208,10 @@ static void test_delta_mapping(void) {
    */
   double worst_f = 0.0;
   for (int i = 0; i < 5; i++) {
-    const double a =
-      (double)sif_delta_nonlinear((real_t)barriers[i], SIF_SPHERICAL_B94);
-    const double b =
-      (double)sif_delta_nonlinear((real_t)barriers[i], SIF_SPHERICAL_EXACT);
+    const double a = (double)sif_spherical_map_nonlinear(
+      (sif_real)barriers[i], SIF_SPHERICAL_B94);
+    const double b = (double)sif_spherical_map_nonlinear(
+      (sif_real)barriers[i], SIF_SPHERICAL_EXACT);
 
     const double fa = pow(1.0 + a, -1.0 / 3.0);
     const double fb = pow(1.0 + b, -1.0 / 3.0);
@@ -221,8 +229,7 @@ static void test_delta_mapping(void) {
 
   /* Shell crossing, the one value the literature pins down. */
   for (int m = 0; m < 2; m++) {
-    const double d =
-      (double)sif_delta_nonlinear(-2.7f, methods[m]);
+    const double d = (double)sif_spherical_map_nonlinear(-2.7f, methods[m]);
     const double f = pow(1.0 + d, -1.0 / 3.0);
     CHECK(fabs(f - 1.69) < 0.02,
       "%s: shell crossing gave F=%g, expected about 1.69", names[m], f);
@@ -236,20 +243,21 @@ static void test_delta_mapping(void) {
   /* The linear limit: a barely underdense region has not evolved. */
   for (int m = 0; m < 2; m++) {
     const double tiny = -1e-4;
-    const double d = (double)sif_delta_nonlinear((real_t)tiny, methods[m]);
+    const double d =
+      (double)sif_spherical_map_nonlinear((sif_real)tiny, methods[m]);
     CHECK(fabs(d - tiny) < 1e-6,
       "%s: delta_L=%g should map to nearly itself, gave %g", names[m], tiny, d);
   }
 
   /* Out of the expanding branch, both directions, both methods. */
   for (int m = 0; m < 2; m++) {
-    CHECK(sif_delta_nonlinear(0.5f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_nonlinear(0.5f, methods[m]) == 0.0f,
       "%s: a positive linear contrast was accepted", names[m]);
-    CHECK(sif_delta_nonlinear(0.0f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_nonlinear(0.0f, methods[m]) == 0.0f,
       "%s: a zero linear contrast was accepted", names[m]);
-    CHECK(sif_delta_linear(-1.0f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_linear(-1.0f, methods[m]) == 0.0f,
       "%s: total evacuation was accepted", names[m]);
-    CHECK(sif_delta_linear(0.5f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_linear(0.5f, methods[m]) == 0.0f,
       "%s: a positive non-linear contrast was accepted", names[m]);
   }
 }
@@ -258,7 +266,7 @@ static void test_delta_mapping(void) {
 static void test_multiplicity_continuity(void) {
   printf("multiplicity function across the x = 0.276 branch\n");
 
-  const real_t delta_c = 1.686f;
+  const sif_real delta_c = 1.686f;
   const double barriers[3] = {-2.7, -1.8, -0.8};
 
   for (int i = 0; i < 3; i++) {
@@ -268,11 +276,11 @@ static void test_multiplicity_continuity(void) {
     /* sigma at which x sits exactly on the switch. */
     const double sigma_switch = 0.276 * abs_dv / dcal;
 
-    const real_t probe[2] = {(real_t)(sigma_switch * (1.0 - 1e-6)),
-      (real_t)(sigma_switch * (1.0 + 1e-6))};
+    const sif_real probe[2] = {(sif_real)(sigma_switch * (1.0 - 1e-6)),
+      (sif_real)(sigma_switch * (1.0 + 1e-6))};
 
-    real_t* f = sif_multiplicity_function_svdw(
-      probe, 2, (real_t)barriers[i], delta_c);
+    sif_real* f =
+      sif_svdw_multiplicity_function(probe, 2, (sif_real)barriers[i], delta_c);
     CHECK(f != NULL, "multiplicity returned NULL");
 
     if (f) {
@@ -282,9 +290,8 @@ static void test_multiplicity_continuity(void) {
 
       /* The two forms are matched at the switch by construction, so the step
        * measures the approximation, not a coding error. */
-      CHECK(rel < 0.02,
-        "delta_v=%g: the branch jumps by %.2f%% at x = 0.276", barriers[i],
-        100.0 * rel);
+      CHECK(rel < 0.02, "delta_v=%g: the branch jumps by %.2f%% at x = 0.276",
+        barriers[i], 100.0 * rel);
 
       CHECK(f[0] > 0.0f && f[1] > 0.0f, "the multiplicity went non-positive");
       sif_free_aligned(f);
@@ -292,10 +299,10 @@ static void test_multiplicity_continuity(void) {
   }
 
   /* Guards. */
-  const real_t sigma[1] = {1.0f};
-  CHECK(sif_multiplicity_function_svdw(sigma, 1, 2.7f, 1.686f) == NULL,
+  const sif_real sigma[1] = {1.0f};
+  CHECK(sif_svdw_multiplicity_function(sigma, 1, 2.7f, 1.686f) == NULL,
     "a positive delta_v was accepted");
-  CHECK(sif_multiplicity_function_svdw(sigma, 1, -2.7f, -1.0f) == NULL,
+  CHECK(sif_svdw_multiplicity_function(sigma, 1, -2.7f, -1.0f) == NULL,
     "a negative delta_c was accepted");
 }
 
@@ -306,21 +313,23 @@ static void test_multiplicity_continuity(void) {
 static void test_svdw_vdn_ratio(void) {
   printf("SvdW / Vdn = F^3\n");
 
-  real_t* k = malloc(N_K * sizeof(real_t));
-  real_t* pk = malloc(N_K * sizeof(real_t));
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
   power_law(k, pk, -2.0);
   normalize(k, pk, 0.8);
 
   const uint32_t n_r = 30;
-  real_t* radii = malloc(n_r * sizeof(real_t));
+  sif_real* radii = malloc(n_r * sizeof(sif_real));
   for (uint32_t i = 0; i < n_r; i++)
-    radii[i] = (real_t)exp(log(1.0) + (log(25.0) - log(1.0)) * i / (n_r - 1.0));
+    radii[i] =
+      (sif_real)exp(log(1.0) + (log(25.0) - log(1.0)) * i / (n_r - 1.0));
 
-  const real_t dv = -2.7f, dc = 1.686f;
+  const sif_real dv = -2.7f, dc = 1.686f;
 
   /* The same expansion factor the models derive internally when passed 0. */
   const double f =
-    pow(1.0 + (double)sif_delta_nonlinear(dv, SIF_SPHERICAL_B94), -1.0 / 3.0);
+    pow(1.0 + (double)sif_spherical_map_nonlinear(dv, SIF_SPHERICAL_B94),
+      -1.0 / 3.0);
 
   sif_size_function_t* sw =
     sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, SIF_DEFAULT);
@@ -355,14 +364,14 @@ static void test_svdw_vdn_ratio(void) {
       "Vdn is not below SvdW; the volumes may be swapped");
 
     /* The container describes itself. */
-    CHECK(sw->n_bins == n_r && sw->r_min == radii[0] &&
-            sw->r_max == radii[n_r - 1],
+    CHECK(
+      sw->n_bins == n_r && sw->r_min == radii[0] && sw->r_max == radii[n_r - 1],
       "the size function container is inconsistent");
   }
 
   /* The linear convention is the log one over R. */
-  sif_size_function_t* per_r = sif_size_function_vdn(
-    k, pk, N_K, radii, n_r, dv, dc, SIF_VSF_BIN_LINEAR);
+  sif_size_function_t* per_r =
+    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, SIF_VSF_BIN_LINEAR);
   if (per_r && vdn) {
     double worst = 0.0;
     for (uint32_t i = 0; i < n_r; i++) {
@@ -379,8 +388,8 @@ static void test_svdw_vdn_ratio(void) {
    * agree to well under a percent on the expansion factor, so the two curves
    * must differ -- proving the flag is threaded through -- but only slightly.
    */
-  sif_size_function_t* forced = sif_size_function_svdw(
-    k, pk, N_K, radii, n_r, dv, dc, SIF_SPHERICAL_EXACT);
+  sif_size_function_t* forced =
+    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, SIF_SPHERICAL_EXACT);
   if (forced && sw) {
     double worst = 0.0;
     int differs = 0;
@@ -413,8 +422,10 @@ static void test_svdw_vdn_ratio(void) {
 
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
-  sif_config_t cfg = {.fft_config = &fftcfg, .omp_config = NULL,
-                      .verbose = false, .log_level = SIF_LOG_LEVEL_ERROR};
+  sif_config_t cfg = {.fft_config = &fftcfg,
+    .omp_config = NULL,
+    .verbose = false,
+    .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 
   test_sigma_slope_closed_form();

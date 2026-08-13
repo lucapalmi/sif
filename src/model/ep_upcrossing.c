@@ -1,10 +1,16 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * The semi-analytic first crossing: Musso & Sheth's up-crossing rate for a
  * correlated walk against a moving barrier, and the local description of the
  * walk it is built from.
  *
  * Everything here is closed form and costs microseconds, against seconds for
- * the Monte Carlo in excursionset.c.
+ * the Monte Carlo in excursion_set.c.
  *
  * The walk runs in its own time variable S = sigma^2(R), which increases as R
  * falls. Everything below is written in S; the caller's ascending radius order
@@ -14,14 +20,14 @@
 
 #include "model/ep_internal.h"
 
-#include "sif/model/deltamoments.h"
+#include "sif/model/delta_moments.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 
 #include <math.h>
 #include <stdlib.h>
 
-#define __TAG "ep"
+#define TAG "ep"
 
 /*
  * Above this the bracket below is evaluated from its asymptotic series rather
@@ -30,13 +36,11 @@
  * the closed form loses every significant digit there, while four terms of the
  * series are good to better than 1e-12.
  */
-#define __EP_Y_ASYMPTOTIC 5.0
+#define EP_Y_ASYMPTOTIC 5.0
 
 /* 1 - Phi(x), the upper tail of the standard normal. Shared with the emulator,
  * which needs it for the walk's first step. */
-double sif_ep_upper_tail(double x) {
-  return 0.5 * erfc(x / sqrt(2.0));
-}
+double sif__ep_upper_tail(double x) { return 0.5 * erfc(x / sqrt(2.0)); }
 
 /*
  * E[(z - y)^+] for a standard normal z, i.e. phi(y) - y (1 - Phi(y)).
@@ -45,24 +49,24 @@ double sif_ep_upper_tail(double x) {
  * barrier runs away from the walk in units of the walk's own slope scatter, so
  * a large positive y is a barrier fleeing upward and almost never crossed.
  */
-static double __mean_excess(double y) {
+static double mean_excess(double y) {
 
-  if (y > __EP_Y_ASYMPTOTIC) {
+  if (y > EP_Y_ASYMPTOTIC) {
     /* phi(y) (1/y^2 - 3/y^4 + 15/y^6 - 105/y^8), from the tail expansion of
      * 1 - Phi. Positive and monotonically decreasing, as the exact form is. */
-    const double phi = exp(-0.5 * y * y) / sqrt(2.0 * M_PI);
+    const double phi = exp(-0.5 * y * y) / sqrt(2.0 * SIF_PI);
     const double y2 = y * y;
     const double y4 = y2 * y2;
     return phi * (1.0 / y2) * (1.0 - 3.0 / y2 + 15.0 / y4 - 105.0 / (y4 * y2));
   }
 
-  const double phi = exp(-0.5 * y * y) / sqrt(2.0 * M_PI);
-  return phi - y * sif_ep_upper_tail(y);
+  const double phi = exp(-0.5 * y * y) / sqrt(2.0 * SIF_PI);
+  return phi - y * sif__ep_upper_tail(y);
 }
 
 /* --- The local description --- */
 
-int sif_ep_features_init(sif_ep_features_t* f, uint32_t n) {
+int sif__ep_features_init(sif_ep_features_t* f, uint32_t n) {
 
   f->n = n;
   f->S = NULL;
@@ -76,7 +80,7 @@ int sif_ep_features_init(sif_ep_features_t* f, uint32_t n) {
   for (size_t a = 0; a < sizeof(all) / sizeof(all[0]); a++) {
     *all[a] = sif_calloc_aligned((size_t)n, sizeof(double));
     if (!*all[a]) {
-      SIF_LOG_ERROR(__TAG, "failed to allocate the walk description");
+      SIF_LOG_ERROR(TAG, "failed to allocate the walk description");
       return SIF_ERR_ALLOC;
     }
   }
@@ -84,7 +88,7 @@ int sif_ep_features_init(sif_ep_features_t* f, uint32_t n) {
   return SIF_OK;
 }
 
-void sif_ep_features_free(sif_ep_features_t* f) {
+void sif__ep_features_free(sif_ep_features_t* f) {
   if (!f)
     return;
   sif_free_aligned(f->S);
@@ -105,22 +109,23 @@ void sif_ep_features_free(sif_ep_features_t* f) {
  * ask sif_delta_covariance_pk for the exact form. Only first order, whatever
  * the spacing -- see the header.
  */
-static void __deriv_variance_differenced(
+static void deriv_variance_differenced(
   const double* cov, const double* S, uint32_t n, double* V) {
 
   for (uint32_t i = 1; i + 1 < n; i++) {
     const double h = S[i + 1] - S[i - 1];
-    V[i] =
-      (S[i + 1] + S[i - 1] - 2.0 * sif_ep_cov_get(cov, i + 1, i - 1)) / (h * h);
+    V[i] = (S[i + 1] + S[i - 1] - 2.0 * sif__ep_cov_get(cov, i + 1, i - 1)) /
+           (h * h);
   }
 
   /* One-sided at the ends, so no radius is left without a value. */
   if (n >= 3) {
     double h = S[2] - S[0];
-    V[0] = (S[2] + S[0] - 2.0 * sif_ep_cov_get(cov, 2, 0)) / (h * h);
+    V[0] = (S[2] + S[0] - 2.0 * sif__ep_cov_get(cov, 2, 0)) / (h * h);
     h = S[n - 1] - S[n - 3];
     V[n - 1] =
-      (S[n - 1] + S[n - 3] - 2.0 * sif_ep_cov_get(cov, n - 1, n - 3)) / (h * h);
+      (S[n - 1] + S[n - 3] - 2.0 * sif__ep_cov_get(cov, n - 1, n - 3)) /
+      (h * h);
   }
 }
 
@@ -138,7 +143,7 @@ static void __deriv_variance_differenced(
  *
  * Signs are irrelevant: x descends here, and the formula does not care.
  */
-static double __deriv_nonuniform(
+static double deriv_nonuniform(
   const double* fv, const double* x, uint32_t n, uint32_t i) {
 
   if (n < 3)
@@ -175,16 +180,16 @@ static double __deriv_nonuniform(
  * against these exact expressions, so a second copy that drifted would be a
  * silently different model.
  */
-static int __fill_core(sif_ep_features_t* f, const real_t* radii, uint32_t n,
-  const real_t* barrier, const double* V) {
+static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
+  const sif_real* barrier, const double* V) {
 
-  /* Promoted once: the barrier arrives as real_t but every derivative below
+  /* Promoted once: the barrier arrives as sif_real but every derivative below
    * is taken in double, and differencing a float array in double precision
    * would carry the float's rounding into the derivative rather than the
    * value. */
   double* Bd = malloc((size_t)n * sizeof(double));
   if (!Bd) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the promoted barrier");
+    SIF_LOG_ERROR(TAG, "failed to allocate the promoted barrier");
     return SIF_ERR_ALLOC;
   }
   for (uint32_t i = 0; i < n; i++)
@@ -214,13 +219,13 @@ static int __fill_core(sif_ep_features_t* f, const real_t* radii, uint32_t n,
     const double mu = Bd[i] / (2.0 * S);
     const double sigma_slope = sqrt(V[i] - 1.0 / (4.0 * S));
 
-    const double dB = __deriv_nonuniform(Bd, f->S, n, i);
+    const double dB = deriv_nonuniform(Bd, f->S, n, i);
 
     f->y[i] = (dB - mu) / sigma_slope;
 
     const double nu = f->nu[i];
-    f->f_up[i] = exp(-0.5 * nu * nu) / sqrt(2.0 * M_PI * S) * sigma_slope *
-                 __mean_excess(f->y[i]);
+    f->f_up[i] = exp(-0.5 * nu * nu) / sqrt(2.0 * SIF_PI * S) * sigma_slope *
+                 mean_excess(f->y[i]);
 
     if (!(f->f_up[i] >= 0.0))
       f->f_up[i] = 0.0;
@@ -229,7 +234,7 @@ static int __fill_core(sif_ep_features_t* f, const real_t* radii, uint32_t n,
   free(Bd);
 
   if (bad > 0) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "at %d of %u radii the walk correlates with its own derivative more "
       "strongly than Cauchy-Schwarz allows, which means the matrix is not a "
       "covariance; check how it was built",
@@ -240,12 +245,12 @@ static int __fill_core(sif_ep_features_t* f, const real_t* radii, uint32_t n,
   return SIF_OK;
 }
 
-int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
-  uint32_t n, const double* S, const real_t* barrier,
+int sif__ep_features_fill_diag(sif_ep_features_t* f, const sif_real* radii,
+  uint32_t n, const double* S, const sif_real* barrier,
   const double* deriv_variance) {
 
   if (!deriv_variance) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "the derivative variance is required when only the diagonal is given; "
       "there are no off-diagonal elements left to difference");
     return SIF_ERR_INVALID;
@@ -253,7 +258,7 @@ int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
 
   for (uint32_t i = 0; i < n; i++) {
     if (!(S[i] > 0.0)) {
-      SIF_LOG_ERROR(__TAG,
+      SIF_LOG_ERROR(TAG,
         "sigma^2 at radius %u (%g) is %g; the walk has no scale there", i,
         (double)radii[i], S[i]);
       return SIF_ERR_RANGE;
@@ -262,16 +267,17 @@ int sif_ep_features_fill_diag(sif_ep_features_t* f, const real_t* radii,
     f->nu[i] = (double)barrier[i] / sqrt(S[i]);
   }
 
-  return __fill_core(f, radii, n, barrier, deriv_variance);
+  return fill_core(f, radii, n, barrier, deriv_variance);
 }
 
-int sif_ep_features_fill(sif_ep_features_t* f, const real_t* radii, uint32_t n,
-  const double* cov, const real_t* barrier, const double* deriv_variance) {
+int sif__ep_features_fill(sif_ep_features_t* f, const sif_real* radii,
+  uint32_t n, const double* cov, const sif_real* barrier,
+  const double* deriv_variance) {
 
   for (uint32_t i = 0; i < n; i++) {
-    f->S[i] = sif_ep_cov_get(cov, i, i);
+    f->S[i] = sif__ep_cov_get(cov, i, i);
     if (!(f->S[i] > 0.0)) {
-      SIF_LOG_ERROR(__TAG,
+      SIF_LOG_ERROR(TAG,
         "the covariance diagonal at radius %u (%g) is %g; the walk has no "
         "scale there",
         i, (double)radii[i], f->S[i]);
@@ -286,28 +292,27 @@ int sif_ep_features_fill(sif_ep_features_t* f, const real_t* radii, uint32_t n,
   if (!V) {
     V_owned = malloc((size_t)n * sizeof(double));
     if (!V_owned) {
-      SIF_LOG_ERROR(__TAG, "failed to allocate the derivative variance");
+      SIF_LOG_ERROR(TAG, "failed to allocate the derivative variance");
       return SIF_ERR_ALLOC;
     }
-    __deriv_variance_differenced(cov, f->S, n, V_owned);
+    deriv_variance_differenced(cov, f->S, n, V_owned);
     V = V_owned;
 
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "no derivative variance supplied, so it was differenced off the "
       "covariance; that estimate converges only at first order and is wrong by "
       "several per cent at a realistic radius count, which propagates into the "
       "result. Take it from sif_delta_covariance_pk instead");
   }
 
-  const int rc = __fill_core(f, radii, n, barrier, V);
+  const int rc = fill_core(f, radii, n, barrier, V);
   free(V_owned);
   return rc;
 }
 
 /* --- The hazard and the survival --- */
 
-void sif_ep_hazard_bins(
-  const sif_ep_features_t* f, uint32_t n, double* lam) {
+void sif__ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam) {
 
   for (uint32_t i = 0; i + 1 < n; i++) {
 
@@ -338,8 +343,8 @@ void sif_ep_hazard_bins(
   }
 }
 
-void sif_ep_survival(const double* lam, const real_t* radii, uint32_t n_bins,
-  double alive0, real_t* out) {
+void sif__ep_survival(const double* lam, const sif_real* radii, uint32_t n_bins,
+  double alive0, sif_real* out) {
 
   double alive = alive0;
 
@@ -349,34 +354,34 @@ void sif_ep_survival(const double* lam, const real_t* radii, uint32_t n_bins,
     alive -= p;
 
     const double dr = (double)radii[i + 1] - (double)radii[i];
-    out[i] = (real_t)(dr > 0.0 ? p / dr : 0.0);
+    out[i] = (sif_real)(dr > 0.0 ? p / dr : 0.0);
   }
 }
 
 /* --- The multiplicity --- */
 
-real_t* sif_ep_multiplicity_upcrossing(
-  const sif_ep_features_t* f, const real_t* radii, uint32_t n) {
+sif_real* sif__ep_multiplicity_upcrossing(
+  const sif_ep_features_t* f, const sif_real* radii, uint32_t n) {
 
   const uint32_t n_bins = n - 1;
 
-  real_t* out = sif_calloc_aligned((size_t)n_bins, sizeof(real_t));
+  sif_real* out = sif_calloc_aligned((size_t)n_bins, sizeof(sif_real));
   double* lam = malloc((size_t)n_bins * sizeof(double));
 
   if (!out || !lam) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the multiplicity array");
+    SIF_LOG_ERROR(TAG, "failed to allocate the multiplicity array");
     sif_free_aligned(out);
     free(lam);
     return NULL;
   }
 
-  sif_ep_hazard_bins(f, n, lam);
+  sif__ep_hazard_bins(f, n, lam);
 
   /* Walks that begin above the barrier cross on the walk's first step, at the
    * largest radius, and never enter a bin. That point mass is exactly the
    * one-point tail there, so it is removed rather than estimated. */
-  sif_ep_survival(
-    lam, radii, n_bins, 1.0 - sif_ep_upper_tail(f->nu[n - 1]), out);
+  sif__ep_survival(
+    lam, radii, n_bins, 1.0 - sif__ep_upper_tail(f->nu[n - 1]), out);
 
   free(lam);
   return out;

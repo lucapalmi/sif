@@ -1,6 +1,12 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /* Covers the simplified histogram-only VSF: no voids dropped at either edge,
  * correct normalization, both binning modes, and the merge path. */
-#include "sif/measure/sizefunction.h"
+#include "sif/measure/size_function.h"
 #include "sif/structures/catalog.h"
 
 #include <math.h>
@@ -19,17 +25,17 @@ static int failures = 0;
 
 #define BOX 100.0f
 
-static sif_catalog_t* make_catalog(uint64_t n, real_t r_lo, real_t r_hi) {
+static sif_catalog_t* make_catalog(uint64_t n, sif_real r_lo, sif_real r_hi) {
   sif_catalog_t* c = sif_catalog_alloc(n);
   for (uint64_t i = 0; i < n; i++) {
     /* Spread radii evenly so both the first and last land exactly on a bound */
-    real_t r = r_lo + (r_hi - r_lo) * ((real_t)i / (real_t)(n - 1));
+    sif_real r = r_lo + (r_hi - r_lo) * ((sif_real)i / (sif_real)(n - 1));
     sif_catalog_append(c, 1.0f, 2.0f, 3.0f, r);
   }
   return c;
 }
 
-static void test_no_voids_dropped(const char* label, sif_option_t bins) {
+static void test_no_voids_dropped(const char* label, sif_option bins) {
   printf("%s: every void is binned\n", label);
 
   const uint64_t n = 1000;
@@ -64,7 +70,7 @@ static void test_no_voids_dropped(const char* label, sif_option_t bins) {
 
     /* Normalization: vsf = counts / (V * bin_width), bin width in r or ln r. */
     const double vol = (double)BOX * BOX * BOX;
-    const int is_ln = (bins & __SIF_VSF_BIN_MASK) == SIF_VSF_BIN_LN;
+    const int is_ln = (bins & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
     const double lo = is_ln ? log(5.0) : 5.0;
     const double hi = is_ln ? log(25.0) : 25.0;
     const double width = (hi - lo) / vsf->n_bins;
@@ -81,10 +87,12 @@ static void test_no_voids_dropped(const char* label, sif_option_t bins) {
     int bad_err = 0;
     for (uint32_t b = 0; b < vsf->n_bins; b++) {
       if (vsf->counts[b] == 0) {
-        if (vsf->err[b] != 0.0f) bad_err++;
+        if (vsf->err[b] != 0.0f)
+          bad_err++;
       } else {
         const double rel = (double)vsf->err[b] / (double)vsf->vsf[b];
-        if (fabs(rel - 1.0 / sqrt((double)vsf->counts[b])) > 1e-5) bad_err++;
+        if (fabs(rel - 1.0 / sqrt((double)vsf->counts[b])) > 1e-5)
+          bad_err++;
       }
     }
     CHECK(bad_err == 0, "%d bins with wrong Poisson error", bad_err);

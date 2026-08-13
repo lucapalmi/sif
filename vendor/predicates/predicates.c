@@ -113,7 +113,27 @@
 /*                                                                           */
 /*****************************************************************************/
 
-#include "predicates.h"
+/*****************************************************************************/
+/*                                                                           */
+/*  Local modifications for sif                                              */
+/*                                                                           */
+/*  This file is otherwise upstream's. The only change is the #include of     */
+/*  "predicates.h" below, marked `sif:`, which is not part of the original    */
+/*  distribution.                                                            */
+/*                                                                           */
+/*  It is load-bearing rather than cosmetic. predicates.h defines             */
+/*  __PREDICATES_USE_FLOAT when sif is built in single precision, and the     */
+/*  #ifdef on it further down is what selects `float` for REAL. Without the   */
+/*  include, this file would compile REAL as double while the rest of sif     */
+/*  declares the predicates as returning float, and the two would disagree    */
+/*  on every call.                                                           */
+/*                                                                           */
+/*  Note also that predicates.c must be compiled with exact IEEE-754          */
+/*  semantics; see the flags set for it in CMakeLists.txt.                    */
+/*                                                                           */
+/*****************************************************************************/
+
+#include "predicates.h" /* sif: not upstream, see note above */
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>

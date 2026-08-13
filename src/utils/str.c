@@ -1,10 +1,10 @@
-#include "sif/utils/stringy.h"
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
 
-#include <ctype.h>
-#include <stdio.h>
-#include <stdlib.h>
-
-#include "sif/utils/stringy.h"
+#include "sif/utils/str.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -52,7 +52,8 @@ int sif_str_decode_format(
   return col_count;
 }
 
-int sif_str_extract_next_real(char** cursor, char delimiter, real_t* out_val) {
+int sif_str_extract_next_real(
+  char** cursor, char delimiter, sif_real* out_val) {
   if (!cursor || !*cursor || **cursor == '\0' || **cursor == '\n')
     return 0;
 
@@ -64,7 +65,7 @@ int sif_str_extract_next_real(char** cursor, char delimiter, real_t* out_val) {
   }
 
   char* endptr;
-  *out_val = (real_t)strtod(*cursor, &endptr);
+  *out_val = (sif_real)strtod(*cursor, &endptr);
 
   if (endptr == *cursor) {
     while (**cursor != '\0' && **cursor != '\n' && **cursor != delimiter) {

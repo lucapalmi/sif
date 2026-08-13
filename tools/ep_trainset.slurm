@@ -1,5 +1,9 @@
 #!/bin/bash
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
+# This file is part of sif. See COPYING for the full license text.
+
 # Training-set generation for the excursion-set multiplicity emulator.
 #
 # One array task per cosmology; every barrier of that cosmology runs inside the

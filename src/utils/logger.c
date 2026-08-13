@@ -1,6 +1,12 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/utils/logger.h"
 
-#include "core/get_system.h"
+#include "core/system_internal.h"
 #include <stdarg.h>
 #include <unistd.h>
 
@@ -24,8 +30,8 @@ static const char* level_colors[] = {
   ANSI_RED      /* ERROR   */
 };
 
-void __sif_log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
-  sif_system_state_t* state = sif_get_system_state_safe();
+void sif__log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
+  sif_system_state_t* state = sif__system_state_safe();
 
   /* 1. Determine Runtime Level */
   /* Fallback to INFO if the user logs something before calling sif_init() */
@@ -55,7 +61,7 @@ void __sif_log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
   fputc('\n', out);
 }
 
-void __sif_log_flush(void) {
+void sif__log_flush(void) {
   fflush(stdout);
   fflush(stderr);
 }

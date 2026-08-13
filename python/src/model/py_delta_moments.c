@@ -1,8 +1,14 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_model.h"
 
 #include "py_delta_common.h"
+#include "sif/model/delta_moments.h"
 #include "structures/py_delta_moments.h"
-#include "sif/model/deltamoments.h"
 #include <numpy/arrayobject.h>
 
 PyObject* py_sif_delta_moments_pk(
@@ -21,7 +27,7 @@ PyObject* py_sif_delta_moments_pk(
     return NULL;
   }
 
-  sif_option_t options = SIF_DEFAULT;
+  sif_option options = SIF_DEFAULT;
   if (py_sif_delta_parse_options(NULL, window, 0, &options) < 0)
     return NULL;
 
@@ -56,8 +62,8 @@ PyObject* py_sif_delta_moments_pk(
   sif_delta_moments_t* tmp = NULL;
 
   Py_BEGIN_ALLOW_THREADS tmp = sif_delta_moments_pk(
-    (const real_t*)PyArray_DATA(k_arr), (const real_t*)PyArray_DATA(pk_arr),
-    (uint32_t)n_points, (const real_t*)PyArray_DATA(radii_arr),
+    (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
+    (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
     (uint32_t)n_radii, (uint8_t)order, options);
   Py_END_ALLOW_THREADS
 

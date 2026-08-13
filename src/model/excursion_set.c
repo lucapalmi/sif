@@ -1,10 +1,16 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * Excursion-set first crossing: the Sheth & van de Weygaert multiplicity
  * function, the Sheth-Mo-Tormen barrier, and the Monte Carlo first crossing of
  * a moving barrier by a correlated random walk.
  */
 
-#include "sif/model/excursionset.h"
+#include "sif/model/excursion_set.h"
 
 #include "model/ep_internal.h"
 #include "sif/utils/align.h"
@@ -14,20 +20,20 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define __TAG "ep"
+#define TAG "ep"
 
 /* Relative jitter added to the diagonal before factorizing, so a marginally
  * rank-deficient radius grid does not fail on its last pivot. Far below the
  * precision at which the covariance is meaningful. */
-#define __SIF_EP_JITTER 1e-12
+#define EP_JITTER 1e-12
 
-static inline uint64_t __roundup(uint64_t v, uint64_t m) {
+static inline uint64_t roundup(uint64_t v, uint64_t m) {
   return (v + m - 1) / m * m;
 }
 
 /* --- The factor --- */
 
-int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n) {
+int sif__ep_factor_init(sif_ep_factor_t* f, uint32_t n) {
 
   f->n = n;
   f->chol = NULL;
@@ -35,14 +41,14 @@ int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n) {
 
   f->row_offset = sif_malloc_aligned(((size_t)n + 1) * sizeof(uint64_t));
   if (!f->row_offset) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the factor row offsets");
+    SIF_LOG_ERROR(TAG, "failed to allocate the factor row offsets");
     return SIF_ERR_ALLOC;
   }
 
   uint64_t at = 0;
   for (uint32_t j = 0; j < n; j++) {
     f->row_offset[j] = at;
-    at += __roundup((uint64_t)j + 1, __SIF_EP_ROW_PAD);
+    at += roundup((uint64_t)j + 1, SIF__EP_ROW_PAD);
   }
   f->row_offset[n] = at;
   f->n_packed = at;
@@ -51,7 +57,7 @@ int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n) {
    * row's diagonal and leaves the padding for this to have cleared. */
   f->chol = sif_calloc_aligned((size_t)at, sizeof(double));
   if (!f->chol) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate a %llu-entry Cholesky factor",
+    SIF_LOG_ERROR(TAG, "failed to allocate a %llu-entry Cholesky factor",
       (unsigned long long)at);
     return SIF_ERR_ALLOC;
   }
@@ -59,7 +65,7 @@ int sif_ep_factor_init(sif_ep_factor_t* f, uint32_t n) {
   return SIF_OK;
 }
 
-void sif_ep_factor_free(sif_ep_factor_t* f) {
+void sif__ep_factor_free(sif_ep_factor_t* f) {
   if (!f)
     return;
   sif_free_aligned(f->chol);
@@ -70,7 +76,7 @@ void sif_ep_factor_free(sif_ep_factor_t* f) {
   f->n_packed = 0;
 }
 
-static inline double __dot(const double* a, const double* b, uint32_t len) {
+static inline double dot(const double* a, const double* b, uint32_t len) {
   double s = 0.0;
   for (uint32_t m = 0; m < len; m++)
     s += a[m] * b[m];
@@ -79,34 +85,34 @@ static inline double __dot(const double* a, const double* b, uint32_t len) {
 
 /* The nearest-neighbour correlation is the number that predicts a failed
  * pivot, so the diagnostic reports it. */
-static void __report_pivot_failure(
-  const double* cov, const real_t* radii, uint32_t n, uint32_t a, double piv) {
+static void report_pivot_failure(const double* cov, const sif_real* radii,
+  uint32_t n, uint32_t a, double piv) {
 
   double worst = 0.0;
   if (a > 0) {
-    const double c = sif_ep_cov_get(cov, a, a - 1) /
-                     sqrt(sif_ep_cov_get(cov, a, a) *
-                          sif_ep_cov_get(cov, a - 1, a - 1));
+    const double c =
+      sif__ep_cov_get(cov, a, a - 1) /
+      sqrt(sif__ep_cov_get(cov, a, a) * sif__ep_cov_get(cov, a - 1, a - 1));
     if (fabs(c) > worst)
       worst = fabs(c);
   }
   if (a + 1 < n) {
-    const double c = sif_ep_cov_get(cov, a + 1, a) /
-                     sqrt(sif_ep_cov_get(cov, a, a) *
-                          sif_ep_cov_get(cov, a + 1, a + 1));
+    const double c =
+      sif__ep_cov_get(cov, a + 1, a) /
+      sqrt(sif__ep_cov_get(cov, a, a) * sif__ep_cov_get(cov, a + 1, a + 1));
     if (fabs(c) > worst)
       worst = fabs(c);
   }
 
   if (worst > 1.0) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "the covariance is not positive definite: pivot %g at radius %g (index "
       "%u of %u), whose nearest-neighbour correlation is %.6f. A correlation "
       "above one violates Cauchy-Schwarz, so this matrix is not a covariance "
       "at all; check how it was built",
       piv, (double)radii[a], a, n, worst);
   } else {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "the covariance is not positive definite: pivot %g at radius %g (index "
       "%u of %u), whose nearest-neighbour correlation is %.9f. A correlation "
       "this close to one means the radii are sampled more finely than the "
@@ -115,15 +121,15 @@ static void __report_pivot_failure(
   }
 }
 
-int sif_ep_cholesky(sif_ep_factor_t* f, const double* cov,
-  const real_t* radii, uint32_t n) {
+int sif__ep_cholesky(
+  sif_ep_factor_t* f, const double* cov, const sif_real* radii, uint32_t n) {
 
   /* Walk index j is ascending index n - 1 - j, so the walk starts at the
    * largest radius, where sigma is smallest. */
   double trace = 0.0;
   for (uint32_t i = 0; i < n; i++)
-    trace += sif_ep_cov_get(cov, i, i);
-  const double jitter = __SIF_EP_JITTER * trace / (double)n;
+    trace += sif__ep_cov_get(cov, i, i);
+  const double jitter = EP_JITTER * trace / (double)n;
 
   for (uint32_t j = 0; j < n; j++) {
     double* Lj = f->chol + f->row_offset[j];
@@ -131,18 +137,17 @@ int sif_ep_cholesky(sif_ep_factor_t* f, const double* cov,
 
     for (uint32_t m = 0; m < j; m++) {
       const double* Lm = f->chol + f->row_offset[m];
-      const double s = sif_ep_cov_get(cov, aj, n - 1 - m);
-      Lj[m] = (s - __dot(Lj, Lm, m)) / Lm[m];
+      const double s = sif__ep_cov_get(cov, aj, n - 1 - m);
+      Lj[m] = (s - dot(Lj, Lm, m)) / Lm[m];
     }
 
-    const double piv =
-      sif_ep_cov_get(cov, aj, aj) + jitter - __dot(Lj, Lj, j);
+    const double piv = sif__ep_cov_get(cov, aj, aj) + jitter - dot(Lj, Lj, j);
 
     /* A sign check before the sqrt, not an isnan/isinf test after it: the
      * release build carries -ffast-math, under which the compiler may fold
      * those predicates to a constant. */
     if (!(piv > 0.0)) {
-      __report_pivot_failure(cov, radii, n, aj, piv);
+      report_pivot_failure(cov, radii, n, aj, piv);
       return SIF_ERR_RANGE;
     }
 
@@ -155,16 +160,16 @@ int sif_ep_cholesky(sif_ep_factor_t* f, const double* cov,
 
 /* --- Validation --- */
 
-static int __validate(const real_t* radii, uint32_t n_radii, const double* cov,
-  const real_t* barrier, uint64_t n_paths) {
+static int validate(const sif_real* radii, uint32_t n_radii, const double* cov,
+  const sif_real* barrier, uint64_t n_paths) {
 
   if (!radii || !cov || !barrier) {
-    SIF_LOG_ERROR(__TAG, "radii, cov and barrier are all required");
+    SIF_LOG_ERROR(TAG, "radii, cov and barrier are all required");
     return SIF_ERR_INVALID;
   }
 
   if (n_radii < 2) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "%u radii; a first-crossing walk needs at least two scales to step "
       "between",
       n_radii);
@@ -172,39 +177,39 @@ static int __validate(const real_t* radii, uint32_t n_radii, const double* cov,
   }
 
   if (n_radii > SIF_COV_MAX_RADII) {
-    SIF_LOG_ERROR(__TAG, "%u radii exceeds the maximum of %d", n_radii,
-      SIF_COV_MAX_RADII);
+    SIF_LOG_ERROR(
+      TAG, "%u radii exceeds the maximum of %d", n_radii, SIF_COV_MAX_RADII);
     return SIF_ERR_INVALID;
   }
 
   if (n_paths == 0) {
-    SIF_LOG_ERROR(__TAG, "n_paths is zero; there is nothing to sample");
+    SIF_LOG_ERROR(TAG, "n_paths is zero; there is nothing to sample");
     return SIF_ERR_INVALID;
   }
 
   for (uint32_t i = 0; i < n_radii; i++) {
     if (!(radii[i] > 0.0f)) {
-      SIF_LOG_ERROR(__TAG, "radius %u is %g, must be strictly positive", i,
-        (double)radii[i]);
+      SIF_LOG_ERROR(
+        TAG, "radius %u is %g, must be strictly positive", i, (double)radii[i]);
       return SIF_ERR_INVALID;
     }
     if (i > 0 && !(radii[i] > radii[i - 1])) {
-      SIF_LOG_ERROR(__TAG,
+      SIF_LOG_ERROR(TAG,
         "radii are not strictly increasing at index %u (%g after %g); the walk "
         "runs from the largest scale down, but the public order is ascending "
         "like every other entry point",
         i, (double)radii[i], (double)radii[i - 1]);
       return SIF_ERR_INVALID;
     }
-    if (!(sif_ep_cov_get(cov, i, i) > 0.0)) {
-      SIF_LOG_ERROR(__TAG,
+    if (!(sif__ep_cov_get(cov, i, i) > 0.0)) {
+      SIF_LOG_ERROR(TAG,
         "the covariance diagonal at radius %u (%g) is %g, must be strictly "
         "positive",
-        i, (double)radii[i], sif_ep_cov_get(cov, i, i));
+        i, (double)radii[i], sif__ep_cov_get(cov, i, i));
       return SIF_ERR_INVALID;
     }
     if (!isfinite((double)barrier[i])) {
-      SIF_LOG_ERROR(__TAG, "the barrier at radius %u (%g) is not finite", i,
+      SIF_LOG_ERROR(TAG, "the barrier at radius %u (%g) is not finite", i,
         (double)radii[i]);
       return SIF_ERR_INVALID;
     }
@@ -220,57 +225,57 @@ static int __validate(const real_t* radii, uint32_t n_radii, const double* cov,
 
 /* Below this the mode series is replaced by its analytic small-x limit; above
  * it the series converges. Jennings, Li & Hu (2013) eq. (8). */
-#define __SVDW_X_SWITCH 0.276
+#define SVDW_X_SWITCH 0.276
 
 /* The Gaussian factor kills the series long before this; the cap only stops a
  * pathological D from spinning. */
-#define __SVDW_MAX_TERMS 64
+#define SVDW_MAX_TERMS 64
 
-static double __f_ln_sigma(double sigma, double abs_dv, double dcal) {
+static double f_ln_sigma(double sigma, double abs_dv, double dcal) {
   /* D = |delta_v| / (delta_c + |delta_v|), x = (D / |delta_v|) sigma. */
   const double x = dcal / abs_dv * sigma;
 
-  if (x <= __SVDW_X_SWITCH) {
+  if (x <= SVDW_X_SWITCH) {
     /* The series does not converge as x -> 0: sum_j j sin(j pi D) diverges,
      * so the limit has to come from the analytic form. */
-    return sqrt(2.0 / M_PI) * (abs_dv / sigma) *
+    return sqrt(2.0 / SIF_PI) * (abs_dv / sigma) *
            exp(-0.5 * abs_dv * abs_dv / (sigma * sigma));
   }
 
   double sum = 0.0;
-  for (int j = 1; j <= __SVDW_MAX_TERMS; j++) {
-    const double jpx = j * M_PI * x;
+  for (int j = 1; j <= SVDW_MAX_TERMS; j++) {
+    const double jpx = j * SIF_PI * x;
     const double term =
-      exp(-0.5 * jpx * jpx) * j * M_PI * x * x * sin(j * M_PI * dcal);
+      exp(-0.5 * jpx * jpx) * j * SIF_PI * x * x * sin(j * SIF_PI * dcal);
 
     sum += term;
 
     /* The envelope is monotonic past the first term, so once it is negligible
      * everything after it is too, regardless of the sine. */
-    if (j > 1 && fabs(exp(-0.5 * jpx * jpx) * j * M_PI * x * x) < 1e-16)
+    if (j > 1 && fabs(exp(-0.5 * jpx * jpx) * j * SIF_PI * x * x) < 1e-16)
       break;
   }
 
   return 2.0 * sum;
 }
 
-real_t* sif_multiplicity_function_svdw(
-  const real_t* sigma, uint32_t n, real_t delta_v, real_t delta_c) {
+sif_real* sif_svdw_multiplicity_function(
+  const sif_real* sigma, uint32_t n, sif_real delta_v, sif_real delta_c) {
 
   if (!sigma || n == 0) {
-    SIF_LOG_ERROR(__TAG, "invalid arguments to multiplicity_function_svdw");
+    SIF_LOG_ERROR(TAG, "invalid arguments to multiplicity_function_svdw");
     return NULL;
   }
 
   if (!(delta_v < 0.0f)) {
     SIF_LOG_ERROR(
-      __TAG, "delta_v is %g, must be strictly negative", (double)delta_v);
+      TAG, "delta_v is %g, must be strictly negative", (double)delta_v);
     return NULL;
   }
 
   if (!(delta_c > 0.0f)) {
     SIF_LOG_ERROR(
-      __TAG, "delta_c is %g, must be strictly positive", (double)delta_c);
+      TAG, "delta_c is %g, must be strictly positive", (double)delta_c);
     return NULL;
   }
 
@@ -278,16 +283,16 @@ real_t* sif_multiplicity_function_svdw(
   const double dcal = abs_dv / ((double)delta_c + abs_dv);
 
   if (dcal >= 0.75) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "D = %g exceeds the 3/4 the reference validates; the series is summed to "
       "convergence but the underlying approximation is outside its tested "
       "range",
       dcal);
   }
 
-  real_t* out = sif_calloc_aligned((size_t)n, sizeof(real_t));
+  sif_real* out = sif_calloc_aligned((size_t)n, sizeof(sif_real));
   if (!out) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the multiplicity array");
+    SIF_LOG_ERROR(TAG, "failed to allocate the multiplicity array");
     return NULL;
   }
 
@@ -299,12 +304,12 @@ real_t* sif_multiplicity_function_svdw(
       n_bad++;
       continue;
     }
-    const double f = __f_ln_sigma((double)sigma[i], abs_dv, dcal);
-    out[i] = (real_t)(f > 0.0 ? f : 0.0);
+    const double f = f_ln_sigma((double)sigma[i], abs_dv, dcal);
+    out[i] = (sif_real)(f > 0.0 ? f : 0.0);
   }
 
   if (n_bad > 0) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "%u of %u sigma values were not positive and were reported as zero",
       n_bad, n);
   }
@@ -314,31 +319,29 @@ real_t* sif_multiplicity_function_svdw(
 
 /* --- The Sheth-Mo-Tormen moving barrier --- */
 
-real_t* sif_barrier_smt(
-  const real_t* sigma, uint32_t n, real_t alpha, real_t beta, real_t gamma) {
+sif_real* sif_ep_barrier_smt(const sif_real* sigma, uint32_t n, sif_real alpha,
+  sif_real beta, sif_real gamma) {
 
   if (!sigma || n == 0) {
-    SIF_LOG_ERROR(__TAG, "no sigma values to build a barrier over");
+    SIF_LOG_ERROR(TAG, "no sigma values to build a barrier over");
     return NULL;
   }
 
   if (!(alpha > 0.0f)) {
-    SIF_LOG_ERROR(
-      __TAG, "alpha is %g, must be strictly positive", (double)alpha);
+    SIF_LOG_ERROR(TAG, "alpha is %g, must be strictly positive", (double)alpha);
     return NULL;
   }
 
   /* Strictly positive: (beta/sigma)^gamma is not real for a negative base at
    * the fractional gamma this barrier is always calibrated with. */
   if (!(beta > 0.0f)) {
-    SIF_LOG_ERROR(
-      __TAG, "beta is %g, must be strictly positive", (double)beta);
+    SIF_LOG_ERROR(TAG, "beta is %g, must be strictly positive", (double)beta);
     return NULL;
   }
 
-  real_t* out = sif_calloc_aligned((size_t)n, sizeof(real_t));
+  sif_real* out = sif_calloc_aligned((size_t)n, sizeof(sif_real));
   if (!out) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the barrier array");
+    SIF_LOG_ERROR(TAG, "failed to allocate the barrier array");
     return NULL;
   }
 
@@ -353,11 +356,11 @@ real_t* sif_barrier_smt(
       n_bad++;
       continue;
     }
-    out[i] = (real_t)(a * (1.0 + pow(b / (double)sigma[i], g)));
+    out[i] = (sif_real)(a * (1.0 + pow(b / (double)sigma[i], g)));
   }
 
   if (n_bad > 0) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "%u of %u sigma values were not positive; their barriers are zero, which "
       "any walk crosses immediately",
       n_bad, n);
@@ -369,11 +372,11 @@ real_t* sif_barrier_smt(
 /* --- The walk --- */
 
 /*
- * Per-path seeding, following __fft_seed_mode in src/math/fft.c. Hashing the
+ * Per-path seeding, following fft_seed_mode in src/math/fft.c. Hashing the
  * path index into the seed, rather than drawing from a per-thread stream,
  * makes the counts a pure function of (seed, n_paths).
  */
-static inline void __ep_seed_path(
+static inline void ep_seed_path(
   sif_prng_state_t* prng, uint64_t seed, uint64_t p) {
 
   uint64_t z = seed + p * 0x9e3779b97f4a7c15ULL;
@@ -382,24 +385,24 @@ static inline void __ep_seed_path(
   sif_prng_init(prng, z ^ (z >> 31));
 }
 
-uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
-  const double* cov, const real_t* barrier, uint64_t n_paths, uint64_t seed,
-  sif_option_t opt) {
+uint64_t* sif_ep_first_crossing_counts(const sif_real* radii, uint32_t n_radii,
+  const double* cov, const sif_real* barrier, uint64_t n_paths, uint64_t seed,
+  sif_option opt) {
 
   (void)opt; /* reserved */
 
-  if (__validate(radii, n_radii, cov, barrier, n_paths) != SIF_OK)
+  if (validate(radii, n_radii, cov, barrier, n_paths) != SIF_OK)
     return NULL;
 
   const uint32_t n = n_radii;
 
   sif_ep_factor_t f;
-  if (sif_ep_factor_init(&f, n) != SIF_OK) {
-    sif_ep_factor_free(&f);
+  if (sif__ep_factor_init(&f, n) != SIF_OK) {
+    sif__ep_factor_free(&f);
     return NULL;
   }
-  if (sif_ep_cholesky(&f, cov, radii, n) != SIF_OK) {
-    sif_ep_factor_free(&f);
+  if (sif__ep_cholesky(&f, cov, radii, n) != SIF_OK) {
+    sif__ep_factor_free(&f);
     return NULL;
   }
 
@@ -409,10 +412,10 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
   uint64_t* total = sif_calloc_aligned((size_t)n, sizeof(uint64_t));
 
   if (!barrier_walk || !total) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the walk buffers");
+    SIF_LOG_ERROR(TAG, "failed to allocate the walk buffers");
     sif_free_aligned(barrier_walk);
     sif_free_aligned(total);
-    sif_ep_factor_free(&f);
+    sif__ep_factor_free(&f);
     return NULL;
   }
 
@@ -420,7 +423,7 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
     barrier_walk[j] = (double)barrier[n - 1 - j];
 
   /* The last row is the longest, and the dot product runs to its padded end. */
-  const uint64_t xi_len = __roundup((uint64_t)n, __SIF_EP_ROW_PAD);
+  const uint64_t xi_len = roundup((uint64_t)n, SIF__EP_ROW_PAD);
 
   int alloc_failed = 0;
 
@@ -451,7 +454,7 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
         continue;
 
       sif_prng_state_t prng;
-      __ep_seed_path(&prng, seed, p);
+      ep_seed_path(&prng, seed, p);
 
       /* Discarded rather than carried across paths, which would couple them
        * and break the per-path reproducibility. */
@@ -502,10 +505,10 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
   }
 
   sif_free_aligned(barrier_walk);
-  sif_ep_factor_free(&f);
+  sif__ep_factor_free(&f);
 
   if (alloc_failed) {
-    SIF_LOG_ERROR(__TAG, "a worker failed to allocate its walk buffers");
+    SIF_LOG_ERROR(TAG, "a worker failed to allocate its walk buffers");
     sif_free_aligned(total);
     return NULL;
   }
@@ -522,11 +525,11 @@ uint64_t* sif_first_crossing_counts_ep(const real_t* radii, uint32_t n_radii,
 
 /* --- The multiplicity function --- */
 
-real_t* sif_multiplicity_function_ep(const real_t* radii, uint32_t n_radii,
-  const double* cov, const real_t* barrier, uint64_t n_paths, uint64_t seed,
-  uint64_t* counts_out, sif_option_t opt) {
+sif_real* sif_ep_multiplicity_function(const sif_real* radii, uint32_t n_radii,
+  const double* cov, const sif_real* barrier, uint64_t n_paths, uint64_t seed,
+  uint64_t* counts_out, sif_option opt) {
 
-  uint64_t* counts = sif_first_crossing_counts_ep(
+  uint64_t* counts = sif_ep_first_crossing_counts(
     radii, n_radii, cov, barrier, n_paths, seed, opt);
   if (!counts)
     return NULL;
@@ -538,9 +541,9 @@ real_t* sif_multiplicity_function_ep(const real_t* radii, uint32_t n_radii,
 
   const uint32_t n_bins = n_radii - 1;
 
-  real_t* f = sif_calloc_aligned((size_t)n_bins, sizeof(real_t));
+  sif_real* f = sif_calloc_aligned((size_t)n_bins, sizeof(sif_real));
   if (!f) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the multiplicity array");
+    SIF_LOG_ERROR(TAG, "failed to allocate the multiplicity array");
     sif_free_aligned(counts);
     return NULL;
   }
@@ -551,11 +554,11 @@ real_t* sif_multiplicity_function_ep(const real_t* radii, uint32_t n_radii,
 
   for (uint32_t i = 0; i < n_bins; i++) {
     const double dr = (double)radii[i + 1] - (double)radii[i];
-    f[i] = (real_t)((double)counts[i] / ((double)n_paths * dr));
+    f[i] = (sif_real)((double)counts[i] / ((double)n_paths * dr));
   }
 
   if (crossed == 0) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "no path crossed the barrier at any radius, so the multiplicity is "
       "identically zero; the barrier is far above the field or the covariance "
       "is far below it");
@@ -565,13 +568,12 @@ real_t* sif_multiplicity_function_ep(const real_t* radii, uint32_t n_radii,
      * grid does not reach far enough out. */
     const uint64_t dropped = counts[n_radii - 1];
     if ((double)dropped > 0.01 * (double)crossed) {
-      SIF_LOG_WARNING(__TAG,
+      SIF_LOG_WARNING(TAG,
         "%llu of %llu crossings (%.1f%%) happened on the walk's first step, at "
         "the largest radius %g, and fall outside every bin; extend the radius "
         "grid upward",
         (unsigned long long)dropped, (unsigned long long)crossed,
-        100.0 * (double)dropped / (double)crossed,
-        (double)radii[n_radii - 1]);
+        100.0 * (double)dropped / (double)crossed, (double)radii[n_radii - 1]);
     }
   }
 

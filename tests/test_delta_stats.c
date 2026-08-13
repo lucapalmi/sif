@@ -1,20 +1,26 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /* Validates the Fourier-space delta PDF estimator and the phase-shuffle
  * surrogate. The load-bearing check is that sigma(R) computed from the
  * spectrum agrees with the variance measured on the real-space field: that
  * single equality pins down the filter normalization, the Parseval factors,
  * and -- for a shuffled spectrum -- the Hermitian symmetry, which otherwise
  * fails silently by quietly dropping power in the c2r transform. */
-#include "core/get_system.h"
+#include "core/system_internal.h"
 #include "math/fft.h"
-#include "test_util.h"
 #include "sif/core/system.h"
-#include "sif/measure/deltadistribution.h"
-#include "sif/measure/deltamoments.h"
+#include "sif/measure/delta_distribution.h"
+#include "sif/measure/delta_moments.h"
 #include "sif/model/bbks.h"
-#include "sif/structures/sizefunction.h"
-#include "sif/model/deltamoments.h"
+#include "sif/model/delta_moments.h"
 #include "sif/structures/grid.h"
+#include "sif/structures/size_function.h"
 #include "sif/utils/align.h"
+#include "test_util.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -47,7 +53,7 @@ static inline uint64_t idx3(uint32_t n, uint32_t i, uint32_t j, uint32_t k) {
 
 /* One periodic box-average pass of half-width h along one axis. */
 static void smooth_pass(
-  const real_t* src, real_t* dst, uint32_t n, int h, int axis) {
+  const sif_real* src, sif_real* dst, uint32_t n, int h, int axis) {
   const double inv = 1.0 / (2 * h + 1);
 
   for (uint32_t i = 0; i < n; i++) {
@@ -65,7 +71,7 @@ static void smooth_pass(
             c = (k + shifted) % n;
           s += (double)src[idx3(n, a, b, c)];
         }
-        dst[idx3(n, i, j, k)] = (real_t)(s * inv);
+        dst[idx3(n, i, j, k)] = (sif_real)(s * inv);
       }
     }
   }
@@ -81,24 +87,24 @@ static void smooth_pass(
  * carries the skewness the surrogate is supposed to destroy. An odd
  * perturbation of a symmetric field (say s + s^3) would have neither.
  */
-static void fill_field(real_t* d, uint32_t n, real_t box_length) {
+static void fill_field(sif_real* d, uint32_t n, sif_real box_length) {
   (void)box_length;
   const uint64_t total = (uint64_t)n * n * n;
 
-  real_t* tmp = malloc(total * sizeof(real_t));
+  sif_real* tmp = malloc(total * sizeof(sif_real));
   if (!tmp)
     return;
 
   rng_state = 0x9E3779B97F4A7C15ULL;
   for (uint64_t i = 0; i < total; i++)
-    d[i] = (real_t)(uni() - 0.5);
+    d[i] = (sif_real)(uni() - 0.5);
 
   /* Two passes per axis gives a correlation length of a few cells, which at
    * n=64 in a 500 box is comparable to the radii under test. */
   for (int pass = 0; pass < 2; pass++) {
     for (int axis = 0; axis < 3; axis++) {
       smooth_pass(d, tmp, n, 3, axis);
-      memcpy(d, tmp, total * sizeof(real_t));
+      memcpy(d, tmp, total * sizeof(sif_real));
     }
   }
 
@@ -123,19 +129,19 @@ static void fill_field(real_t* d, uint32_t n, real_t box_length) {
   for (uint64_t i = 0; i < total; i++) {
     double g = ((double)d[i] - mean) * scale;
     double v = exp(g);
-    d[i] = (real_t)v;
+    d[i] = (sif_real)v;
     sum += v;
   }
 
   /* Normalize to an overdensity: zero mean by construction. */
   const double inv_mean = (double)total / sum;
   for (uint64_t i = 0; i < total; i++)
-    d[i] = (real_t)((double)d[i] * inv_mean - 1.0);
+    d[i] = (sif_real)((double)d[i] * inv_mean - 1.0);
 }
 
 /* Mean and variance of a real-space buffer, in double. */
 static void field_moments(
-  const real_t* d, uint64_t n, double* mean, double* var) {
+  const sif_real* d, uint64_t n, double* mean, double* var) {
   double s = 0.0;
   for (uint64_t i = 0; i < n; i++)
     s += (double)d[i];
@@ -149,7 +155,7 @@ static void field_moments(
   *var = v / (double)n;
 }
 
-/* Half-complex index, mirroring __get_flat_complex_index in fft.c. */
+/* Half-complex index, mirroring get_flat_complex_index in fft.c. */
 static inline uint64_t cidx(uint32_t ix, uint32_t iy, uint32_t iz, uint32_t n) {
   const uint32_t z_dim = n / 2 + 1;
   return ((uint64_t)ix * n + iy) * z_dim + iz;
@@ -173,14 +179,14 @@ static inline int32_t kvec(uint32_t i, uint32_t n) {
  * only up to the Nyquist-plane power -- negligible for a well-smoothed field,
  * which is the point.
  */
-static real_t* derivative_field(sif_fft_workspace_t* ws, uint32_t n,
-  sif_filter_type_t filter, real_t radius, int axis) {
+static sif_real* derivative_field(sif_fft_workspace_t* ws, uint32_t n,
+  sif_filter_type_t filter, sif_real radius, int axis) {
 
-  if (sif_fft_apply_filter(ws, filter, radius, BOX_LENGTH) != SIF_OK)
+  if (sif__fft_apply_filter(ws, filter, radius, BOX_LENGTH) != SIF_OK)
     return NULL;
 
   const uint32_t z_dim = n / 2 + 1;
-  const double k_unit = 2.0 * M_PI / (double)BOX_LENGTH;
+  const double k_unit = 2.0 * SIF_PI / (double)BOX_LENGTH;
 
   if (axis >= 0) {
     for (uint32_t ix = 0; ix < n; ix++) {
@@ -197,8 +203,8 @@ static real_t* derivative_field(sif_fft_workspace_t* ws, uint32_t n,
           if (axis == 3) {
             const double k2 =
               k_unit * k_unit * (double)(kx * kx + ky * ky + kz * kz);
-            ws->delta_k_cpy[i][0] = (real_t)(-k2 * re);
-            ws->delta_k_cpy[i][1] = (real_t)(-k2 * im);
+            ws->delta_k_cpy[i][0] = (sif_real)(-k2 * re);
+            ws->delta_k_cpy[i][1] = (sif_real)(-k2 * im);
           } else {
             const int32_t ka = (axis == 0) ? kx : (axis == 1) ? ky : kz;
 
@@ -212,15 +218,15 @@ static real_t* derivative_field(sif_fft_workspace_t* ws, uint32_t n,
 
             const double k = k_unit * (double)ka;
             /* (re + i im) * i k = -k im + i k re */
-            ws->delta_k_cpy[i][0] = (real_t)(-k * im);
-            ws->delta_k_cpy[i][1] = (real_t)(k * re);
+            ws->delta_k_cpy[i][0] = (sif_real)(-k * im);
+            ws->delta_k_cpy[i][1] = (sif_real)(k * re);
           }
         }
       }
     }
   }
 
-  return sif_fft_grid_backward(ws);
+  return sif__fft_grid_backward(ws);
 }
 
 /*
@@ -235,12 +241,13 @@ static real_t* derivative_field(sif_fft_workspace_t* ws, uint32_t n,
  * sigma_2 sum would be a statement about the grid rather than the field.
  */
 static void test_moments_match_field(
-  uint32_t n, sif_option_t shuffle, const char* label) {
+  uint32_t n, sif_option shuffle, const char* label) {
   printf("k-space vs real-space moments, n=%u (%s)\n", n, label);
 
-  /* The library owns the FFTW manager: sif_fft_manager_finalize tears FFTW down
-   * process-wide, so a test must never create and destroy one of its own. */
-  sif_fft_manager_t* mgr = sif_get_system_state()->fft_mgr;
+  /* The library owns the FFTW manager: sif__fft_manager_finalize tears FFTW
+   * down process-wide, so a test must never create and destroy one of its own.
+   */
+  sif_fft_manager_t* mgr = sif__system_state()->fft_mgr;
   sif_grid_t* grid = sif_grid_alloc(n, BOX_LENGTH);
   CHECK(mgr && grid, "setup failed");
   if (!mgr || !grid) {
@@ -249,31 +256,34 @@ static void test_moments_match_field(
     return;
   }
 
-  fill_field(grid->delta, n, BOX_LENGTH);
+  fill_field(grid->values, n, BOX_LENGTH);
 
-  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif__fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
   if (!ws) {
     sif_grid_free(grid);
     return;
   }
 
-  sif_fft_grid_forward(ws, grid);
+  sif__fft_grid_forward(ws, grid);
 
   if (shuffle == SIF_DELTA_SHUFFLE_PHASES) {
-    CHECK(sif_fft_randomize_phases(ws, 1234, false) == SIF_OK, "shuffle failed");
+    CHECK(
+      sif__fft_randomize_phases(ws, 1234, false) == SIF_OK, "shuffle failed");
   } else if (shuffle == SIF_DELTA_SHUFFLE_GAUSSIAN) {
-    CHECK(sif_fft_randomize_phases(ws, 1234, true) == SIF_OK, "shuffle failed");
+    CHECK(
+      sif__fft_randomize_phases(ws, 1234, true) == SIF_OK, "shuffle failed");
   }
 
-  CHECK(sif_fft_workspace_init_backward(ws, mgr) == SIF_OK, "init_backward failed");
+  CHECK(sif__fft_workspace_init_backward(ws, mgr) == SIF_OK,
+    "init_backward failed");
 
-  const real_t radius = 25.0f;
+  const sif_real radius = 25.0f;
   const uint64_t total = (uint64_t)n * n * n;
 
   double predicted[3], high_k[3];
-  CHECK(sif_fft_spectral_moments(ws, FILTER_GAUSSIAN, radius, BOX_LENGTH, 2, 0,
-          predicted, high_k) == SIF_OK,
+  CHECK(sif__fft_spectral_moments(ws, SIF__FILTER_GAUSSIAN, radius, BOX_LENGTH,
+          2, 0, predicted, high_k) == SIF_OK,
     "moment evaluation failed");
 
   /* The whole comparison is only meaningful if the window really has killed
@@ -286,14 +296,14 @@ static void test_moments_match_field(
   double mean;
 
   /* sigma_0^2 = <delta_R^2> */
-  real_t* f = derivative_field(ws, n, FILTER_GAUSSIAN, radius, -1);
+  sif_real* f = derivative_field(ws, n, SIF__FILTER_GAUSSIAN, radius, -1);
   CHECK(f != NULL, "smoothed field failed");
   if (f)
     field_moments(f, total, &mean, &measured[0]);
 
   /* sigma_1^2 = <|grad delta_R|^2>, summed over the three components. */
   for (int axis = 0; axis < 3; axis++) {
-    real_t* g = derivative_field(ws, n, FILTER_GAUSSIAN, radius, axis);
+    sif_real* g = derivative_field(ws, n, SIF__FILTER_GAUSSIAN, radius, axis);
     CHECK(g != NULL, "gradient component %d failed", axis);
     if (g) {
       double m, v;
@@ -304,7 +314,7 @@ static void test_moments_match_field(
   }
 
   /* sigma_2^2 = <(laplacian delta_R)^2> */
-  real_t* l = derivative_field(ws, n, FILTER_GAUSSIAN, radius, 3);
+  sif_real* l = derivative_field(ws, n, SIF__FILTER_GAUSSIAN, radius, 3);
   CHECK(l != NULL, "laplacian failed");
   if (l) {
     double m, v;
@@ -323,7 +333,7 @@ static void test_moments_match_field(
     }
   }
 
-  sif_fft_workspace_free(ws);
+  sif__fft_workspace_free(ws);
   sif_grid_free(grid);
 }
 
@@ -335,23 +345,23 @@ static void test_moments_match_field(
 static void test_shuffle_preserves_power(uint32_t n) {
   printf("phase shuffle preserves |delta_k|, n=%u\n", n);
 
-  sif_fft_manager_t* mgr = sif_get_system_state()->fft_mgr;
+  sif_fft_manager_t* mgr = sif__system_state()->fft_mgr;
   sif_grid_t* grid = sif_grid_alloc(n, BOX_LENGTH);
   if (!mgr || !grid) {
     CHECK(0, "setup failed");
     return;
   }
 
-  fill_field(grid->delta, n, BOX_LENGTH);
+  fill_field(grid->values, n, BOX_LENGTH);
 
-  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif__fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
   if (!ws) {
     sif_grid_free(grid);
     return;
   }
 
-  sif_fft_grid_forward(ws, grid);
+  sif__fft_grid_forward(ws, grid);
 
   const uint64_t complex_cells = (uint64_t)n * n * (n / 2 + 1);
   double* before = malloc(complex_cells * sizeof(double));
@@ -374,7 +384,7 @@ static void test_shuffle_preserves_power(uint32_t n) {
       power += before[i] * before[i];
     const double rms = sqrt(power / (double)complex_cells);
 
-    CHECK(sif_fft_randomize_phases(ws, 99, false) == SIF_OK, "shuffle failed");
+    CHECK(sif__fft_randomize_phases(ws, 99, false) == SIF_OK, "shuffle failed");
 
     uint64_t bad = 0, moved = 0;
     double power_after = 0.0;
@@ -396,8 +406,8 @@ static void test_shuffle_preserves_power(uint32_t n) {
     CHECK(bad == 0, "%llu of %llu modes changed amplitude",
       (unsigned long long)bad, (unsigned long long)complex_cells);
     CHECK(moved > 0, "no mode acquired an imaginary part; phases did not move");
-    CHECK(fabs(power_after - power) / power < 1e-6,
-      "total power moved by %.3e", fabs(power_after - power) / power);
+    CHECK(fabs(power_after - power) / power < 1e-6, "total power moved by %.3e",
+      fabs(power_after - power) / power);
 
     /* The k = 0 mode carries the mean and must survive untouched. */
     CHECK(fabs((double)ws->delta_k[0][1]) < 1e-9,
@@ -406,7 +416,7 @@ static void test_shuffle_preserves_power(uint32_t n) {
     free(before);
   }
 
-  sif_fft_workspace_free(ws);
+  sif__fft_workspace_free(ws);
   sif_grid_free(grid);
 }
 
@@ -419,13 +429,13 @@ static void test_stats_api(uint32_t n) {
   if (!grid)
     return;
 
-  fill_field(grid->delta, n, BOX_LENGTH);
+  fill_field(grid->values, n, BOX_LENGTH);
 
-  const real_t radii[3] = {20.0f, 30.0f, 45.0f};
+  const sif_real radii[3] = {20.0f, 30.0f, 45.0f};
   /* Wide enough that the lognormal tail does not clip: the estimator counts
    * every cell in the normalization but only histograms the ones in range, so
    * a clipped tail shows up as an integral below one and a depressed sigma. */
-  const real_t bounds[2] = {-8.0f, 64.0f};
+  const sif_real bounds[2] = {-8.0f, 64.0f};
   const uint32_t n_bins = 720;
 
   sif_delta_distribution_t* d = sif_delta_distribution_grid(
@@ -433,8 +443,8 @@ static void test_stats_api(uint32_t n) {
   CHECK(d != NULL, "computation returned NULL");
 
   /* Every order comes from a single call and a single pass. */
-  sif_delta_moments_t* mom = sif_delta_moments_grid(
-    grid, radii, 3, 2, 0, 7, SIF_DELTA_KEEP_CIC_WINDOW);
+  sif_delta_moments_t* mom =
+    sif_delta_moments_grid(grid, radii, 3, 2, 0, 7, SIF_DELTA_KEEP_CIC_WINDOW);
   CHECK(mom != NULL, "moments returned NULL");
   if (!d || !mom) {
     sif_delta_distribution_free(d);
@@ -459,12 +469,12 @@ static void test_stats_api(uint32_t n) {
   CHECK(sif_delta_moments_sigma(mom, 3) == NULL,
     "the sigma accessor returned a block for an absent order");
 
-  const real_t* sig0 = sif_delta_moments_sigma(mom, 0);
-  const real_t* sig1 = sif_delta_moments_sigma(mom, 1);
-  const real_t* sig2 = sif_delta_moments_sigma(mom, 2);
+  const sif_real* sig0 = sif_delta_moments_sigma(mom, 0);
+  const sif_real* sig1 = sif_delta_moments_sigma(mom, 1);
+  const sif_real* sig2 = sif_delta_moments_sigma(mom, 2);
 
-  real_t* gamma_arr = sif_gamma_moments(mom);
-  real_t* r_star_arr = sif_r_star_moments(mom);
+  sif_real* gamma_arr = sif_bbks_gamma(mom);
+  sif_real* r_star_arr = sif_bbks_r_star(mom);
   CHECK(gamma_arr && r_star_arr, "gamma / R_star computation failed");
 
   if (d) {
@@ -473,11 +483,11 @@ static void test_stats_api(uint32_t n) {
     CHECK(d->delta_edges[0] == bounds[0] && d->delta_edges[n_bins] == bounds[1],
       "bin edges do not span the requested bounds");
 
-    const real_t bin_width = (bounds[1] - bounds[0]) / n_bins;
+    const sif_real bin_width = (bounds[1] - bounds[0]) / n_bins;
 
     for (uint32_t k = 0; k < 3; k++) {
       CHECK(d->radii[k] == radii[k], "radius %u was not echoed back", k);
-      const real_t sigma0 = sig0[k];
+      const sif_real sigma0 = sig0[k];
       CHECK(sigma0 > 0.0f, "sigma_0 at radius %u is non-positive", k);
 
       /* The field is well inside the bounds, so the PDF must integrate to 1
@@ -492,8 +502,8 @@ static void test_stats_api(uint32_t n) {
       /* sigma must be consistent with the second moment of the histogram. */
       double mean = 0.0, m2 = 0.0;
       for (uint32_t b = 0; b < n_bins; b++) {
-        double c = 0.5 * ((double)d->delta_edges[b] +
-                           (double)d->delta_edges[b + 1]);
+        double c =
+          0.5 * ((double)d->delta_edges[b] + (double)d->delta_edges[b + 1]);
         double w = (double)d->distributions[k * n_bins + b] * bin_width;
         mean += w * c;
         m2 += w * c * c;
@@ -507,18 +517,18 @@ static void test_stats_api(uint32_t n) {
         hist_sigma, (double)sigma0, rel);
 
       /* The moments are ordered by construction and gamma is bounded. */
-      const real_t s1 = sig1[k];
-      const real_t s2 = sig2[k];
-      CHECK(s1 > 0.0f && s2 > 0.0f, "row %u has a non-positive higher moment",
-        k);
+      const sif_real s1 = sig1[k];
+      const sif_real s2 = sig2[k];
+      CHECK(
+        s1 > 0.0f && s2 > 0.0f, "row %u has a non-positive higher moment", k);
       /* The BBKS parameters come from external functions rather than living
        * in the struct. gamma < 1 is Cauchy-Schwarz on the moment sums, so it
        * is a genuine bound rather than a heuristic. */
       const double gamma = gamma_arr ? (double)gamma_arr[k] : 0.0;
       const double r_star = r_star_arr ? (double)r_star_arr[k] : 0.0;
 
-      CHECK(fabs(gamma - (double)s1 * s1 / ((double)sigma0 * s2)) <
-              1e-5 * gamma,
+      CHECK(
+        fabs(gamma - (double)s1 * s1 / ((double)sigma0 * s2)) < 1e-5 * gamma,
         "row %u: gamma helper disagrees with the definition", k);
       CHECK(fabs(r_star - sqrt(3.0) * (double)s1 / s2) < 1e-5 * r_star,
         "row %u: R_star helper disagrees with the definition", k);
@@ -535,8 +545,8 @@ static void test_stats_api(uint32_t n) {
 
       printf("    R=%5.1f  sigma=(%.5f, %.3e, %.3e)  gamma=%.4f  "
              "R*=%6.2f  high_k(sigma_2)=%.2e\n",
-        (double)radii[k], (double)sigma0, (double)s1, (double)s2, gamma,
-        r_star, (double)mom->high_k_fraction[mom->offsets[2] + k]);
+        (double)radii[k], (double)sigma0, (double)s1, (double)s2, gamma, r_star,
+        (double)mom->high_k_fraction[mom->offsets[2] + k]);
     }
 
     /* Smoothing on a larger scale can only reduce the variance. */
@@ -548,13 +558,13 @@ static void test_stats_api(uint32_t n) {
   }
 
   /* An order-1 set must refuse to produce gamma or R_star. */
-  sif_delta_moments_t* low = sif_delta_moments_grid(
-    grid, radii, 3, 1, 0, 7, SIF_DELTA_KEEP_CIC_WINDOW);
+  sif_delta_moments_t* low =
+    sif_delta_moments_grid(grid, radii, 3, 1, 0, 7, SIF_DELTA_KEEP_CIC_WINDOW);
   CHECK(low != NULL, "order-1 moments returned NULL");
   if (low) {
-    CHECK(sif_gamma_moments(low) == NULL,
+    CHECK(sif_bbks_gamma(low) == NULL,
       "gamma was produced from an order-1 moment set");
-    CHECK(sif_r_star_moments(low) == NULL,
+    CHECK(sif_bbks_r_star(low) == NULL,
       "R_star was produced from an order-1 moment set");
     sif_delta_moments_free(low);
   }
@@ -571,17 +581,17 @@ static void test_stats_api(uint32_t n) {
 static void test_shuffle_removes_skewness(uint32_t n) {
   printf("shuffle preserves sigma and removes skewness, n=%u\n", n);
 
-  const real_t radii[1] = {20.0f};
+  const sif_real radii[1] = {20.0f};
   /* The surrogate is Gaussian and reaches well below delta = -1, which the
    * original lognormal field never does. Both tails have to fit or the
    * skewness comparison is measuring the clip, not the field. */
-  const real_t bounds[2] = {-8.0f, 64.0f};
+  const sif_real bounds[2] = {-8.0f, 64.0f};
   const uint32_t n_bins = 720;
 
   double skew[2] = {0.0, 0.0};
-  real_t sigma[2] = {0.0f, 0.0f};
+  sif_real sigma[2] = {0.0f, 0.0f};
 
-  const sif_option_t modes[2] = {
+  const sif_option modes[2] = {
     SIF_DELTA_SHUFFLE_NONE, SIF_DELTA_SHUFFLE_PHASES};
 
   for (int m = 0; m < 2; m++) {
@@ -590,7 +600,7 @@ static void test_shuffle_removes_skewness(uint32_t n) {
       CHECK(0, "grid alloc failed");
       return;
     }
-    fill_field(grid->delta, n, BOX_LENGTH);
+    fill_field(grid->values, n, BOX_LENGTH);
 
     sif_delta_distribution_t* d = sif_delta_distribution_grid(grid, radii, 1,
       n_bins, bounds, 2024, modes[m] | SIF_DELTA_KEEP_CIC_WINDOW);
@@ -629,8 +639,9 @@ static void test_shuffle_removes_skewness(uint32_t n) {
   CHECK(dsigma < 1e-3, "shuffle changed sigma: %g -> %g (rel %.3e)",
     (double)sigma[0], (double)sigma[1], dsigma);
 
-  CHECK(fabs(skew[0]) > 0.05, "the reference field is not skewed (%g); the "
-                              "test cannot detect anything",
+  CHECK(fabs(skew[0]) > 0.05,
+    "the reference field is not skewed (%g); the "
+    "test cannot detect anything",
     skew[0]);
   CHECK(fabs(skew[1]) < 0.3 * fabs(skew[0]),
     "the surrogate kept its skewness: %g vs %g", skew[1], skew[0]);
@@ -648,26 +659,24 @@ static void test_radius_guards(uint32_t n) {
     CHECK(0, "grid alloc failed");
     return;
   }
-  fill_field(grid->delta, n, BOX_LENGTH);
+  fill_field(grid->values, n, BOX_LENGTH);
 
-  const real_t bounds[2] = {-3.0f, 3.0f};
+  const sif_real bounds[2] = {-3.0f, 3.0f};
 
-  const real_t too_small[1] = {grid->cell_length};
-  sif_delta_distribution_t* d = sif_delta_distribution_grid(
-    grid, too_small, 1, 20, bounds, 1, SIF_DEFAULT);
+  const sif_real too_small[1] = {grid->cell_length};
+  sif_delta_distribution_t* d =
+    sif_delta_distribution_grid(grid, too_small, 1, 20, bounds, 1, SIF_DEFAULT);
   CHECK(d == NULL, "a sub-resolution radius was accepted");
   sif_delta_distribution_free(d);
 
-  const real_t too_big[1] = {BOX_LENGTH * 0.75f};
-  d = sif_delta_distribution_grid(
-    grid, too_big, 1, 20, bounds, 1, SIF_DEFAULT);
+  const sif_real too_big[1] = {BOX_LENGTH * 0.75f};
+  d = sif_delta_distribution_grid(grid, too_big, 1, 20, bounds, 1, SIF_DEFAULT);
   CHECK(d == NULL, "a radius larger than half the box was accepted");
   sif_delta_distribution_free(d);
 
-  const real_t ok[1] = {30.0f};
-  const real_t bad_bounds[2] = {2.0f, 1.0f};
-  d = sif_delta_distribution_grid(
-    grid, ok, 1, 20, bad_bounds, 1, SIF_DEFAULT);
+  const sif_real ok[1] = {30.0f};
+  const sif_real bad_bounds[2] = {2.0f, 1.0f};
+  d = sif_delta_distribution_grid(grid, ok, 1, 20, bad_bounds, 1, SIF_DEFAULT);
   CHECK(d == NULL, "inverted delta bounds were accepted");
   sif_delta_distribution_free(d);
 
@@ -695,27 +704,27 @@ static void test_radius_guards(uint32_t n) {
 static void test_pk_matches_field(uint32_t n) {
   printf("theory integral vs field sum, n=%u\n", n);
 
-  sif_fft_manager_t* mgr = sif_get_system_state()->fft_mgr;
+  sif_fft_manager_t* mgr = sif__system_state()->fft_mgr;
   sif_grid_t* grid = sif_grid_alloc(n, BOX_LENGTH);
   if (!mgr || !grid) {
     CHECK(0, "setup failed");
     return;
   }
-  fill_field(grid->delta, n, BOX_LENGTH);
+  fill_field(grid->values, n, BOX_LENGTH);
 
-  sif_fft_workspace_t* ws = sif_fft_workspace_alloc(mgr, n);
+  sif_fft_workspace_t* ws = sif__fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed");
   if (!ws) {
     sif_grid_free(grid);
     return;
   }
-  sif_fft_grid_forward(ws, grid);
+  sif__fft_grid_forward(ws, grid);
 
   /* Bin |delta_k|^2 into a spherically averaged P(k) on the box's own mode
    * spacing. P(k) = |delta_k|^2 * V / N^6 in this convention. */
   const uint32_t z_dim = n / 2 + 1;
   const uint32_t n_bins_k = n / 2;
-  const double k_f = 2.0 * M_PI / (double)BOX_LENGTH;
+  const double k_f = 2.0 * SIF_PI / (double)BOX_LENGTH;
   const double volume = (double)BOX_LENGTH * BOX_LENGTH * BOX_LENGTH;
   const double n3 = (double)n * n * n;
 
@@ -751,27 +760,26 @@ static void test_pk_matches_field(uint32_t n) {
 
     /* Bin centres at the mean |k| of each shell; b = 0 is empty by
      * construction since k = 0 was skipped. */
-    real_t* kt = malloc(n_bins_k * sizeof(real_t));
-    real_t* pt = malloc(n_bins_k * sizeof(real_t));
+    sif_real* kt = malloc(n_bins_k * sizeof(sif_real));
+    sif_real* pt = malloc(n_bins_k * sizeof(sif_real));
     uint32_t n_pts = 0;
 
     if (kt && pt) {
       for (uint32_t b = 1; b < n_bins_k; b++) {
         if (p_cnt[b] <= 0.0)
           continue;
-        kt[n_pts] = (real_t)(k_f * ((double)b + 0.5));
-        pt[n_pts] = (real_t)(p_sum[b] / p_cnt[b]);
+        kt[n_pts] = (sif_real)(k_f * ((double)b + 0.5));
+        pt[n_pts] = (sif_real)(p_sum[b] / p_cnt[b]);
         n_pts++;
       }
 
-      const real_t radii[2] = {30.0f, 45.0f};
+      const sif_real radii[2] = {30.0f, 45.0f};
 
       for (uint8_t j = 0; j < 3; j++) {
         sif_delta_moments_t* from_pk = sif_delta_moments_pk(
           kt, pt, n_pts, radii, 2, j, SIF_DELTA_FILTER_GAUSSIAN);
-        sif_delta_moments_t* from_field =
-          sif_delta_moments_grid(grid, radii, 2, j, 0, 0,
-            SIF_DELTA_FILTER_GAUSSIAN | SIF_DELTA_KEEP_CIC_WINDOW);
+        sif_delta_moments_t* from_field = sif_delta_moments_grid(grid, radii, 2,
+          j, 0, 0, SIF_DELTA_FILTER_GAUSSIAN | SIF_DELTA_KEEP_CIC_WINDOW);
 
         CHECK(from_pk != NULL && from_field != NULL,
           "moment %u: one of the two routes returned NULL", j);
@@ -780,8 +788,8 @@ static void test_pk_matches_field(uint32_t n) {
           CHECK(from_pk->order == j && from_field->order == j,
             "moment %u: order not echoed back", j);
 
-          const real_t* fs = sif_delta_moments_sigma(from_field, j);
-          const real_t* ps = sif_delta_moments_sigma(from_pk, j);
+          const sif_real* fs = sif_delta_moments_sigma(from_field, j);
+          const sif_real* ps = sif_delta_moments_sigma(from_pk, j);
 
           for (uint32_t r = 0; r < 2; r++) {
             const double a = (double)fs[r];
@@ -816,7 +824,7 @@ static void test_pk_matches_field(uint32_t n) {
 
   free(p_sum);
   free(p_cnt);
-  sif_fft_workspace_free(ws);
+  sif__fft_workspace_free(ws);
   sif_grid_free(grid);
 }
 
@@ -842,8 +850,8 @@ static void test_pk_analytic(void) {
    * top and well below 1/R at the bottom, or the integral is truncated
    * rather than wrong. */
   const uint32_t n_points = 2000;
-  real_t* kt = malloc(n_points * sizeof(real_t));
-  real_t* pt = malloc(n_points * sizeof(real_t));
+  sif_real* kt = malloc(n_points * sizeof(sif_real));
+  sif_real* pt = malloc(n_points * sizeof(sif_real));
   CHECK(kt && pt, "table alloc failed");
   if (!kt || !pt) {
     free(kt);
@@ -855,26 +863,26 @@ static void test_pk_analytic(void) {
   for (uint32_t i = 0; i < n_points; i++) {
     const double lk = lk_min + (lk_max - lk_min) * i / (double)(n_points - 1);
     const double k = exp(lk);
-    kt[i] = (real_t)k;
-    pt[i] = (real_t)(amplitude * pow(k, slope));
+    kt[i] = (sif_real)k;
+    pt[i] = (sif_real)(amplitude * pow(k, slope));
   }
 
-  const real_t radii[3] = {5.0f, 20.0f, 80.0f};
+  const sif_real radii[3] = {5.0f, 20.0f, 80.0f};
 
   sif_delta_moments_t* m = sif_delta_moments_pk(
     kt, pt, n_points, radii, 3, 2, SIF_DELTA_FILTER_GAUSSIAN);
   CHECK(m != NULL, "the analytic table returned NULL");
 
   for (uint8_t j = 0; m && j <= 2; j++) {
-    const real_t* sig = sif_delta_moments_sigma(m, j);
-    const real_t* hkf = m->high_k_fraction + m->offsets[j];
+    const sif_real* sig = sif_delta_moments_sigma(m, j);
+    const sif_real* hkf = m->high_k_fraction + m->offsets[j];
 
     const double p = 2.0 * j + 3.0 + slope;
 
     for (uint32_t r = 0; r < 3; r++) {
       const double R = (double)radii[r];
       const double expected_sq =
-        amplitude / (4.0 * M_PI * M_PI) * pow(R, -p) * tgamma(0.5 * p);
+        amplitude / (4.0 * SIF_PI * SIF_PI) * pow(R, -p) * tgamma(0.5 * p);
       const double expected = sqrt(expected_sq);
       const double got = (double)sig[r];
       const double rel = fabs(got - expected) / expected;
@@ -889,8 +897,8 @@ static void test_pk_analytic(void) {
         j, R, (double)hkf[r]);
     }
 
-    printf("    order %u: within 1e-3 of the closed form at R = 5, 20, 80\n",
-      j);
+    printf(
+      "    order %u: within 1e-3 of the closed form at R = 5, 20, 80\n", j);
   }
 
   sif_delta_moments_free(m);
@@ -902,30 +910,27 @@ static void test_pk_analytic(void) {
 static void test_pk_guards(void) {
   printf("P(k) table guards\n");
 
-  const real_t radii[1] = {20.0f};
-  const real_t good_k[3] = {0.01f, 0.1f, 1.0f};
-  const real_t good_p[3] = {100.0f, 50.0f, 1.0f};
+  const sif_real radii[1] = {20.0f};
+  const sif_real good_k[3] = {0.01f, 0.1f, 1.0f};
+  const sif_real good_p[3] = {100.0f, 50.0f, 1.0f};
 
-  const real_t zero_k[3] = {0.0f, 0.1f, 1.0f};
-  sif_delta_moments_t* m = sif_delta_moments_pk(
-    zero_k, good_p, 3, radii, 1, 0, SIF_DEFAULT);
+  const sif_real zero_k[3] = {0.0f, 0.1f, 1.0f};
+  sif_delta_moments_t* m =
+    sif_delta_moments_pk(zero_k, good_p, 3, radii, 1, 0, SIF_DEFAULT);
   CHECK(m == NULL, "a table containing k = 0 was accepted");
   sif_delta_moments_free(m);
 
-  const real_t unsorted_k[3] = {0.1f, 0.01f, 1.0f};
-  m = sif_delta_moments_pk(
-    unsorted_k, good_p, 3, radii, 1, 0, SIF_DEFAULT);
+  const sif_real unsorted_k[3] = {0.1f, 0.01f, 1.0f};
+  m = sif_delta_moments_pk(unsorted_k, good_p, 3, radii, 1, 0, SIF_DEFAULT);
   CHECK(m == NULL, "a non-monotonic k table was accepted");
   sif_delta_moments_free(m);
 
-  m = sif_delta_moments_pk(
-    good_k, good_p, 1, radii, 1, 0, SIF_DEFAULT);
+  m = sif_delta_moments_pk(good_k, good_p, 1, radii, 1, 0, SIF_DEFAULT);
   CHECK(m == NULL, "a single-point table was accepted");
   sif_delta_moments_free(m);
 
-  const real_t bad_radius[1] = {-1.0f};
-  m = sif_delta_moments_pk(
-    good_k, good_p, 3, bad_radius, 1, 0, SIF_DEFAULT);
+  const sif_real bad_radius[1] = {-1.0f};
+  m = sif_delta_moments_pk(good_k, good_p, 3, bad_radius, 1, 0, SIF_DEFAULT);
   CHECK(m == NULL, "a negative radius was accepted");
   sif_delta_moments_free(m);
 
@@ -962,7 +967,8 @@ static void test_bbks_g_asymptote(void) {
     const double g = gammas[i];
     const double w = 30.0;
 
-    const double got = (double)sif_g_bbks((real_t)g, (real_t)w, SIF_BBKS_G_FITTED);
+    const double got =
+      (double)sif_bbks_g((sif_real)g, (sif_real)w, SIF_BBKS_G_FITTED);
     const double lead = w * w * w - 3.0 * g * g * w;
     const double rel = fabs(got - lead) / lead;
 
@@ -973,9 +979,10 @@ static void test_bbks_g_asymptote(void) {
   /* G has to be positive across the range peaks are actually counted in. */
   for (int i = 0; i < 3; i++) {
     for (double w = 0.0; w <= 5.0; w += 0.25) {
-      const double got = (double)sif_g_bbks((real_t)gammas[i], (real_t)w, SIF_BBKS_G_FITTED);
-      CHECK(got > 0.0, "gamma=%g: G(%g) = %g is not positive", gammas[i], w,
-        got);
+      const double got =
+        (double)sif_bbks_g((sif_real)gammas[i], (sif_real)w, SIF_BBKS_G_FITTED);
+      CHECK(
+        got > 0.0, "gamma=%g: G(%g) = %g is not positive", gammas[i], w, got);
     }
   }
 }
@@ -988,16 +995,16 @@ static void test_bbks_g_asymptote(void) {
  * a wrong coefficient in the fit would break it, since gamma enters G in five
  * different places.
  */
-static void test_bbks_number_density(sif_option_t mode, const char* label) {
+static void test_bbks_number_density(sif_option mode, const char* label) {
   printf("BBKS maxima number density (%s G)\n", label);
 
   /* Exact 1/R_star^3 scaling at fixed nu and gamma. */
   {
-    const real_t nu[2] = {2.0f, 2.0f};
-    const real_t gamma[2] = {0.55f, 0.55f};
-    const real_t r_star[2] = {10.0f, 20.0f};
+    const sif_real nu[2] = {2.0f, 2.0f};
+    const sif_real gamma[2] = {0.55f, 0.55f};
+    const sif_real r_star[2] = {10.0f, 20.0f};
 
-    real_t* n = sif_differential_number_density_bbks(
+    sif_real* n = sif_bbks_number_density_differential(
       nu, gamma, r_star, 2, SIF_BBKS_G_FITTED);
     CHECK(n != NULL, "number density returned NULL");
     if (n) {
@@ -1016,9 +1023,9 @@ static void test_bbks_number_density(sif_option_t mode, const char* label) {
     const double dnu = (nu_hi - nu_lo) / (n_nu - 1);
     const double r = 1.0;
 
-    real_t* nu = malloc(n_nu * sizeof(real_t));
-    real_t* gm = malloc(n_nu * sizeof(real_t));
-    real_t* rs = malloc(n_nu * sizeof(real_t));
+    sif_real* nu = malloc(n_nu * sizeof(sif_real));
+    sif_real* gm = malloc(n_nu * sizeof(sif_real));
+    sif_real* rs = malloc(n_nu * sizeof(sif_real));
     CHECK(nu && gm && rs, "sweep alloc failed");
 
     if (nu && gm && rs) {
@@ -1027,15 +1034,15 @@ static void test_bbks_number_density(sif_option_t mode, const char* label) {
 
       for (int i = 0; i < 4; i++) {
         for (uint32_t t = 0; t < n_nu; t++) {
-          nu[t] = (real_t)(nu_lo + t * dnu);
-          gm[t] = (real_t)gammas[i];
-          rs[t] = (real_t)r;
+          nu[t] = (sif_real)(nu_lo + t * dnu);
+          gm[t] = (sif_real)gammas[i];
+          rs[t] = (sif_real)r;
         }
 
-        real_t* n = sif_differential_number_density_bbks(
-          nu, gm, rs, n_nu, mode);
-        CHECK(n != NULL, "number density returned NULL for gamma=%g",
-          gammas[i]);
+        sif_real* n =
+          sif_bbks_number_density_differential(nu, gm, rs, n_nu, mode);
+        CHECK(
+          n != NULL, "number density returned NULL for gamma=%g", gammas[i]);
 
         double total = 0.0;
         if (n) {
@@ -1073,23 +1080,23 @@ static void test_bbks_number_density(sif_option_t mode, const char* label) {
 
   /* Invalid inputs must be rejected rather than producing a NaN. */
   {
-    const real_t nu[1] = {1.0f};
-    const real_t good_g[1] = {0.5f};
-    const real_t good_r[1] = {10.0f};
+    const sif_real nu[1] = {1.0f};
+    const sif_real good_g[1] = {0.5f};
+    const sif_real good_r[1] = {10.0f};
 
-    const real_t bad_r[1] = {0.0f};
-    real_t* n = sif_differential_number_density_bbks(
+    const sif_real bad_r[1] = {0.0f};
+    sif_real* n = sif_bbks_number_density_differential(
       nu, good_g, bad_r, 1, SIF_BBKS_G_FITTED);
     CHECK(n == NULL, "R_star = 0 was accepted");
     sif_free_aligned(n);
 
-    const real_t bad_g[1] = {1.5f};
-    n = sif_differential_number_density_bbks(
+    const sif_real bad_g[1] = {1.5f};
+    n = sif_bbks_number_density_differential(
       nu, bad_g, good_r, 1, SIF_BBKS_G_FITTED);
     CHECK(n == NULL, "gamma > 1 was accepted");
     sif_free_aligned(n);
 
-    n = sif_differential_number_density_bbks(
+    n = sif_bbks_number_density_differential(
       NULL, good_g, good_r, 1, SIF_BBKS_G_FITTED);
     CHECK(n == NULL, "a NULL nu array was accepted");
     sif_free_aligned(n);
@@ -1113,11 +1120,11 @@ static void test_bbks_g_exact_vs_fit(void) {
   double worst_g = 0.0, worst_w = 0.0;
 
   for (int i = 0; i < 4; i++) {
-    const real_t g = (real_t)gammas[i];
+    const sif_real g = (sif_real)gammas[i];
 
     for (double w = 0.5; w <= 8.0; w += 0.1) {
-      const double fit = (double)sif_g_bbks(g, (real_t)w, SIF_BBKS_G_FITTED);
-      const double exact = (double)sif_g_bbks(g, (real_t)w, SIF_BBKS_G_EXACT);
+      const double fit = (double)sif_bbks_g(g, (sif_real)w, SIF_BBKS_G_FITTED);
+      const double exact = (double)sif_bbks_g(g, (sif_real)w, SIF_BBKS_G_EXACT);
 
       CHECK(exact > 0.0, "gamma=%g: exact G(%g) = %g is not positive",
         gammas[i], w, exact);
@@ -1147,7 +1154,8 @@ static void test_bbks_g_exact_vs_fit(void) {
   for (int i = 0; i < 4; i++) {
     const double w = 25.0;
     const double lead = w * w * w - 3.0 * gammas[i] * gammas[i] * w;
-    const double exact = (double)sif_g_bbks((real_t)gammas[i], (real_t)w, SIF_BBKS_G_EXACT);
+    const double exact =
+      (double)sif_bbks_g((sif_real)gammas[i], (sif_real)w, SIF_BBKS_G_EXACT);
     const double rel = fabs(exact - lead) / lead;
 
     CHECK(rel < 1e-3,
@@ -1159,18 +1167,19 @@ static void test_bbks_g_exact_vs_fit(void) {
    * the one the fit was tuned on. */
   for (double g = 0.05; g < 0.99; g += 0.05) {
     for (double w = 0.0; w <= 6.0; w += 0.5) {
-      const double v = (double)sif_g_bbks((real_t)g, (real_t)w, SIF_BBKS_G_EXACT);
+      const double v =
+        (double)sif_bbks_g((sif_real)g, (sif_real)w, SIF_BBKS_G_EXACT);
       CHECK(v > 0.0 && v < 1e6, "exact G(gamma=%g, w=%g) = %g is out of range",
         g, w, v);
     }
   }
 
   /* Unlike the fit, the exact G stays positive below zero. */
-  const double below = (double)sif_g_bbks(0.5f, -2.0f, SIF_BBKS_G_EXACT);
-  CHECK(below > 0.0, "exact G at w = -2 is %g, expected a small positive",
-    below);
+  const double below = (double)sif_bbks_g(0.5f, -2.0f, SIF_BBKS_G_EXACT);
+  CHECK(
+    below > 0.0, "exact G at w = -2 is %g, expected a small positive", below);
   printf("    exact G(0.5, -2) = %.3e, fitted = %.3e\n", below,
-    (double)sif_g_bbks(0.5f, -2.0f, SIF_BBKS_G_FITTED));
+    (double)sif_bbks_g(0.5f, -2.0f, SIF_BBKS_G_FITTED));
 }
 
 /*
@@ -1191,7 +1200,7 @@ static void test_bbks_g_exact_vs_fit(void) {
  * different route, so agreement checks the normalization against the paper
  * rather than against itself.
  */
-static void test_bbks_cumulative(sif_option_t mode, const char* label) {
+static void test_bbks_cumulative(sif_option mode, const char* label) {
   printf("BBKS cumulative density (%s G)\n", label);
 
   /*
@@ -1203,11 +1212,11 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
    * would instead push gamma towards 1; test_bbks_fit_breaks_at_high_gamma
    * covers that case deliberately.
    */
-  const real_t radii[1] = {20.0f};
+  const sif_real radii[1] = {20.0f};
 
   const uint32_t n_k = 1000;
-  real_t* k_table = malloc(n_k * sizeof(real_t));
-  real_t* p_table = malloc(n_k * sizeof(real_t));
+  sif_real* k_table = malloc(n_k * sizeof(sif_real));
+  sif_real* p_table = malloc(n_k * sizeof(sif_real));
   CHECK(k_table && p_table, "table alloc failed");
   if (!k_table || !p_table) {
     free(k_table);
@@ -1217,8 +1226,8 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
 
   for (uint32_t i = 0; i < n_k; i++) {
     const double lk = log(1e-4) + (log(1e1) - log(1e-4)) * i / (n_k - 1.0);
-    k_table[i] = (real_t)exp(lk);
-    p_table[i] = (real_t)pow(exp(lk), -2.0);
+    k_table[i] = (sif_real)exp(lk);
+    p_table[i] = (sif_real)pow(exp(lk), -2.0);
   }
 
   /* Build a real moment set through the public API so the test exercises the
@@ -1234,7 +1243,7 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
 
   /* Confirm the spectrum really did land the fit inside its band. */
   {
-    real_t* gcheck = sif_gamma_moments(m);
+    sif_real* gcheck = sif_bbks_gamma(m);
     if (gcheck) {
       CHECK(gcheck[0] > 0.5f && gcheck[0] < 0.65f,
         "the test spectrum gives gamma = %g, outside the intended band",
@@ -1243,9 +1252,9 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
     }
   }
 
-  real_t* gamma = sif_gamma_moments(m);
-  real_t* r_star = sif_r_star_moments(m);
-  const real_t* s0 = sif_delta_moments_sigma(m, 0);
+  sif_real* gamma = sif_bbks_gamma(m);
+  sif_real* r_star = sif_bbks_r_star(m);
+  const sif_real* s0 = sif_delta_moments_sigma(m, 0);
   CHECK(gamma && r_star && s0, "derived quantities failed");
 
   if (gamma && r_star && s0) {
@@ -1267,10 +1276,10 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
       const double depths[3] = {0.5, 2.0, 5.0};
 
       for (int t = 0; t < 3; t++) {
-        real_t* neg = sif_cumulative_number_density_bbks(
-          (real_t)(-depths[t] * sigma0), m, mode);
-        real_t* pos = sif_cumulative_number_density_bbks(
-          (real_t)(depths[t] * sigma0), m, mode);
+        sif_real* neg = sif_bbks_number_density_cumulative(
+          (sif_real)(-depths[t] * sigma0), m, mode);
+        sif_real* pos = sif_bbks_number_density_cumulative(
+          (sif_real)(depths[t] * sigma0), m, mode);
 
         CHECK(neg != NULL && pos != NULL, "cumulative returned NULL");
         if (neg && pos) {
@@ -1286,7 +1295,7 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
       /* At zero threshold the integral covers every maximum with nu > 0, so
        * it has to match the differential density integrated over the same
        * range -- a second integrator over the same integrand. */
-      real_t* at_zero = sif_cumulative_number_density_bbks(0.0f, m, mode);
+      sif_real* at_zero = sif_bbks_number_density_cumulative(0.0f, m, mode);
       CHECK(at_zero != NULL, "cumulative at delta = 0 returned NULL");
 
       if (at_zero) {
@@ -1296,10 +1305,11 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
         double integral = 0.0, prev = 0.0;
         for (uint32_t i = 0; i < n_nu; i++) {
           const double nu = i * dnu;
-          const real_t nuf = (real_t)nu, gf = (real_t)g, rf = (real_t)rs;
+          const sif_real nuf = (sif_real)nu, gf = (sif_real)g,
+                         rf = (sif_real)rs;
 
-          real_t* nd =
-            sif_differential_number_density_bbks(&nuf, &gf, &rf, 1, mode);
+          sif_real* nd =
+            sif_bbks_number_density_differential(&nuf, &gf, &rf, 1, mode);
           const double v = nd ? (double)nd[0] : 0.0;
           sif_free_aligned(nd);
 
@@ -1339,16 +1349,16 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
      * comfortably above that.
      */
     for (double nu_t = 5.0; nu_t <= 11.0; nu_t += 1.0) {
-      const real_t delta = (real_t)(nu_t * sigma0);
+      const sif_real delta = (sif_real)(nu_t * sigma0);
 
-      real_t* c = sif_cumulative_number_density_bbks(delta, m, mode);
+      sif_real* c = sif_bbks_number_density_cumulative(delta, m, mode);
       CHECK(c != NULL, "cumulative density returned NULL at nu_t=%g", nu_t);
       if (!c)
         continue;
 
       const double expected = exp(-0.5 * nu_t * nu_t) *
                               (g * g * g * (nu_t * nu_t + 2.0) - 3.0 * g) /
-                              (4.0 * M_PI * M_PI * rs * rs * rs);
+                              (4.0 * SIF_PI * SIF_PI * rs * rs * rs);
 
       const double got = (double)c[0];
       const double rel = fabs(got - expected) / expected;
@@ -1371,8 +1381,8 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
     {
       double prev = 1e30;
       for (double nu_t = 0.0; nu_t <= 5.0; nu_t += 0.5) {
-        real_t* c = sif_cumulative_number_density_bbks(
-          (real_t)(nu_t * sigma0), m, mode);
+        sif_real* c = sif_bbks_number_density_cumulative(
+          (sif_real)(nu_t * sigma0), m, mode);
         if (!c)
           continue;
 
@@ -1389,12 +1399,12 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
   sif_delta_moments_t* low = sif_delta_moments_pk(
     k_table, p_table, n_k, radii, 1, 1, SIF_DELTA_FILTER_GAUSSIAN);
   if (low) {
-    CHECK(sif_cumulative_number_density_bbks(0.5f, low, mode) == NULL,
+    CHECK(sif_bbks_number_density_cumulative(0.5f, low, mode) == NULL,
       "an order-1 moment set produced a cumulative density");
     sif_delta_moments_free(low);
   }
 
-  CHECK(sif_cumulative_number_density_bbks(0.5f, NULL, mode) == NULL,
+  CHECK(sif_bbks_number_density_cumulative(0.5f, NULL, mode) == NULL,
     "a NULL moment set was accepted");
 
   sif_free_aligned(gamma);
@@ -1413,9 +1423,9 @@ static void test_bbks_cumulative(sif_option_t mode, const char* label) {
 static void test_bbks_fit_breaks_at_high_gamma(void) {
   printf("BBKS fit vs exact outside the calibration band\n");
 
-  const real_t radii[1] = {20.0f};
-  const real_t k_narrow[3] = {0.01f, 0.1f, 1.0f};
-  const real_t p_narrow[3] = {1.0f, 1.0f, 1.0f};
+  const sif_real radii[1] = {20.0f};
+  const sif_real k_narrow[3] = {0.01f, 0.1f, 1.0f};
+  const sif_real p_narrow[3] = {1.0f, 1.0f, 1.0f};
 
   sif_delta_moments_t* m = sif_delta_moments_pk(
     k_narrow, p_narrow, 3, radii, 1, 2, SIF_DELTA_FILTER_GAUSSIAN);
@@ -1423,24 +1433,24 @@ static void test_bbks_fit_breaks_at_high_gamma(void) {
   if (!m)
     return;
 
-  real_t* gamma = sif_gamma_moments(m);
-  real_t* r_star = sif_r_star_moments(m);
-  const real_t* s0 = sif_delta_moments_sigma(m, 0);
+  sif_real* gamma = sif_bbks_gamma(m);
+  sif_real* r_star = sif_bbks_r_star(m);
+  const sif_real* s0 = sif_delta_moments_sigma(m, 0);
 
   if (gamma && r_star && s0) {
     const double rs = (double)r_star[0];
     (void)rs;
     (void)s0;
 
-    CHECK(gamma[0] > 0.9f, "the narrow spectrum gave gamma = %g, expected > 0.9",
-      (double)gamma[0]);
+    CHECK(gamma[0] > 0.9f,
+      "the narrow spectrum gave gamma = %g, expected > 0.9", (double)gamma[0]);
 
     /* A zero threshold puts the whole integral at small w = gamma * nu, which
      * is exactly where the fit degrades once gamma leaves its band. */
-    real_t* fitted =
-      sif_cumulative_number_density_bbks(0.0f, m, SIF_BBKS_G_FITTED);
-    real_t* exact =
-      sif_cumulative_number_density_bbks(0.0f, m, SIF_BBKS_G_EXACT);
+    sif_real* fitted =
+      sif_bbks_number_density_cumulative(0.0f, m, SIF_BBKS_G_FITTED);
+    sif_real* exact =
+      sif_bbks_number_density_cumulative(0.0f, m, SIF_BBKS_G_EXACT);
 
     if (fitted && exact) {
       const double tf = (double)fitted[0];
@@ -1471,12 +1481,12 @@ static void test_bbks_fit_breaks_at_high_gamma(void) {
  * scheme at all: integrating it back over ln R has to recover the drop in C,
  * and the two unit conventions have to differ by exactly a factor of R.
  */
-static void test_bbks_size_function(sif_option_t mode, const char* label) {
+static void test_bbks_size_function(sif_option mode, const char* label) {
   printf("BBKS size function (%s G)\n", label);
 
   const uint32_t n_k = 1000;
-  real_t* k_table = malloc(n_k * sizeof(real_t));
-  real_t* p_table = malloc(n_k * sizeof(real_t));
+  sif_real* k_table = malloc(n_k * sizeof(sif_real));
+  sif_real* p_table = malloc(n_k * sizeof(sif_real));
   if (!k_table || !p_table) {
     CHECK(0, "table alloc failed");
     free(k_table);
@@ -1486,14 +1496,15 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
 
   for (uint32_t i = 0; i < n_k; i++) {
     const double lk = log(1e-4) + (log(1e1) - log(1e-4)) * i / (n_k - 1.0);
-    k_table[i] = (real_t)exp(lk);
-    p_table[i] = (real_t)pow(exp(lk), -2.0);
+    k_table[i] = (sif_real)exp(lk);
+    p_table[i] = (sif_real)pow(exp(lk), -2.0);
   }
 
   const uint32_t n_r = 60;
-  real_t* radii = malloc(n_r * sizeof(real_t));
+  sif_real* radii = malloc(n_r * sizeof(sif_real));
   for (uint32_t i = 0; i < n_r; i++) {
-    radii[i] = (real_t)exp(log(5.0) + (log(60.0) - log(5.0)) * i / (n_r - 1.0));
+    radii[i] =
+      (sif_real)exp(log(5.0) + (log(60.0) - log(5.0)) * i / (n_r - 1.0));
   }
 
   sif_delta_moments_t* m = sif_delta_moments_pk(
@@ -1501,10 +1512,10 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
   CHECK(m != NULL, "moment set returned NULL");
 
   if (m) {
-    const real_t* s0 = sif_delta_moments_sigma(m, 0);
-    const real_t delta = (real_t)(-1.5 * (double)s0[0]);
+    const sif_real* s0 = sif_delta_moments_sigma(m, 0);
+    const sif_real delta = (sif_real)(-1.5 * (double)s0[0]);
 
-    real_t* c = sif_cumulative_number_density_bbks(delta, m, mode);
+    sif_real* c = sif_bbks_number_density_cumulative(delta, m, mode);
     sif_size_function_t* per_ln =
       sif_size_function_bbks(delta, m, mode | SIF_VSF_BIN_LN);
     sif_size_function_t* per_r =
@@ -1515,10 +1526,10 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
     if (c && per_ln && per_r) {
       /* The container has to describe itself: bins, centres, and the units
        * the values are in. */
-      CHECK(per_ln->n_bins == n_r, "n_bins is %u, expected %u",
-        per_ln->n_bins, n_r);
-      CHECK((per_ln->options & __SIF_VSF_BIN_MASK) == SIF_VSF_BIN_LN &&
-              (per_r->options & __SIF_VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR,
+      CHECK(per_ln->n_bins == n_r, "n_bins is %u, expected %u", per_ln->n_bins,
+        n_r);
+      CHECK((per_ln->options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN &&
+              (per_r->options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR,
         "the binning convention was not recorded in options");
       CHECK(per_ln->r_min == radii[0] && per_ln->r_max == radii[n_r - 1],
         "r_min / r_max do not match the radius range");
@@ -1570,8 +1581,7 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
       double recovered = 0.0;
       for (uint32_t r = 1; r < n_r; r++) {
         const double dln = log((double)radii[r]) - log((double)radii[r - 1]);
-        recovered +=
-          0.5 * ((double)per_ln->vsf[r] + per_ln->vsf[r - 1]) * dln;
+        recovered += 0.5 * ((double)per_ln->vsf[r] + per_ln->vsf[r - 1]) * dln;
       }
       const double expected = (double)c[0] - (double)c[n_r - 1];
       const double rel = fabs(recovered - expected) / expected;
@@ -1591,7 +1601,7 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
     sif_size_function_free(per_r);
 
     /* Guards: the derivative needs an ordered grid with more than one point. */
-    real_t backwards[3] = {30.0f, 20.0f, 10.0f};
+    sif_real backwards[3] = {30.0f, 20.0f, 10.0f};
     sif_delta_moments_t* bad = sif_delta_moments_pk(
       k_table, p_table, n_k, backwards, 3, 2, SIF_DELTA_FILTER_GAUSSIAN);
     if (bad) {
@@ -1600,7 +1610,7 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
       sif_delta_moments_free(bad);
     }
 
-    real_t single[1] = {20.0f};
+    sif_real single[1] = {20.0f};
     sif_delta_moments_t* one = sif_delta_moments_pk(
       k_table, p_table, n_k, single, 1, 2, SIF_DELTA_FILTER_GAUSSIAN);
     if (one) {
@@ -1619,8 +1629,10 @@ static void test_bbks_size_function(sif_option_t mode, const char* label) {
 
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
-  sif_config_t cfg = {.fft_config = &fftcfg, .omp_config = NULL,
-                      .verbose = false, .log_level = SIF_LOG_LEVEL_ERROR};
+  sif_config_t cfg = {.fft_config = &fftcfg,
+    .omp_config = NULL,
+    .verbose = false,
+    .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 
   const uint32_t n = (uint32_t)SIF_TEST_SCALE(64);

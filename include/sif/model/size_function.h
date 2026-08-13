@@ -1,16 +1,32 @@
-#ifndef __SIF_MODEL_SIZEFUNCTION_H__
-#define __SIF_MODEL_SIZEFUNCTION_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file size_function.h
+ * @brief Model void size functions, and the spherical-evolution mapping they
+ * are expressed in.
+ *
+ * The models predict a number density per radius bin in the same container the
+ * measurement fills, so a prediction and a catalogue can be plotted and
+ * compared directly.
+ */
+
+#ifndef SIF_MODEL_SIZE_FUNCTION_H
+#define SIF_MODEL_SIZE_FUNCTION_H
 
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/sizefunction.h"
+#include "sif/structures/size_function.h"
 
 /* Bernardeau (1994) fit constant linking the linear and non-linear void
  * density contrasts. */
 #define SIF_SPHERICAL_EXPANSION_C 1.594
 
-/*
+/**
  * @brief Non-linear density contrast a void of a given linear contrast
  * evolves to.
  *
@@ -29,11 +45,11 @@
  * outside that branch. A valid result is never 0, so the two are
  * distinguishable.
  */
-real_t sif_delta_nonlinear(real_t delta_linear, sif_option_t opt);
+sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt);
 
-/*
+/**
  * @brief Linear density contrast that evolves into a given non-linear one,
- * the inverse of sif_delta_nonlinear.
+ * the inverse of sif_spherical_map_nonlinear.
  *
  * Wanted when a barrier is quoted as an observed underdensity rather than as a
  * linear threshold.
@@ -44,9 +60,9 @@ real_t sif_delta_nonlinear(real_t delta_linear, sif_option_t opt);
  * @return The linear contrast, strictly negative, or 0 for input outside that
  * range.
  */
-real_t sif_delta_linear(real_t delta_nonlinear, sif_option_t opt);
+sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt);
 
-/*
+/**
  * @brief Sheth & van de Weygaert void size function.
  *
  * Jennings, Li & Hu (2013) eqs. (9) and (10): the number-conserving mapping,
@@ -75,11 +91,11 @@ real_t sif_delta_linear(real_t delta_nonlinear, sif_option_t opt);
  * @return Newly allocated size function with n_bins = n_radii, released with
  * sif_size_function_free, or NULL on invalid input.
  */
-NODISCARD sif_size_function_t* sif_size_function_svdw(const real_t* k,
-  const real_t* pk, uint32_t n_points, const real_t* radii, uint32_t n_radii,
-  real_t delta_v, real_t delta_c, sif_option_t opt);
+SIF_NODISCARD sif_size_function_t* sif_size_function_svdw(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt);
 
-/*
+/**
  * @brief Volume-conserving (Vdn) void size function.
  *
  * Jennings, Li & Hu (2013) eq. (12). Identical to SvdW except that the
@@ -92,8 +108,8 @@ NODISCARD sif_size_function_t* sif_size_function_svdw(const real_t* k,
  * @return Newly allocated size function with n_bins = n_radii, released with
  * sif_size_function_free, or NULL on invalid input.
  */
-NODISCARD sif_size_function_t* sif_size_function_vdn(const real_t* k,
-  const real_t* pk, uint32_t n_points, const real_t* radii, uint32_t n_radii,
-  real_t delta_v, real_t delta_c, sif_option_t opt);
+SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt);
 
-#endif /* __SIF_MODEL_SIZEFUNCTION_H__ */
+#endif /* SIF_MODEL_SIZE_FUNCTION_H */

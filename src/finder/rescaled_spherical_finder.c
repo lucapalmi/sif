@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/finder/rescaled_spherical_finder.h"
 
 #include <math.h>
@@ -9,7 +15,7 @@
 #include "sif/structures/cell_linked_list.h"
 #include "sif/structures/chain_mesh.h"
 
-#include "core/get_system.h"
+#include "core/system_internal.h"
 
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -18,14 +24,14 @@
 
 #include "utils.h"
 
-#ifndef M_PI
-#  define M_PI 3.14159265358979323846f
-#endif
+SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
+SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
 
-SIF_DEFINE_QUICKSORT(__sort_radii_desc, real_t, a > b)
-SIF_DEFINE_QUICKSORT(__sort_real_asc, real_t, a < b)
+/* Upper bound on the number of radial bins. Private to this file: it is a
+ * tuning constant, not part of the library's interface. */
+#define RESCALED_MAX_BINS 2048
 
-#define __TAG "rescaled_spherical_finder"
+#define TAG "rescaled_spherical_finder"
 
 /*
  * Speculation window.
@@ -43,36 +49,36 @@ SIF_DEFINE_QUICKSORT(__sort_real_asc, real_t, a < b)
  * accepts nothing cost nothing to speculate on and widens the window by one
  * floor's worth; a batch that accepts divides it down, the more accepts the
  * harder. Probing up slowly and backing off fast is what keeps the window off
- * the ceiling -- measured end to end, the result is insensitive to __BATCH_MAX,
+ * the ceiling -- measured end to end, the result is insensitive to BATCH_MAX,
  * and beats the best single fixed window precisely because no fixed window
  * suits every radius.
  *
  * This only changes how candidates are grouped, never the order in which they
  * are committed, so the catalog is identical for any window.
  */
-#define __BATCH_MAX 4096u
+#define BATCH_MAX 4096u
 
 /* Below a few candidates per thread the parallel region stops paying for
  * itself, whatever the accept rate says. */
-#define __BATCH_PER_THREAD 8u
-#define __BATCH_FLOOR      32u
+#define BATCH_PER_THREAD 8u
+#define BATCH_FLOOR      32u
 
 /* Coarse grid for the void-vs-void overlap index. */
-#define __VOID_CLL_CELLS 32
+#define VOID_CLL_CELLS 32
 
-#define __CATALOG_INITIAL_CAPACITY 250000
+#define CATALOG_INITIAL_CAPACITY 250000
 
 /*
  * Rescaling constants. Fixed, so that a catalog depends only on the grid, the
  * radius ladder and the threshold.
  *
- * __RMIN_FACTOR floors the rescaled radius at half the rung that found the
- * void. __N_MIN is a noise floor on the density estimate: a sphere whose
+ * RMIN_FACTOR floors the rescaled radius at half the rung that found the
+ * void. N_MIN is a noise floor on the density estimate: a sphere whose
  * expected tracer count at the mean density falls below it is too sparsely
  * sampled to say anything, so the walk abandons it. At 0 it never triggers.
  */
-#define __RMIN_FACTOR 0.50f
-#define __N_MIN       0.0f
+#define RMIN_FACTOR 0.50f
+#define N_MIN       0.0f
 
 /*
  * --- Per-thread scratch for the radial pass ---
@@ -94,18 +100,18 @@ SIF_DEFINE_QUICKSORT(__sort_real_asc, real_t, a < b)
 /* Roughly this many particles per bin. Sizing the histogram to the expected
  * occupancy keeps it (and the memset that clears it) small when the search
  * sphere is nearly empty, which is the common case at small radii. */
-#define __PARTICLES_PER_BIN 16.0f
+#define PARTICLES_PER_BIN 16.0f
 
-#define __MAX_RADIAL_BINS __SIF_RESCALED_SPHERICAL_FINDER_MAX_BINS
-#define __MIN_RADIAL_BINS 64u
+#define MAX_RADIAL_BINS RESCALED_MAX_BINS
+#define MIN_RADIAL_BINS 64u
 
 /* Initial capacity of the refinement buffer, which only ever holds the
  * contents of a single bin. */
-#define __REFINE_INITIAL_CAPACITY 4096u
+#define REFINE_INITIAL_CAPACITY 4096u
 
 /* Distances are computed in tiles so the arithmetic stays vectorizable even
  * though the histogram update that follows it cannot be. */
-#define __DIST_TILE 64u
+#define DIST_TILE 64u
 
 /*
  * Refinement window.
@@ -134,10 +140,10 @@ SIF_DEFINE_QUICKSORT(__sort_real_asc, real_t, a < b)
  * grows with W and has to be sorted, and eventually the window does get thick
  * enough to pull in extra cells.
  */
-#define __RESOLVE_MARGIN  2u  /* W = margin x mean span */
-#define __RESOLVE_MIN     1u
-#define __RESOLVE_MAX     64u
-#define __RESOLVE_INITIAL 8u
+#define RESOLVE_MARGIN  2u /* W = margin x mean span */
+#define RESOLVE_MIN     1u
+#define RESOLVE_MAX     64u
+#define RESOLVE_INITIAL 8u
 
 /*
  * A void is localized by the rung that found it: its center is the deepest
@@ -153,28 +159,28 @@ SIF_DEFINE_QUICKSORT(__sort_real_asc, real_t, a < b)
  * a ladder dense enough that every void meets a rung near its own scale never
  * trips it.
  */
-#define __MISMATCH_RATIO 2.0f
+#define MISMATCH_RATIO 2.0f
 
 typedef struct {
   uint32_t* bins;
-  real_t* refine;
+  sif_real* refine;
   uint32_t refine_count;
   uint32_t refine_capacity;
 
   /* How far down the bins the walk had to reach before the answer turned up,
    * summed over the scans that found one. This is what sizes the refinement
-   * window; see __RESOLVE_* below. Accumulated per thread and folded in during
+   * window; see RESOLVE_* below. Accumulated per thread and folded in during
    * the sequential commit, so no synchronization is needed. */
   uint64_t span_sum;
   uint64_t span_count;
 } radial_scratch_t;
 
-static int __refine_reserve(radial_scratch_t* s, uint32_t needed) {
+static int refine_reserve(radial_scratch_t* s, uint32_t needed) {
   if (needed <= s->refine_capacity)
     return SIF_OK;
 
   uint32_t new_capacity =
-    s->refine_capacity ? s->refine_capacity : __REFINE_INITIAL_CAPACITY;
+    s->refine_capacity ? s->refine_capacity : REFINE_INITIAL_CAPACITY;
   while (new_capacity < needed) {
     if (new_capacity > UINT32_MAX / 2)
       return SIF_ERR_ALLOC;
@@ -186,12 +192,12 @@ static int __refine_reserve(radial_scratch_t* s, uint32_t needed) {
    * far has to survive it. (It must: dropping it silently loses particles and
    * the walk then returns a radius that is too small. It only stays hidden
    * while a single bin fits in the initial capacity.) */
-  real_t* grown = sif_malloc_aligned((size_t)new_capacity * sizeof(real_t));
+  sif_real* grown = sif_malloc_aligned((size_t)new_capacity * sizeof(sif_real));
   if (!grown)
     return SIF_ERR_ALLOC;
 
   if (s->refine_count > 0)
-    memcpy(grown, s->refine, (size_t)s->refine_count * sizeof(real_t));
+    memcpy(grown, s->refine, (size_t)s->refine_count * sizeof(sif_real));
 
   sif_free_aligned(s->refine);
   s->refine = grown;
@@ -200,29 +206,29 @@ static int __refine_reserve(radial_scratch_t* s, uint32_t needed) {
   return SIF_OK;
 }
 
-static void __scratch_free(radial_scratch_t* s) {
+static void scratch_free(radial_scratch_t* s) {
   sif_free_aligned(s->bins);
   sif_free_aligned(s->refine);
   memset(s, 0, sizeof(*s));
 }
 
-static int __scratch_init(radial_scratch_t* s) {
+static int scratch_init(radial_scratch_t* s) {
   memset(s, 0, sizeof(*s));
 
-  s->bins = sif_malloc_aligned((size_t)__MAX_RADIAL_BINS * sizeof(uint32_t));
+  s->bins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(uint32_t));
   if (!s->bins)
     return SIF_ERR_ALLOC;
 
-  return __refine_reserve(s, __REFINE_INITIAL_CAPACITY);
+  return refine_reserve(s, REFINE_INITIAL_CAPACITY);
 }
 
 /* --- Mesh traversal template --- */
 
 /* Cell classification relative to the [rmin, r_search] annulus. */
-#define __CELL_FULLY_CORE   1 /* entirely inside rmin: count, never store */
-#define __CELL_STRADDLES    2 /* spans the rmin boundary: test each particle */
-#define __CELL_PARTIAL_EDGE 3 /* spans the r_search boundary: test each        */
-#define __CELL_FULLY_SHELL  4 /* entirely inside the annulus: store all        */
+#define CELL_FULLY_CORE   1 /* entirely inside rmin: count, never store */
+#define CELL_STRADDLES    2 /* spans the rmin boundary: test each particle */
+#define CELL_PARTIAL_EDGE 3 /* spans the r_search boundary: test each */
+#define CELL_FULLY_SHELL  4 /* entirely inside the annulus: store all        */
 
 typedef struct {
   int32_t* dx;
@@ -231,13 +237,14 @@ typedef struct {
   uint8_t* type;
   /* Squared distance bounds of the cell relative to the query center. Kept so
    * the refinement pass can drop every cell that cannot reach into the bin it
-   * is resolving, which turns that pass from a sphere scan into a shell scan. */
-  real_t* min_d2;
-  real_t* max_d2;
+   * is resolving, which turns that pass from a sphere scan into a shell scan.
+   */
+  sif_real* min_d2;
+  sif_real* max_d2;
   uint32_t count;
 } mesh_template_t;
 
-static void __template_free(mesh_template_t* tpl) {
+static void template_free(mesh_template_t* tpl) {
   sif_free_aligned(tpl->dx);
   sif_free_aligned(tpl->dy);
   sif_free_aligned(tpl->dz);
@@ -247,8 +254,8 @@ static void __template_free(mesh_template_t* tpl) {
   memset(tpl, 0, sizeof(*tpl));
 }
 
-static int __template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
-  real_t cell_length, real_t rmin, real_t r_search) {
+static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
+  sif_real cell_length, sif_real rmin, sif_real r_search) {
 
   memset(tpl, 0, sizeof(*tpl));
 
@@ -269,53 +276,57 @@ static int __template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
    * coarse mesh and a large radius are each reasonable alone.
    */
   if (cell_radius >= (int32_t)mesh_n_cells) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "the search sphere (r_search = %g, %d mesh cells) does not fit in a mesh "
       "of %u cells; use a finer mesh or smaller radii",
       (double)r_search, cell_radius, mesh_n_cells);
     return SIF_ERR_RANGE;
   }
 
-  const uint64_t max_cells =
-    (uint64_t)(2 * cell_radius + 1) * (2 * cell_radius + 1) *
-    (2 * cell_radius + 1);
+  const uint64_t max_cells = (uint64_t)(2 * cell_radius + 1) *
+                             (2 * cell_radius + 1) * (2 * cell_radius + 1);
 
   tpl->dx = sif_malloc_aligned(max_cells * sizeof(int32_t));
   tpl->dy = sif_malloc_aligned(max_cells * sizeof(int32_t));
   tpl->dz = sif_malloc_aligned(max_cells * sizeof(int32_t));
   tpl->type = sif_malloc_aligned(max_cells * sizeof(uint8_t));
-  tpl->min_d2 = sif_malloc_aligned(max_cells * sizeof(real_t));
-  tpl->max_d2 = sif_malloc_aligned(max_cells * sizeof(real_t));
+  tpl->min_d2 = sif_malloc_aligned(max_cells * sizeof(sif_real));
+  tpl->max_d2 = sif_malloc_aligned(max_cells * sizeof(sif_real));
 
   if (!tpl->dx || !tpl->dy || !tpl->dz || !tpl->type || !tpl->min_d2 ||
       !tpl->max_d2) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the mesh template");
-    __template_free(tpl);
+    SIF_LOG_ERROR(TAG, "failed to allocate the mesh template");
+    template_free(tpl);
     return SIF_ERR_ALLOC;
   }
 
-  const real_t r_search2 = r_search * r_search;
-  const real_t r_core2 = rmin * rmin;
+  const sif_real r_search2 = r_search * r_search;
+  const sif_real r_core2 = rmin * rmin;
 
   for (int32_t dx = -cell_radius; dx <= cell_radius; dx++) {
     for (int32_t dy = -cell_radius; dy <= cell_radius; dy++) {
       for (int32_t dz = -cell_radius; dz <= cell_radius; dz++) {
         /* Nearest and farthest a point in this cell can be from the center. */
-        const real_t min_x =
-          (dx == 0) ? 0.0f : (REAL_ABS((real_t)dx) - 1.0f) * cell_length;
-        const real_t min_y =
-          (dy == 0) ? 0.0f : (REAL_ABS((real_t)dy) - 1.0f) * cell_length;
-        const real_t min_z =
-          (dz == 0) ? 0.0f : (REAL_ABS((real_t)dz) - 1.0f) * cell_length;
-        const real_t min_dist2 = min_x * min_x + min_y * min_y + min_z * min_z;
+        const sif_real min_x =
+          (dx == 0) ? 0.0f : (SIF_REAL_ABS((sif_real)dx) - 1.0f) * cell_length;
+        const sif_real min_y =
+          (dy == 0) ? 0.0f : (SIF_REAL_ABS((sif_real)dy) - 1.0f) * cell_length;
+        const sif_real min_z =
+          (dz == 0) ? 0.0f : (SIF_REAL_ABS((sif_real)dz) - 1.0f) * cell_length;
+        const sif_real min_dist2 =
+          min_x * min_x + min_y * min_y + min_z * min_z;
 
         if (min_dist2 > r_search2)
           continue;
 
-        const real_t max_x = (REAL_ABS((real_t)dx) + 1.0f) * cell_length;
-        const real_t max_y = (REAL_ABS((real_t)dy) + 1.0f) * cell_length;
-        const real_t max_z = (REAL_ABS((real_t)dz) + 1.0f) * cell_length;
-        const real_t max_dist2 = max_x * max_x + max_y * max_y + max_z * max_z;
+        const sif_real max_x =
+          (SIF_REAL_ABS((sif_real)dx) + 1.0f) * cell_length;
+        const sif_real max_y =
+          (SIF_REAL_ABS((sif_real)dy) + 1.0f) * cell_length;
+        const sif_real max_z =
+          (SIF_REAL_ABS((sif_real)dz) + 1.0f) * cell_length;
+        const sif_real max_dist2 =
+          max_x * max_x + max_y * max_y + max_z * max_z;
 
         tpl->dx[tpl->count] = dx;
         tpl->dy[tpl->count] = dy;
@@ -324,13 +335,12 @@ static int __template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
         tpl->max_d2[tpl->count] = max_dist2;
 
         if (max_dist2 <= r_core2) {
-          tpl->type[tpl->count] = __CELL_FULLY_CORE;
+          tpl->type[tpl->count] = CELL_FULLY_CORE;
         } else if (min_dist2 > r_core2) {
-          tpl->type[tpl->count] = (max_dist2 <= r_search2)
-                                    ? __CELL_FULLY_SHELL
-                                    : __CELL_PARTIAL_EDGE;
+          tpl->type[tpl->count] =
+            (max_dist2 <= r_search2) ? CELL_FULLY_SHELL : CELL_PARTIAL_EDGE;
         } else {
-          tpl->type[tpl->count] = __CELL_STRADDLES;
+          tpl->type[tpl->count] = CELL_STRADDLES;
         }
         tpl->count++;
       }
@@ -351,10 +361,10 @@ static int __template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
 typedef struct {
   const sif_chain_mesh_t* mesh;
   const mesh_template_t* tpl;
-  real_t cx, cy, cz;
+  sif_real cx, cy, cz;
   int32_t center_ix, center_iy, center_iz;
   int32_t n_cells;
-  real_t box_length;
+  sif_real box_length;
 } mesh_query_t;
 
 /*
@@ -364,26 +374,42 @@ typedef struct {
  *
  * @return 0 if the cell is empty
  */
-static inline int __query_cell(const mesh_query_t* q, uint32_t i,
-  uint64_t* p_start, uint64_t* p_end, real_t* ex, real_t* ey, real_t* ez) {
+static inline int query_cell(const mesh_query_t* q, uint32_t i,
+  uint64_t* p_start, uint64_t* p_end, sif_real* ex, sif_real* ey,
+  sif_real* ez) {
 
   const int32_t N = q->n_cells;
-  const real_t box_L = q->box_length;
+  const sif_real box_L = q->box_length;
 
   int32_t ix = q->center_ix + q->tpl->dx[i];
-  real_t cx_eff = q->cx;
-  if (ix < 0) { ix += N; cx_eff += box_L; }
-  else if (ix >= N) { ix -= N; cx_eff -= box_L; }
+  sif_real cx_eff = q->cx;
+  if (ix < 0) {
+    ix += N;
+    cx_eff += box_L;
+  } else if (ix >= N) {
+    ix -= N;
+    cx_eff -= box_L;
+  }
 
   int32_t iy = q->center_iy + q->tpl->dy[i];
-  real_t cy_eff = q->cy;
-  if (iy < 0) { iy += N; cy_eff += box_L; }
-  else if (iy >= N) { iy -= N; cy_eff -= box_L; }
+  sif_real cy_eff = q->cy;
+  if (iy < 0) {
+    iy += N;
+    cy_eff += box_L;
+  } else if (iy >= N) {
+    iy -= N;
+    cy_eff -= box_L;
+  }
 
   int32_t iz = q->center_iz + q->tpl->dz[i];
-  real_t cz_eff = q->cz;
-  if (iz < 0) { iz += N; cz_eff += box_L; }
-  else if (iz >= N) { iz -= N; cz_eff -= box_L; }
+  sif_real cz_eff = q->cz;
+  if (iz < 0) {
+    iz += N;
+    cz_eff += box_L;
+  } else if (iz >= N) {
+    iz -= N;
+    cz_eff -= box_L;
+  }
 
   const uint64_t flat = (uint64_t)ix * N * N + (uint64_t)iy * N + iz;
 
@@ -401,19 +427,19 @@ static inline int __query_cell(const mesh_query_t* q, uint32_t i,
  * the histogram and the refinement classify a particle from bit-identical
  * inputs -- which is what lets the refinement trust the histogram's counts.
  */
-static inline real_t __dist2(
-  real_t px, real_t py, real_t pz, real_t cx, real_t cy, real_t cz) {
-  const real_t dx = px - cx;
-  const real_t dy = py - cy;
-  const real_t dz = pz - cz;
+static inline sif_real dist2(sif_real px, sif_real py, sif_real pz, sif_real cx,
+  sif_real cy, sif_real cz) {
+  const sif_real dx = px - cx;
+  const sif_real dy = py - cy;
+  const sif_real dz = pz - cz;
   return dx * dx + dy * dy + dz * dz;
 }
 
 /* Bin index for a squared distance, clamped: the classification of a cell is
  * geometric and conservative, so a particle can land a rounding error outside
  * the nominal range. */
-static inline uint32_t __bin_of(
-  real_t d2, real_t r_core2, real_t inv_bin_w, uint32_t n_bins) {
+static inline uint32_t bin_of(
+  sif_real d2, sif_real r_core2, sif_real inv_bin_w, uint32_t n_bins) {
 
   const int32_t b = (int32_t)((d2 - r_core2) * inv_bin_w);
   if (b < 0)
@@ -423,8 +449,8 @@ static inline uint32_t __bin_of(
   return (uint32_t)b;
 }
 
-#define __BIN_FOUND     1
-#define __BIN_EXHAUSTED 0
+#define BIN_FOUND     1
+#define BIN_EXHAUSTED 0
 
 /*
  * Resolves the exact radius inside a range of bins: re-scans the cells that
@@ -438,18 +464,18 @@ static inline uint32_t __bin_of(
  * skip test contributes nothing: that test is a proof that none of its
  * particles qualify, so walking them costs comparisons and decides nothing.
  *
- * @return __BIN_FOUND with *out set, __BIN_EXHAUSTED if the range holds no
+ * @return BIN_FOUND with *out set, BIN_EXHAUSTED if the range holds no
  * acceptable radius, or SIF_ERR_* if the whole search has to be abandoned
  */
-HOT_LOOP static int __resolve_bin(const mesh_query_t* q,
-  radial_scratch_t* scratch, uint32_t bin_lo, uint32_t bin_hi, real_t lo,
-  real_t hi, real_t r_core2, real_t r_search2, real_t inv_bin_w,
-  uint32_t n_bins, uint32_t current_N, real_t K2, real_t vol_factor2,
-  real_t n_min2, real_t* out) {
+SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
+  radial_scratch_t* scratch, uint32_t bin_lo, uint32_t bin_hi, sif_real lo,
+  sif_real hi, sif_real r_core2, sif_real r_search2, sif_real inv_bin_w,
+  uint32_t n_bins, uint32_t current_N, sif_real K2, sif_real vol_factor2,
+  sif_real n_min2, sif_real* out) {
 
-  const real_t* mx = SIF_ASSUME_ALIGNED(q->mesh->x);
-  const real_t* my = SIF_ASSUME_ALIGNED(q->mesh->y);
-  const real_t* mz = SIF_ASSUME_ALIGNED(q->mesh->z);
+  const sif_real* mx = SIF_ASSUME_ALIGNED(q->mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(q->mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(q->mesh->z);
   const mesh_template_t* tpl = q->tpl;
 
   scratch->refine_count = 0;
@@ -458,27 +484,26 @@ HOT_LOOP static int __resolve_bin(const mesh_query_t* q,
     const uint8_t type = tpl->type[i];
 
     /* A bin is a thin shell, so most of the template cannot touch it. */
-    if (type == __CELL_FULLY_CORE || tpl->max_d2[i] < lo || tpl->min_d2[i] > hi)
+    if (type == CELL_FULLY_CORE || tpl->max_d2[i] < lo || tpl->min_d2[i] > hi)
       continue;
 
     uint64_t p_start, p_end;
-    real_t ex, ey, ez;
-    if (!__query_cell(q, i, &p_start, &p_end, &ex, &ey, &ez))
+    sif_real ex, ey, ez;
+    if (!query_cell(q, i, &p_start, &p_end, &ex, &ey, &ez))
       continue;
 
-    if (__refine_reserve(
-          scratch, scratch->refine_count + (uint32_t)(p_end - p_start)) !=
-        SIF_OK)
+    if (refine_reserve(scratch,
+          scratch->refine_count + (uint32_t)(p_end - p_start)) != SIF_OK)
       return SIF_ERR_ALLOC;
 
     for (uint64_t p = p_start; p < p_end; p++) {
-      const real_t d2 = __dist2(mx[p], my[p], mz[p], ex, ey, ez);
+      const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
 
       /* Cells that straddle a boundary carry particles outside the annulus. */
-      if (type != __CELL_FULLY_SHELL && !(d2 > r_core2 && d2 <= r_search2))
+      if (type != CELL_FULLY_SHELL && !(d2 > r_core2 && d2 <= r_search2))
         continue;
 
-      const uint32_t bi = __bin_of(d2, r_core2, inv_bin_w, n_bins);
+      const uint32_t bi = bin_of(d2, r_core2, inv_bin_w, n_bins);
       if (bi < bin_lo || bi > bin_hi)
         continue;
 
@@ -487,32 +512,32 @@ HOT_LOOP static int __resolve_bin(const mesh_query_t* q,
   }
 
   if (scratch->refine_count > 1)
-    __sort_real_asc(scratch->refine, scratch->refine_count);
+    sort_real_asc(scratch->refine, scratch->refine_count);
 
   for (int32_t k = (int32_t)scratch->refine_count - 1; k >= 0; k--) {
-    const real_t d2_test = scratch->refine[k];
+    const sif_real d2_test = scratch->refine[k];
     if (d2_test == 0.0f) {
       current_N--;
       continue;
     }
 
     const uint32_t n_in = current_N - 1;
-    const real_t d2_cube = d2_test * d2_test * d2_test;
+    const sif_real d2_cube = d2_test * d2_test * d2_test;
 
     /* Below the noise floor the estimate stops being meaningful. */
     if (vol_factor2 * d2_cube < n_min2)
       return SIF_ERR_RANGE;
 
-    const real_t rn_in = (real_t)n_in;
+    const sif_real rn_in = (sif_real)n_in;
     if (rn_in * rn_in <= K2 * d2_cube) {
-      *out = REAL_SQRT(d2_test);
-      return __BIN_FOUND;
+      *out = SIF_REAL_SQRT(d2_test);
+      return BIN_FOUND;
     }
 
     current_N--;
   }
 
-  return __BIN_EXHAUSTED;
+  return BIN_EXHAUSTED;
 }
 
 /*
@@ -521,22 +546,24 @@ HOT_LOOP static int __resolve_bin(const mesh_query_t* q,
  *
  * @return the rescaled radius, or -1 if no acceptable radius exists
  */
-HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
-  real_t cx, real_t cy, real_t cz, real_t r_search, real_t threshold,
-  real_t vol_factor, radial_scratch_t* scratch, real_t rmin,
+SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
+  sif_real cx, sif_real cy, sif_real cz, sif_real r_search, sif_real threshold,
+  sif_real vol_factor, radial_scratch_t* scratch, sif_real rmin,
   const mesh_template_t* tpl, uint32_t window) {
 
-  const real_t* mx = SIF_ASSUME_ALIGNED(mesh->x);
-  const real_t* my = SIF_ASSUME_ALIGNED(mesh->y);
-  const real_t* mz = SIF_ASSUME_ALIGNED(mesh->z);
+  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
 
-  const real_t inv_l = 1.0f / mesh->cell_length;
+  const sif_real inv_l = 1.0f / mesh->cell_length;
   const int32_t N = (int32_t)mesh->n_cells;
 
   mesh_query_t q = {
     .mesh = mesh,
     .tpl = tpl,
-    .cx = cx, .cy = cy, .cz = cz,
+    .cx = cx,
+    .cy = cy,
+    .cz = cz,
     .center_ix = (int32_t)(cx * inv_l),
     .center_iy = (int32_t)(cy * inv_l),
     .center_iz = (int32_t)(cz * inv_l),
@@ -544,31 +571,40 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
     .box_length = mesh->box_length,
   };
 
-  const real_t r_search2 = r_search * r_search;
-  const real_t r_core2 = rmin * rmin;
+  const sif_real r_search2 = r_search * r_search;
+  const sif_real r_core2 = rmin * rmin;
 
   uint32_t n_core = 0;
   uint32_t n_shell = 0;
 
   /* Above this many particles inside rmin the void is already denser than the
    * threshold allows, so it can be abandoned before doing any distance work. */
-  const real_t expected_core = vol_factor * rmin * rmin * rmin;
+  const sif_real expected_core = vol_factor * rmin * rmin * rmin;
   uint32_t max_core_particles = 0xFFFFFFFFu;
-  if (expected_core >= __N_MIN)
+  if (expected_core >= N_MIN)
     max_core_particles = (uint32_t)(expected_core * (1.0f + threshold));
 
   /* Cheap pre-pass: cell occupancies alone can exceed the core budget. */
   uint32_t guaranteed_core = 0;
   for (uint32_t i = 0; i < tpl->count; i++) {
-    if (tpl->type[i] != __CELL_FULLY_CORE)
+    if (tpl->type[i] != CELL_FULLY_CORE)
       continue;
 
     int32_t ix = q.center_ix + tpl->dx[i];
-    if (ix < 0) ix += N; else if (ix >= N) ix -= N;
+    if (ix < 0)
+      ix += N;
+    else if (ix >= N)
+      ix -= N;
     int32_t iy = q.center_iy + tpl->dy[i];
-    if (iy < 0) iy += N; else if (iy >= N) iy -= N;
+    if (iy < 0)
+      iy += N;
+    else if (iy >= N)
+      iy -= N;
     int32_t iz = q.center_iz + tpl->dz[i];
-    if (iz < 0) iz += N; else if (iz >= N) iz -= N;
+    if (iz < 0)
+      iz += N;
+    else if (iz >= N)
+      iz -= N;
 
     const uint64_t flat = (uint64_t)ix * N * N + (uint64_t)iy * N + iz;
     guaranteed_core +=
@@ -581,25 +617,25 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
   /* Histogram geometry. Uniform in d^2, so no square roots are needed to bin;
    * the resulting bins are finer in radius further out, which is the half that
    * matters since the walk starts from the outside. */
-  const real_t span = r_search2 - r_core2;
-  uint32_t n_bins = __MAX_RADIAL_BINS;
+  const sif_real span = r_search2 - r_core2;
+  uint32_t n_bins = MAX_RADIAL_BINS;
   {
-    const real_t expected_shell =
+    const sif_real expected_shell =
       vol_factor * (r_search * r_search * r_search - rmin * rmin * rmin);
-    const real_t want = expected_shell / __PARTICLES_PER_BIN;
+    const sif_real want = expected_shell / PARTICLES_PER_BIN;
 
     /* The !(a >= b) form also catches a NaN estimate. */
-    if (!(want >= (real_t)__MIN_RADIAL_BINS))
-      n_bins = __MIN_RADIAL_BINS;
-    else if (want < (real_t)__MAX_RADIAL_BINS)
+    if (!(want >= (sif_real)MIN_RADIAL_BINS))
+      n_bins = MIN_RADIAL_BINS;
+    else if (want < (sif_real)MAX_RADIAL_BINS)
       n_bins = (uint32_t)want;
   }
 
   if (!(span > 0.0f))
     return -1.0f;
 
-  const real_t inv_bin_w = (real_t)n_bins / span;
-  const real_t bin_w = span / (real_t)n_bins;
+  const sif_real inv_bin_w = (sif_real)n_bins / span;
+  const sif_real bin_w = span / (sif_real)n_bins;
 
   uint32_t* bins = scratch->bins;
   memset(bins, 0, (size_t)n_bins * sizeof(uint32_t));
@@ -608,42 +644,42 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
     const uint8_t type = tpl->type[i];
 
     uint64_t p_start, p_end;
-    real_t ex, ey, ez;
-    if (!__query_cell(&q, i, &p_start, &p_end, &ex, &ey, &ez))
+    sif_real ex, ey, ez;
+    if (!query_cell(&q, i, &p_start, &p_end, &ex, &ey, &ez))
       continue;
 
     const uint64_t p_count = p_end - p_start;
 
-    if (type == __CELL_FULLY_CORE) {
+    if (type == CELL_FULLY_CORE) {
       n_core += (uint32_t)p_count;
-    } else if (type == __CELL_FULLY_SHELL) {
+    } else if (type == CELL_FULLY_SHELL) {
       /* Every particle here is known to be in the annulus, so the only work is
        * the distance itself. Tiling keeps that part vectorized despite the
        * scattered counter update that follows. */
-      real_t tile[__DIST_TILE];
+      sif_real tile[DIST_TILE];
 
-      for (uint64_t base = p_start; base < p_end; base += __DIST_TILE) {
-        const uint32_t m = (uint32_t)((p_end - base < (uint64_t)__DIST_TILE)
+      for (uint64_t base = p_start; base < p_end; base += DIST_TILE) {
+        const uint32_t m = (uint32_t)((p_end - base < (uint64_t)DIST_TILE)
                                         ? (p_end - base)
-                                        : (uint64_t)__DIST_TILE);
+                                        : (uint64_t)DIST_TILE);
 #pragma omp simd
         for (uint32_t t = 0; t < m; t++) {
-          tile[t] = __dist2(mx[base + t], my[base + t], mz[base + t], ex, ey, ez);
+          tile[t] = dist2(mx[base + t], my[base + t], mz[base + t], ex, ey, ez);
         }
 
         for (uint32_t t = 0; t < m; t++)
-          bins[__bin_of(tile[t], r_core2, inv_bin_w, n_bins)]++;
+          bins[bin_of(tile[t], r_core2, inv_bin_w, n_bins)]++;
       }
 
       n_shell += (uint32_t)p_count;
     } else {
       for (uint64_t p = p_start; p < p_end; p++) {
-        const real_t d2 = __dist2(mx[p], my[p], mz[p], ex, ey, ez);
+        const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
 
         n_core += (d2 <= r_core2);
 
         if (d2 > r_core2 && d2 <= r_search2) {
-          bins[__bin_of(d2, r_core2, inv_bin_w, n_bins)]++;
+          bins[bin_of(d2, r_core2, inv_bin_w, n_bins)]++;
           n_shell++;
         }
       }
@@ -659,9 +695,9 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
 
   /* If the whole search sphere is already denser than the threshold there is
    * no radius in range that satisfies it. */
-  const real_t expected_search = vol_factor * r_search * r_search * r_search;
-  if (expected_search >= __N_MIN) {
-    if (((real_t)total_N / expected_search) - 1.0f <= threshold)
+  const sif_real expected_search = vol_factor * r_search * r_search * r_search;
+  if (expected_search >= N_MIN) {
+    if (((sif_real)total_N / expected_search) - 1.0f <= threshold)
       return -1.0f;
   }
 
@@ -670,12 +706,12 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
    *   n_in / (vol_factor * d^3) - 1 <= threshold
    *   <=> n_in^2 <= ((threshold + 1) * vol_factor)^2 * (d^2)^3
    */
-  const real_t vol_factor2 = vol_factor * vol_factor;
-  const real_t K = (threshold + 1.0f) * vol_factor;
-  const real_t K2 = K * K;
-  const real_t n_min2 = __N_MIN * __N_MIN;
+  const sif_real vol_factor2 = vol_factor * vol_factor;
+  const sif_real K = (threshold + 1.0f) * vol_factor;
+  const sif_real K2 = K * K;
+  const sif_real n_min2 = N_MIN * N_MIN;
 
-  uint32_t above = 0; /* particles beyond the bin under examination */
+  uint32_t above = 0;   /* particles beyond the bin under examination */
   int32_t b_first = -1; /* outermost bin the walk actually had to open */
 
   for (int32_t b = (int32_t)n_bins - 1; b >= 0; b--) {
@@ -683,7 +719,7 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
     if (count == 0)
       continue;
 
-    real_t hi = r_core2 + (real_t)(b + 1) * bin_w;
+    sif_real hi = r_core2 + (sif_real)(b + 1) * bin_w;
 
     /* The top bin also absorbs anything the clamp pulled back in, so its upper
      * edge has to be generous. Being too generous only costs a refinement that
@@ -694,7 +730,7 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
     /* The most permissive particle this bin could hold is its outermost one
      * carrying the smallest interior count. If even that is too dense, no
      * particle in the bin can qualify and none of them need to be touched. */
-    const real_t n_in_min = (real_t)(total_N - above - count);
+    const sif_real n_in_min = (sif_real)(total_N - above - count);
     if (n_in_min * n_in_min > K2 * hi * hi * hi) {
       above += count;
       continue;
@@ -713,18 +749,18 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
     for (int32_t bb = b_lo; bb <= b; bb++)
       window_count += bins[bb];
 
-    const real_t win_lo = r_core2 + (real_t)b_lo * bin_w;
+    const sif_real win_lo = r_core2 + (sif_real)b_lo * bin_w;
 
-    real_t radius = -1.0f;
-    const int status = __resolve_bin(&q, scratch, (uint32_t)b_lo, (uint32_t)b,
+    sif_real radius = -1.0f;
+    const int status = resolve_bin(&q, scratch, (uint32_t)b_lo, (uint32_t)b,
       win_lo, hi, r_core2, r_search2, inv_bin_w, n_bins, total_N - above, K2,
       vol_factor2, n_min2, &radius);
 
-    if (status == __BIN_FOUND) {
+    if (status == BIN_FOUND) {
       /* Report how far the walk had to reach, so the next batch can size the
        * window to cover it in one pass. */
       const int32_t b_found =
-        (int32_t)__bin_of(radius * radius, r_core2, inv_bin_w, n_bins);
+        (int32_t)bin_of(radius * radius, r_core2, inv_bin_w, n_bins);
       int32_t bins_reached = b_first - b_found + 1;
       if (bins_reached < 1)
         bins_reached = 1;
@@ -734,7 +770,7 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
 
       return radius;
     }
-    if (status != __BIN_EXHAUSTED)
+    if (status != BIN_EXHAUSTED)
       return -1.0f;
 
     above += window_count;
@@ -747,22 +783,22 @@ HOT_LOOP static real_t __find_exact_radius(const sif_chain_mesh_t* mesh,
 /* --- Speculative batch evaluation --- */
 
 typedef struct {
-  uint8_t status;  /* one of __BATCH_* below */
-  real_t r_scaled;
-  real_t cx, cy, cz;
+  uint8_t status; /* one of BATCH_* below */
+  sif_real r_scaled;
+  sif_real cx, cy, cz;
   int32_t proxy_pole;
   uint32_t ix, iy, iz;
 } batch_result_t;
 
-#define __BATCH_REJECTED_PROXY   1
-#define __BATCH_REJECTED_MESH    2
-#define __BATCH_REJECTED_RESCALE 3
-#define __BATCH_ACCEPTED         4
+#define BATCH_REJECTED_PROXY   1
+#define BATCH_REJECTED_MESH    2
+#define BATCH_REJECTED_RESCALE 3
+#define BATCH_ACCEPTED         4
 
 /* --- Run context --- */
 
 typedef struct {
-  real_t* sorted_radii;
+  sif_real* sorted_radii;
   sif_catalog_t* cat;
   sif_bitmask_t* mask;
   sif_cell_linked_list_t* void_cll;
@@ -777,28 +813,28 @@ typedef struct {
   int n_threads;
 } rescaled_ctx_t;
 
-static void __ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
+static void ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
   if (!ctx)
     return;
 
   if (ctx->fft_ws) {
-    real_t* recovered = sif_fft_workspace_take_real_buffer(ctx->fft_ws);
+    sif_real* recovered = sif__fft_workspace_take_real_buffer(ctx->fft_ws);
     if (recovered)
-      grid->delta = recovered;
-    sif_fft_workspace_free(ctx->fft_ws);
+      grid->values = recovered;
+    sif__fft_workspace_free(ctx->fft_ws);
     ctx->fft_ws = NULL;
   }
 
   if (ctx->scratch) {
     for (int t = 0; t < ctx->n_threads; t++)
-      __scratch_free(&ctx->scratch[t]);
+      scratch_free(&ctx->scratch[t]);
     sif_free_aligned(ctx->scratch);
     ctx->scratch = NULL;
   }
 
   sif_free_aligned(ctx->batch_results);
   sif_free_aligned(ctx->batch_indices);
-  sif_candidate_buffer_free(&ctx->candidates);
+  sif__candidate_buffer_free(&ctx->candidates);
   sif_cell_linked_list_free(ctx->void_cll);
   sif_bitmask_free(ctx->mask);
   sif_free_aligned(ctx->sorted_radii);
@@ -815,26 +851,26 @@ static void __ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
   ctx->cat = NULL;
 }
 
-static int __ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
-  const sif_chain_mesh_t* mesh, const real_t* radii, uint32_t n_radii) {
+static int ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii) {
 
   memset(ctx, 0, sizeof(*ctx));
 
   ctx->mesh = mesh;
 
-  ctx->n_threads = sif_system_get_max_threads();
+  ctx->n_threads = sif__system_max_threads();
   if (ctx->n_threads < 1)
     ctx->n_threads = 1;
 
-  ctx->sorted_radii = sif_malloc_aligned(n_radii * sizeof(real_t));
+  ctx->sorted_radii = sif_malloc_aligned(n_radii * sizeof(sif_real));
   if (!ctx->sorted_radii) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the radii array");
+    SIF_LOG_ERROR(TAG, "failed to allocate the radii array");
     return SIF_ERR_ALLOC;
   }
-  memcpy(ctx->sorted_radii, radii, n_radii * sizeof(real_t));
-  __sort_radii_desc(ctx->sorted_radii, n_radii);
+  memcpy(ctx->sorted_radii, radii, n_radii * sizeof(sif_real));
+  sort_radii_desc(ctx->sorted_radii, n_radii);
 
-  ctx->cat = sif_catalog_alloc(__CATALOG_INITIAL_CAPACITY);
+  ctx->cat = sif_catalog_alloc(CATALOG_INITIAL_CAPACITY);
   if (!ctx->cat)
     return SIF_ERR_ALLOC;
 
@@ -843,13 +879,12 @@ static int __ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
 
   ctx->void_cll = sif_cell_linked_list_alloc(
-    __VOID_CLL_CELLS, grid->box_length, ctx->cat->capacity, SIF_PBC_PERIODIC);
+    VOID_CLL_CELLS, grid->box_length, ctx->cat->capacity, SIF_PBC_PERIODIC);
   if (!ctx->void_cll)
     return SIF_ERR_ALLOC;
 
-  ctx->batch_results =
-    sif_malloc_aligned(__BATCH_MAX * sizeof(batch_result_t));
-  ctx->batch_indices = sif_malloc_aligned(__BATCH_MAX * sizeof(uint64_t));
+  ctx->batch_results = sif_malloc_aligned(BATCH_MAX * sizeof(batch_result_t));
+  ctx->batch_indices = sif_malloc_aligned(BATCH_MAX * sizeof(uint64_t));
   if (!ctx->batch_results || !ctx->batch_indices)
     return SIF_ERR_ALLOC;
 
@@ -862,39 +897,39 @@ static int __ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
 
   for (int t = 0; t < ctx->n_threads; t++) {
-    if (__scratch_init(&ctx->scratch[t]) != SIF_OK) {
-      SIF_LOG_ERROR(__TAG, "failed to allocate the per-thread radial scratch");
+    if (scratch_init(&ctx->scratch[t]) != SIF_OK) {
+      SIF_LOG_ERROR(TAG, "failed to allocate the per-thread radial scratch");
       return SIF_ERR_ALLOC;
     }
   }
 
-  sif_system_state_t* state = sif_get_system_state();
-  ctx->fft_ws = sif_fft_workspace_alloc(state->fft_mgr, grid->n_cells);
+  sif_system_state_t* state = sif__system_state();
+  ctx->fft_ws = sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
   if (!ctx->fft_ws) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the FFT workspace");
+    SIF_LOG_ERROR(TAG, "failed to allocate the FFT workspace");
     return SIF_ERR_ALLOC;
   }
 
   /* Must succeed before the field is released: on failure the caller's grid
    * has to come back untouched. */
-  if (sif_fft_grid_forward(ctx->fft_ws, grid) != SIF_OK) {
-    SIF_LOG_ERROR(__TAG, "the forward FFT failed");
+  if (sif__fft_grid_forward(ctx->fft_ws, grid) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "the forward FFT failed");
     return SIF_ERR_ALLOC;
   }
 
-  sif_free_aligned(grid->delta);
-  grid->delta = NULL;
+  sif_free_aligned(grid->values);
+  grid->values = NULL;
 
-  if (sif_fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(__TAG, "failed to initialize the backward FFT");
+  if (sif__fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
     return SIF_ERR_ALLOC;
   }
 
   return SIF_OK;
 }
 
-static int __accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, real_t cx,
-  real_t cy, real_t cz, real_t r) {
+static int accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
+  sif_real cy, sif_real cz, sif_real r) {
 
   int status = sif_catalog_append(ctx->cat, cx, cy, cz, r);
   if (status != SIF_OK)
@@ -910,8 +945,8 @@ static int __accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, real_t cx,
   if (status != SIF_OK)
     return status;
 
-  sif_mark_sphere(ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask,
-    grid->cell_length);
+  sif__mark_sphere(
+    ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask, grid->cell_length);
 
   return SIF_OK;
 }
@@ -919,41 +954,49 @@ static int __accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, real_t cx,
 /* --- Driver --- */
 
 sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
-  const sif_chain_mesh_t* mesh, const real_t* radii, uint32_t n_radii,
-  real_t threshold, real_t overlap_fraction, sif_option_t options) {
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option options) {
 
-  if (!grid || !grid->delta || !mesh || !radii || n_radii == 0) {
-    SIF_LOG_ERROR(__TAG, "invalid grid, mesh or radii");
+  if (!grid || !grid->values || !mesh || !radii || n_radii == 0) {
+    SIF_LOG_ERROR(TAG, "invalid grid, mesh or radii");
     return NULL;
   }
 
+  /* A mass grid handed to something that expects a density contrast produces
+   * numbers rather than an error. SIF_GRID_EMPTY is not flagged: that is a
+   * grid the caller filled directly, and only the caller knows what is in it.
+   */
+  if (grid->content == SIF_GRID_MASS) {
+    SIF_LOG_WARNING(TAG,
+      "this grid still holds masses; call sif_grid_to_density_contrast first");
+  }
+
   if (!mesh->x || mesh->n_particles == 0) {
-    SIF_LOG_ERROR(__TAG, "the chain mesh holds no particles");
+    SIF_LOG_ERROR(TAG, "the chain mesh holds no particles");
     return NULL;
   }
 
   /* Grid and mesh coordinates are used interchangeably throughout, so the two
    * have to describe the same box. */
   if (mesh->box_length != grid->box_length) {
-    SIF_LOG_ERROR(__TAG,
-      "the mesh spans a box of %g but the grid spans %g",
+    SIF_LOG_ERROR(TAG, "the mesh spans a box of %g but the grid spans %g",
       (double)mesh->box_length, (double)grid->box_length);
     return NULL;
   }
 
   rescaled_ctx_t ctx;
-  if (__ctx_init(&ctx, grid, mesh, radii, n_radii) != SIF_OK) {
-    __ctx_release(&ctx, grid);
+  if (ctx_init(&ctx, grid, mesh, radii, n_radii) != SIF_OK) {
+    ctx_release(&ctx, grid);
     return NULL;
   }
 
-  const real_t max_radius = ctx.sorted_radii[0];
+  const sif_real max_radius = ctx.sorted_radii[0];
 
   /* Loop invariants: the mean tracer density never changes between radii. */
-  const real_t box_volume =
+  const sif_real box_volume =
     grid->box_length * grid->box_length * grid->box_length;
-  const real_t mean_density = (real_t)mesh->n_particles / box_volume;
-  const real_t vol_factor = (4.0f / 3.0f) * M_PI * mean_density;
+  const sif_real mean_density = (sif_real)mesh->n_particles / box_volume;
+  const sif_real vol_factor = (4.0f / 3.0f) * SIF_PI * mean_density;
 
   sif_timer_t timer;
   int failed = 0;
@@ -962,37 +1005,37 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
   for (uint32_t i = 0; i < n_radii && !failed; i++) {
     sif_timer_start(&timer);
 
-    const real_t radius = ctx.sorted_radii[i];
+    const sif_real radius = ctx.sorted_radii[i];
     sif_finder_radius_stats_t stats = {0};
 
-    /* Localization quality for this rung, see __MISMATCH_RATIO. */
+    /* Localization quality for this rung, see MISMATCH_RATIO. */
     double ratio_sum = 0.0;
-    real_t ratio_max = 0.0f;
+    sif_real ratio_max = 0.0f;
     uint64_t n_mismatched = 0;
 
-    if (sif_fft_apply_filter(ctx.fft_ws, FILTER_TOP_HAT, radius,
+    if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_TOP_HAT, radius,
           grid->box_length) != SIF_OK) {
       failed = 1;
       break;
     }
-    grid->delta = sif_fft_grid_backward(ctx.fft_ws);
+    grid->values = sif__fft_grid_backward(ctx.fft_ws);
 
-    if (sif_finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates) !=
-        SIF_OK) {
+    if (sif__finder_scan_candidates(
+          grid, ctx.mask, threshold, &ctx.candidates) != SIF_OK) {
       failed = 1;
       break;
     }
     stats.n_candidates = ctx.candidates.count;
 
-    const real_t rmin = __RMIN_FACTOR * radius;
-    real_t r_search = radius + REAL_MAX(radius, 3.0f * grid->cell_length);
+    const sif_real rmin = RMIN_FACTOR * radius;
+    sif_real r_search = radius + SIF_REAL_MAX(radius, 3.0f * grid->cell_length);
 
     /*
      * Consecutive rungs of the radius ladder have to overlap in the void sizes
      * they can return, or sizes in between are reachable at no rung at all and
      * simply never appear in the catalog.
      *
-     * What limits a rung from below is not __RMIN_FACTOR but detection: an
+     * What limits a rung from below is not RMIN_FACTOR but detection: an
      * empty void of size p smoothed with a top-hat of radius R registers as
      * delta = -(p/R)^3, so it only clears the threshold once p >= |t|^(1/3) R.
      * The previous, larger rung therefore found nothing below
@@ -1007,20 +1050,20 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
      * makes it err wide; erring wide costs time, erring narrow loses voids.
      */
     if (i > 0) {
-      real_t detect = REAL_POW(REAL_ABS(threshold), 1.0f / 3.0f);
+      sif_real detect = SIF_REAL_POW(SIF_REAL_ABS(threshold), 1.0f / 3.0f);
       if (detect > 1.0f)
         detect = 1.0f;
 
-      const real_t reach = detect * ctx.sorted_radii[i - 1];
+      const sif_real reach = detect * ctx.sorted_radii[i - 1];
       if (reach > r_search)
         r_search = reach;
     }
 
     mesh_template_t tpl;
-    if (__template_build(&tpl, ctx.mesh->n_cells, ctx.mesh->cell_length, rmin,
+    if (template_build(&tpl, ctx.mesh->n_cells, ctx.mesh->cell_length, rmin,
           r_search) != SIF_OK) {
-      SIF_LOG_ERROR(__TAG, "could not build the mesh template for r = %g",
-        (double)radius);
+      SIF_LOG_ERROR(
+        TAG, "could not build the mesh template for r = %g", (double)radius);
       failed = 1;
       break;
     }
@@ -1030,17 +1073,17 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
 
     /* The window is re-learned per radius: the accept rate at the largest
      * radius says little about the smallest. */
-    uint64_t batch_floor = (uint64_t)__BATCH_PER_THREAD * (uint64_t)ctx.n_threads;
-    if (batch_floor < __BATCH_FLOOR)
-      batch_floor = __BATCH_FLOOR;
-    if (batch_floor > __BATCH_MAX)
-      batch_floor = __BATCH_MAX;
+    uint64_t batch_floor = (uint64_t)BATCH_PER_THREAD * (uint64_t)ctx.n_threads;
+    if (batch_floor < BATCH_FLOOR)
+      batch_floor = BATCH_FLOOR;
+    if (batch_floor > BATCH_MAX)
+      batch_floor = BATCH_MAX;
 
     uint64_t batch_cap = batch_floor;
 
     /* Re-learned per radius alongside the batch window: the annulus geometry,
      * and with it the bin thickness, changes with every smoothing radius. */
-    uint32_t resolve_window = __RESOLVE_INITIAL;
+    uint32_t resolve_window = RESOLVE_INITIAL;
 
     uint64_t k = 0;
     while (k < ctx.candidates.count && !failed) {
@@ -1065,16 +1108,16 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
        * stood when the batch started. Read-only on mask and catalog.
        *
        * The team size is pinned so that omp_get_thread_num() can never index
-       * past the per-thread shell buffers allocated in __ctx_init. */
+       * past the per-thread shell buffers allocated in ctx_init. */
 #pragma omp parallel for schedule(dynamic, 16) num_threads(ctx.n_threads)
       for (uint64_t b = 0; b < batch_count; b++) {
-        const int tid = sif_system_get_thread_num();
+        const int tid = sif__system_thread_num();
         const uint64_t flat =
           ctx.candidates.items[ctx.batch_indices[b]].flat_idx;
         batch_result_t* res = &ctx.batch_results[b];
 
         uint32_t ix, iy, iz;
-        sif_unflatten_index(grid, flat, &ix, &iy, &iz);
+        sif__unflatten_index(grid, flat, &ix, &iy, &iz);
 
         res->ix = ix;
         res->iy = iy;
@@ -1082,38 +1125,38 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         res->proxy_pole = proxy_pole;
 
         if (proxy_pole > 0 &&
-            sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask, ix,
-              iy, iz, (uint32_t)proxy_pole)) {
-          res->status = __BATCH_REJECTED_PROXY;
+            sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, ix, iy,
+              iz, (uint32_t)proxy_pole)) {
+          res->status = BATCH_REJECTED_PROXY;
           continue;
         }
 
-        const real_t cx = (real_t)ix * grid->cell_length;
-        const real_t cy = (real_t)iy * grid->cell_length;
-        const real_t cz = (real_t)iz * grid->cell_length;
+        const sif_real cx = (sif_real)ix * grid->cell_length;
+        const sif_real cy = (sif_real)iy * grid->cell_length;
+        const sif_real cz = (sif_real)iz * grid->cell_length;
 
         res->cx = cx;
         res->cy = cy;
         res->cz = cz;
 
-        if (sif_check_overlap_mesh(ctx.cat, cx, cy, cz, radius, max_radius,
+        if (sif__overlap_exact(ctx.cat, cx, cy, cz, radius, max_radius,
               grid->box_length, ctx.void_cll, grid->p2_mask,
               overlap_fraction)) {
-          res->status = __BATCH_REJECTED_MESH;
+          res->status = BATCH_REJECTED_MESH;
           continue;
         }
 
-        const real_t r_scaled = __find_exact_radius(ctx.mesh, cx, cy, cz,
-          r_search, threshold, vol_factor, &ctx.scratch[tid], rmin, &tpl,
-          resolve_window);
+        const sif_real r_scaled =
+          find_exact_radius(ctx.mesh, cx, cy, cz, r_search, threshold,
+            vol_factor, &ctx.scratch[tid], rmin, &tpl, resolve_window);
 
         if (r_scaled < 0.0f) {
-          res->status = __BATCH_REJECTED_RESCALE;
+          res->status = BATCH_REJECTED_RESCALE;
           continue;
         }
 
         res->r_scaled = r_scaled;
-        res->status = __BATCH_ACCEPTED;
+        res->status = BATCH_ACCEPTED;
       }
 
       /* Phase 2: commit sequentially, re-checking everything that the parallel
@@ -1125,10 +1168,17 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         const batch_result_t* res = &ctx.batch_results[b];
 
         switch (res->status) {
-        case __BATCH_REJECTED_PROXY: stats.rejected_proxy++; continue;
-        case __BATCH_REJECTED_MESH: stats.rejected_mesh++; continue;
-        case __BATCH_REJECTED_RESCALE: stats.rejected_rescale++; continue;
-        default: break;
+        case BATCH_REJECTED_PROXY:
+          stats.rejected_proxy++;
+          continue;
+        case BATCH_REJECTED_MESH:
+          stats.rejected_mesh++;
+          continue;
+        case BATCH_REJECTED_RESCALE:
+          stats.rejected_rescale++;
+          continue;
+        default:
+          break;
         }
 
         const uint64_t flat =
@@ -1140,8 +1190,8 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         }
 
         if (res->proxy_pole > 0 &&
-            sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask,
-              res->ix, res->iy, res->iz, (uint32_t)res->proxy_pole)) {
+            sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, res->ix,
+              res->iy, res->iz, (uint32_t)res->proxy_pole)) {
           stats.rejected_proxy++;
           continue;
         }
@@ -1153,32 +1203,32 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
                     grid->cell_length) -
           1;
         if (exact_pole > 0 && exact_pole != res->proxy_pole &&
-            sif_check_overlap_cells(ctx.mask, grid->n_cells, grid->p2_mask,
-              res->ix, res->iy, res->iz, (uint32_t)exact_pole)) {
+            sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, res->ix,
+              res->iy, res->iz, (uint32_t)exact_pole)) {
           stats.rejected_exact++;
           continue;
         }
 
-        if (sif_check_overlap_mesh(ctx.cat, res->cx, res->cy, res->cz,
+        if (sif__overlap_exact(ctx.cat, res->cx, res->cy, res->cz,
               res->r_scaled, max_radius, grid->box_length, ctx.void_cll,
               grid->p2_mask, overlap_fraction)) {
           stats.rejected_exact++;
           continue;
         }
 
-        if (__accept_void(&ctx, grid, res->cx, res->cy, res->cz,
-              res->r_scaled) != SIF_OK) {
-          SIF_LOG_ERROR(__TAG, "failed to store an accepted void, aborting");
+        if (accept_void(&ctx, grid, res->cx, res->cy, res->cz, res->r_scaled) !=
+            SIF_OK) {
+          SIF_LOG_ERROR(TAG, "failed to store an accepted void, aborting");
           failed = 1;
           break;
         }
         stats.accepted++;
 
-        const real_t ratio = res->r_scaled / radius;
+        const sif_real ratio = res->r_scaled / radius;
         ratio_sum += (double)ratio;
         if (ratio > ratio_max)
           ratio_max = ratio;
-        if (ratio > __MISMATCH_RATIO)
+        if (ratio > MISMATCH_RATIO)
           n_mismatched++;
       }
 
@@ -1190,8 +1240,8 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
 
       if (n_accepted == 0) {
         batch_cap += batch_floor;
-        if (batch_cap > __BATCH_MAX)
-          batch_cap = __BATCH_MAX;
+        if (batch_cap > BATCH_MAX)
+          batch_cap = BATCH_MAX;
       } else {
         batch_cap /= (n_accepted + 1);
         if (batch_cap < batch_floor)
@@ -1213,55 +1263,55 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
       }
 
       if (span_count > 0) {
-        uint64_t w = (span_sum * __RESOLVE_MARGIN + span_count - 1) / span_count;
-        if (w < __RESOLVE_MIN)
-          w = __RESOLVE_MIN;
-        if (w > __RESOLVE_MAX)
-          w = __RESOLVE_MAX;
+        uint64_t w = (span_sum * RESOLVE_MARGIN + span_count - 1) / span_count;
+        if (w < RESOLVE_MIN)
+          w = RESOLVE_MIN;
+        if (w > RESOLVE_MAX)
+          w = RESOLVE_MAX;
         resolve_window = (uint32_t)w;
       }
     }
 
-    __template_free(&tpl);
+    template_free(&tpl);
 
     sif_timer_stop(&timer);
     if (stats.accepted > 0) {
-      SIF_LOG_TRACE(__TAG,
+      SIF_LOG_TRACE(TAG,
         "localization:         mean r/R %.2f, max %.2f, %" PRIu64
         " beyond %.1fx",
         ratio_sum / (double)stats.accepted, (double)ratio_max, n_mismatched,
-        (double)__MISMATCH_RATIO);
+        (double)MISMATCH_RATIO);
     }
 
     total_mismatched += n_mismatched;
 
-    sif_finder_log_radius(__TAG, radius, &stats, ctx.cat->n_voids,
+    sif__finder_log_radius(TAG, radius, &stats, ctx.cat->n_voids,
       sif_timer_elapsed_ms(&timer) / 1000.0);
   }
 
-  if (!failed && (options & SIF_FINDER_PRESERVE_GRID)) {
-    if (sif_fft_apply_filter(ctx.fft_ws, FILTER_NONE, 0, 0) == SIF_OK) {
-      grid->delta = sif_fft_grid_backward(ctx.fft_ws);
-      SIF_LOG_INFO(__TAG, "recovered original density grid");
+  if (!failed && !(options & SIF_FINDER_CONSUME_GRID)) {
+    if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
+      grid->values = sif__fft_grid_backward(ctx.fft_ws);
+      SIF_LOG_INFO(TAG, "recovered original density grid");
     }
   }
 
   if (total_mismatched > 0 && ctx.cat->n_voids > 0) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "%" PRIu64 " of %" PRIu64
       " voids (%.1f%%) are more than %.1fx the radius of the rung that found "
       "them; their centers are localized at that rung's scale, not their own. "
       "A denser radius ladder would place them better",
       total_mismatched, ctx.cat->n_voids,
       100.0 * (double)total_mismatched / (double)ctx.cat->n_voids,
-      (double)__MISMATCH_RATIO);
+      (double)MISMATCH_RATIO);
   }
 
   sif_catalog_trim(ctx.cat);
 
   sif_catalog_t* result = ctx.cat;
   ctx.cat = NULL; /* ownership passes to the caller */
-  __ctx_release(&ctx, grid);
+  ctx_release(&ctx, grid);
 
   return result;
 }

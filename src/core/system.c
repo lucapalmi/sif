@@ -1,5 +1,11 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/core/system.h"
-#include "get_system.h"
+#include "system_internal.h"
 
 #include "sif/core/settings.h"
 #include "sif/utils/logger.h"
@@ -13,16 +19,17 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-#include <string.h>
 
-static void _ensure_dir(const char* path) {
+static void ensure_dir(const char* path) {
   char tmp[512];
   snprintf(tmp, sizeof(tmp), "%s", path);
   size_t len = strlen(tmp);
-  if (tmp[len - 1] == '/') tmp[len - 1] = 0;
+  if (tmp[len - 1] == '/')
+    tmp[len - 1] = 0;
   for (char* p = tmp + 1; *p; p++) {
     if (*p == '/') {
       *p = 0;
@@ -32,10 +39,6 @@ static void _ensure_dir(const char* path) {
   }
   mkdir(tmp, 0777);
 }
-
-/* Forward declare internal settings hooks */
-void __sif_settings_init(const char* default_dir);
-void __sif_settings_finalize(void);
 
 static sif_system_state_t* system_state = NULL;
 
@@ -107,15 +110,15 @@ void sif_init(sif_config_t* config) {
       "system", "HOME env variable not set, defaulting cache to %s", base_dir);
   }
 
-  _ensure_dir(base_dir);
+  ensure_dir(base_dir);
 
   /* Boot the configuration engine FIRST from the base .sif directory */
-  __sif_settings_init(base_dir);
+  sif__settings_init(base_dir);
 
   /* Parse directories from settings */
   const char* cache_dir = sif_setting_get("cache_directory", NULL);
   if (cache_dir) {
-    _ensure_dir(cache_dir);
+    ensure_dir(cache_dir);
   }
 
   /* --- FFTW Configuration --- */
@@ -126,13 +129,13 @@ void sif_init(sif_config_t* config) {
   }
 
   if (req_wisdom_dir) {
-    _ensure_dir(req_wisdom_dir);
+    ensure_dir(req_wisdom_dir);
   }
 
   system_state->fft_mgr =
-    sif_fft_manager_init(req_skip_tuning, req_wisdom_dir);
+    sif__fft_manager_init(req_skip_tuning, req_wisdom_dir);
 
-  real_fftw_plan_with_nthreads(sif_system_get_max_threads());
+  real_fftw_plan_with_nthreads(sif__system_max_threads());
 
   /* --- Exact Math Init --- */
   exactinit();
@@ -157,16 +160,16 @@ void sif_finalize() {
   SIF_LOG_FLUSH();
 
   /* FFTW saves wisdom during its finalize step */
-  sif_fft_manager_finalize(system_state->fft_mgr);
+  sif__fft_manager_finalize(system_state->fft_mgr);
 
   /* Shut down settings engine and trigger auto-save if modified */
-  __sif_settings_finalize();
+  sif__settings_finalize();
 
   free(system_state);
   system_state = NULL;
 }
 
-sif_system_state_t* sif_get_system_state() {
+sif_system_state_t* sif__system_state() {
   if (!system_state) {
     SIF_LOG_ERROR("system", "system not initialized. aborting");
     exit(EXIT_FAILURE);
@@ -175,15 +178,15 @@ sif_system_state_t* sif_get_system_state() {
   return system_state;
 }
 
-sif_system_state_t* sif_get_system_state_safe() { return system_state; }
+sif_system_state_t* sif__system_state_safe() { return system_state; }
 
-int sif_system_get_max_threads(void) {
+int sif__system_max_threads(void) {
   if (system_state)
     return (int)system_state->max_threads;
   return 1;
 }
 
-int sif_system_get_num_threads(void) {
+int sif__system_num_threads(void) {
 #ifdef _OPENMP
   return omp_get_num_threads();
 #else
@@ -191,7 +194,7 @@ int sif_system_get_num_threads(void) {
 #endif
 }
 
-int sif_system_get_thread_num(void) {
+int sif__system_thread_num(void) {
 #ifdef _OPENMP
   return omp_get_thread_num();
 #else

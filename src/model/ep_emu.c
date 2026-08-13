@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * The emulated multiplicity function: the semi-analytic up-crossing baseline,
  * corrected per bin by a small trained network.
@@ -10,11 +16,11 @@
  * Python reference.
  *
  * Costs a few tens of microseconds against seconds for the Monte Carlo in
- * excursionset.c, and returns the answer that Monte Carlo CONVERGES to rather
+ * excursion_set.c, and returns the answer that Monte Carlo CONVERGES to rather
  * than the one it gives on the caller's grid.
  */
 
-#include "sif/model/excursionset.h"
+#include "sif/model/excursion_set.h"
 
 #include "math/nn.h"
 #include "model/ep_emu_weights.h"
@@ -25,32 +31,33 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define __TAG "ep_emu"
+#define TAG "ep_emu"
 
 /* Column order of the feature matrix. Must match ep_emu_weights.h, which
  * records the same list as the order the network was fitted in. */
 enum {
-  __F_NU = 0,
-  __F_GAMMA2,
-  __F_Y,
-  __F_DLNNU_DLNS,
-  __F_NU_BACK,
-  __F_LAG,
-  __F_CUM_LAM,
-  __F_NU_ORIGIN,
-  __F_COUNT
+  F_NU = 0,
+  F_GAMMA2,
+  F_Y,
+  F_DLNNU_DLNS,
+  F_NU_BACK,
+  F_LAG,
+  F_CUM_LAM,
+  F_NU_ORIGIN,
+  F_COUNT
 };
 
 /* The lookback: nu where the variance was half its current value. */
-#define __EP_EMU_LOOKBACK 0.5
+#define EP_EMU_LOOKBACK 0.5
 
 /* --- Validation --- */
 
-static int __validate(const real_t* radii, uint32_t n_radii,
-  const real_t* sigma, const real_t* barrier, const double* deriv_variance) {
+static int validate(const sif_real* radii, uint32_t n_radii,
+  const sif_real* sigma, const sif_real* barrier,
+  const double* deriv_variance) {
 
   if (!radii || !sigma || !barrier || !deriv_variance) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "radii, sigma, barrier and deriv_variance are all required; the "
       "derivative variance has no fallback here, since differencing it off a "
       "covariance converges only at first order and would make the result "
@@ -67,7 +74,7 @@ static int __validate(const real_t* radii, uint32_t n_radii,
    * this implementation happens to accept.
    */
   if (n_radii < 4) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "%u radii; the local description differentiates over a three-point "
       "stencil on the %u bin centres, so it needs at least four radii",
       n_radii, n_radii > 0 ? n_radii - 1 : 0);
@@ -75,38 +82,39 @@ static int __validate(const real_t* radii, uint32_t n_radii,
   }
 
   if (n_radii > SIF_COV_MAX_RADII) {
-    SIF_LOG_ERROR(__TAG, "%u radii exceeds the maximum of %d", n_radii,
-      SIF_COV_MAX_RADII);
+    SIF_LOG_ERROR(
+      TAG, "%u radii exceeds the maximum of %d", n_radii, SIF_COV_MAX_RADII);
     return SIF_ERR_INVALID;
   }
 
   for (uint32_t i = 0; i < n_radii; i++) {
     if (!(radii[i] > 0.0f)) {
-      SIF_LOG_ERROR(__TAG, "radius %u is %g, must be strictly positive", i,
-        (double)radii[i]);
+      SIF_LOG_ERROR(
+        TAG, "radius %u is %g, must be strictly positive", i, (double)radii[i]);
       return SIF_ERR_INVALID;
     }
     if (i > 0 && !(radii[i] > radii[i - 1])) {
-      SIF_LOG_ERROR(__TAG,
+      SIF_LOG_ERROR(TAG,
         "radii are not strictly increasing at index %u (%g after %g)", i,
         (double)radii[i], (double)radii[i - 1]);
       return SIF_ERR_INVALID;
     }
     if (!(sigma[i] > 0.0f)) {
-      SIF_LOG_ERROR(__TAG, "sigma at radius %u (%g) is %g, must be strictly "
-                           "positive",
+      SIF_LOG_ERROR(TAG,
+        "sigma at radius %u (%g) is %g, must be strictly "
+        "positive",
         i, (double)radii[i], (double)sigma[i]);
       return SIF_ERR_INVALID;
     }
     if (!(deriv_variance[i] > 0.0)) {
-      SIF_LOG_ERROR(__TAG,
+      SIF_LOG_ERROR(TAG,
         "the derivative variance at radius %u (%g) is %g, must be strictly "
         "positive",
         i, (double)radii[i], deriv_variance[i]);
       return SIF_ERR_INVALID;
     }
     if (!isfinite((double)barrier[i])) {
-      SIF_LOG_ERROR(__TAG, "the barrier at radius %u (%g) is not finite", i,
+      SIF_LOG_ERROR(TAG, "the barrier at radius %u (%g) is not finite", i,
         (double)radii[i]);
       return SIF_ERR_INVALID;
     }
@@ -122,8 +130,7 @@ static int __validate(const real_t* radii, uint32_t n_radii,
  * edge_order=2 -- which is what the trainer used, so the stencil is part of
  * the model rather than a choice made here.
  */
-static double __grad(const double* fv, const double* x, uint32_t n,
-  uint32_t i) {
+static double grad(const double* fv, const double* x, uint32_t n, uint32_t i) {
 
   if (i == 0) {
     const double h1 = x[1] - x[0];
@@ -153,7 +160,7 @@ static double __grad(const double* fv, const double* x, uint32_t n,
  * arrays to get it; walking down from the top here is the same thing without
  * the copies.
  */
-static double __interp_desc(
+static double interp_desc(
   const double* x, const double* v, uint32_t n, double t) {
 
   if (t >= x[0])
@@ -182,8 +189,8 @@ static double __interp_desc(
  * is what lets the result be read on any radius sampling: the emulated answer
  * moves by under 0.25% between 64 and 256 radii.
  */
-static int __features(const sif_ep_features_t* f, uint32_t n,
-  const double* lam, double* X) {
+static int features(
+  const sif_ep_features_t* f, uint32_t n, const double* lam, double* X) {
 
   const uint32_t n_bins = n - 1;
 
@@ -195,7 +202,7 @@ static int __features(const sif_ep_features_t* f, uint32_t n,
   double* cum_lam = malloc((size_t)n_bins * sizeof(double));
 
   if (!S_mid || !nu_mid || !ln_nu || !ln_S || !cum_lam) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the feature workspace");
+    SIF_LOG_ERROR(TAG, "failed to allocate the feature workspace");
     free(S_mid);
     free(nu_mid);
     free(ln_nu);
@@ -226,20 +233,20 @@ static int __features(const sif_ep_features_t* f, uint32_t n,
   const double nu_origin = nu_mid[n_bins - 1];
 
   for (uint32_t i = 0; i < n_bins; i++) {
-    double* row = X + (size_t)i * __F_COUNT;
+    double* row = X + (size_t)i * F_COUNT;
 
-    double target = __EP_EMU_LOOKBACK * S_mid[i];
+    double target = EP_EMU_LOOKBACK * S_mid[i];
     if (target < S_origin)
       target = S_origin;
 
-    row[__F_NU] = nu_mid[i];
-    row[__F_GAMMA2] = 0.5 * (f->gamma2[i] + f->gamma2[i + 1]);
-    row[__F_Y] = 0.5 * (f->y[i] + f->y[i + 1]);
-    row[__F_DLNNU_DLNS] = __grad(ln_nu, ln_S, n_bins, i);
-    row[__F_NU_BACK] = __interp_desc(S_mid, nu_mid, n_bins, target);
-    row[__F_LAG] = log(S_mid[i] / target);
-    row[__F_CUM_LAM] = cum_lam[i];
-    row[__F_NU_ORIGIN] = nu_origin;
+    row[F_NU] = nu_mid[i];
+    row[F_GAMMA2] = 0.5 * (f->gamma2[i] + f->gamma2[i + 1]);
+    row[F_Y] = 0.5 * (f->y[i] + f->y[i + 1]);
+    row[F_DLNNU_DLNS] = grad(ln_nu, ln_S, n_bins, i);
+    row[F_NU_BACK] = interp_desc(S_mid, nu_mid, n_bins, target);
+    row[F_LAG] = log(S_mid[i] / target);
+    row[F_CUM_LAM] = cum_lam[i];
+    row[F_NU_ORIGIN] = nu_origin;
   }
 
   free(cum_lam);
@@ -253,24 +260,24 @@ static int __features(const sif_ep_features_t* f, uint32_t n,
 
 /* --- The domain report --- */
 
-static void __report_domain(const double* X, uint32_t n_bins, double nu_large,
-  sif_emu_domain_t* domain) {
+static void report_domain(
+  const double* X, uint32_t n_bins, double nu_large, sif_emu_domain_t* domain) {
 
   const double* lo = SIF_EP_EMU_BOX_LO;
   const double* hi = SIF_EP_EMU_BOX_HI;
-  static const char* const names[__F_COUNT] = {"nu", "gamma2", "y",
-    "dlnnu_dlnS", "nu_back", "lag", "cum_lam", "nu_origin"};
+  static const char* const names[F_COUNT] = {"nu", "gamma2", "y", "dlnnu_dlnS",
+    "nu_back", "lag", "cum_lam", "nu_origin"};
 
-  const double first_step = sif_ep_upper_tail(nu_large);
+  const double first_step = sif__ep_upper_tail(nu_large);
 
   uint32_t n_outside = 0;
   uint32_t worst = 0;
   double worst_excess = 0.0;
 
   for (uint32_t i = 0; i < n_bins; i++) {
-    const double* row = X + (size_t)i * __F_COUNT;
+    const double* row = X + (size_t)i * F_COUNT;
     int out = 0;
-    for (uint32_t j = 0; j < __F_COUNT; j++) {
+    for (uint32_t j = 0; j < F_COUNT; j++) {
       const double span = (hi[j] - lo[j]) > 0.0 ? (hi[j] - lo[j]) : 1.0;
       const double excess =
         (row[j] < lo[j]) ? (lo[j] - row[j]) / span
@@ -288,7 +295,7 @@ static void __report_domain(const double* X, uint32_t n_bins, double nu_large,
   const int origin_low = nu_large < SIF_EP_EMU_NU_ORIGIN_MIN;
 
   if (origin_low) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "nu at the largest radius is %.3f, below the %.3f the correction was "
       "trained over: %.2f%% of walks start above the barrier and never enter "
       "any bin. Extend the radius grid outward; no amount of training would "
@@ -297,7 +304,7 @@ static void __report_domain(const double* X, uint32_t n_bins, double nu_large,
   }
 
   if (n_outside > 0) {
-    SIF_LOG_WARNING(__TAG,
+    SIF_LOG_WARNING(TAG,
       "%u of %u bins fall outside the region the correction was fitted over; "
       "%s is the furthest out, by %.1f%% of its trained span. The baseline is "
       "still corrected, but the accuracy below is the measured out-of-domain "
@@ -308,19 +315,19 @@ static void __report_domain(const double* X, uint32_t n_bins, double nu_large,
   if (domain) {
     domain->in_domain = (!origin_low && n_outside == 0) ? 1 : 0;
     domain->n_bins_outside = n_outside;
-    domain->nu_origin = (real_t)nu_large;
-    domain->first_step_mass = (real_t)first_step;
-    domain->expected_error = (real_t)(domain->in_domain
-                                        ? SIF_EP_EMU_ERROR_IN_DOMAIN
-                                        : SIF_EP_EMU_ERROR_OUT_DOMAIN);
+    domain->nu_origin = (sif_real)nu_large;
+    domain->first_step_mass = (sif_real)first_step;
+    domain->expected_error =
+      (sif_real)(domain->in_domain ? SIF_EP_EMU_ERROR_IN_DOMAIN
+                                   : SIF_EP_EMU_ERROR_OUT_DOMAIN);
   }
 }
 
 /* --- The entry point --- */
 
-real_t* sif_multiplicity_function_ep_emu(const real_t* radii, uint32_t n_radii,
-  const real_t* sigma, const real_t* barrier, const double* deriv_variance,
-  sif_emu_domain_t* domain, sif_option_t opt) {
+sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
+  uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
+  const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt) {
 
   (void)opt; /* reserved */
 
@@ -332,46 +339,46 @@ real_t* sif_multiplicity_function_ep_emu(const real_t* radii, uint32_t n_radii,
     domain->expected_error = 0.0f;
   }
 
-  if (__validate(radii, n_radii, sigma, barrier, deriv_variance) != SIF_OK)
+  if (validate(radii, n_radii, sigma, barrier, deriv_variance) != SIF_OK)
     return NULL;
 
   const uint32_t n = n_radii;
   const uint32_t n_bins = n - 1;
 
   sif_ep_features_t f;
-  if (sif_ep_features_init(&f, n) != SIF_OK) {
-    sif_ep_features_free(&f);
+  if (sif__ep_features_init(&f, n) != SIF_OK) {
+    sif__ep_features_free(&f);
     return NULL;
   }
 
   double* S = malloc((size_t)n * sizeof(double));
   double* lam = malloc((size_t)n_bins * sizeof(double));
-  double* X = malloc((size_t)n_bins * __F_COUNT * sizeof(double));
+  double* X = malloc((size_t)n_bins * F_COUNT * sizeof(double));
   double* corr = malloc((size_t)n_bins * sizeof(double));
-  real_t* out = sif_calloc_aligned((size_t)n_bins, sizeof(real_t));
+  sif_real* out = sif_calloc_aligned((size_t)n_bins, sizeof(sif_real));
 
   if (!S || !lam || !X || !corr || !out) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the emulator workspace");
+    SIF_LOG_ERROR(TAG, "failed to allocate the emulator workspace");
     goto fail;
   }
 
   for (uint32_t i = 0; i < n; i++)
     S[i] = (double)sigma[i] * (double)sigma[i];
 
-  if (sif_ep_features_fill_diag(&f, radii, n, S, barrier, deriv_variance)
-      != SIF_OK)
+  if (sif__ep_features_fill_diag(&f, radii, n, S, barrier, deriv_variance) !=
+      SIF_OK)
     goto fail;
 
-  sif_ep_hazard_bins(&f, n, lam);
+  sif__ep_hazard_bins(&f, n, lam);
 
-  if (__features(&f, n, lam, X) != SIF_OK)
+  if (features(&f, n, lam, X) != SIF_OK)
     goto fail;
 
-  if (sif_nn_eval(&SIF_EP_EMU_NN, X, n_bins, corr) != SIF_OK)
+  if (sif__nn_eval(&SIF_EP_EMU_NN, X, n_bins, corr) != SIF_OK)
     goto fail;
 
   const double nu_large = f.nu[n - 1];
-  __report_domain(X, n_bins, nu_large, domain);
+  report_domain(X, n_bins, nu_large, domain);
 
   /* The correction multiplies the HAZARD. Everything downstream of this line
    * is bounded by construction: 1 - exp(-Lambda) stays in [0, 1] however
@@ -382,13 +389,13 @@ real_t* sif_multiplicity_function_ep_emu(const real_t* radii, uint32_t n_radii,
     lam[i] = isfinite(scaled) && scaled > 0.0 ? scaled : 0.0;
   }
 
-  sif_ep_survival(lam, radii, n_bins, 1.0 - sif_ep_upper_tail(nu_large), out);
+  sif__ep_survival(lam, radii, n_bins, 1.0 - sif__ep_upper_tail(nu_large), out);
 
   free(S);
   free(lam);
   free(X);
   free(corr);
-  sif_ep_features_free(&f);
+  sif__ep_features_free(&f);
   return out;
 
 fail:
@@ -397,6 +404,6 @@ fail:
   free(X);
   free(corr);
   sif_free_aligned(out);
-  sif_ep_features_free(&f);
+  sif__ep_features_free(&f);
   return NULL;
 }

@@ -1,14 +1,20 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_model.h"
 
 #include "py_delta_common.h"
+#include "sif/model/bbks.h"
 #include "structures/py_delta_moments.h"
 #include "structures/py_size_function.h"
-#include "sif/model/bbks.h"
 #include <numpy/arrayobject.h>
 #include <string.h>
 
 /* Which G(gamma, w) to evaluate. Shared by every entry point here. */
-static int py_sif_bbks_g_option(const char* g, sif_option_t* opt) {
+static int py_sif_bbks_g_option(const char* g, sif_option* opt) {
   if (!g || strcmp(g, "fitted") == 0) {
     *opt = SIF_BBKS_G_FITTED;
     return 0;
@@ -17,12 +23,11 @@ static int py_sif_bbks_g_option(const char* g, sif_option_t* opt) {
     *opt = SIF_BBKS_G_EXACT;
     return 0;
   }
-  PyErr_Format(
-    PyExc_ValueError, "g must be 'fitted' or 'exact', got '%s'", g);
+  PyErr_Format(PyExc_ValueError, "g must be 'fitted' or 'exact', got '%s'", g);
   return -1;
 }
 
-PyObject* py_sif_g_bbks(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* py_sif_bbks_g(PyObject* self, PyObject* args, PyObject* kwds) {
   double gamma, w;
   const char* g_mode = NULL;
   static char* kwlist[] = {"gamma", "w", "g", NULL};
@@ -36,14 +41,14 @@ PyObject* py_sif_g_bbks(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
   }
 
-  sif_option_t options;
+  sif_option options;
   if (py_sif_bbks_g_option(g_mode, &options) != 0)
     return NULL;
   return PyFloat_FromDouble(
-    (double)sif_g_bbks((real_t)gamma, (real_t)w, options));
+    (double)sif_bbks_g((sif_real)gamma, (sif_real)w, options));
 }
 
-PyObject* py_sif_differential_number_density_bbks(
+PyObject* py_sif_bbks_number_density_differential(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* nu_obj;
   PyObject* gamma_obj;
@@ -57,7 +62,7 @@ PyObject* py_sif_differential_number_density_bbks(
     return NULL;
   }
 
-  sif_option_t options;
+  sif_option options;
   if (py_sif_bbks_g_option(g_mode, &options) != 0)
     return NULL;
 
@@ -89,12 +94,12 @@ PyObject* py_sif_differential_number_density_bbks(
     return NULL;
   }
 
-  real_t* values = NULL;
+  sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values = sif_differential_number_density_bbks(
-    (const real_t*)PyArray_DATA(nu_arr),
-    (const real_t*)PyArray_DATA(gamma_arr),
-    (const real_t*)PyArray_DATA(r_star_arr), (uint32_t)size, options);
+  Py_BEGIN_ALLOW_THREADS values =
+    sif_bbks_number_density_differential((const sif_real*)PyArray_DATA(nu_arr),
+      (const sif_real*)PyArray_DATA(gamma_arr),
+      (const sif_real*)PyArray_DATA(r_star_arr), (uint32_t)size, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(nu_arr);
@@ -111,7 +116,7 @@ PyObject* py_sif_differential_number_density_bbks(
   return py_sif_owned_array(values, size);
 }
 
-PyObject* py_sif_cumulative_number_density_bbks(
+PyObject* py_sif_bbks_number_density_cumulative(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* moments_obj;
   double delta;
@@ -140,13 +145,13 @@ PyObject* py_sif_cumulative_number_density_bbks(
     return NULL;
   }
 
-  sif_option_t options;
+  sif_option options;
   if (py_sif_bbks_g_option(g_mode, &options) != 0)
     return NULL;
-  real_t* values = NULL;
+  sif_real* values = NULL;
 
   Py_BEGIN_ALLOW_THREADS values =
-    sif_cumulative_number_density_bbks((real_t)delta, moments, options);
+    sif_bbks_number_density_cumulative((sif_real)delta, moments, options);
   Py_END_ALLOW_THREADS
 
     if (!values) {
@@ -172,7 +177,7 @@ PyObject* py_sif_size_function_bbks(
     return NULL;
   }
 
-  sif_option_t options;
+  sif_option options;
   if (py_sif_bbks_g_option(g_mode, &options) != 0)
     return NULL;
 
@@ -211,7 +216,7 @@ PyObject* py_sif_size_function_bbks(
   sif_size_function_t* vsf = NULL;
 
   Py_BEGIN_ALLOW_THREADS vsf =
-    sif_size_function_bbks((real_t)delta, moments, options);
+    sif_size_function_bbks((sif_real)delta, moments, options);
   Py_END_ALLOW_THREADS
 
     if (!vsf) {

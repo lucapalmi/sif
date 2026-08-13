@@ -1,179 +1,212 @@
-#ifndef __SIF_FIELD_H__
-#define __SIF_FIELD_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file field.h
+ * @brief The particle field: positions, velocities and masses, in
+ * structure-of-arrays layout.
+ *
+ * Coordinates are held as three separate arrays rather than as interleaved
+ * triples, because every loop over the field reads one axis at a time and an
+ * interleaved layout would fetch three times the cache lines it uses.
+ *
+ * **A field always owns every buffer it points at.** There used to be a
+ * borrowing mode (`FIELD_POINTS`) alongside per-array ownership bits. It could
+ * not be honoured: assigning masses or velocities to a sorted field silently
+ * took ownership anyway so the incoming data could be permuted, and
+ * sif_field_sort_morton() reallocates unconditionally, which detached the field
+ * from the caller's arrays with no diagnostic. What is left describes the state
+ * of the data, not who frees it.
+ *
+ * To fill a field without paying for a copy, reserve the arrays and write into
+ * `field->x` and friends directly; that is what the readers do.
+ */
+
+#ifndef SIF_STRUCTURES_FIELD_H
+#define SIF_STRUCTURES_FIELD_H
 
 #include "sif/core/macros.h"
 #include <stdint.h>
 
-/*
- * A field always owns every buffer it points at.
- *
- * There used to be a borrowing mode (FIELD_POINTS) alongside per-array
- * ownership bits. It could not be honoured: assigning masses or velocities to a
- * sorted field silently took ownership anyway so the incoming data could be
- * permuted, and sif_field_sort_morton reallocates unconditionally, which
- * detached the field from the caller's arrays with no diagnostic. What is left
- * describes the state of the data, not who frees it.
- *
- * To fill a field without paying for a copy, reserve the arrays and write into
- * field->x and friends directly; that is what the readers do.
+/**
+ * @defgroup field_state Field state flags
+ * @brief Bits of sif_field_t::state_flags, describing what is currently true
+ * of the data.
+ * @{
  */
-#define __FIELD_STATE_MORTON_SORTED (1u << 0)
-#define __FIELD_STATE_BOUNDS_VALID  (1u << 1)
+/** Arrays are physically ordered along the Morton curve. */
+#define SIF_FIELD_STATE_MORTON_SORTED (1u << 0)
+/** The cached bounding box and centre match the current positions. */
+#define SIF_FIELD_STATE_BOUNDS_VALID (1u << 1)
+/** @} */
 
-/* Bits per axis in the 3D Morton code. Three of these must fit in a uint64. */
+/** @brief Bits per axis in the 3D Morton code. Three of these must fit in a
+ *  uint64. */
 #define SIF_MORTON_BITS 21
 
-/*
- * @brief Quantizes one coordinate onto the field's bounding-cube grid.
+/**
+ * @brief Quantize one coordinate onto the field's bounding-cube grid.
  *
  * Bit (SIF_MORTON_BITS - 1 - d) of the result answers "is this point in the
  * upper half at subdivision level d". Everything that subdivides space the way
- * sif_field_sort_morton does -- notably the octree -- must go through this
+ * sif_field_sort_morton() does -- notably the octree -- must go through this
  * function, so the two agree exactly instead of approximately. Recomputing an
  * equivalent float comparison independently is what used to put particles in
  * the wrong octree cell.
  *
- * @param origin The low corner of the bounding cube (center - half_span)
- * @param inv_side 1 / (2 * half_span)
+ * @param p Coordinate to quantize.
+ * @param origin The low corner of the bounding cube (center - half_span).
+ * @param inv_side 1 / (2 * half_span).
+ * @return The quantized coordinate, clamped to the cube.
  */
 static inline uint32_t sif_field_quantize(
-  real_t p, real_t origin, real_t inv_side) {
+  sif_real p, sif_real origin, sif_real inv_side) {
 
-  const real_t t = (p - origin) * inv_side;
+  const sif_real t = (p - origin) * inv_side;
   const int32_t q_max = (int32_t)((1u << SIF_MORTON_BITS) - 1u);
 
-  int32_t q = (int32_t)(t * (real_t)(1u << SIF_MORTON_BITS));
+  int32_t q = (int32_t)(t * (sif_real)(1u << SIF_MORTON_BITS));
   return (uint32_t)((q < 0) ? 0 : ((q > q_max) ? q_max : q));
 }
 
-/*
- * @brief Represents a physical particle field
+/**
+ * @brief A physical particle field.
+ *
+ * Any of the data arrays may be NULL: a field carries only what was reserved or
+ * assigned into it. Check before reading, or reserve up front.
  */
 typedef struct {
-  real_t* _position_block;
-  real_t* _velocity_block;
+  /** Backing store for x/y/z. Owned; not for callers. */
+  sif_real* _position_block;
+  /** Backing store for vx/vy/vz. Owned; not for callers. */
+  sif_real* _velocity_block;
 
-  real_t* x;
-  real_t* y;
-  real_t* z;
+  sif_real* x; /**< Position, x axis. Views into #_position_block. */
+  sif_real* y;
+  sif_real* z;
 
-  real_t* vx;
-  real_t* vy;
-  real_t* vz;
+  sif_real* vx; /**< Velocity, x axis. Views into #_velocity_block. */
+  sif_real* vy;
+  sif_real* vz;
 
-  real_t* masses;
+  /** Per-particle mass, or NULL for an equal-mass field. */
+  sif_real* masses;
+  /** Where each particle sat before the Morton sort, or NULL if unsorted. */
   uint64_t* original_indices;
 
-  real_t min_p[3];
-  real_t max_p[3];
-  real_t center[3];
-  real_t half_span;
+  sif_real min_p[3];  /**< Lower corner of the bounding box. */
+  sif_real max_p[3];  /**< Upper corner of the bounding box. */
+  sif_real center[3]; /**< Centre of the bounding cube. */
+  sif_real half_span; /**< Half-side of the bounding cube. */
 
+  /** Bitwise OR of the SIF_FIELD_STATE_* flags. */
   uint32_t state_flags;
   uint64_t n_particles;
 } sif_field_t;
 
-/*
- * @brief Initializes a field
+/**
+ * @brief Allocate an empty field header for @p n_particles particles.
  *
- * @param n_particles The number of particles in the field
+ * Allocates only the struct: every data array is left NULL and the field is not
+ * usable until the arrays are reserved (sif_field_reserve_positions() and
+ * friends) or assigned (sif_field_assign_positions() and friends).
  *
- * @return Initialized field
+ * @param n_particles Particle count the arrays will be sized for.
+ * @return The field, owned by the caller and released with sif_field_free().
+ * NULL on allocation failure.
  */
-NODISCARD sif_field_t* sif_field_alloc(uint64_t n_particles);
+SIF_NODISCARD sif_field_t* sif_field_alloc(uint64_t n_particles);
 
-/*
- * @brief Per-array stride inside a packed x/y/z block
+/**
+ * @brief Per-array stride inside a packed x/y/z block.
  *
  * Each sub-array of a unified block starts on a cache line, so a block holds
  * 3 * sif_field_padded_n(n) elements rather than 3 * n. Anything that lays out
  * its own block the same way (the chain mesh, the readers) has to agree on
  * this, so it lives here rather than being open-coded per call site.
- */
-PURE_FUNCTION uint64_t sif_field_padded_n(uint64_t n_particles);
-
-/*
- * @brief Frees a field
  *
- * @param field The field to free
+ * @param n_particles Logical element count.
+ * @return The padded count.
+ */
+SIF_PURE_FUNCTION uint64_t sif_field_padded_n(uint64_t n_particles);
+
+/**
+ * @brief Release a field and every buffer it owns.
+ * @param field Field to free. NULL is accepted and ignored.
  */
 void sif_field_free(sif_field_t* field);
 
-/*
- * @brief Allocate the position arrays without filling them
+/**
+ * @brief Allocate the position arrays without filling them.
  *
- * Sized from field->n_particles, which must be set. Writing straight into
- * field->x, field->y and field->z afterwards is the zero-copy way to populate a
- * field. A no-op if the arrays already exist.
+ * Sized from sif_field_t::n_particles, which must be set. Writing straight into
+ * `field->x`, `field->y` and `field->z` afterwards is the zero-copy way to
+ * populate a field. A no-op if the arrays already exist.
  *
- * @return SIF_OK on success, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC
- * on failure
+ * @return SIF_OK, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC on failure.
  */
 int sif_field_reserve_positions(sif_field_t* field);
 
-/*
- * @brief Allocate the velocity arrays without filling them. See
- * sif_field_reserve_positions.
+/**
+ * @brief Allocate the velocity arrays without filling them.
+ * @see sif_field_reserve_positions
  */
 int sif_field_reserve_velocities(sif_field_t* field);
 
-/*
- * @brief Allocate the mass array without filling it. See
- * sif_field_reserve_positions.
+/**
+ * @brief Allocate the mass array without filling it.
+ * @see sif_field_reserve_positions
  */
 int sif_field_reserve_masses(sif_field_t* field);
 
-/*
- * @brief Copy positions into the field
+/**
+ * @brief Copy positions into the field.
  *
- * @param field The field
- * @param x X-axis positions
- * @param y Y-axis positions
- * @param z Z-axis positions
+ * @param field The field.
+ * @param x X-axis positions.
+ * @param y Y-axis positions.
+ * @param z Z-axis positions.
+ * @return SIF_OK, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC on failure.
  *
  * @note Invalidates the bounds and the Morton order, and drops the permutation
  * a previous sort had recorded: it no longer describes this data.
- *
- * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
- * on failure
  */
 int sif_field_assign_positions(
-  sif_field_t* field, const real_t* x, const real_t* y, const real_t* z);
+  sif_field_t* field, const sif_real* x, const sif_real* y, const sif_real* z);
 
-/*
- * @brief Copy velocities into the field
+/**
+ * @brief Copy velocities into the field.
  *
- * @param field The field
+ * @param field The field.
  * @param vx X-axis velocities, indexed as the positions were BEFORE any Morton
- * sort (i.e. in the caller's original particle order)
- * @param vy Y-axis velocities
- * @param vz Z-axis velocities
+ * sort -- that is, in the caller's original particle order.
+ * @param vy Y-axis velocities.
+ * @param vz Z-axis velocities.
+ * @return SIF_OK, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC on failure.
  *
  * @note If the field has already been Morton-sorted the incoming arrays are
  * permuted into the field's current order on the way in, so that every particle
  * keeps its own velocity.
- *
- * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
- * on failure
  */
-int sif_field_assign_velocities(
-  sif_field_t* field, const real_t* vx, const real_t* vy, const real_t* vz);
+int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
+  const sif_real* vy, const sif_real* vz);
 
-/*
- * @brief Copy per-particle masses into the field
+/**
+ * @brief Copy per-particle masses into the field.
  *
- * @param field The field
- * @param masses Masses in the caller's original particle order
+ * @param field The field.
+ * @param masses Masses in the caller's original particle order.
+ * @return SIF_OK, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC on failure.
  *
- * @note Same permutation rule as sif_field_assign_velocities.
- *
- * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
- * on failure
+ * @note Same permutation rule as sif_field_assign_velocities().
  */
-int sif_field_assign_masses(sif_field_t* field, const real_t* masses);
+int sif_field_assign_masses(sif_field_t* field, const sif_real* masses);
 
-/*
- * @brief Folds every coordinate into [0, box_length) periodically
+/**
+ * @brief Fold every coordinate into [0, box_length) periodically.
  *
  * Everything that bins the field -- the CIC assignment, the chain mesh --
  * requires coordinates strictly inside the box, and rejects the field
@@ -188,66 +221,69 @@ int sif_field_assign_masses(sif_field_t* field, const real_t* masses);
  *
  * The two populations are counted separately because they mean different
  * things. A handful of boundary folds is the expected rounding artifact. A
- * large `n_wrapped` means the coordinates were not in this box to begin with --
- * the box length is wrong, or the data was never wrapped -- and folding them
+ * large @p n_wrapped means the coordinates were not in this box to begin with
+ * -- the box length is wrong, or the data was never wrapped -- and folding them
  * produces a silently meaningless density field rather than an error.
  *
- * NaN cannot be repaired here and is left alone; the binning validators reject
- * it, and it is counted in neither total.
+ * @param field The field, modified in place.
+ * @param box_length The periodic box the field lives in.
+ * @param n_boundary Optional; coordinates that sat exactly on box_length.
+ * @param n_wrapped Optional; coordinates that were genuinely outside the box.
+ * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field or a
+ * non-positive box.
  *
- * @param field The field, modified in place
- * @param box_length The periodic box the field lives in
- * @param n_boundary Optional; coordinates that sat exactly on box_length
- * @param n_wrapped Optional; coordinates that were genuinely outside the box
- *
- * @return SIF_OK on success, SIF_ERR_INVALID on an empty or positionless field
- * or a non-positive box
+ * @note NaN cannot be repaired here and is left alone; the binning validators
+ * reject it, and it is counted in neither total.
  */
-int sif_field_wrap_periodic(sif_field_t* field, real_t box_length,
+int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
   uint64_t* n_boundary, uint64_t* n_wrapped);
 
-/*
- * @brief Computes and caches the bounding box and center of the field.
+/**
+ * @brief Recompute the bounding box and centre, unconditionally.
  *
- * Recomputes unconditionally. Prefer sif_field_require_bounds unless you
- * specifically need to force a refresh.
+ * Prefer sif_field_require_bounds() unless you specifically need to force a
+ * refresh -- after writing into `field->x` directly, for instance, which the
+ * field cannot notice.
  *
- * @param field The field
- *
- * @return SIF_OK on success, SIF_ERR_INVALID on an empty or positionless field
+ * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field.
  */
-int sif_field_compute_bounds(sif_field_t* field);
+int sif_field_refresh_bounds(sif_field_t* field);
 
-/*
- * @brief Ensures the field has a valid bounding box, computing it if needed.
+/**
+ * @brief Ensure the field has a valid bounding box, computing it if needed.
  *
- * Idempotent and quiet: safe to call from anything that reads min_p, max_p,
- * center or half_span.
+ * Idempotent and quiet: safe to call from anything that reads
+ * sif_field_t::min_p, ::max_p, ::center or ::half_span.
  *
- * @return SIF_OK if the bounds are valid on return, an error code otherwise
+ * @return SIF_OK if the bounds are valid on return, an error code otherwise.
  */
 int sif_field_require_bounds(sif_field_t* field);
 
-/*
- * @brief Physically sorts the field arrays in memory using a 3D Morton curve.
+/**
+ * @brief Sort the field arrays in memory along a 3D Morton curve.
+ *
+ * Reorders the data physically rather than producing an index, so that
+ * neighbouring particles in space end up neighbouring in memory and the
+ * spatial queries walk contiguous ranges. The permutation is recorded in
+ * sif_field_t::original_indices.
+ *
+ * @return SIF_OK, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC on failure
+ * -- in which case the field is left unmodified.
  *
  * @note On success the field owns its positions and indices regardless of how
  * they were assigned: the permuted copy cannot alias the caller's arrays.
- *
- * @return SIF_OK on success, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC
- * on failure (in which case the field is left unmodified)
  */
 int sif_field_sort_morton(sif_field_t* field);
 
-/*
- * @brief Ensures the field is Morton-sorted, sorting it if needed.
+/**
+ * @brief Ensure the field is Morton-sorted, sorting it if needed.
  *
- * Consumers that structurally depend on Morton order (the octree, which stores
- * contiguous particle ranges per node) should call this instead of testing the
- * flag and failing.
+ * Consumers that structurally depend on Morton order -- the octree, which
+ * stores contiguous particle ranges per node -- should call this instead of
+ * testing the flag and failing.
  *
- * @return SIF_OK if the field is Morton-sorted on return, an error otherwise
+ * @return SIF_OK if the field is Morton-sorted on return, an error otherwise.
  */
 int sif_field_require_morton(sif_field_t* field);
 
-#endif /* __SIF_FIELD_H__ */
+#endif /* SIF_STRUCTURES_FIELD_H */

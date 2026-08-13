@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_delta_distribution.h"
 
 #include "py_delta_common.h"
@@ -82,10 +88,10 @@ static PyObject* sifDeltaDistribution_get_delta_centers(
   if (!array)
     return NULL;
 
-  real_t* out = (real_t*)PyArray_DATA(array);
-  const real_t* edges = self->dist->delta_edges;
+  sif_real* out = (sif_real*)PyArray_DATA(array);
+  const sif_real* edges = self->dist->delta_edges;
   for (uint32_t i = 0; i < self->dist->n_bins; i++) {
-    out[i] = (real_t)(0.5 * ((double)edges[i] + (double)edges[i + 1]));
+    out[i] = (sif_real)(0.5 * ((double)edges[i] + (double)edges[i + 1]));
   }
 
   return (PyObject*)array;
@@ -108,8 +114,8 @@ static PyGetSetDef sifDeltaDistribution_getset[] = {
     NULL},
   {"n_samples", sifDeltaDistribution_get_n_samples, NULL,
     "Grid cells sampled per radius", NULL},
-  {"radii", sifDeltaDistribution_get_radii, NULL,
-    "1D array of smoothing radii", NULL},
+  {"radii", sifDeltaDistribution_get_radii, NULL, "1D array of smoothing radii",
+    NULL},
   {"delta_edges", sifDeltaDistribution_get_delta_edges, NULL,
     "1D array of delta bin edges", NULL},
   {"delta_centers", sifDeltaDistribution_get_delta_centers, NULL,
@@ -124,7 +130,14 @@ PyTypeObject sifDeltaDistributionType = {
   .tp_itemsize = 0,
   .tp_dealloc = sifDeltaDistribution_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "PDF of the smoothed density contrast, one row per radius.",
+  .tp_doc =
+    "DeltaDistribution()\n"
+    "--\n\n"
+    "The one-point PDF of the smoothed density contrast, one row per\n"
+    "smoothing radius.\n\n"
+    "Returned by pysif.measure.delta_distribution_grid(). Every row\n"
+    "shares one set of bin edges, so rows are comparable across radii.\n\n"
+    "Not constructed directly.",
   .tp_getset = sifDeltaDistribution_getset,
   .tp_init = sifDeltaDistribution_init,
   .tp_new = PyType_GenericNew,

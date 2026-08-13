@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_grid.h"
 #include "py_field.h"
 
@@ -23,7 +29,7 @@ static int sifGrid_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
     return -1;
   }
 
-  sif_grid_t* tmp = sif_grid_alloc(n_cells, (real_t)box_length_in);
+  sif_grid_t* tmp = sif_grid_alloc(n_cells, (sif_real)box_length_in);
   if (!tmp) {
     PyErr_SetString(PyExc_MemoryError, "Failed to allocate sif.grid");
     return -1;
@@ -55,32 +61,65 @@ static PyObject* sifGrid_assign_cic(
   Py_RETURN_NONE;
 }
 
-static PyObject* sifGrid_compute_overdensity(
+static PyObject* sifGrid_to_density_contrast(
   PyObject* self_obj, PyObject* args) {
   sifGridObject* self = (sifGridObject*)self_obj;
 
-  sif_grid_compute_overdensity(self->grid);
+  /* The C entry point returns void and refuses a second conversion by
+   * logging, which a Python caller cannot see. Check here so the refusal
+   * arrives as an exception instead of as a silent no-op. */
+  if (self->grid->content == SIF_GRID_DENSITY_CONTRAST) {
+    PyErr_SetString(PyExc_ValueError,
+      "this grid already holds a density contrast; converting again would "
+      "renormalize by a mean of zero");
+    return NULL;
+  }
+
+  sif_grid_to_density_contrast(self->grid);
 
   Py_RETURN_NONE;
 }
 
 static PyMethodDef sifGrid_methods[] = {
   {"assign_cic", (PyCFunction)sifGrid_assign_cic, METH_VARARGS | METH_KEYWORDS,
-    "Assign particles from an sif.field to the grid using Cloud-in-Cell "
-    "interpolation."},
-  {"compute_overdensity", (PyCFunction)sifGrid_compute_overdensity, METH_NOARGS,
-    "Compute the density contrast (delta) for the grid cells."},
+    "assign_cic(field)\n"
+    "--\n\n"
+    "Deposit a particle field onto the grid by Cloud-In-Cell assignment.\n\n"
+    "Each particle contributes to the eight cells around it. Masses are\n"
+    "used when the field carries them, otherwise every particle counts as\n"
+    "one. Afterwards the cells hold mass, not density contrast.\n\n"
+    "Every coordinate must lie in [0, box_length); use Field.wrap() first\n"
+    "if a periodic snapshot has drifted onto the boundary.\n\n"
+    "Args:\n"
+    "    field: The particle field to deposit."},
+  {"to_density_contrast", (PyCFunction)sifGrid_to_density_contrast, METH_NOARGS,
+    "to_density_contrast()\n"
+    "--\n\n"
+    "Convert the cells in place from mass to density contrast.\n\n"
+    "Replaces each cell with delta = rho / rho_mean - 1, so the field\n"
+    "averages to zero and is bounded below by -1. This is the form the\n"
+    "finders and pysif.measure expect.\n\n"
+    "Calling it twice is refused: the second pass would renormalize by a\n"
+    "mean that is now zero."},
   {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */
 PyTypeObject sifGridType = {
-  PyVarObject_HEAD_INIT(NULL, 0)
-  .tp_name = "pysif.structures.Grid", /* Updated Namespace and Capitalized */
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name =
+    "pysif.Grid", /* Updated Namespace and Capitalized */
   .tp_basicsize = sizeof(sifGridObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifGrid_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "SIF cubic grid object.",
+  .tp_doc = "Grid(n_cells, box_length)\n"
+            "--\n\n"
+            "A cubic grid of n_cells**3 cells over a periodic box.\n\n"
+            "Deposit a field onto it with assign_cic(), then convert it with\n"
+            "to_density_contrast() before handing it to a finder or to\n"
+            "pysif.measure.\n\n"
+            "Args:\n"
+            "    n_cells: Cells per side.\n"
+            "    box_length: Physical side length of the box.",
   .tp_methods = sifGrid_methods,
   .tp_init = sifGrid_init,
   .tp_new = PyType_GenericNew,

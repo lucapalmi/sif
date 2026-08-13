@@ -1,13 +1,34 @@
-#ifndef __SIF_MODEL_EXCURSIONSET_H__
-#define __SIF_MODEL_EXCURSIONSET_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file excursion_set.h
+ * @brief The excursion-set first-crossing problem: how often a random walk in
+ * density first drops below a barrier.
+ *
+ * Two paths to the same multiplicity function. sif_ep_multiplicity_function()
+ * runs correlated walks by Monte Carlo, which needs the full packed covariance
+ * and costs quadratic work in the radius count.
+ * sif_ep_multiplicity_function_emu() evaluates a trained network over the same
+ * features, needs only the diagonal, and is linear -- about a million times
+ * faster, at a fitted accuracy quoted with the emulator.
+ *
+ * The upcrossing form is the analytic limit both are measured against.
+ */
+
+#ifndef SIF_MODEL_EXCURSION_SET_H
+#define SIF_MODEL_EXCURSION_SET_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/model/deltamoments.h"
+#include "sif/model/delta_moments.h"
 
-/*
+/**
  * @brief Excursion-set void multiplicity function f_ln(sigma), for a constant
  * barrier and uncorrelated steps.
  *
@@ -25,10 +46,10 @@
  * @return Newly allocated array of n values, released with sif_free_aligned,
  * or NULL on invalid input.
  */
-NODISCARD real_t* sif_multiplicity_function_svdw(
-  const real_t* sigma, uint32_t n, real_t delta_v, real_t delta_c);
+SIF_NODISCARD sif_real* sif_svdw_multiplicity_function(
+  const sif_real* sigma, uint32_t n, sif_real delta_v, sif_real delta_c);
 
-/*
+/**
  * @brief The Sheth-Mo-Tormen moving barrier,
  * B(sigma) = alpha [1 + (beta / sigma)^gamma].
  *
@@ -49,10 +70,10 @@ NODISCARD real_t* sif_multiplicity_function_svdw(
  * @return Newly allocated array of n barrier heights, released with
  * sif_free_aligned, or NULL on invalid input.
  */
-NODISCARD real_t* sif_barrier_smt(
-  const real_t* sigma, uint32_t n, real_t alpha, real_t beta, real_t gamma);
+SIF_NODISCARD sif_real* sif_ep_barrier_smt(const sif_real* sigma, uint32_t n,
+  sif_real alpha, sif_real beta, sif_real gamma);
 
-/*
+/**
  * @brief Raw first-crossing counts of a correlated random walk against a
  * moving barrier, one count per smoothing radius.
  *
@@ -75,7 +96,7 @@ NODISCARD real_t* sif_barrier_smt(
  * @param cov Covariance of the smoothed field between every pair of radii,
  * packed lower triangle in the ascending order of radii: S(i, j) at
  * SIF_COV_INDEX(i, j) for j <= i. Must be symmetric positive semi-definite
- * with a strictly positive diagonal. Double rather than real_t: a
+ * with a strictly positive diagonal. Double rather than sif_real: a
  * single-precision factorization of a realistic radius grid reaches a
  * non-positive pivot and fails.
  * @param barrier n_radii barrier heights, in the ascending order of radii
@@ -87,11 +108,11 @@ NODISCARD real_t* sif_barrier_smt(
  * radii, released with sif_free_aligned, or NULL on invalid input or a failed
  * factorization.
  */
-NODISCARD uint64_t* sif_first_crossing_counts_ep(const real_t* radii,
-  uint32_t n_radii, const double* cov, const real_t* barrier, uint64_t n_paths,
-  uint64_t seed, sif_option_t opt);
+SIF_NODISCARD uint64_t* sif_ep_first_crossing_counts(const sif_real* radii,
+  uint32_t n_radii, const double* cov, const sif_real* barrier,
+  uint64_t n_paths, uint64_t seed, sif_option opt);
 
-/*
+/**
  * @brief Lagrangian void multiplicity function from the first crossing of a
  * moving barrier by a correlated random walk.
  *
@@ -101,32 +122,32 @@ NODISCARD uint64_t* sif_first_crossing_counts_ep(const real_t* radii,
  * @note The result has n_radii - 1 entries, on the bin centres
  * 0.5 (radii[i] + radii[i+1]), not n_radii point values on the radii
  * themselves; the largest radius is the walk's first step and has no bin above
- * it. This is a different shape from sif_multiplicity_function_svdw, which is
+ * it. This is a different shape from sif_svdw_multiplicity_function, which is
  * point-evaluated.
  *
  * @note The Monte Carlo error on a bin is sqrt(n_i) / (n_paths dr_i), so a bin
  * holding a fraction p of the walks is known to a relative 1 / sqrt(p n_paths).
  * Take `counts` and check it before trusting the tails; re-running the walk
- * through sif_first_crossing_counts_ep to get the same numbers doubles the
+ * through sif_ep_first_crossing_counts to get the same numbers doubles the
  * cost of the most expensive call in the library.
  *
  * @param counts Optional output, n_radii entries: the raw first-crossing
  * counts this multiplicity was built from, exactly as
- * sif_first_crossing_counts_ep would have returned them. Pass NULL to skip.
+ * sif_ep_first_crossing_counts would have returned them. Pass NULL to skip.
  *
  * Remaining parameters, and the barrier and reproducibility conventions, are as
- * sif_first_crossing_counts_ep.
+ * sif_ep_first_crossing_counts.
  *
  * @return Newly allocated array of n_radii - 1 values, released with
  * sif_free_aligned, or NULL on invalid input or a failed factorization.
  */
-NODISCARD real_t* sif_multiplicity_function_ep(const real_t* radii,
-  uint32_t n_radii, const double* cov, const real_t* barrier, uint64_t n_paths,
-  uint64_t seed, uint64_t* counts, sif_option_t opt);
+SIF_NODISCARD sif_real* sif_ep_multiplicity_function(const sif_real* radii,
+  uint32_t n_radii, const double* cov, const sif_real* barrier,
+  uint64_t n_paths, uint64_t seed, uint64_t* counts, sif_option opt);
 
-/*
+/**
  * @brief Report on where an emulated call sat relative to what the emulator
- * was trained over. Optional; pass NULL to sif_multiplicity_function_ep_emu if
+ * was trained over. Optional; pass NULL to sif_ep_multiplicity_function_emu if
  * the answer is all that is wanted.
  *
  * Leaving the trained region is not an error and does not fail the call. It
@@ -146,17 +167,17 @@ typedef struct {
    * never enters any bin; above a per cent the emulator was measured to be
    * unreliable. This one is the caller's to fix, by extending the radius grid
    * outward -- no amount of training would help. */
-  real_t nu_origin;
-  real_t first_step_mass;
+  sif_real nu_origin;
+  sif_real first_step_mass;
 
   /* Expected relative error, from the trainer's held-out validation: the
    * in-domain figure when in_domain is set, and the measured out-of-domain one
    * otherwise. */
-  real_t expected_error;
+  sif_real expected_error;
 } sif_emu_domain_t;
 
-/*
- * @brief The same multiplicity function as sif_multiplicity_function_ep,
+/**
+ * @brief The same multiplicity function as sif_ep_multiplicity_function,
  * emulated: no random walks, no paths, well under a millisecond.
  *
  * A semi-analytic up-crossing rate corrected by a small trained network. The
@@ -165,7 +186,7 @@ typedef struct {
  * integrates to at most one whatever the network predicts.
  *
  * @note Takes `sigma`, not the packed covariance that
- * sif_multiplicity_function_ep needs. That is deliberate rather than an
+ * sif_ep_multiplicity_function needs. That is deliberate rather than an
  * oversight: the emulator reads only the diagonal, so it needs n numbers where
  * the Monte Carlo needs n(n+1)/2, and its cost is linear rather than quadratic
  * in the radius count.
@@ -200,12 +221,12 @@ typedef struct {
  * @param opt Reserved; pass SIF_DEFAULT
  *
  * @return Newly allocated array of n_radii - 1 values on the same bin centres
- * as sif_multiplicity_function_ep, released with sif_free_aligned, or NULL on
+ * as sif_ep_multiplicity_function, released with sif_free_aligned, or NULL on
  * invalid input. An input outside the trained region is NOT invalid: the answer
  * is returned, `domain` records it, and the log names the quantity responsible.
  */
-NODISCARD real_t* sif_multiplicity_function_ep_emu(const real_t* radii,
-  uint32_t n_radii, const real_t* sigma, const real_t* barrier,
-  const double* deriv_variance, sif_emu_domain_t* domain, sif_option_t opt);
+SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
+  uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
+  const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt);
 
-#endif /* __SIF_MODEL_EXCURSIONSET_H__ */
+#endif /* SIF_MODEL_EXCURSION_SET_H */

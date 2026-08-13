@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * The emulated multiplicity function.
  *
@@ -17,8 +23,8 @@
  */
 
 #include "sif/core/system.h"
-#include "sif/model/deltamoments.h"
-#include "sif/model/excursionset.h"
+#include "sif/model/delta_moments.h"
+#include "sif/model/excursion_set.h"
 #include "sif/utils/align.h"
 #include "test_util.h"
 
@@ -39,16 +45,16 @@ static int failures = 0;
     }                                                                          \
   } while (0)
 
-/* real_t holds about seven significant digits, so a result stored in it can
+/* sif_real holds about seven significant digits, so a result stored in it can
  * differ from the double the Python produced by that much and no more. This
  * tolerance is float rounding, not a physics allowance: the measured agreement
  * is 5e-8, and anything at 1e-5 or worse is a real divergence. */
-#define __REF_TOL 5e-7
+#define REF_TOL 5e-7
 
-static real_t* __as_real(const double* v, uint32_t n) {
-  real_t* out = malloc((size_t)n * sizeof(real_t));
+static sif_real* as_real(const double* v, uint32_t n) {
+  sif_real* out = malloc((size_t)n * sizeof(sif_real));
   for (uint32_t i = 0; i < n; i++)
-    out[i] = (real_t)v[i];
+    out[i] = (sif_real)v[i];
   return out;
 }
 
@@ -61,12 +67,12 @@ static void test_against_reference(void) {
     const uint32_t n = EP_EMU_CASE_N;
     const uint32_t n_bins = n - 1;
 
-    real_t* radii = __as_real(EP_EMU_RADII[c], n);
-    real_t* sigma = __as_real(EP_EMU_SIGMA[c], n);
-    real_t* barrier = __as_real(EP_EMU_BARRIER[c], n);
+    sif_real* radii = as_real(EP_EMU_RADII[c], n);
+    sif_real* sigma = as_real(EP_EMU_SIGMA[c], n);
+    sif_real* barrier = as_real(EP_EMU_BARRIER[c], n);
 
     sif_emu_domain_t dom;
-    real_t* f = sif_multiplicity_function_ep_emu(
+    sif_real* f = sif_ep_multiplicity_function_emu(
       radii, n, sigma, barrier, EP_EMU_DVAR[c], &dom, SIF_DEFAULT);
 
     CHECK(f != NULL, "case %d returned NULL on a valid input", c);
@@ -84,20 +90,19 @@ static void test_against_reference(void) {
         }
       }
 
-      CHECK(worst < __REF_TOL,
+      CHECK(worst < REF_TOL,
         "case %d departs from the Python model by a relative %.3e at bin %u; "
         "at this size the cause is an implementation difference, not rounding",
         c, worst, at);
 
       CHECK(dom.in_domain == EP_EMU_IN_DOMAIN[c],
-        "case %d reports in_domain=%d, the reference says %d", c,
-        dom.in_domain, EP_EMU_IN_DOMAIN[c]);
+        "case %d reports in_domain=%d, the reference says %d", c, dom.in_domain,
+        EP_EMU_IN_DOMAIN[c]);
 
       const double nu_rel =
-        fabs((double)dom.nu_origin - EP_EMU_NU_ORIGIN[c]) /
-        EP_EMU_NU_ORIGIN[c];
-      CHECK(nu_rel < 1e-6, "case %d reports nu_origin %.6f, expected %.6f",
-        c, (double)dom.nu_origin, EP_EMU_NU_ORIGIN[c]);
+        fabs((double)dom.nu_origin - EP_EMU_NU_ORIGIN[c]) / EP_EMU_NU_ORIGIN[c];
+      CHECK(nu_rel < 1e-6, "case %d reports nu_origin %.6f, expected %.6f", c,
+        (double)dom.nu_origin, EP_EMU_NU_ORIGIN[c]);
 
       printf("  case %d: worst relative departure %.2e at bin %u, "
              "in_domain %d\n",
@@ -119,11 +124,11 @@ static void test_invariants(void) {
   for (int c = 0; c < EP_EMU_N_CASES; c++) {
     const uint32_t n = EP_EMU_CASE_N;
 
-    real_t* radii = __as_real(EP_EMU_RADII[c], n);
-    real_t* sigma = __as_real(EP_EMU_SIGMA[c], n);
-    real_t* barrier = __as_real(EP_EMU_BARRIER[c], n);
+    sif_real* radii = as_real(EP_EMU_RADII[c], n);
+    sif_real* sigma = as_real(EP_EMU_SIGMA[c], n);
+    sif_real* barrier = as_real(EP_EMU_BARRIER[c], n);
 
-    real_t* f = sif_multiplicity_function_ep_emu(
+    sif_real* f = sif_ep_multiplicity_function_emu(
       radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_DEFAULT);
 
     if (f) {
@@ -161,18 +166,18 @@ static void test_invariants(void) {
  * A power-law spectrum is used so the covariance is exact and self-similar,
  * and the same physical problem is read at a radius common to all three grids.
  */
-#define __N_K 4000
+#define N_K 4000
 
 static void test_grid_independence(void) {
   printf("independence of the radius sampling\n");
 
-  real_t* k = malloc(__N_K * sizeof(real_t));
-  real_t* pk = malloc(__N_K * sizeof(real_t));
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
   const double lo = log(1e-6), hi = log(1e4);
-  for (uint32_t i = 0; i < __N_K; i++) {
-    const double lk = lo + (hi - lo) * i / (__N_K - 1.0);
-    k[i] = (real_t)exp(lk);
-    pk[i] = (real_t)pow(exp(lk), -2.0);
+  for (uint32_t i = 0; i < N_K; i++) {
+    const double lk = lo + (hi - lo) * i / (N_K - 1.0);
+    k[i] = (sif_real)exp(lk);
+    pk[i] = (sif_real)pow(exp(lk), -2.0);
   }
 
   /* Normalize to sigma_8 = 0.8, so nu lands where the emulator was trained
@@ -180,15 +185,15 @@ static void test_grid_independence(void) {
    * this the multiplicity is zero on every grid and the comparison below
    * passes by comparing nothing. */
   {
-    const real_t eight[1] = {8.0f};
-    real_t s8[1];
+    const sif_real eight[1] = {8.0f};
+    sif_real s8[1];
     double* c = sif_delta_covariance_pk(
-      k, pk, __N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
+      k, pk, N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
     CHECK(c != NULL && s8[0] > 0.0f, "could not normalize the spectrum");
     if (c) {
       const double scale = (0.8 / (double)s8[0]) * (0.8 / (double)s8[0]);
-      for (uint32_t i = 0; i < __N_K; i++)
-        pk[i] = (real_t)((double)pk[i] * scale);
+      for (uint32_t i = 0; i < N_K; i++)
+        pk[i] = (sif_real)((double)pk[i] * scale);
       sif_free_aligned(c);
     }
   }
@@ -200,22 +205,22 @@ static void test_grid_independence(void) {
 
   for (int g = 0; g < 3; g++) {
     const uint32_t n = counts[g];
-    real_t* radii = malloc(n * sizeof(real_t));
-    real_t* sigma = malloc(n * sizeof(real_t));
+    sif_real* radii = malloc(n * sizeof(sif_real));
+    sif_real* sigma = malloc(n * sizeof(sif_real));
     double* dvar = malloc(n * sizeof(double));
 
     for (uint32_t i = 0; i < n; i++)
-      radii[i] = (real_t)(r_lo * pow(r_hi / r_lo, (double)i / (n - 1.0)));
+      radii[i] = (sif_real)(r_lo * pow(r_hi / r_lo, (double)i / (n - 1.0)));
 
     double* cov = sif_delta_covariance_pk(
-      k, pk, __N_K, radii, n, sigma, NULL, dvar, SIF_DEFAULT);
+      k, pk, N_K, radii, n, sigma, NULL, dvar, SIF_DEFAULT);
     CHECK(cov != NULL, "the covariance returned NULL at %u radii", n);
 
     if (cov) {
-      real_t* barrier = sif_barrier_smt(sigma, n, 0.5f, 0.3f, 0.8f);
-      real_t* f = barrier ? sif_multiplicity_function_ep_emu(radii, n, sigma,
-                              barrier, dvar, NULL, SIF_DEFAULT)
-                          : NULL;
+      sif_real* barrier = sif_ep_barrier_smt(sigma, n, 0.5f, 0.3f, 0.8f);
+      sif_real* f = barrier ? sif_ep_multiplicity_function_emu(radii, n, sigma,
+                                barrier, dvar, NULL, SIF_DEFAULT)
+                            : NULL;
       CHECK(f != NULL, "the emulator returned NULL at %u radii", n);
 
       if (f) {
@@ -275,12 +280,12 @@ static void test_domain(void) {
   printf("the domain report\n");
 
   const uint32_t n = EP_EMU_CASE_N;
-  real_t* radii = __as_real(EP_EMU_RADII[0], n);
-  real_t* sigma = __as_real(EP_EMU_SIGMA[0], n);
-  real_t* barrier = __as_real(EP_EMU_BARRIER[0], n);
+  sif_real* radii = as_real(EP_EMU_RADII[0], n);
+  sif_real* sigma = as_real(EP_EMU_SIGMA[0], n);
+  sif_real* barrier = as_real(EP_EMU_BARRIER[0], n);
 
   sif_emu_domain_t dom;
-  real_t* f = sif_multiplicity_function_ep_emu(
+  sif_real* f = sif_ep_multiplicity_function_emu(
     radii, n, sigma, barrier, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
   CHECK(f && dom.in_domain == 1, "a training-like input was not in domain");
   CHECK(dom.first_step_mass < 0.01f,
@@ -299,7 +304,7 @@ static void test_domain(void) {
    */
   {
     const uint32_t cut = n / 2;
-    real_t* f2 = sif_multiplicity_function_ep_emu(
+    sif_real* f2 = sif_ep_multiplicity_function_emu(
       radii, cut, sigma, barrier, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
     CHECK(f2 != NULL, "a truncated grid was rejected rather than reported");
     CHECK(dom.in_domain == 0,
@@ -314,11 +319,11 @@ static void test_domain(void) {
 
   /* A barrier far above anything trained: extrapolation, reported per bin. */
   {
-    real_t* tall = malloc((size_t)n * sizeof(real_t));
+    sif_real* tall = malloc((size_t)n * sizeof(sif_real));
     for (uint32_t i = 0; i < n; i++)
       tall[i] = barrier[i] * 4.0f;
 
-    real_t* f3 = sif_multiplicity_function_ep_emu(
+    sif_real* f3 = sif_ep_multiplicity_function_emu(
       radii, n, sigma, tall, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
     CHECK(f3 != NULL, "an out-of-domain barrier was rejected rather than "
                       "reported");
@@ -341,29 +346,29 @@ static void test_guards(void) {
   printf("input validation\n");
 
   const uint32_t n = EP_EMU_CASE_N;
-  real_t* radii = __as_real(EP_EMU_RADII[0], n);
-  real_t* sigma = __as_real(EP_EMU_SIGMA[0], n);
-  real_t* barrier = __as_real(EP_EMU_BARRIER[0], n);
+  sif_real* radii = as_real(EP_EMU_RADII[0], n);
+  sif_real* sigma = as_real(EP_EMU_SIGMA[0], n);
+  sif_real* barrier = as_real(EP_EMU_BARRIER[0], n);
   const double* dvar = EP_EMU_DVAR[0];
-  real_t* r;
+  sif_real* r;
 
-  r = sif_multiplicity_function_ep_emu(
+  r = sif_ep_multiplicity_function_emu(
     NULL, n, sigma, barrier, dvar, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
 
-  r = sif_multiplicity_function_ep_emu(
+  r = sif_ep_multiplicity_function_emu(
     radii, n, NULL, barrier, dvar, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL sigma was accepted");
   sif_free_aligned(r);
 
-  r = sif_multiplicity_function_ep_emu(
+  r = sif_ep_multiplicity_function_emu(
     radii, n, sigma, barrier, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL,
     "a NULL derivative variance was accepted; it has no fallback here");
   sif_free_aligned(r);
 
-  r = sif_multiplicity_function_ep_emu(
+  r = sif_ep_multiplicity_function_emu(
     radii, 2, sigma, barrier, dvar, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "two radii were accepted by a three-point stencil");
   sif_free_aligned(r);
@@ -374,7 +379,7 @@ static void test_guards(void) {
    * result looking wrong, which is why the boundary is asserted here rather
    * than left to the reference cases (all of which are 128 radii).
    */
-  r = sif_multiplicity_function_ep_emu(
+  r = sif_ep_multiplicity_function_emu(
     radii, 3, sigma, barrier, dvar, NULL, SIF_DEFAULT);
   CHECK(r == NULL,
     "three radii were accepted, leaving the three-point stencil two bin "
@@ -382,7 +387,7 @@ static void test_guards(void) {
   sif_free_aligned(r);
 
   /* Four is the smallest grid the model is defined on, and must work. */
-  r = sif_multiplicity_function_ep_emu(
+  r = sif_ep_multiplicity_function_emu(
     radii, 4, sigma, barrier, dvar, NULL, SIF_DEFAULT);
   CHECK(r != NULL, "four radii were rejected; that is the documented minimum");
   if (r) {
@@ -395,10 +400,10 @@ static void test_guards(void) {
   sif_free_aligned(r);
 
   {
-    real_t* descending = malloc((size_t)n * sizeof(real_t));
+    sif_real* descending = malloc((size_t)n * sizeof(sif_real));
     for (uint32_t i = 0; i < n; i++)
       descending[i] = radii[n - 1 - i];
-    r = sif_multiplicity_function_ep_emu(
+    r = sif_ep_multiplicity_function_emu(
       descending, n, sigma, barrier, dvar, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "descending radii were accepted");
     sif_free_aligned(r);
@@ -406,10 +411,10 @@ static void test_guards(void) {
   }
 
   {
-    real_t* bad = malloc((size_t)n * sizeof(real_t));
-    memcpy(bad, sigma, (size_t)n * sizeof(real_t));
+    sif_real* bad = malloc((size_t)n * sizeof(sif_real));
+    memcpy(bad, sigma, (size_t)n * sizeof(sif_real));
     bad[3] = 0.0f;
-    r = sif_multiplicity_function_ep_emu(
+    r = sif_ep_multiplicity_function_emu(
       radii, n, bad, barrier, dvar, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero sigma was accepted");
     sif_free_aligned(r);
@@ -424,8 +429,10 @@ static void test_guards(void) {
 }
 
 int main(void) {
-  sif_config_t cfg = {.fft_config = NULL, .omp_config = NULL, .verbose = false,
-                      .log_level = SIF_LOG_LEVEL_ERROR};
+  sif_config_t cfg = {.fft_config = NULL,
+    .omp_config = NULL,
+    .verbose = false,
+    .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 
   test_against_reference();

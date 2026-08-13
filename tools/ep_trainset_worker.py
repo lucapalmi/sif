@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 """
 One SLURM array task: every barrier of a single cosmology.
 

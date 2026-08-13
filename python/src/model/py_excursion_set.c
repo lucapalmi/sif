@@ -1,13 +1,19 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_model.h"
 
 #include "py_delta_common.h"
-#include "sif/model/deltamoments.h"
-#include "sif/model/excursionset.h"
+#include "sif/model/delta_moments.h"
+#include "sif/model/excursion_set.h"
 #include <numpy/arrayobject.h>
 #include <string.h>
 
-/* The covariance and the walk run in double whatever real_t is, so these
- * mirror the real_t helpers in py_delta_common.h at fixed precision. */
+/* The covariance and the walk run in double whatever sif_real is, so these
+ * mirror the sif_real helpers in py_delta_common.h at fixed precision. */
 
 static PyArrayObject* py_sif_as_double_array(PyObject* obj, const char* name) {
   PyArrayObject* arr = (PyArrayObject*)PyArray_FROM_OTF(
@@ -34,8 +40,8 @@ static PyObject* py_sif_owned_double_array(double* values, npy_intp n) {
     return NULL;
   }
 
-  memcpy(PyArray_DATA((PyArrayObject*)array), values,
-    (size_t)n * sizeof(double));
+  memcpy(
+    PyArray_DATA((PyArrayObject*)array), values, (size_t)n * sizeof(double));
   sif_free_aligned(values);
 
   return array;
@@ -51,8 +57,8 @@ static PyObject* py_sif_owned_u64_array(uint64_t* values, npy_intp n) {
     return NULL;
   }
 
-  memcpy(PyArray_DATA((PyArrayObject*)array), values,
-    (size_t)n * sizeof(uint64_t));
+  memcpy(
+    PyArray_DATA((PyArrayObject*)array), values, (size_t)n * sizeof(uint64_t));
   sif_free_aligned(values);
 
   return array;
@@ -72,7 +78,7 @@ PyObject* py_sif_delta_covariance_pk(
     return NULL;
   }
 
-  sif_option_t options = SIF_DEFAULT;
+  sif_option options = SIF_DEFAULT;
   if (py_sif_delta_parse_options(NULL, window, 0, &options) < 0)
     return NULL;
 
@@ -107,7 +113,7 @@ PyObject* py_sif_delta_covariance_pk(
   PyObject* sigma_arr = PyArray_SimpleNew(1, (npy_intp*)&n_radii, NPY_REAL_T);
   PyObject* high_arr = PyArray_SimpleNew(1, (npy_intp*)&n_radii, NPY_REAL_T);
 
-  /* Double, not real_t: the derivative variance follows the covariance, which
+  /* Double, not sif_real: the derivative variance follows the covariance, which
    * is double for the same reason. */
   PyObject* dvar_arr = PyArray_SimpleNew(1, (npy_intp*)&n_radii, NPY_FLOAT64);
 
@@ -124,10 +130,10 @@ PyObject* py_sif_delta_covariance_pk(
   double* cov = NULL;
 
   Py_BEGIN_ALLOW_THREADS cov = sif_delta_covariance_pk(
-    (const real_t*)PyArray_DATA(k_arr), (const real_t*)PyArray_DATA(pk_arr),
-    (uint32_t)n_points, (const real_t*)PyArray_DATA(radii_arr),
-    (uint32_t)n_radii, (real_t*)PyArray_DATA((PyArrayObject*)sigma_arr),
-    (real_t*)PyArray_DATA((PyArrayObject*)high_arr),
+    (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
+    (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
+    (uint32_t)n_radii, (sif_real*)PyArray_DATA((PyArrayObject*)sigma_arr),
+    (sif_real*)PyArray_DATA((PyArrayObject*)high_arr),
     (double*)PyArray_DATA((PyArrayObject*)dvar_arr), options);
   Py_END_ALLOW_THREADS
 
@@ -139,13 +145,13 @@ PyObject* py_sif_delta_covariance_pk(
     Py_DECREF(sigma_arr);
     Py_DECREF(high_arr);
     Py_DECREF(dvar_arr);
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to evaluate the covariance; see the sif log");
+    PyErr_SetString(
+      PyExc_RuntimeError, "failed to evaluate the covariance; see the sif log");
     return NULL;
   }
 
-  PyObject* cov_arr = py_sif_owned_double_array(
-    cov, (npy_intp)SIF_COV_SIZE((uint32_t)n_radii));
+  PyObject* cov_arr =
+    py_sif_owned_double_array(cov, (npy_intp)SIF_COV_SIZE((uint32_t)n_radii));
   if (!cov_arr) {
     Py_DECREF(sigma_arr);
     Py_DECREF(high_arr);
@@ -156,7 +162,8 @@ PyObject* py_sif_delta_covariance_pk(
   return Py_BuildValue("(NNNN)", cov_arr, sigma_arr, high_arr, dvar_arr);
 }
 
-PyObject* py_sif_barrier_smt(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* py_sif_ep_barrier_smt(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* sigma_obj;
   double alpha, beta, gamma;
 
@@ -181,8 +188,9 @@ PyObject* py_sif_barrier_smt(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
 
   const npy_intp n = PyArray_SIZE(sigma_arr);
-  real_t* values = sif_barrier_smt((const real_t*)PyArray_DATA(sigma_arr),
-    (uint32_t)n, (real_t)alpha, (real_t)beta, (real_t)gamma);
+  sif_real* values =
+    sif_ep_barrier_smt((const sif_real*)PyArray_DATA(sigma_arr), (uint32_t)n,
+      (sif_real)alpha, (sif_real)beta, (sif_real)gamma);
 
   Py_DECREF(sigma_arr);
 
@@ -198,7 +206,7 @@ PyObject* py_sif_barrier_smt(PyObject* self, PyObject* args, PyObject* kwds) {
 /* Shared argument handling for the two first-crossing entry points.
  * `return_counts` is accepted by both and ignored by the counts entry point,
  * which returns them either way. */
-static int __parse_walk_args(PyObject* args, PyObject* kwds,
+static int parse_walk_args(PyObject* args, PyObject* kwds,
   PyArrayObject** radii_arr, PyArrayObject** cov_arr,
   PyArrayObject** barrier_arr, unsigned long long* n_paths,
   unsigned long long* seed, int* return_counts) {
@@ -243,8 +251,7 @@ static int __parse_walk_args(PyObject* args, PyObject* kwds,
   const npy_intp n = PyArray_SIZE(*radii_arr);
 
   if (PyArray_SIZE(*barrier_arr) != n) {
-    PyErr_SetString(
-      PyExc_ValueError, "barrier must have one entry per radius");
+    PyErr_SetString(PyExc_ValueError, "barrier must have one entry per radius");
     goto fail;
   }
 
@@ -265,25 +272,25 @@ fail:
   return -1;
 }
 
-PyObject* py_sif_first_crossing_counts_ep(
+PyObject* py_sif_ep_first_crossing_counts(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyArrayObject *radii_arr, *cov_arr, *barrier_arr;
   unsigned long long n_paths, seed;
   int return_counts;
 
-  if (__parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr,
-        &n_paths, &seed, &return_counts) < 0) {
+  if (parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr, &n_paths,
+        &seed, &return_counts) < 0) {
     return NULL;
   }
 
   const npy_intp n = PyArray_SIZE(radii_arr);
   uint64_t* counts = NULL;
 
-  Py_BEGIN_ALLOW_THREADS counts = sif_first_crossing_counts_ep(
-    (const real_t*)PyArray_DATA(radii_arr), (uint32_t)n,
-    (const double*)PyArray_DATA(cov_arr),
-    (const real_t*)PyArray_DATA(barrier_arr), (uint64_t)n_paths, (uint64_t)seed,
-    SIF_DEFAULT);
+  Py_BEGIN_ALLOW_THREADS counts =
+    sif_ep_first_crossing_counts((const sif_real*)PyArray_DATA(radii_arr),
+      (uint32_t)n, (const double*)PyArray_DATA(cov_arr),
+      (const sif_real*)PyArray_DATA(barrier_arr), (uint64_t)n_paths,
+      (uint64_t)seed, SIF_DEFAULT);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -299,14 +306,14 @@ PyObject* py_sif_first_crossing_counts_ep(
   return py_sif_owned_u64_array(counts, n);
 }
 
-PyObject* py_sif_multiplicity_function_ep(
+PyObject* py_sif_ep_multiplicity_function(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyArrayObject *radii_arr, *cov_arr, *barrier_arr;
   unsigned long long n_paths, seed;
   int return_counts;
 
-  if (__parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr,
-        &n_paths, &seed, &return_counts) < 0) {
+  if (parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr, &n_paths,
+        &seed, &return_counts) < 0) {
     return NULL;
   }
 
@@ -328,13 +335,13 @@ PyObject* py_sif_multiplicity_function_ep(
     counts_data = (uint64_t*)PyArray_DATA((PyArrayObject*)counts_arr);
   }
 
-  real_t* values = NULL;
+  sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values = sif_multiplicity_function_ep(
-    (const real_t*)PyArray_DATA(radii_arr), (uint32_t)n,
-    (const double*)PyArray_DATA(cov_arr),
-    (const real_t*)PyArray_DATA(barrier_arr), (uint64_t)n_paths, (uint64_t)seed,
-    counts_data, SIF_DEFAULT);
+  Py_BEGIN_ALLOW_THREADS values =
+    sif_ep_multiplicity_function((const sif_real*)PyArray_DATA(radii_arr),
+      (uint32_t)n, (const double*)PyArray_DATA(cov_arr),
+      (const sif_real*)PyArray_DATA(barrier_arr), (uint64_t)n_paths,
+      (uint64_t)seed, counts_data, SIF_DEFAULT);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -360,14 +367,13 @@ PyObject* py_sif_multiplicity_function_ep(
   return Py_BuildValue("(NN)", mult_arr, counts_arr);
 }
 
-
 /*
  * The emulator. Deliberately a different signature from the walk above: it
  * reads only the covariance DIAGONAL, so it takes sigma where the Monte Carlo
  * takes the packed triangle, and its cost is linear rather than quadratic in
  * the radius count.
  */
-PyObject* py_sif_multiplicity_function_ep_emu(
+PyObject* py_sif_ep_multiplicity_function_emu(
   PyObject* self, PyObject* args, PyObject* kwds) {
 
   (void)self;
@@ -416,13 +422,13 @@ PyObject* py_sif_multiplicity_function_ep_emu(
   }
 
   sif_emu_domain_t domain;
-  real_t* values = NULL;
+  sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values = sif_multiplicity_function_ep_emu(
-    (const real_t*)PyArray_DATA(radii_arr), (uint32_t)n,
-    (const real_t*)PyArray_DATA(sigma_arr),
-    (const real_t*)PyArray_DATA(barrier_arr),
-    (const double*)PyArray_DATA(dvar_arr), &domain, SIF_DEFAULT);
+  Py_BEGIN_ALLOW_THREADS values =
+    sif_ep_multiplicity_function_emu((const sif_real*)PyArray_DATA(radii_arr),
+      (uint32_t)n, (const sif_real*)PyArray_DATA(sigma_arr),
+      (const sif_real*)PyArray_DATA(barrier_arr),
+      (const double*)PyArray_DATA(dvar_arr), &domain, SIF_DEFAULT);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -445,12 +451,11 @@ PyObject* py_sif_multiplicity_function_ep_emu(
 
   /* A dict rather than a tuple: these are five unrelated numbers, and a
    * caller reading domain["in_domain"] cannot get the order wrong. */
-  PyObject* d = Py_BuildValue("{s:O,s:I,s:d,s:d,s:d}",
-    "in_domain", domain.in_domain ? Py_True : Py_False,
-    "n_bins_outside", (unsigned int)domain.n_bins_outside,
-    "nu_origin", (double)domain.nu_origin,
-    "first_step_mass", (double)domain.first_step_mass,
-    "expected_error", (double)domain.expected_error);
+  PyObject* d = Py_BuildValue("{s:O,s:I,s:d,s:d,s:d}", "in_domain",
+    domain.in_domain ? Py_True : Py_False, "n_bins_outside",
+    (unsigned int)domain.n_bins_outside, "nu_origin", (double)domain.nu_origin,
+    "first_step_mass", (double)domain.first_step_mass, "expected_error",
+    (double)domain.expected_error);
 
   if (!d) {
     Py_DECREF(mult_arr);

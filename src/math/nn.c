@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * Dense feed-forward evaluation for compile-time networks. See nn.h for what
  * this is and is not.
@@ -15,23 +21,23 @@
 #include <math.h>
 #include <string.h>
 
-#define __TAG "nn"
+#define TAG "nn"
 
-static int __validate(const sif_nn_t* nn, const double* x, double* out) {
+static int validate(const sif_nn_t* nn, const double* x, double* out) {
 
   if (!nn || !x || !out) {
-    SIF_LOG_ERROR(__TAG, "network, input and output are all required");
+    SIF_LOG_ERROR(TAG, "network, input and output are all required");
     return SIF_ERR_INVALID;
   }
 
-  if (nn->n_layers == 0 || nn->n_layers > SIF_NN_MAX_LAYERS) {
-    SIF_LOG_ERROR(__TAG, "%u layers; the maximum is %d", nn->n_layers,
-      SIF_NN_MAX_LAYERS);
+  if (nn->n_layers == 0 || nn->n_layers > SIF__NN_MAX_LAYERS) {
+    SIF_LOG_ERROR(
+      TAG, "%u layers; the maximum is %d", nn->n_layers, SIF__NN_MAX_LAYERS);
     return SIF_ERR_INVALID;
   }
 
   if (!nn->mu || !nn->sd) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "the input standardization is missing; a network evaluated without the "
       "mean and scale it was fitted with is a different function");
     return SIF_ERR_INVALID;
@@ -43,32 +49,31 @@ static int __validate(const sif_nn_t* nn, const double* x, double* out) {
     const sif_nn_layer_t* ly = &nn->layers[l];
 
     if (!ly->W || !ly->b) {
-      SIF_LOG_ERROR(__TAG, "layer %u has no weights", l);
+      SIF_LOG_ERROR(TAG, "layer %u has no weights", l);
       return SIF_ERR_INVALID;
     }
     if (ly->n_in != width) {
-      SIF_LOG_ERROR(__TAG,
+      SIF_LOG_ERROR(TAG,
         "layer %u takes %u inputs but the layer before it produces %u", l,
         ly->n_in, width);
       return SIF_ERR_INVALID;
     }
-    if (ly->n_out == 0 || ly->n_out > SIF_NN_MAX_WIDTH) {
-      SIF_LOG_ERROR(__TAG,
-        "layer %u is %u wide; the scratch buffers hold %d", l, ly->n_out,
-        SIF_NN_MAX_WIDTH);
+    if (ly->n_out == 0 || ly->n_out > SIF__NN_MAX_WIDTH) {
+      SIF_LOG_ERROR(TAG, "layer %u is %u wide; the scratch buffers hold %d", l,
+        ly->n_out, SIF__NN_MAX_WIDTH);
       return SIF_ERR_INVALID;
     }
     width = ly->n_out;
   }
 
-  if (nn->n_in == 0 || nn->n_in > SIF_NN_MAX_WIDTH) {
-    SIF_LOG_ERROR(__TAG, "%u inputs; the scratch buffers hold %d", nn->n_in,
-      SIF_NN_MAX_WIDTH);
+  if (nn->n_in == 0 || nn->n_in > SIF__NN_MAX_WIDTH) {
+    SIF_LOG_ERROR(TAG, "%u inputs; the scratch buffers hold %d", nn->n_in,
+      SIF__NN_MAX_WIDTH);
     return SIF_ERR_INVALID;
   }
 
   if (width != nn->n_out) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "the last layer produces %u outputs but the network declares %u", width,
       nn->n_out);
     return SIF_ERR_INVALID;
@@ -88,8 +93,8 @@ static int __validate(const sif_nn_t* nn, const double* x, double* out) {
  * built with -ffast-math off for this file's callers and we want the same
  * answer either way.
  */
-static void __layer(const sif_nn_layer_t* ly, const double* src, double* dst,
-  uint32_t n_rows) {
+static void layer(
+  const sif_nn_layer_t* ly, const double* src, double* dst, uint32_t n_rows) {
 
   const uint32_t n_in = ly->n_in;
   const uint32_t n_out = ly->n_out;
@@ -108,17 +113,17 @@ static void __layer(const sif_nn_layer_t* ly, const double* src, double* dst,
         d[j] += v * Wi[j];
     }
 
-    if (ly->act == SIF_NN_TANH) {
+    if (ly->act == SIF__NN_TANH) {
       for (uint32_t j = 0; j < n_out; j++)
         d[j] = tanh(d[j]);
     }
   }
 }
 
-int sif_nn_eval(const sif_nn_t* nn, const double* x, uint32_t n_rows,
-  double* out) {
+int sif__nn_eval(
+  const sif_nn_t* nn, const double* x, uint32_t n_rows, double* out) {
 
-  const int bad = __validate(nn, x, out);
+  const int bad = validate(nn, x, out);
   if (bad != SIF_OK)
     return bad;
 
@@ -128,15 +133,15 @@ int sif_nn_eval(const sif_nn_t* nn, const double* x, uint32_t n_rows,
   /* Two buffers, ping-ponged between layers. Sized by the widest layer the
    * header admits, not by this network, so the frame is the same whatever is
    * evaluated. */
-  double buf_a[SIF_NN_BLOCK * SIF_NN_MAX_WIDTH];
-  double buf_b[SIF_NN_BLOCK * SIF_NN_MAX_WIDTH];
+  double buf_a[SIF__NN_BLOCK * SIF__NN_MAX_WIDTH];
+  double buf_b[SIF__NN_BLOCK * SIF__NN_MAX_WIDTH];
 
   const uint32_t n_in = nn->n_in;
   const uint32_t n_out = nn->n_out;
 
-  for (uint32_t base = 0; base < n_rows; base += SIF_NN_BLOCK) {
-    const uint32_t rows = (n_rows - base < SIF_NN_BLOCK) ? (n_rows - base)
-                                                         : SIF_NN_BLOCK;
+  for (uint32_t base = 0; base < n_rows; base += SIF__NN_BLOCK) {
+    const uint32_t rows =
+      (n_rows - base < SIF__NN_BLOCK) ? (n_rows - base) : SIF__NN_BLOCK;
 
     /* Standardize into the first buffer. The fit saw (x - mu) / sd, so this is
      * part of the model rather than a convenience. */
@@ -151,15 +156,15 @@ int sif_nn_eval(const sif_nn_t* nn, const double* x, uint32_t n_rows,
     double* dst = buf_b;
 
     for (uint32_t l = 0; l < nn->n_layers; l++) {
-      __layer(&nn->layers[l], src, dst, rows);
+      layer(&nn->layers[l], src, dst, rows);
       double* tmp = src;
       src = dst;
       dst = tmp;
     }
 
     /* After the swap on the last layer, src holds the output. */
-    memcpy(out + (size_t)base * n_out, src,
-      (size_t)rows * n_out * sizeof(double));
+    memcpy(
+      out + (size_t)base * n_out, src, (size_t)rows * n_out * sizeof(double));
   }
 
   return SIF_OK;

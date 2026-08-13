@@ -1,17 +1,23 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_delta.h"
 
 #include "py_delta_common.h"
+#include "sif/measure/delta_distribution.h"
+#include "sif/measure/delta_moments.h"
 #include "structures/py_delta_distribution.h"
 #include "structures/py_delta_moments.h"
 #include "structures/py_grid.h"
-#include "sif/measure/deltadistribution.h"
-#include "sif/measure/deltamoments.h"
 #include <numpy/arrayobject.h>
 
 /* Both entry points take a grid, so they share the unwrapping. */
-static const sif_grid_t* __grid_of(PyObject* grid_obj) {
+static const sif_grid_t* grid_of(PyObject* grid_obj) {
   const sif_grid_t* grid = ((sifGridObject*)grid_obj)->grid;
-  if (!grid || !grid->delta) {
+  if (!grid || !grid->values) {
     PyErr_SetString(PyExc_ValueError,
       "the grid holds no density field; call assign_cic and "
       "compute_overdensity first");
@@ -48,24 +54,25 @@ PyObject* py_sif_delta_distribution_grid(
     return NULL;
   }
 
-  sif_option_t options = SIF_DEFAULT;
-  if (py_sif_delta_parse_options(shuffle, window, keep_cic_window, &options) < 0)
+  sif_option options = SIF_DEFAULT;
+  if (py_sif_delta_parse_options(shuffle, window, keep_cic_window, &options) <
+      0)
     return NULL;
 
   PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
   if (!radii_arr)
     return NULL;
 
-  const sif_grid_t* c_grid = __grid_of(grid_obj);
+  const sif_grid_t* c_grid = grid_of(grid_obj);
   if (!c_grid) {
     Py_DECREF(radii_arr);
     return NULL;
   }
 
   const npy_intp n_radii = PyArray_SHAPE(radii_arr)[0];
-  const real_t* c_radii = (const real_t*)PyArray_DATA(radii_arr);
+  const sif_real* c_radii = (const sif_real*)PyArray_DATA(radii_arr);
 
-  real_t delta_bounds[2] = {(real_t)delta_min, (real_t)delta_max};
+  sif_real delta_bounds[2] = {(sif_real)delta_min, (sif_real)delta_max};
   sif_delta_distribution_t* tmp = NULL;
 
   /* Release the GIL allowing seamless multi-threading in the C backend */
@@ -106,28 +113,29 @@ PyObject* py_sif_delta_moments_grid(
     return NULL;
   }
 
-  sif_option_t options = SIF_DEFAULT;
-  if (py_sif_delta_parse_options(shuffle, window, keep_cic_window, &options) < 0)
+  sif_option options = SIF_DEFAULT;
+  if (py_sif_delta_parse_options(shuffle, window, keep_cic_window, &options) <
+      0)
     return NULL;
 
   PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
   if (!radii_arr)
     return NULL;
 
-  const sif_grid_t* c_grid = __grid_of(grid_obj);
+  const sif_grid_t* c_grid = grid_of(grid_obj);
   if (!c_grid) {
     Py_DECREF(radii_arr);
     return NULL;
   }
 
   const npy_intp n_radii = PyArray_SHAPE(radii_arr)[0];
-  const real_t* c_radii = (const real_t*)PyArray_DATA(radii_arr);
+  const sif_real* c_radii = (const sif_real*)PyArray_DATA(radii_arr);
 
   sif_delta_moments_t* tmp = NULL;
 
-  Py_BEGIN_ALLOW_THREADS tmp = sif_delta_moments_grid(c_grid, c_radii,
-    (uint32_t)n_radii, (uint8_t)order, (uint64_t)n_tracers, (uint64_t)seed,
-    options);
+  Py_BEGIN_ALLOW_THREADS tmp =
+    sif_delta_moments_grid(c_grid, c_radii, (uint32_t)n_radii, (uint8_t)order,
+      (uint64_t)n_tracers, (uint64_t)seed, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);

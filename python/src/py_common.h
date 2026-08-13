@@ -1,5 +1,11 @@
-#ifndef __SIF_PY_COMMON_H__
-#define __SIF_PY_COMMON_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_PY_PY_COMMON_H
+#define SIF_PY_PY_COMMON_H
 
 #define PY_SSIZE_T_CLEAN
 #include <Python.h>
@@ -13,7 +19,7 @@
 #endif
 #include <numpy/arrayobject.h>
 
-#ifdef __SIF_USE_DOUBLE
+#ifdef SIF_USE_DOUBLE
 #  define NPY_REAL_T NPY_FLOAT64
 #else
 #  define NPY_REAL_T NPY_FLOAT32
@@ -44,4 +50,4 @@ static inline PyObject* py_sif_wrap_borrowed(
   return array;
 }
 
-#endif /* __SIF_PY_COMMON_H__ */
+#endif /* SIF_PY_PY_COMMON_H */

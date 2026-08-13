@@ -1,5 +1,11 @@
-#ifndef __SIF_MODEL_EP_EMU_WEIGHTS_H__
-#define __SIF_MODEL_EP_EMU_WEIGHTS_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF__MODEL_EP_EMU_WEIGHTS_H
+#define SIF__MODEL_EP_EMU_WEIGHTS_H
 
 /*
  * GENERATED FILE -- do not edit.
@@ -184,9 +190,9 @@ static const sif_nn_t SIF_EP_EMU_NN = {
   .mu = SIF_EP_EMU_MU,
   .sd = SIF_EP_EMU_SD,
   .layers = {
-    {8u, 16u, SIF_EP_EMU_W0, SIF_EP_EMU_B0, SIF_NN_TANH},
-    {16u, 16u, SIF_EP_EMU_W1, SIF_EP_EMU_B1, SIF_NN_TANH},
-    {16u, 1u, SIF_EP_EMU_W2, SIF_EP_EMU_B2, SIF_NN_LINEAR}
+    {8u, 16u, SIF_EP_EMU_W0, SIF_EP_EMU_B0, SIF__NN_TANH},
+    {16u, 16u, SIF_EP_EMU_W1, SIF_EP_EMU_B1, SIF__NN_TANH},
+    {16u, 1u, SIF_EP_EMU_W2, SIF_EP_EMU_B2, SIF__NN_LINEAR}
   }
 };
 
@@ -200,4 +206,4 @@ static const sif_nn_t SIF_EP_EMU_NN = {
 #define SIF_EP_EMU_ERROR_IN_DOMAIN 0.0012824885553572277
 #define SIF_EP_EMU_ERROR_OUT_DOMAIN 0.0077000000000000002
 
-#endif /* __SIF_MODEL_EP_EMU_WEIGHTS_H__ */
+#endif /* SIF__MODEL_EP_EMU_WEIGHTS_H */

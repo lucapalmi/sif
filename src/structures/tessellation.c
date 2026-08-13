@@ -1,5 +1,11 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/structures/tessellation.h"
-#include "core/get_system.h"
+#include "core/system_internal.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -16,7 +22,7 @@ typedef struct {
   uint64_t p2;
 } sif_edge_t;
 
-static int __sif_edge_cmp(const void* a, const void* b) {
+static int edge_cmp(const void* a, const void* b) {
   const sif_edge_t* ea = (const sif_edge_t*)a;
   const sif_edge_t* eb = (const sif_edge_t*)b;
   if (ea->p1 < eb->p1)
@@ -30,19 +36,18 @@ static int __sif_edge_cmp(const void* a, const void* b) {
   return 0;
 }
 
-static void __sif_compute_voxel_layer(const sif_field_t* field,
-  const sif_chain_mesh_t* mesh, uint64_t* layer_out, real_t* volumes,
-  int32_t iz, int32_t grid_dim, real_t voxel_len, real_t vol_per_voxel,
-  bool is_pbc) {
+static void voxel_layer(const sif_field_t* field, const sif_chain_mesh_t* mesh,
+  uint64_t* layer_out, sif_real* volumes, int32_t iz, int32_t grid_dim,
+  sif_real voxel_len, sif_real vol_per_voxel, bool is_pbc) {
 
 #pragma omp parallel for schedule(static)
   for (int32_t ix = 0; ix < grid_dim; ix++) {
     for (int32_t iy = 0; iy < grid_dim; iy++) {
       /* The chain mesh is anchored at the origin, so sample in box-local
        * coordinates. */
-      real_t px = (ix + 0.5f) * voxel_len;
-      real_t py = (iy + 0.5f) * voxel_len;
-      real_t pz = (iz + 0.5f) * voxel_len;
+      sif_real px = (ix + 0.5f) * voxel_len;
+      sif_real py = (iy + 0.5f) * voxel_len;
+      sif_real pz = (iz + 0.5f) * voxel_len;
 
       uint64_t nearest_idx =
         is_pbc ? sif_chain_mesh_find_nearest_pbc(mesh, px, py, pz)
@@ -62,8 +67,8 @@ static void __sif_compute_voxel_layer(const sif_field_t* field,
 /* --- PUBLIC API                                                             */
 /* ========================================================================== */
 
-NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
-  const sif_field_t* field, uint32_t supersample_factor, sif_option_t opt) {
+SIF_NODISCARD sif_tessellation_t* sif_tessellation_approx(
+  sif_field_t* field, uint32_t supersample_factor, sif_option opt) {
 
   if (!field || field->n_particles == 0 || supersample_factor == 0) {
     SIF_LOG_ERROR("tessellation", "Invalid field or zero supersampling.");
@@ -74,16 +79,16 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
   if (!tess)
     return NULL;
 
-  tess->num_particles = field->n_particles;
-  tess->num_edges = 0;
+  tess->n_particles = field->n_particles;
+  tess->n_edges = 0;
   tess->neighbor_offsets = NULL;
   tess->neighbor_indices = NULL;
 
-  uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
+  uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
   uint64_t padded_n =
     (field->n_particles + align_elements - 1) & ~(align_elements - 1);
 
-  tess->volumes = sif_malloc_aligned(padded_n * sizeof(real_t));
+  tess->volumes = sif_malloc_aligned(padded_n * sizeof(sif_real));
   if (!tess->volumes) {
     free(tess);
     return NULL;
@@ -96,11 +101,45 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
 
   // Auto-tune grid resolution to roughly 1 cell per particle mean-spacing
   uint32_t mesh_cells =
-    (uint32_t)REAL_CEIL(REAL_POW(field->n_particles, 1.0 / 3.0));
-  real_t box_len = field->max_p[0] - field->min_p[0];
+    (uint32_t)SIF_REAL_CEIL(SIF_REAL_POW(field->n_particles, 1.0 / 3.0));
+  /* The extent is read straight off the field, so the bounds have to be
+   * valid. Establishing them here rather than failing on them matches what
+   * the octree does, and is why the field is not const. */
+  if (sif_field_require_bounds(field) != SIF_OK) {
+    SIF_LOG_ERROR("tessellation", "failed to compute the field bounds");
+    sif_free_aligned(tess->volumes);
+    free(tess);
+    return NULL;
+  }
 
-  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(
-    mesh_cells, box_len, field, false, false, true);
+  /* The mesh is anchored at the origin and bins [0, box_len), so the box has
+   * to cover every axis, not just x -- and the outermost particle has to fall
+   * strictly inside it. Taking the largest coordinate over the three axes and
+   * nudging up by one ULP is what makes both true.
+   *
+   * This infers the box from the data because the signature does not carry
+   * it. That is only correct for a field already in box-local coordinates,
+   * which is what every other structure here requires as well. */
+  sif_real box_len = field->max_p[0];
+  if (field->max_p[1] > box_len)
+    box_len = field->max_p[1];
+  if (field->max_p[2] > box_len)
+    box_len = field->max_p[2];
+  box_len = SIF_REAL_NEXT_AFTER(box_len, SIF_REAL_MAX_VAL);
+
+  if (!(box_len > 0.0f) || field->min_p[0] < 0.0f || field->min_p[1] < 0.0f ||
+      field->min_p[2] < 0.0f) {
+    SIF_LOG_ERROR("tessellation",
+      "the field is not in box-local coordinates: it spans [%g, %g] and the "
+      "tessellation needs every coordinate in [0, box)",
+      (double)field->min_p[0], (double)box_len);
+    sif_free_aligned(tess->volumes);
+    free(tess);
+    return NULL;
+  }
+
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(mesh_cells, box_len, field, false, false, true);
   if (!mesh) {
     SIF_LOG_ERROR("tessellation", "Failed to allocate chain mesh.");
     sif_free_aligned(tess->volumes);
@@ -110,29 +149,29 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
 
   /* --- DISPATCH BRANCHES --- */
 
-  if ((opt & __SIF_TESS_METHOD_MASK) == SIF_TESS_METHOD_RANDOM) {
+  if ((opt & SIF__TESS_METHOD_MASK) == SIF_TESS_METHOD_RANDOM) {
     SIF_LOG_INFO("tessellation", "Building random approximation (Vol only).");
 
     uint64_t total_samples = field->n_particles * supersample_factor;
-    real_t total_volume = box_len * box_len * box_len;
-    real_t vol_per_sample = total_volume / (real_t)total_samples;
+    sif_real total_volume = box_len * box_len * box_len;
+    sif_real vol_per_sample = total_volume / (sif_real)total_samples;
 
     uint64_t base_seed = 0x9E3779B97F4A7C15ULL;
 
 #pragma omp parallel
     {
       sif_prng_state_t rng_state;
-      sif_prng_init(&rng_state, base_seed ^ (uint64_t)sif_system_get_thread_num());
+      sif_prng_init(&rng_state, base_seed ^ (uint64_t)sif__system_thread_num());
 
-      bool is_pbc = ((opt & __SIF_PBC_MASK) == SIF_PBC_PERIODIC);
+      bool is_pbc = ((opt & SIF__PBC_MASK) == SIF_PBC_PERIODIC);
 
 #pragma omp for schedule(guided)
       for (uint64_t i = 0; i < total_samples; i++) {
 
         /* Box-local: the chain mesh is anchored at the origin. */
-        real_t px = sif_prng_next_real(&rng_state) * box_len;
-        real_t py = sif_prng_next_real(&rng_state) * box_len;
-        real_t pz = sif_prng_next_real(&rng_state) * box_len;
+        sif_real px = sif_prng_next_real(&rng_state) * box_len;
+        sif_real py = sif_prng_next_real(&rng_state) * box_len;
+        sif_real pz = sif_prng_next_real(&rng_state) * box_len;
 
         uint64_t nearest_idx;
         if (is_pbc) {
@@ -147,17 +186,17 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
         }
       }
     }
-  } else if ((opt & __SIF_TESS_METHOD_MASK) == SIF_TESS_METHOD_VOXEL) {
+  } else if ((opt & SIF__TESS_METHOD_MASK) == SIF_TESS_METHOD_VOXEL) {
     SIF_LOG_INFO("tessellation", "Building voxel approximation (Vol + Graph).");
 
     // 1. Grid Dimensions
     uint64_t total_target_voxels = field->n_particles * supersample_factor;
     int32_t grid_dim =
-      (int32_t)REAL_CEIL(REAL_POW(total_target_voxels, 1.0 / 3.0));
-    real_t voxel_len = box_len / (real_t)grid_dim;
-    real_t vol_per_voxel = voxel_len * voxel_len * voxel_len;
+      (int32_t)SIF_REAL_CEIL(SIF_REAL_POW(total_target_voxels, 1.0 / 3.0));
+    sif_real voxel_len = box_len / (sif_real)grid_dim;
+    sif_real vol_per_voxel = voxel_len * voxel_len * voxel_len;
 
-    bool is_pbc = ((opt & __SIF_PBC_MASK) == SIF_PBC_PERIODIC);
+    bool is_pbc = ((opt & SIF__PBC_MASK) == SIF_PBC_PERIODIC);
 
     // 2. Sliding Window Buffers
     uint64_t elements_per_layer = (uint64_t)grid_dim * grid_dim;
@@ -189,8 +228,8 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
     }
 
     // Initialize Z=0
-    __sif_compute_voxel_layer(field, mesh, layer_zero, tess->volumes, 0,
-      grid_dim, voxel_len, vol_per_voxel, is_pbc);
+    voxel_layer(field, mesh, layer_zero, tess->volumes, 0, grid_dim, voxel_len,
+      vol_per_voxel, is_pbc);
     memcpy(layer_current, layer_zero, elements_per_layer * sizeof(uint64_t));
 
     // --- PHASE A & B: SLIDING WINDOW SWEEP ---
@@ -198,8 +237,8 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
 
       // Prepare the NEXT layer
       if (iz < grid_dim - 1) {
-        __sif_compute_voxel_layer(field, mesh, layer_next, tess->volumes,
-          iz + 1, grid_dim, voxel_len, vol_per_voxel, is_pbc);
+        voxel_layer(field, mesh, layer_next, tess->volumes, iz + 1, grid_dim,
+          voxel_len, vol_per_voxel, is_pbc);
       } else if (is_pbc) {
         // Periodic wrap: DO NOT re-add volumes, just copy the IDs from
         // layer_zero
@@ -283,13 +322,13 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
       raw_edge_count);
 
     // 1. Sort the raw edges to bring duplicates together
-    qsort(raw_edges, raw_edge_count, sizeof(sif_edge_t), __sif_edge_cmp);
+    qsort(raw_edges, raw_edge_count, sizeof(sif_edge_t), edge_cmp);
 
     // 2. Count unique undirected edges and allocate offsets
     tess->neighbor_offsets =
-      sif_malloc_aligned((tess->num_particles + 1) * sizeof(uint64_t));
+      sif_malloc_aligned((tess->n_particles + 1) * sizeof(uint64_t));
     memset(
-      tess->neighbor_offsets, 0, (tess->num_particles + 1) * sizeof(uint64_t));
+      tess->neighbor_offsets, 0, (tess->n_particles + 1) * sizeof(uint64_t));
 
     uint64_t unique_count = 0;
     if (raw_edge_count > 0) {
@@ -308,20 +347,19 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
     }
 
     // Directed edges for CSR = Undirected connections * 2
-    tess->num_edges = unique_count * 2;
+    tess->n_edges = unique_count * 2;
 
     // 3. Prefix sum the offsets
-    for (uint64_t i = 0; i < tess->num_particles; i++) {
+    for (uint64_t i = 0; i < tess->n_particles; i++) {
       tess->neighbor_offsets[i + 1] += tess->neighbor_offsets[i];
     }
 
     // 4. Populate indices
     tess->neighbor_indices =
-      sif_malloc_aligned(tess->num_edges * sizeof(uint64_t));
-    uint64_t* insert_ptrs =
-      malloc((tess->num_particles + 1) * sizeof(uint64_t));
+      sif_malloc_aligned(tess->n_edges * sizeof(uint64_t));
+    uint64_t* insert_ptrs = malloc((tess->n_particles + 1) * sizeof(uint64_t));
     memcpy(insert_ptrs, tess->neighbor_offsets,
-      (tess->num_particles + 1) * sizeof(uint64_t));
+      (tess->n_particles + 1) * sizeof(uint64_t));
 
     if (raw_edge_count > 0) {
       tess->neighbor_indices[insert_ptrs[raw_edges[0].p1]++] = raw_edges[0].p2;
@@ -346,7 +384,7 @@ NODISCARD sif_tessellation_t* sif_tessellation_build_approx(
     sif_free_aligned(layer_next);
 
     SIF_LOG_INFO(
-      "tessellation", "Generated %llu unique CSR edges.", tess->num_edges);
+      "tessellation", "Generated %llu unique CSR edges.", tess->n_edges);
 
   } else {
 

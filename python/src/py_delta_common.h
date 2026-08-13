@@ -1,5 +1,11 @@
-#ifndef __SIF_PY_DELTA_COMMON_H__
-#define __SIF_PY_DELTA_COMMON_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_PY_PY_DELTA_COMMON_H
+#define SIF_PY_PY_DELTA_COMMON_H
 
 /*
  * Helpers shared by the measure-side and model-side delta bindings. Both
@@ -17,9 +23,9 @@
  * @return 0, or -1 with a Python exception set on an unrecognized name.
  */
 static inline int py_sif_delta_parse_options(const char* shuffle,
-  const char* window, int keep_cic_window, sif_option_t* out) {
+  const char* window, int keep_cic_window, sif_option* out) {
 
-  sif_option_t options = SIF_DEFAULT;
+  sif_option options = SIF_DEFAULT;
 
   if (shuffle == NULL || strcmp(shuffle, "none") == 0) {
     options |= SIF_DELTA_SHUFFLE_NONE;
@@ -52,7 +58,7 @@ static inline int py_sif_delta_parse_options(const char* shuffle,
 }
 
 /*
- * @brief Converts a 1D sequence to a contiguous real_t array.
+ * @brief Converts a 1D sequence to a contiguous sif_real array.
  *
  * @return A new reference, or NULL with a Python exception set.
  */
@@ -74,14 +80,14 @@ static inline PyArrayObject* py_sif_as_real_array(
 }
 
 /*
- * @brief Copies a C-owned real_t array into a fresh NumPy array and releases
+ * @brief Copies a C-owned sif_real array into a fresh NumPy array and releases
  * the original.
  *
  * Takes ownership of `values` on every path, including failure.
  *
  * @return A new reference, or NULL with a Python exception set.
  */
-static inline PyObject* py_sif_owned_array(real_t* values, npy_intp n) {
+static inline PyObject* py_sif_owned_array(sif_real* values, npy_intp n) {
   if (!values)
     return NULL;
 
@@ -91,11 +97,11 @@ static inline PyObject* py_sif_owned_array(real_t* values, npy_intp n) {
     return NULL;
   }
 
-  memcpy(PyArray_DATA((PyArrayObject*)array), values,
-    (size_t)n * sizeof(real_t));
+  memcpy(
+    PyArray_DATA((PyArrayObject*)array), values, (size_t)n * sizeof(sif_real));
   sif_free_aligned(values);
 
   return array;
 }
 
-#endif /* __SIF_PY_DELTA_COMMON_H__ */
+#endif /* SIF_PY_PY_DELTA_COMMON_H */

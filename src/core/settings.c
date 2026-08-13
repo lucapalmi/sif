@@ -1,5 +1,14 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/core/settings.h"
+
 #include "sif/utils/logger.h"
+
+#include "core/system_internal.h"
 
 #include <ctype.h>
 #include <stdio.h>
@@ -20,15 +29,15 @@ typedef struct {
   char expanded_value[256];
 } sif_kv_pair_t;
 
-static sif_kv_pair_t* _settings = NULL;
-static uint32_t _settings_count = 0;
-static uint32_t _settings_capacity = 0;
-static char _settings_filepath[512] = {0};
+static sif_kv_pair_t* settings = NULL;
+static uint32_t settings_count = 0;
+static uint32_t settings_capacity = 0;
+static char settings_filepath[512] = {0};
 
 /* Tracks if we actually need to save to disk */
-static uint8_t _settings_modified = 0;
+static uint8_t settings_modified = 0;
 
-static char* _trim_whitespace(char* str) {
+static char* trim_whitespace(char* str) {
   while (isspace((unsigned char)*str))
     str++;
   if (*str == 0)
@@ -41,7 +50,7 @@ static char* _trim_whitespace(char* str) {
 }
 
 /* Dynamically translates $HOME or ${USER} into absolute paths */
-static void _expand_env_vars(const char* input, char* output, size_t max_len) {
+static void expand_env_vars(const char* input, char* output, size_t max_len) {
   const char* src = input;
   char* dst = output;
   size_t len = 0;
@@ -83,13 +92,13 @@ static void _expand_env_vars(const char* input, char* output, size_t max_len) {
   *dst = '\0';
 }
 
-static void __sif_settings_save(void) {
-  if (!_settings || _settings_filepath[0] == '\0' || !_settings_modified)
+static void settings_save(void) {
+  if (!settings || settings_filepath[0] == '\0' || !settings_modified)
     return;
 
   char tmp_path[1024];
   snprintf(
-    tmp_path, sizeof(tmp_path), "%s.tmp.%d", _settings_filepath, getpid());
+    tmp_path, sizeof(tmp_path), "%s.tmp.%d", settings_filepath, getpid());
 
   FILE* f = fopen(tmp_path, "w");
   if (!f) {
@@ -101,52 +110,52 @@ static void __sif_settings_save(void) {
   fprintf(
     f, "# This file is auto-generated. Paths support $ENV variables.\n\n");
 
-  for (uint32_t i = 0; i < _settings_count; i++) {
+  for (uint32_t i = 0; i < settings_count; i++) {
     /* Write the RAW value (e.g. $HOME/.sif) to disk, not the expanded one */
-    fprintf(f, "%s = %s\n", _settings[i].key, _settings[i].raw_value);
+    fprintf(f, "%s = %s\n", settings[i].key, settings[i].raw_value);
   }
   fclose(f);
 
   /* Atomic rename prevents parallel job array corruption */
-  if (rename(tmp_path, _settings_filepath) == 0) {
+  if (rename(tmp_path, settings_filepath) == 0) {
     SIF_LOG_TRACE("settings", "auto-saved configuration to disk");
-    _settings_modified = 0;
+    settings_modified = 0;
   } else {
     remove(tmp_path);
   }
 }
 
-void __sif_settings_init(const char* default_dir) {
+void sif__settings_init(const char* default_dir) {
   snprintf(
-    _settings_filepath, sizeof(_settings_filepath), "%s/config", default_dir);
-  _settings_capacity = 16;
-  _settings_count = 0;
-  _settings = malloc(_settings_capacity * sizeof(sif_kv_pair_t));
+    settings_filepath, sizeof(settings_filepath), "%s/config", default_dir);
+  settings_capacity = 16;
+  settings_count = 0;
+  settings = malloc(settings_capacity * sizeof(sif_kv_pair_t));
 
-  FILE* f = fopen(_settings_filepath, "r");
+  FILE* f = fopen(settings_filepath, "r");
   if (f) {
     char line[512];
     while (fgets(line, sizeof(line), f)) {
-      char* trimmed = _trim_whitespace(line);
+      char* trimmed = trim_whitespace(line);
       if (trimmed[0] == '\0' || trimmed[0] == '#' || trimmed[0] == ';')
         continue;
 
       char* eq = strchr(trimmed, '=');
       if (eq) {
         *eq = '\0';
-        char* key = _trim_whitespace(trimmed);
-        char* val = _trim_whitespace(eq + 1);
+        char* key = trim_whitespace(trimmed);
+        char* val = trim_whitespace(eq + 1);
         if (strlen(key) > 0)
           sif_setting_set(key, val);
       }
     }
     fclose(f);
     SIF_LOG_TRACE(
-      "settings", "loaded runtime config from %s", _settings_filepath);
+      "settings", "loaded runtime config from %s", settings_filepath);
   }
 
   /* Reset dirty flag so we don't save just because we loaded a file */
-  _settings_modified = 0;
+  settings_modified = 0;
 
   /* Inject Smart Defaults! (Because they use fallbacks, they trigger
    * auto-injection if missing) */
@@ -154,64 +163,64 @@ void __sif_settings_init(const char* default_dir) {
   sif_setting_get("fft_wisdom_dir", "$HOME/.sif/wisdoms");
 }
 
-void __sif_settings_finalize(void) {
+void sif__settings_finalize(void) {
   /* Auto-save if anything was touched during execution! */
-  if (_settings_modified) {
-    __sif_settings_save();
+  if (settings_modified) {
+    settings_save();
   }
 
-  if (_settings) {
-    free(_settings);
-    _settings = NULL;
+  if (settings) {
+    free(settings);
+    settings = NULL;
   }
-  _settings_count = 0;
-  _settings_capacity = 0;
+  settings_count = 0;
+  settings_capacity = 0;
 }
 
 void sif_setting_set(const char* key, const char* value) {
-  if (!_settings || !key || !value)
+  if (!settings || !key || !value)
     return;
 
   /* Check if it exists */
-  for (uint32_t i = 0; i < _settings_count; i++) {
-    if (strcmp(_settings[i].key, key) == 0) {
-      if (strcmp(_settings[i].raw_value, value) == 0)
+  for (uint32_t i = 0; i < settings_count; i++) {
+    if (strcmp(settings[i].key, key) == 0) {
+      if (strcmp(settings[i].raw_value, value) == 0)
         return; /* Value hasn't changed, no need to dirty the flag */
 
-      strncpy(_settings[i].raw_value, value, 255);
-      _settings[i].raw_value[255] = '\0';
-      _expand_env_vars(value, _settings[i].expanded_value, 256);
+      strncpy(settings[i].raw_value, value, 255);
+      settings[i].raw_value[255] = '\0';
+      expand_env_vars(value, settings[i].expanded_value, 256);
 
-      _settings_modified = 1;
+      settings_modified = 1;
       return;
     }
   }
 
   /* Expand array if full */
-  if (_settings_count == _settings_capacity) {
-    _settings_capacity *= 2;
-    _settings = realloc(_settings, _settings_capacity * sizeof(sif_kv_pair_t));
+  if (settings_count == settings_capacity) {
+    settings_capacity *= 2;
+    settings = realloc(settings, settings_capacity * sizeof(sif_kv_pair_t));
   }
 
   /* Add new key */
-  strncpy(_settings[_settings_count].key, key, 63);
-  _settings[_settings_count].key[63] = '\0';
+  strncpy(settings[settings_count].key, key, 63);
+  settings[settings_count].key[63] = '\0';
 
-  strncpy(_settings[_settings_count].raw_value, value, 255);
-  _settings[_settings_count].raw_value[255] = '\0';
-  _expand_env_vars(value, _settings[_settings_count].expanded_value, 256);
+  strncpy(settings[settings_count].raw_value, value, 255);
+  settings[settings_count].raw_value[255] = '\0';
+  expand_env_vars(value, settings[settings_count].expanded_value, 256);
 
-  _settings_count++;
-  _settings_modified = 1;
+  settings_count++;
+  settings_modified = 1;
 }
 
 const char* sif_setting_get(const char* key, const char* fallback) {
-  if (!_settings || !key)
+  if (!settings || !key)
     return fallback;
 
-  for (uint32_t i = 0; i < _settings_count; i++) {
-    if (strcmp(_settings[i].key, key) == 0) {
-      return _settings[i]
+  for (uint32_t i = 0; i < settings_count; i++) {
+    if (strcmp(settings[i].key, key) == 0) {
+      return settings[i]
         .expanded_value; /* Safely return the expanded pointer */
     }
   }
@@ -219,7 +228,7 @@ const char* sif_setting_get(const char* key, const char* fallback) {
   /* Get-or-Create pattern: If key is missing but fallback exists, inject it! */
   if (fallback) {
     sif_setting_set(key, fallback);
-    return _settings[_settings_count - 1].expanded_value;
+    return settings[settings_count - 1].expanded_value;
   }
 
   return NULL;

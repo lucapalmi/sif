@@ -1,7 +1,7 @@
 # The excursion-set multiplicity emulator
 
 A trained replacement for the Monte Carlo first-crossing calculation
-(`sif_multiplicity_function_ep`), accurate to **0.13%** and about **2×10⁶ times
+(`sif_ep_multiplicity_function`), accurate to **0.13%** and about **2×10⁶ times
 faster**, intended for MCMC use where the Monte Carlo is unaffordable.
 
 This document covers what the emulator emulates and why, the physical meaning
@@ -14,7 +14,7 @@ of every quantity it consumes, the training pipeline, and the measured results.
 The excursion-set void multiplicity function is obtained by walking a
 correlated Gaussian random field δ(R) from large smoothing radii down to small
 ones and recording, for each walk, the largest radius at which it first reaches
-a moving barrier B(σ). The Monte Carlo (`src/model/excursionset.c`) does this
+a moving barrier B(σ). The Monte Carlo (`src/model/excursion_set.c`) does this
 directly: it Cholesky-factorises the covariance S(Rᵢ, Rⱼ), draws correlated
 walks, and histograms the first crossings.
 
@@ -398,15 +398,15 @@ task reruns bit-identically, and the counts do not depend on thread count.
 
 ## 9. Using it from the library
 
-The emulator is one public function, declared in `include/sif/model/excursionset.h`:
+The emulator is one public function, declared in `include/sif/model/excursion_set.h`:
 
 ```c
-NODISCARD real_t* sif_multiplicity_function_ep_emu(const real_t* radii,
-  uint32_t n_radii, const real_t* sigma, const real_t* barrier,
-  const double* deriv_variance, sif_emu_domain_t* domain, sif_option_t opt);
+SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
+  uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
+  const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt);
 ```
 
-It takes **`sigma`, not the packed covariance** that `sif_multiplicity_function_ep`
+It takes **`sigma`, not the packed covariance** that `sif_ep_multiplicity_function`
 needs. That is deliberate: the emulator reads only the diagonal, so it wants
 `n` numbers where the Monte Carlo wants `n(n+1)/2`, and its cost is linear
 rather than quadratic in the radius count. `deriv_variance` is **required**
@@ -421,9 +421,9 @@ relative to the training:
 typedef struct {
   int      in_domain;        /* zero if either check below fired */
   uint32_t n_bins_outside;   /* bins with a feature outside the trained box */
-  real_t   nu_origin;        /* B/sigma at the largest radius */
-  real_t   first_step_mass;  /* walks starting above the barrier */
-  real_t   expected_error;   /* 0.0013 in domain, 0.0077 just outside */
+  sif_real   nu_origin;        /* B/sigma at the largest radius */
+  sif_real   first_step_mass;  /* walks starting above the barrier */
+  sif_real   expected_error;   /* 0.0013 in domain, 0.0077 just outside */
 } sif_emu_domain_t;
 ```
 
@@ -469,7 +469,7 @@ argument is that the C reproduces the Python it was fitted with — exactly. The
 stored cases in `tests/ep_emu_cases.h` (regenerate with
 `ep_export_test_cases.py`) pin the whole chain: baseline rate, hazard
 integration, all eight features, the network, and the survival recursion. The
-measured agreement is **5×10⁻⁸**, which is float rounding on the `real_t`
+measured agreement is **5×10⁻⁸**, which is float rounding on the `sif_real`
 output; anything at 10⁻⁵ or worse means a feature is being computed
 differently, and no physical invariant would notice that.
 

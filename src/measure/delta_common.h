@@ -1,23 +1,34 @@
-#ifndef __SIF_DELTA_COMMON_H__
-#define __SIF_DELTA_COMMON_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
 
-/*
- * Internals shared by the delta distribution and the delta moment estimators.
- * Not a public header: both estimators start from the same prepared spectrum,
- * and duplicating that preparation is how the two would drift apart.
+#ifndef SIF__MEASURE_DELTA_COMMON_H
+#define SIF__MEASURE_DELTA_COMMON_H
+
+/**
+ * @file delta_common.h
+ * @brief Internals shared by the delta distribution and delta moment
+ * estimators. Private to the library.
+ *
+ * Both estimators start from the same prepared spectrum, and duplicating that
+ * preparation is how the two would drift apart -- at which point a PDF and a
+ * set of moments that are supposed to describe one field quietly describe two.
  */
 
 #include "math/fft.h"
 #include "sif/core/macros.h"
 #include "sif/structures/grid.h"
 
-#define __SIF_DELTA_TAG "delta"
+/** @brief Log tag shared by both estimators. */
+#define SIF__DELTA_TAG "delta"
 
-/* Below this many cells per radius the k-space window is aliased badly enough
- * that the result is grid artefacts rather than field. */
-#define __SIF_DELTA_MIN_CELLS_PER_RADIUS 2.0
+/** @brief Below this many cells per radius the k-space window is aliased badly
+ *  enough that the result is grid artefacts rather than field. */
+#define SIF__DELTA_MIN_CELLS_PER_RADIUS 2.0
 
-/*
+/**
  * @brief Validates radii against the grid resolution and the box size.
  *
  * A radius below a couple of cells is not a smaller measurement, it is a
@@ -26,22 +37,22 @@
  *
  * @return SIF_OK or SIF_ERR_INVALID
  */
-int sif_delta_validate_radii(
-  const sif_grid_t* grid, const real_t* radii, uint32_t n_radii);
+int sif__delta_validate_radii(
+  const sif_grid_t* grid, const sif_real* radii, uint32_t n_radii);
 
-/*
+/**
  * @brief Resolves the smoothing window selected in the options bitmask.
  */
-sif_filter_type_t sif_delta_filter(sif_option_t opt);
+sif_filter_type_t sif__delta_filter(sif_option opt);
 
-/*
+/**
  * @brief Validates the parts of the options bitmask both estimators share.
  *
  * @return SIF_OK or SIF_ERR_INVALID
  */
-int sif_delta_validate_options(sif_option_t opt);
+int sif__delta_validate_options(sif_option opt);
 
-/*
+/**
  * @brief Builds the spectrum both estimators work from.
  *
  * Allocates a workspace, runs the forward transform, deconvolves the CIC
@@ -55,7 +66,7 @@ int sif_delta_validate_options(sif_option_t opt);
  *
  * @return The workspace, owned by the caller, or NULL on failure.
  */
-NODISCARD sif_fft_workspace_t* sif_delta_prepare_spectrum(
-  const sif_grid_t* grid, uint64_t seed, sif_option_t opt);
+SIF_NODISCARD sif_fft_workspace_t* sif__delta_prepare_spectrum(
+  const sif_grid_t* grid, uint64_t seed, sif_option opt);
 
-#endif /* __SIF_DELTA_COMMON_H__ */
+#endif /* SIF__MEASURE_DELTA_COMMON_H */

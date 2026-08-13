@@ -1,16 +1,26 @@
-#ifndef __SIF_PY_IO_H__
-#define __SIF_PY_IO_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_PY_IO_PY_IO_H
+#define SIF_PY_IO_PY_IO_H
 
 #include "py_common.h"
 
 /* Module-level functional entry points for discrete file formats */
 PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_read_field_header(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_field_header(
+  PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_write_grid(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_grid(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_read_field_ascii(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_write_catalog_ascii(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_read_catalog_ascii(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_field_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_catalog_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_catalog_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds);
 
-#endif /* __SIF_PY_IO_H__ */
+#endif /* SIF_PY_IO_PY_IO_H */

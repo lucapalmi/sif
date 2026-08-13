@@ -1,8 +1,15 @@
-#ifndef __SIF_MATH_NN_H__
-#define __SIF_MATH_NN_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
 
-/*
- * Evaluation of a small dense feed-forward network with weights fixed at
+#ifndef SIF__MATH_NN_H
+#define SIF__MATH_NN_H
+
+/**
+ * @file nn.h
+ * @brief Evaluation of a small dense feed-forward network with weights fixed at
  * compile time.
  *
  * Not a public header, and not a machine-learning framework: there is no
@@ -28,25 +35,25 @@
 
 #include "sif/core/macros.h"
 
-/* Largest number of layers a network may declare. Raising it costs one pointer
- * per layer in the descriptor and nothing at runtime. */
-#define SIF_NN_MAX_LAYERS 8
+/** @brief Largest number of layers a network may declare. Raising it costs one
+ * pointer per layer in the descriptor and nothing at runtime. */
+#define SIF__NN_MAX_LAYERS 8
 
-/* Rows evaluated per pass. The point of batching is that the weights are read
- * once and stay in L1 while a block of inputs streams past them, and a few
- * hundred parameters are already resident after the first row -- so this is
+/** @brief Rows evaluated per pass. The point of batching is that the weights
+ * are read once and stay in L1 while a block of inputs streams past them, and a
+ * few hundred parameters are already resident after the first row -- so this is
  * chosen for the stack budget rather than for the cache. Two scratch buffers
- * of SIF_NN_BLOCK * SIF_NN_MAX_WIDTH doubles live in sif_nn_eval's frame,
+ * of SIF__NN_BLOCK * SIF__NN_MAX_WIDTH doubles live in sif__nn_eval's frame,
  * which at 16 x 64 is 16 KiB in total: comfortable even on the small stacks
  * OpenMP hands its workers. */
-#define SIF_NN_BLOCK 16
+#define SIF__NN_BLOCK 16
 
 typedef enum {
-  SIF_NN_LINEAR = 0, /* no activation; what the output layer uses */
-  SIF_NN_TANH = 1
+  SIF__NN_LINEAR = 0, /**< No activation; what the output layer uses. */
+  SIF__NN_TANH = 1
 } sif_nn_activation_t;
 
-/*
+/**
  * @brief One dense layer: out = act(in * W + b).
  *
  * W is row-major with n_in rows and n_out columns, so W[i * n_out + j] is the
@@ -62,7 +69,7 @@ typedef struct {
   sif_nn_activation_t act;
 } sif_nn_layer_t;
 
-/*
+/**
  * @brief A network, plus the input standardization it was fitted with.
  *
  * `mu` and `sd` are not decoration: the fit standardized its inputs, so an
@@ -72,14 +79,14 @@ typedef struct {
  */
 typedef struct {
   uint32_t n_layers;
-  uint32_t n_in;  /* == layers[0].n_in */
-  uint32_t n_out; /* == layers[n_layers - 1].n_out */
+  uint32_t n_in;    /* == layers[0].n_in */
+  uint32_t n_out;   /* == layers[n_layers - 1].n_out */
   const double* mu; /* n_in; subtracted before the first layer */
   const double* sd; /* n_in; divides after mu */
-  sif_nn_layer_t layers[SIF_NN_MAX_LAYERS];
+  sif_nn_layer_t layers[SIF__NN_MAX_LAYERS];
 } sif_nn_t;
 
-/*
+/**
  * @brief Evaluates the network over a batch of inputs.
  *
  * @param nn Network with all weights non-NULL and consistent dimensions
@@ -90,14 +97,14 @@ typedef struct {
  * @return SIF_OK, or SIF_ERR_INVALID on a malformed network or NULL argument.
  *
  * @note No allocation: the intermediate activations live in a fixed-size stack
- * buffer, which is what bounds SIF_NN_MAX_WIDTH below. Reentrant and safe to
+ * buffer, which is what bounds SIF__NN_MAX_WIDTH below. Reentrant and safe to
  * call from several threads on the same `nn`, which is const throughout.
  */
-int sif_nn_eval(const sif_nn_t* nn, const double* x, uint32_t n_rows,
-  double* out);
+int sif__nn_eval(
+  const sif_nn_t* nn, const double* x, uint32_t n_rows, double* out);
 
-/* Widest layer the stack buffer in sif_nn_eval can hold. Exceeding it is
- * reported rather than overflowing; raise it if a future model needs it. */
-#define SIF_NN_MAX_WIDTH 64
+/** @brief Widest layer the stack buffer in sif__nn_eval can hold. Exceeding it
+ * is reported rather than overflowing; raise it if a future model needs it. */
+#define SIF__NN_MAX_WIDTH 64
 
-#endif /* __SIF_MATH_NN_H__ */
+#endif /* SIF__MATH_NN_H */

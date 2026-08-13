@@ -1,9 +1,15 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/structures/field.h"
 
-#include "core/get_system.h"
+#include "core/system_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
-#include "sif/utils/stringy.h"
+#include "sif/utils/str.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -42,17 +48,15 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
   return field;
 }
 
-/* Number of real_t per cache line, used to pad each sub-array of a block. */
-PURE_FUNCTION uint64_t sif_field_padded_n(uint64_t n_particles) {
-  const uint64_t align_elements = __SIF_CACHE_LINE / sizeof(real_t);
+/* Number of sif_real per cache line, used to pad each sub-array of a block. */
+SIF_PURE_FUNCTION uint64_t sif_field_padded_n(uint64_t n_particles) {
+  const uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
   return (n_particles + align_elements - 1) & ~(align_elements - 1);
 }
 
 void sif_field_free(sif_field_t* field) {
-  if (!field) {
-    SIF_LOG_WARNING("field", "cannot free a NULL field");
+  if (!field)
     return;
-  }
 
   sif_free_aligned(field->_position_block);
   sif_free_aligned(field->_velocity_block);
@@ -65,12 +69,12 @@ void sif_field_free(sif_field_t* field) {
 /*
  * Carves a 3 x padded_n block into three cache-line aligned views.
  */
-static int __field_reserve_block(uint64_t n_particles, real_t** block,
-  real_t** a, real_t** b, real_t** c, const char* what) {
+static int field_reserve_block(uint64_t n_particles, sif_real** block,
+  sif_real** a, sif_real** b, sif_real** c, const char* what) {
 
   const uint64_t padded_n = sif_field_padded_n(n_particles);
 
-  real_t* fresh = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
+  sif_real* fresh = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
   if (!fresh) {
     SIF_LOG_ERROR("field", "failed to allocate the %s block", what);
     return SIF_ERR_ALLOC;
@@ -93,7 +97,7 @@ int sif_field_reserve_positions(sif_field_t* field) {
   if (field->_position_block)
     return SIF_OK;
 
-  return __field_reserve_block(field->n_particles, &field->_position_block,
+  return field_reserve_block(field->n_particles, &field->_position_block,
     &field->x, &field->y, &field->z, "position");
 }
 
@@ -106,7 +110,7 @@ int sif_field_reserve_velocities(sif_field_t* field) {
   if (field->_velocity_block)
     return SIF_OK;
 
-  return __field_reserve_block(field->n_particles, &field->_velocity_block,
+  return field_reserve_block(field->n_particles, &field->_velocity_block,
     &field->vx, &field->vy, &field->vz, "velocity");
 }
 
@@ -119,7 +123,7 @@ int sif_field_reserve_masses(sif_field_t* field) {
   if (field->masses)
     return SIF_OK;
 
-  field->masses = sif_malloc_aligned(field->n_particles * sizeof(real_t));
+  field->masses = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
   if (!field->masses) {
     SIF_LOG_ERROR("field", "failed to allocate the mass array");
     return SIF_ERR_ALLOC;
@@ -129,7 +133,7 @@ int sif_field_reserve_masses(sif_field_t* field) {
 }
 
 int sif_field_assign_positions(
-  sif_field_t* field, const real_t* x, const real_t* y, const real_t* z) {
+  sif_field_t* field, const sif_real* x, const sif_real* y, const sif_real* z) {
 
   if (!field || !x || !y || !z) {
     SIF_LOG_ERROR("field", "invalid positions");
@@ -141,14 +145,14 @@ int sif_field_assign_positions(
     return SIF_ERR_INVALID;
   }
 
-  real_t *new_block = NULL, *new_x = NULL, *new_y = NULL, *new_z = NULL;
-  if (__field_reserve_block(field->n_particles, &new_block, &new_x, &new_y,
+  sif_real *new_block = NULL, *new_x = NULL, *new_y = NULL, *new_z = NULL;
+  if (field_reserve_block(field->n_particles, &new_block, &new_x, &new_y,
         &new_z, "position") != SIF_OK)
     return SIF_ERR_ALLOC;
 
-  memcpy(new_x, x, field->n_particles * sizeof(real_t));
-  memcpy(new_y, y, field->n_particles * sizeof(real_t));
-  memcpy(new_z, z, field->n_particles * sizeof(real_t));
+  memcpy(new_x, x, field->n_particles * sizeof(sif_real));
+  memcpy(new_y, y, field->n_particles * sizeof(sif_real));
+  memcpy(new_z, z, field->n_particles * sizeof(sif_real));
 
   /* Only release the old block once the replacement is secured. */
   sif_free_aligned(field->_position_block);
@@ -164,8 +168,8 @@ int sif_field_assign_positions(
   sif_free_aligned(field->original_indices);
   field->original_indices = NULL;
 
-  field->state_flags &= ~__FIELD_STATE_BOUNDS_VALID;
-  field->state_flags &= ~__FIELD_STATE_MORTON_SORTED;
+  field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
+  field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
 
   return SIF_OK;
 }
@@ -174,13 +178,13 @@ int sif_field_assign_positions(
  * True when incoming per-particle data, which the caller indexes in the
  * original particle order, has to be permuted into the field's current order.
  */
-static inline int __field_needs_permutation(const sif_field_t* field) {
-  return (field->state_flags & __FIELD_STATE_MORTON_SORTED) &&
+static inline int field_needs_permutation(const sif_field_t* field) {
+  return (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) &&
          field->original_indices != NULL;
 }
 
-int sif_field_assign_velocities(
-  sif_field_t* field, const real_t* vx, const real_t* vy, const real_t* vz) {
+int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
+  const sif_real* vy, const sif_real* vz) {
 
   if (!field || !vx || !vy || !vz) {
     SIF_LOG_ERROR("field", "invalid velocities");
@@ -197,10 +201,10 @@ int sif_field_assign_velocities(
    * order and must be gathered through the stored permutation. Copying them
    * straight in would silently pair every particle with someone else's
    * velocity. */
-  const int permute = __field_needs_permutation(field);
+  const int permute = field_needs_permutation(field);
 
-  real_t *new_block = NULL, *new_vx = NULL, *new_vy = NULL, *new_vz = NULL;
-  if (__field_reserve_block(field->n_particles, &new_block, &new_vx, &new_vy,
+  sif_real *new_block = NULL, *new_vx = NULL, *new_vy = NULL, *new_vz = NULL;
+  if (field_reserve_block(field->n_particles, &new_block, &new_vx, &new_vy,
         &new_vz, "velocity") != SIF_OK)
     return SIF_ERR_ALLOC;
 
@@ -214,9 +218,9 @@ int sif_field_assign_velocities(
       new_vz[i] = vz[src];
     }
   } else {
-    memcpy(new_vx, vx, field->n_particles * sizeof(real_t));
-    memcpy(new_vy, vy, field->n_particles * sizeof(real_t));
-    memcpy(new_vz, vz, field->n_particles * sizeof(real_t));
+    memcpy(new_vx, vx, field->n_particles * sizeof(sif_real));
+    memcpy(new_vy, vy, field->n_particles * sizeof(sif_real));
+    memcpy(new_vz, vz, field->n_particles * sizeof(sif_real));
   }
 
   /* Only release the old block once the replacement is secured. */
@@ -230,7 +234,7 @@ int sif_field_assign_velocities(
   return SIF_OK;
 }
 
-int sif_field_assign_masses(sif_field_t* field, const real_t* masses) {
+int sif_field_assign_masses(sif_field_t* field, const sif_real* masses) {
   if (!field || !masses) {
     SIF_LOG_ERROR("field", "invalid masses");
     return SIF_ERR_INVALID;
@@ -241,10 +245,10 @@ int sif_field_assign_masses(sif_field_t* field, const real_t* masses) {
     return SIF_ERR_INVALID;
   }
 
-  const int permute = __field_needs_permutation(field);
+  const int permute = field_needs_permutation(field);
 
-  real_t* new_masses =
-    sif_malloc_aligned(field->n_particles * sizeof(real_t));
+  sif_real* new_masses =
+    sif_malloc_aligned(field->n_particles * sizeof(sif_real));
   if (!new_masses) {
     SIF_LOG_ERROR("field", "failed to allocate the mass array");
     return SIF_ERR_ALLOC;
@@ -256,7 +260,7 @@ int sif_field_assign_masses(sif_field_t* field, const real_t* masses) {
     for (uint64_t i = 0; i < field->n_particles; i++)
       new_masses[i] = masses[perm[i]];
   } else {
-    memcpy(new_masses, masses, field->n_particles * sizeof(real_t));
+    memcpy(new_masses, masses, field->n_particles * sizeof(sif_real));
   }
 
   sif_free_aligned(field->masses);
@@ -274,8 +278,8 @@ int sif_field_assign_masses(sif_field_t* field, const real_t* masses) {
  * to exactly box_length and the value would leave this function still out of
  * range, which is the bug it was called to fix.
  */
-static inline real_t __wrap_coordinate(real_t v, real_t box_length,
-  uint64_t* boundary, uint64_t* wrapped) {
+static inline sif_real wrap_coordinate(
+  sif_real v, sif_real box_length, uint64_t* boundary, uint64_t* wrapped) {
 
   if (v >= 0.0f && v < box_length)
     return v;
@@ -292,7 +296,7 @@ static inline real_t __wrap_coordinate(real_t v, real_t box_length,
 
   (*wrapped)++;
 
-  real_t w = REAL_FMOD(v, box_length);
+  sif_real w = SIF_REAL_FMOD(v, box_length);
   if (w < 0.0f)
     w += box_length;
   if (w >= box_length)
@@ -301,7 +305,7 @@ static inline real_t __wrap_coordinate(real_t v, real_t box_length,
   return w;
 }
 
-int sif_field_wrap_periodic(sif_field_t* field, real_t box_length,
+int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
   uint64_t* n_boundary, uint64_t* n_wrapped) {
 
   if (!field || !field->x || !field->y || !field->z ||
@@ -320,17 +324,17 @@ int sif_field_wrap_periodic(sif_field_t* field, real_t box_length,
 
 #pragma omp parallel for schedule(static) reduction(+ : boundary, wrapped)
   for (uint64_t i = 0; i < field->n_particles; i++) {
-    field->x[i] = __wrap_coordinate(field->x[i], box_length, &boundary, &wrapped);
-    field->y[i] = __wrap_coordinate(field->y[i], box_length, &boundary, &wrapped);
-    field->z[i] = __wrap_coordinate(field->z[i], box_length, &boundary, &wrapped);
+    field->x[i] = wrap_coordinate(field->x[i], box_length, &boundary, &wrapped);
+    field->y[i] = wrap_coordinate(field->y[i], box_length, &boundary, &wrapped);
+    field->z[i] = wrap_coordinate(field->z[i], box_length, &boundary, &wrapped);
   }
 
   /* Positions moved, so anything derived from them is stale. The Morton order
    * is dropped for the same reason: a wrapped particle jumps to the opposite
    * corner, which is exactly the case the curve orders by. */
   if (boundary > 0 || wrapped > 0) {
-    field->state_flags &= ~__FIELD_STATE_BOUNDS_VALID;
-    field->state_flags &= ~__FIELD_STATE_MORTON_SORTED;
+    field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
+    field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
   }
 
   if (wrapped > 0) {
@@ -355,26 +359,28 @@ int sif_field_wrap_periodic(sif_field_t* field, real_t box_length,
   return SIF_OK;
 }
 
-int sif_field_compute_bounds(sif_field_t* field) {
+int sif_field_refresh_bounds(sif_field_t* field) {
   if (!field || !field->x || field->n_particles == 0) {
     SIF_LOG_ERROR("field", "invalid or empty field");
     return SIF_ERR_INVALID;
   }
 
-  real_t min_x = REAL_MAX_VAL, min_y = REAL_MAX_VAL, min_z = REAL_MAX_VAL;
-  real_t max_x = -REAL_MAX_VAL, max_y = -REAL_MAX_VAL, max_z = -REAL_MAX_VAL;
+  sif_real min_x = SIF_REAL_MAX_VAL, min_y = SIF_REAL_MAX_VAL,
+           min_z = SIF_REAL_MAX_VAL;
+  sif_real max_x = -SIF_REAL_MAX_VAL, max_y = -SIF_REAL_MAX_VAL,
+           max_z = -SIF_REAL_MAX_VAL;
 
 #pragma omp parallel for simd reduction(min : min_x, min_y, min_z)             \
   reduction(max : max_x, max_y, max_z)
   for (uint64_t i = 0; i < field->n_particles; i++) {
-    min_x = REAL_MIN(min_x, field->x[i]);
-    max_x = REAL_MAX(max_x, field->x[i]);
+    min_x = SIF_REAL_MIN(min_x, field->x[i]);
+    max_x = SIF_REAL_MAX(max_x, field->x[i]);
 
-    min_y = REAL_MIN(min_y, field->y[i]);
-    max_y = REAL_MAX(max_y, field->y[i]);
+    min_y = SIF_REAL_MIN(min_y, field->y[i]);
+    max_y = SIF_REAL_MAX(max_y, field->y[i]);
 
-    min_z = REAL_MIN(min_z, field->z[i]);
-    max_z = REAL_MAX(max_z, field->z[i]);
+    min_z = SIF_REAL_MIN(min_z, field->z[i]);
+    max_z = SIF_REAL_MAX(max_z, field->z[i]);
   }
 
   field->min_p[0] = min_x;
@@ -388,13 +394,13 @@ int sif_field_compute_bounds(sif_field_t* field) {
   field->center[1] = (max_y + min_y) * 0.5f;
   field->center[2] = (max_z + min_z) * 0.5f;
 
-  real_t dx = max_x - min_x;
-  real_t dy = max_y - min_y;
-  real_t dz = max_z - min_z;
-  real_t max_dim = dx > dy ? (dx > dz ? dx : dz) : (dy > dz ? dy : dz);
+  sif_real dx = max_x - min_x;
+  sif_real dy = max_y - min_y;
+  sif_real dz = max_z - min_z;
+  sif_real max_dim = dx > dy ? (dx > dz ? dx : dz) : (dy > dz ? dy : dz);
 
   field->half_span = (max_dim * 0.5f) * 1.001f;
-  field->state_flags |= __FIELD_STATE_BOUNDS_VALID;
+  field->state_flags |= SIF_FIELD_STATE_BOUNDS_VALID;
 
   return SIF_OK;
 }
@@ -403,15 +409,15 @@ int sif_field_require_bounds(sif_field_t* field) {
   if (!field)
     return SIF_ERR_INVALID;
 
-  if (field->state_flags & __FIELD_STATE_BOUNDS_VALID)
+  if (field->state_flags & SIF_FIELD_STATE_BOUNDS_VALID)
     return SIF_OK;
 
-  return sif_field_compute_bounds(field);
+  return sif_field_refresh_bounds(field);
 }
 
 /* --- Morton Sorting Utilities --- */
 
-static inline uint64_t __spread_bits_3(uint32_t v) {
+static inline uint64_t spread_bits_3(uint32_t v) {
   uint64_t x = v & 0x1FFFFF; /* 21 bits */
   x = (x | (x << 32)) & 0x1F00000000FFFFULL;
   x = (x | (x << 16)) & 0x1F0000FF0000FFULL;
@@ -421,9 +427,8 @@ static inline uint64_t __spread_bits_3(uint32_t v) {
   return x;
 }
 
-static inline uint64_t __morton_3d(uint32_t x, uint32_t y, uint32_t z) {
-  return __spread_bits_3(x) | (__spread_bits_3(y) << 1) |
-         (__spread_bits_3(z) << 2);
+static inline uint64_t morton_3d(uint32_t x, uint32_t y, uint32_t z) {
+  return spread_bits_3(x) | (spread_bits_3(y) << 1) | (spread_bits_3(z) << 2);
 }
 
 typedef struct {
@@ -431,7 +436,7 @@ typedef struct {
   uint64_t morton_code;
 } particle_sort_t;
 
-static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
+static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
   if (n == 0)
     return SIF_OK;
 
@@ -449,7 +454,7 @@ static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
    * must be sized by the team the parallel regions below will actually get,
    * not by the ceiling recorded at init time. Pinning the team size makes the
    * two agree by construction. */
-  int n_threads = sif_system_get_max_threads();
+  int n_threads = sif__system_max_threads();
   if (n_threads < 1)
     n_threads = 1;
 
@@ -469,8 +474,8 @@ static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
 
 #pragma omp parallel num_threads(n_threads)
     {
-      int tid = sif_system_get_thread_num();
-      int num_t = sif_system_get_num_threads();
+      int tid = sif__system_thread_num();
+      int num_t = sif__system_num_threads();
       uint64_t chunk = n / num_t;
       uint64_t start = tid * chunk;
       uint64_t end = (tid == num_t - 1) ? n : start + chunk;
@@ -491,8 +496,8 @@ static int __radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
 
 #pragma omp parallel num_threads(n_threads)
     {
-      int tid = sif_system_get_thread_num();
-      int num_t = sif_system_get_num_threads();
+      int tid = sif__system_thread_num();
+      int num_t = sif__system_num_threads();
       uint64_t chunk = n / num_t;
       uint64_t start = tid * chunk;
       uint64_t end = (tid == num_t - 1) ? n : start + chunk;
@@ -528,13 +533,13 @@ int sif_field_sort_morton(sif_field_t* field) {
     SIF_LOG_ERROR("field", "invalid or empty field");
     return SIF_ERR_INVALID;
   }
-  if (field->state_flags & __FIELD_STATE_MORTON_SORTED) {
+  if (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) {
     return SIF_OK; /* Already sorted! */
   }
 
   /* Quantization needs bounds that describe the data as it is now. */
-  field->state_flags &= ~__FIELD_STATE_BOUNDS_VALID;
-  if (sif_field_compute_bounds(field) != SIF_OK)
+  field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
+  if (sif_field_refresh_bounds(field) != SIF_OK)
     return SIF_ERR_INVALID;
 
   /* Quantize against the field's bounding CUBE, not each axis independently.
@@ -542,16 +547,16 @@ int sif_field_sort_morton(sif_field_t* field) {
    * A per-axis normalization makes the Morton curve split space differently
    * from the octree, which subdivides a single cube of side 2 * half_span
    * around center. When the two disagree, the octants stop being contiguous
-   * along the sorted array and sif_octree_build cannot partition. Using the
+   * along the sorted array and sif_octree_alloc cannot partition. Using the
    * same cube here makes Morton order exactly depth-first octree order. */
-  real_t cube_side = 2.0f * field->half_span;
+  sif_real cube_side = 2.0f * field->half_span;
   if (!(cube_side > 0.0f))
     cube_side = 1.0f; /* every particle coincident: any order will do */
 
-  const real_t origin_x = field->center[0] - field->half_span;
-  const real_t origin_y = field->center[1] - field->half_span;
-  const real_t origin_z = field->center[2] - field->half_span;
-  const real_t inv_side = 1.0f / cube_side;
+  const sif_real origin_x = field->center[0] - field->half_span;
+  const sif_real origin_y = field->center[1] - field->half_span;
+  const sif_real origin_z = field->center[2] - field->half_span;
+  const sif_real inv_side = 1.0f / cube_side;
 
   particle_sort_t* sort_array =
     sif_malloc_aligned(field->n_particles * sizeof(particle_sort_t));
@@ -567,10 +572,10 @@ int sif_field_sort_morton(sif_field_t* field) {
     const uint32_t qz = sif_field_quantize(field->z[i], origin_z, inv_side);
 
     sort_array[i].original_index = i;
-    sort_array[i].morton_code = __morton_3d(qx, qy, qz);
+    sort_array[i].morton_code = morton_3d(qx, qy, qz);
   }
 
-  if (__radix_sort_morton_parallel(sort_array, field->n_particles) != SIF_OK) {
+  if (radix_sort_morton_parallel(sort_array, field->n_particles) != SIF_OK) {
     sif_free_aligned(sort_array);
     return SIF_ERR_ALLOC;
   }
@@ -578,16 +583,16 @@ int sif_field_sort_morton(sif_field_t* field) {
   const uint64_t padded_n = sif_field_padded_n(field->n_particles);
 
   /* Allocate new blocks */
-  real_t* new_pos_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
+  sif_real* new_pos_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
 
-  real_t* new_vel_block = NULL;
+  sif_real* new_vel_block = NULL;
   if (field->vx) {
-    new_vel_block = sif_malloc_aligned(3 * padded_n * sizeof(real_t));
+    new_vel_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
   }
 
-  real_t* new_masses = NULL;
+  sif_real* new_masses = NULL;
   if (field->masses) {
-    new_masses = sif_malloc_aligned(field->n_particles * sizeof(real_t));
+    new_masses = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
   }
 
   uint64_t* new_indices =
@@ -606,13 +611,13 @@ int sif_field_sort_morton(sif_field_t* field) {
     return SIF_ERR_ALLOC;
   }
 
-  real_t* new_x = new_pos_block;
-  real_t* new_y = new_pos_block + padded_n;
-  real_t* new_z = new_pos_block + (2 * padded_n);
+  sif_real* new_x = new_pos_block;
+  sif_real* new_y = new_pos_block + padded_n;
+  sif_real* new_z = new_pos_block + (2 * padded_n);
 
-  real_t* new_vx = new_vel_block ? new_vel_block : NULL;
-  real_t* new_vy = new_vel_block ? new_vel_block + padded_n : NULL;
-  real_t* new_vz = new_vel_block ? new_vel_block + (2 * padded_n) : NULL;
+  sif_real* new_vx = new_vel_block ? new_vel_block : NULL;
+  sif_real* new_vy = new_vel_block ? new_vel_block + padded_n : NULL;
+  sif_real* new_vz = new_vel_block ? new_vel_block + (2 * padded_n) : NULL;
 
   /* Apply the sorted permutation to ALL arrays in one parallel pass. This is a
    * gather through an index array, so it does not vectorize: plain
@@ -658,7 +663,7 @@ int sif_field_sort_morton(sif_field_t* field) {
   field->masses = new_masses;
   field->original_indices = new_indices;
 
-  field->state_flags |= __FIELD_STATE_MORTON_SORTED;
+  field->state_flags |= SIF_FIELD_STATE_MORTON_SORTED;
 
   /* Reordering does not move the bounding box, so the cached bounds stay
    * valid. */
@@ -670,7 +675,7 @@ int sif_field_require_morton(sif_field_t* field) {
   if (!field)
     return SIF_ERR_INVALID;
 
-  if (field->state_flags & __FIELD_STATE_MORTON_SORTED)
+  if (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED)
     return SIF_OK;
 
   return sif_field_sort_morton(field);

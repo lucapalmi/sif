@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
 #
+# This file is part of sif. See COPYING for the full license text.
+
 # The emulator training pipeline, end to end.
 #
 # Stages 1 and 2 run locally; stage 3 runs on a cluster and is the only

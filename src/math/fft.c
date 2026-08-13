@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "fft.h"
 
 #include <math.h>
@@ -5,22 +11,19 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "core/get_system.h"
+#include "core/system_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 
-#ifndef M_PI
-#  define M_PI 3.14159265358979323846
-#endif
-
 /* Number of complex slots for an r2c transform. The matching in-place real
  * buffer is 2x this, with the last dimension padded to 2 * (n/2 + 1). */
-static inline uint64_t __fft_complex_count(uint32_t n) {
+static inline uint64_t fft_complex_count(uint32_t n) {
   return (uint64_t)n * n * (uint64_t)(n / 2 + 1);
 }
 
-sif_fft_manager_t* sif_fft_manager_init(bool skip_tuning, const char* wisdom_dir) {
+sif_fft_manager_t* sif__fft_manager_init(
+  bool skip_tuning, const char* wisdom_dir) {
   sif_fft_manager_t* mgr = malloc(sizeof(sif_fft_manager_t));
   if (!mgr)
     return NULL;
@@ -37,7 +40,7 @@ sif_fft_manager_t* sif_fft_manager_init(bool skip_tuning, const char* wisdom_dir
   return mgr;
 }
 
-void sif_fft_manager_finalize(sif_fft_manager_t* mgr) {
+void sif__fft_manager_finalize(sif_fft_manager_t* mgr) {
   if (!mgr)
     return;
 
@@ -52,7 +55,8 @@ void sif_fft_manager_finalize(sif_fft_manager_t* mgr) {
   free(mgr);
 }
 
-sif_fft_workspace_t* sif_fft_workspace_alloc(sif_fft_manager_t* mgr, uint32_t n_cells) {
+sif_fft_workspace_t* sif__fft_workspace_alloc(
+  sif_fft_manager_t* mgr, uint32_t n_cells) {
   if (!mgr || n_cells == 0) {
     SIF_LOG_ERROR("fft_context", "invalid manager or grid size");
     return NULL;
@@ -78,18 +82,18 @@ sif_fft_workspace_t* sif_fft_workspace_alloc(sif_fft_manager_t* mgr, uint32_t n_
     }
   }
 
-  const uint64_t complex_cells = __fft_complex_count(n_cells);
+  const uint64_t complex_cells = fft_complex_count(n_cells);
 
-  ws->delta_k = real_fftw_malloc(complex_cells * sizeof(sif_real_complex_t));
+  ws->delta_k = real_fftw_malloc(complex_cells * sizeof(sif_real_complex));
   if (!ws->delta_k) {
     SIF_LOG_ERROR("fft_context",
       "failed to allocate the spectrum buffer (%" PRIu64 " bytes)",
-      complex_cells * sizeof(sif_real_complex_t));
+      complex_cells * sizeof(sif_real_complex));
     free(ws);
     return NULL;
   }
 
-  /* The forward plan is created on first use, see __fft_ensure_forward_plan. */
+  /* The forward plan is created on first use, see fft_ensure_forward_plan. */
   return ws;
 }
 
@@ -114,22 +118,22 @@ sif_fft_workspace_t* sif_fft_workspace_alloc(sif_fft_manager_t* mgr, uint32_t n_
  * FFTW_WISDOM_ONLY returns NULL rather than measuring when no wisdom applies,
  * so neither branch can touch `in`.
  */
-static int __fft_ensure_forward_plan(
-  sif_fft_workspace_t* ws, const real_t* in) {
+static int fft_ensure_forward_plan(
+  sif_fft_workspace_t* ws, const sif_real* in) {
 
   if (ws->forward_plan)
     return SIF_OK;
 
   const uint32_t n = ws->n_cells;
 
-  real_fftw_plan_with_nthreads(sif_system_get_max_threads());
+  real_fftw_plan_with_nthreads(sif__system_max_threads());
 
-  ws->forward_plan = real_fftw_plan_dft_r2c_3d(n, n, n, (real_t*)in,
-    ws->delta_k, ws->mgr->flags | FFTW_WISDOM_ONLY);
+  ws->forward_plan = real_fftw_plan_dft_r2c_3d(
+    n, n, n, (sif_real*)in, ws->delta_k, ws->mgr->flags | FFTW_WISDOM_ONLY);
 
   if (!ws->forward_plan) {
     ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-      n, n, n, (real_t*)in, ws->delta_k, FFTW_ESTIMATE);
+      n, n, n, (sif_real*)in, ws->delta_k, FFTW_ESTIMATE);
   }
 
   if (!ws->forward_plan) {
@@ -140,25 +144,27 @@ static int __fft_ensure_forward_plan(
   return SIF_OK;
 }
 
-int sif_fft_workspace_init_backward(sif_fft_workspace_t* ws, sif_fft_manager_t* mgr) {
+int sif__fft_workspace_init_backward(
+  sif_fft_workspace_t* ws, sif_fft_manager_t* mgr) {
   if (!ws || !mgr)
     return SIF_ERR_INVALID;
 
   if (ws->backward_plan)
     return SIF_OK;
 
-  const uint64_t complex_cells = __fft_complex_count(ws->n_cells);
+  const uint64_t complex_cells = fft_complex_count(ws->n_cells);
 
-  ws->delta_k_cpy = sif_malloc_aligned(complex_cells * sizeof(sif_real_complex_t));
+  ws->delta_k_cpy =
+    sif_malloc_aligned(complex_cells * sizeof(sif_real_complex));
   if (!ws->delta_k_cpy) {
     SIF_LOG_ERROR("fft_context",
       "failed to allocate the real-space buffer (%" PRIu64 " bytes)",
-      complex_cells * sizeof(sif_real_complex_t));
+      complex_cells * sizeof(sif_real_complex));
     return SIF_ERR_ALLOC;
   }
 
   ws->backward_plan = real_fftw_plan_dft_c2r_3d(ws->n_cells, ws->n_cells,
-    ws->n_cells, ws->delta_k_cpy, (real_t*)ws->delta_k_cpy, mgr->flags);
+    ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy, mgr->flags);
 
   if (!ws->backward_plan) {
     SIF_LOG_ERROR("fft_context", "failed to create the backward plan");
@@ -170,11 +176,11 @@ int sif_fft_workspace_init_backward(sif_fft_workspace_t* ws, sif_fft_manager_t* 
   return SIF_OK;
 }
 
-real_t* sif_fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
+sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
   if (!ws || !ws->delta_k_cpy)
     return NULL;
 
-  real_t* buffer = (real_t*)ws->delta_k_cpy;
+  sif_real* buffer = (sif_real*)ws->delta_k_cpy;
   ws->delta_k_cpy = NULL;
 
   /* The plan points at a buffer we no longer own, so it must not be reused. */
@@ -186,7 +192,7 @@ real_t* sif_fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
   return buffer;
 }
 
-void sif_fft_workspace_free(sif_fft_workspace_t* ws) {
+void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
   if (!ws) {
     SIF_LOG_WARNING("fft_context", "cannot free a NULL workspace");
     return;
@@ -216,7 +222,7 @@ void sif_fft_workspace_free(sif_fft_workspace_t* ws) {
   free(ws);
 }
 
-static inline uint64_t __get_flat_complex_index(
+static inline uint64_t get_flat_complex_index(
   uint32_t ix, uint32_t iy, uint32_t iz, uint32_t n_cells) {
   uint32_t z_dim = n_cells / 2 + 1;
   return (uint64_t)ix * n_cells * z_dim + (uint64_t)iy * z_dim + (uint64_t)iz;
@@ -224,64 +230,65 @@ static inline uint64_t __get_flat_complex_index(
 
 /*
  * Builds the radial filter lookup table, indexed directly by the integer |k|^2.
- * Shared by sif_fft_apply_filter and fft_filtered_variance so the two can never
- * disagree about what the filter actually is.
+ * Shared by sif__fft_apply_filter and fft_filtered_variance so the two can
+ * never disagree about what the filter actually is.
  */
-static real_t* __fft_build_filter_lut(
-  sif_filter_type_t filter, real_t r, real_t box_length, uint32_t n_cells) {
+static sif_real* fft_build_filter_lut(
+  sif_filter_type_t filter, sif_real r, sif_real box_length, uint32_t n_cells) {
 
   const uint32_t N_half = n_cells >> 1;
   const uint32_t max_k2 = 3 * N_half * N_half;
 
-  real_t* lut = malloc(((size_t)max_k2 + 1) * sizeof(real_t));
+  sif_real* lut = malloc(((size_t)max_k2 + 1) * sizeof(sif_real));
   if (!lut) {
     SIF_LOG_ERROR("fft_context",
       "failed to allocate the filter lookup table (%zu bytes)",
-      ((size_t)max_k2 + 1) * sizeof(real_t));
+      ((size_t)max_k2 + 1) * sizeof(sif_real));
     return NULL;
   }
 
-  const real_t factor = (real_t)(r * 2.0 * M_PI / box_length);
-  const real_t factor2 = factor * factor;
+  const sif_real factor = (sif_real)(r * 2.0 * SIF_PI / box_length);
+  const sif_real factor2 = factor * factor;
 
 #pragma omp parallel for schedule(static)
   for (uint32_t k2 = 0; k2 <= max_k2; k2++) {
     if (k2 == 0) {
       lut[k2] = 1.0f;
-    } else if (filter == FILTER_TOP_HAT) {
-      real_t kr = factor * REAL_SQRT((real_t)k2);
+    } else if (filter == SIF__FILTER_TOP_HAT) {
+      sif_real kr = factor * SIF_REAL_SQRT((sif_real)k2);
       if (kr > 1e-4f) {
-        lut[k2] = 3.0f * (REAL_SIN(kr) - kr * REAL_COS(kr)) / (kr * kr * kr);
+        lut[k2] =
+          3.0f * (SIF_REAL_SIN(kr) - kr * SIF_REAL_COS(kr)) / (kr * kr * kr);
       } else {
         lut[k2] = 1.0f;
       }
     } else {
-      lut[k2] = REAL_EXP(-0.5f * factor2 * (real_t)k2);
+      lut[k2] = SIF_REAL_EXP(-0.5f * factor2 * (sif_real)k2);
     }
   }
 
   return lut;
 }
 
-int sif_fft_apply_filter(
-  sif_fft_workspace_t* ws, sif_filter_type_t filter, real_t r, real_t box_length) {
+int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
+  sif_real r, sif_real box_length) {
 
   if (!ws || !ws->delta_k_cpy) {
-    SIF_LOG_ERROR("fft_context",
-      "the backward stage must be initialized before filtering");
+    SIF_LOG_ERROR(
+      "fft_context", "the backward stage must be initialized before filtering");
     return SIF_ERR_INVALID;
   }
 
-  const uint64_t complex_cells = __fft_complex_count(ws->n_cells);
+  const uint64_t complex_cells = fft_complex_count(ws->n_cells);
 
-  if (filter == FILTER_NONE) {
+  if (filter == SIF__FILTER_NONE) {
     memcpy(
-      ws->delta_k_cpy, ws->delta_k, complex_cells * sizeof(sif_real_complex_t));
+      ws->delta_k_cpy, ws->delta_k, complex_cells * sizeof(sif_real_complex));
     SIF_LOG_TRACE("fft_context", "no filter applied");
     return SIF_OK;
   }
 
-  if (filter != FILTER_TOP_HAT && filter != FILTER_GAUSSIAN) {
+  if (filter != SIF__FILTER_TOP_HAT && filter != SIF__FILTER_GAUSSIAN) {
     /* Returning without writing delta_k_cpy would leave the backward transform
      * operating on whatever was there before, so this has to be an error. */
     SIF_LOG_ERROR("fft_context", "filter type %d is not supported", filter);
@@ -291,7 +298,7 @@ int sif_fft_apply_filter(
   const uint32_t N = ws->n_cells;
   const uint32_t N_half = N >> 1;
 
-  real_t* lut = __fft_build_filter_lut(filter, r, box_length, N);
+  sif_real* lut = fft_build_filter_lut(filter, r, box_length, N);
   if (!lut)
     return SIF_ERR_ALLOC;
 
@@ -307,8 +314,8 @@ int sif_fft_apply_filter(
       for (uint32_t iz = 0; iz <= N_half; iz++) {
         uint32_t k2 = kxy2 + (iz * iz);
 
-        uint64_t idx = __get_flat_complex_index(ix, iy, iz, N);
-        real_t smoothing = lut[k2];
+        uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
+        sif_real smoothing = lut[k2];
 
         ws->delta_k_cpy[idx][0] = ws->delta_k[idx][0] * smoothing;
         ws->delta_k_cpy[idx][1] = ws->delta_k[idx][1] * smoothing;
@@ -319,42 +326,42 @@ int sif_fft_apply_filter(
   free(lut);
 
   SIF_LOG_TRACE("fft_context", "%s smoothing applied",
-    filter == FILTER_TOP_HAT ? "top hat" : "gaussian");
+    filter == SIF__FILTER_TOP_HAT ? "top hat" : "gaussian");
 
   return SIF_OK;
 }
 
-int sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
-  if (!ws || !ws->delta_k || !grid || !grid->delta) {
+int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
+  if (!ws || !ws->delta_k || !grid || !grid->values) {
     SIF_LOG_ERROR("fft_context", "invalid workspace or grid");
     return SIF_ERR_INVALID;
   }
 
-  if (__fft_ensure_forward_plan(ws, grid->delta) != SIF_OK)
+  if (fft_ensure_forward_plan(ws, grid->values) != SIF_OK)
     return SIF_ERR_ALLOC;
 
   real_fftw_execute_dft_r2c(
-    ws->forward_plan, (real_t*)grid->delta, ws->delta_k);
+    ws->forward_plan, (sif_real*)grid->values, ws->delta_k);
   SIF_LOG_TRACE("fft_context", "forward fft on cubic grid executed");
 
   return SIF_OK;
 }
 
-real_t* sif_fft_grid_backward(sif_fft_workspace_t* ws) {
+sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
   if (!ws || !ws->backward_plan || !ws->delta_k_cpy) {
     SIF_LOG_ERROR("fft_context", "the backward stage is not initialized");
     return NULL;
   }
 
   real_fftw_execute_dft_c2r(
-    ws->backward_plan, ws->delta_k_cpy, (real_t*)ws->delta_k_cpy);
+    ws->backward_plan, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy);
 
-  real_t* data = (real_t*)ws->delta_k_cpy;
+  sif_real* data = (sif_real*)ws->delta_k_cpy;
 
   const uint64_t n = ws->n_cells;
   const uint64_t n_padded = 2 * (n / 2 + 1);
   const uint64_t total_cells = n * n * n;
-  const real_t norm = 1.0f / (real_t)total_cells;
+  const sif_real norm = 1.0f / (sif_real)total_cells;
 
   /* An in-place r2c/c2r pair always pads the last dimension, so n_padded > n
    * unconditionally and the rows have to be compacted.
@@ -365,7 +372,7 @@ real_t* sif_fft_grid_backward(sif_fft_workspace_t* ws) {
    * the read cursor. So compact serially with memmove (bandwidth-bound, no
    * per-element loop) and do the arithmetic in a separate parallel pass. */
   for (uint64_t row = 1; row < n * n; row++) {
-    memmove(data + row * n, data + row * n_padded, n * sizeof(real_t));
+    memmove(data + row * n, data + row * n_padded, n * sizeof(sif_real));
   }
 
 #pragma omp parallel for schedule(static)
@@ -381,13 +388,13 @@ real_t* sif_fft_grid_backward(sif_fft_workspace_t* ws) {
 /* --- CIC window deconvolution --- */
 
 /* sinc(x) = sin(x)/x, continuous at 0. */
-static inline double __fft_sinc(double x) {
+static inline double fft_sinc(double x) {
   if (x < 1e-9 && x > -1e-9)
     return 1.0;
   return sin(x) / x;
 }
 
-int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws) {
+int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
   if (!ws || !ws->delta_k) {
     SIF_LOG_ERROR("fft_context", "no spectrum to deconvolve");
     return SIF_ERR_INVALID;
@@ -407,7 +414,7 @@ int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws) {
 
   for (uint32_t i = 0; i < N; i++) {
     int32_t k = (i > N_half) ? (int32_t)i - (int32_t)N : (int32_t)i;
-    double s = __fft_sinc(M_PI * (double)k / (double)N);
+    double s = fft_sinc(SIF_PI * (double)k / (double)N);
     axis[i] = s * s; /* CIC is the square of the NGP window */
   }
 
@@ -420,9 +427,9 @@ int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws) {
         const double w = wxy * axis[iz];
         const double inv = 1.0 / w;
 
-        uint64_t idx = __get_flat_complex_index(ix, iy, iz, N);
-        ws->delta_k[idx][0] = (real_t)(ws->delta_k[idx][0] * inv);
-        ws->delta_k[idx][1] = (real_t)(ws->delta_k[idx][1] * inv);
+        uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
+        ws->delta_k[idx][0] = (sif_real)(ws->delta_k[idx][0] * inv);
+        ws->delta_k[idx][1] = (sif_real)(ws->delta_k[idx][1] * inv);
       }
     }
   }
@@ -440,7 +447,7 @@ int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws) {
  * depend on how the loop is scheduled across threads; hashing the flat index
  * into the seed instead makes it a pure function of (seed, n_cells).
  */
-static inline void __fft_seed_mode(
+static inline void fft_seed_mode(
   sif_prng_state_t* prng, uint64_t seed, uint64_t idx) {
   uint64_t z = seed + idx * 0x9e3779b97f4a7c15ULL;
   z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
@@ -454,12 +461,12 @@ static inline void __fft_seed_mode(
  * amplitude into a correctly distributed Rayleigh one. next_real returns
  * [0, 1), so the draw is taken as 1 - u to keep the log finite.
  */
-static inline real_t __fft_amp_complex(
-  real_t a, sif_prng_state_t* prng, bool resample) {
+static inline sif_real fft_amp_complex(
+  sif_real a, sif_prng_state_t* prng, bool resample) {
   if (!resample)
     return a;
   double u = 1.0 - (double)sif_prng_next_real(prng);
-  return (real_t)(a * sqrt(-log(u)));
+  return (sif_real)(a * sqrt(-log(u)));
 }
 
 /*
@@ -468,16 +475,16 @@ static inline real_t __fft_amp_complex(
  * real and an imaginary part, so the Gaussian counterpart is a standard normal
  * scaling, not a Rayleigh one.
  */
-static inline real_t __fft_amp_real(
-  real_t a, sif_prng_state_t* prng, bool resample) {
+static inline sif_real fft_amp_real(
+  sif_real a, sif_prng_state_t* prng, bool resample) {
   if (!resample)
     return a;
   double u1 = 1.0 - (double)sif_prng_next_real(prng);
   double u2 = (double)sif_prng_next_real(prng);
-  return (real_t)(a * sqrt(-2.0 * log(u1)) * cos(2.0 * M_PI * u2));
+  return (sif_real)(a * sqrt(-2.0 * log(u1)) * cos(2.0 * SIF_PI * u2));
 }
 
-int sif_fft_randomize_phases(
+int sif__fft_randomize_phases(
   sif_fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes) {
 
   if (!ws || !ws->delta_k) {
@@ -487,7 +494,7 @@ int sif_fft_randomize_phases(
 
   const uint32_t N = ws->n_cells;
   const uint32_t z_dim = N / 2 + 1;
-  const double two_pi = 2.0 * M_PI;
+  const double two_pi = 2.0 * SIF_PI;
 
   /*
    * Pass 1: the interior planes, 0 < k_z < N/2. Their conjugate partners live
@@ -502,20 +509,20 @@ int sif_fft_randomize_phases(
         if ((2 * iz) % N == 0)
           continue;
 
-        uint64_t idx = __get_flat_complex_index(ix, iy, iz, N);
+        uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
 
-        real_t re = ws->delta_k[idx][0];
-        real_t im = ws->delta_k[idx][1];
-        real_t amp = (real_t)sqrt((double)re * re + (double)im * im);
+        sif_real re = ws->delta_k[idx][0];
+        sif_real im = ws->delta_k[idx][1];
+        sif_real amp = (sif_real)sqrt((double)re * re + (double)im * im);
 
         sif_prng_state_t prng;
-        __fft_seed_mode(&prng, seed, idx);
+        fft_seed_mode(&prng, seed, idx);
 
         double phase = two_pi * (double)sif_prng_next_real(&prng);
-        amp = __fft_amp_complex(amp, &prng, resample_amplitudes);
+        amp = fft_amp_complex(amp, &prng, resample_amplitudes);
 
-        ws->delta_k[idx][0] = (real_t)(amp * cos(phase));
-        ws->delta_k[idx][1] = (real_t)(amp * sin(phase));
+        ws->delta_k[idx][0] = (sif_real)(amp * cos(phase));
+        ws->delta_k[idx][1] = (sif_real)(amp * sin(phase));
       }
     }
   }
@@ -545,15 +552,15 @@ int sif_fft_randomize_phases(
         if (!(ix < jx || (ix == jx && iy <= jy)))
           continue;
 
-        uint64_t idx = __get_flat_complex_index(ix, iy, iz, N);
-        uint64_t jdx = __get_flat_complex_index(jx, jy, iz, N);
+        uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
+        uint64_t jdx = get_flat_complex_index(jx, jy, iz, N);
 
-        real_t re = ws->delta_k[idx][0];
-        real_t im = ws->delta_k[idx][1];
-        real_t amp = (real_t)sqrt((double)re * re + (double)im * im);
+        sif_real re = ws->delta_k[idx][0];
+        sif_real im = ws->delta_k[idx][1];
+        sif_real amp = (sif_real)sqrt((double)re * re + (double)im * im);
 
         sif_prng_state_t prng;
-        __fft_seed_mode(&prng, seed, idx);
+        fft_seed_mode(&prng, seed, idx);
 
         if (idx == jdx) {
           /* Self-conjugate: k == -k, so the mode has to stay real. The k = 0
@@ -561,7 +568,7 @@ int sif_fft_randomize_phases(
           if (idx == 0)
             continue;
 
-          real_t a = __fft_amp_real(amp, &prng, resample_amplitudes);
+          sif_real a = fft_amp_real(amp, &prng, resample_amplitudes);
           if (!resample_amplitudes && sif_prng_next_real(&prng) < 0.5f)
             a = -a; /* a fixed-amplitude real mode still gets a random sign */
 
@@ -571,10 +578,10 @@ int sif_fft_randomize_phases(
         }
 
         double phase = two_pi * (double)sif_prng_next_real(&prng);
-        amp = __fft_amp_complex(amp, &prng, resample_amplitudes);
+        amp = fft_amp_complex(amp, &prng, resample_amplitudes);
 
-        real_t new_re = (real_t)(amp * cos(phase));
-        real_t new_im = (real_t)(amp * sin(phase));
+        sif_real new_re = (sif_real)(amp * cos(phase));
+        sif_real new_im = (sif_real)(amp * sin(phase));
 
         ws->delta_k[idx][0] = new_re;
         ws->delta_k[idx][1] = new_im;
@@ -591,9 +598,9 @@ int sif_fft_randomize_phases(
 
 /* --- Fourier-space spectral moments --- */
 
-int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t filter,
-  real_t r, real_t box_length, uint8_t max_order, uint64_t n_tracers,
-  double* sigma_sq, double* high_k_fraction) {
+int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
+  sif_filter_type_t filter, sif_real r, sif_real box_length, uint8_t max_order,
+  uint64_t n_tracers, double* sigma_sq, double* high_k_fraction) {
 
   if (!ws || !ws->delta_k || !sigma_sq) {
     SIF_LOG_ERROR("fft_context", "no spectrum to evaluate");
@@ -611,9 +618,9 @@ int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t fi
   const uint32_t z_dim = N / 2 + 1;
   const int n_moments = (int)max_order + 1;
 
-  real_t* lut = NULL;
-  if (filter != FILTER_NONE) {
-    lut = __fft_build_filter_lut(filter, r, box_length, N);
+  sif_real* lut = NULL;
+  if (filter != SIF__FILTER_NONE) {
+    lut = fft_build_filter_lut(filter, r, box_length, N);
     if (!lut)
       return SIF_ERR_ALLOC;
   }
@@ -625,7 +632,7 @@ int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t fi
    * require a newer OpenMP than the rest of the library assumes.
    */
   const int n_threads =
-    sif_system_get_max_threads() > 0 ? sif_system_get_max_threads() : 1;
+    sif__system_max_threads() > 0 ? sif__system_max_threads() : 1;
   const size_t stride = 3 * (size_t)n_moments;
 
   double* scratch = calloc((size_t)n_threads * stride, sizeof(double));
@@ -640,7 +647,7 @@ int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t fi
 
 #pragma omp parallel num_threads(n_threads)
   {
-    double* local = scratch + (size_t)sif_system_get_thread_num() * stride;
+    double* local = scratch + (size_t)sif__system_thread_num() * stride;
     double* l_sum = local;
     double* l_win = local + n_moments;
     double* l_high = local + 2 * n_moments;
@@ -662,7 +669,7 @@ int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t fi
           if (k2i == 0)
             continue;
 
-          uint64_t idx = __get_flat_complex_index(ix, iy, iz, N);
+          uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
 
           double w = lut ? (double)lut[k2i] : 1.0;
           double re = (double)ws->delta_k[idx][0];
@@ -698,7 +705,7 @@ int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t fi
   /* k_physical = (2*pi/L) * sqrt(k2_integer), so the k^2j weight carries
    * (2*pi/L)^2j once the integer sum is done. */
   const double k_unit2 =
-    (2.0 * M_PI / (double)box_length) * (2.0 * M_PI / (double)box_length);
+    (2.0 * SIF_PI / (double)box_length) * (2.0 * SIF_PI / (double)box_length);
 
   double k_scale = 1.0;
 

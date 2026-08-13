@@ -1,4 +1,9 @@
 #!/usr/bin/env python
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
 """
 Emits stored reference cases for tests/test_ep_emu.c.
 
@@ -10,7 +15,7 @@ hazard integration, all eight features, the network, the survival recursion --
 against values the Python produced.
 
 The inputs are stored at the precision the C entry point actually receives
-(sigma and the barrier as real_t), and the expected outputs are computed from
+(sigma and the barrier as sif_real), and the expected outputs are computed from
 those same reduced-precision inputs, so a mismatch means an implementation
 difference rather than a rounding difference.
 
@@ -55,7 +60,7 @@ def main():
         radii = d[f"{t}__radii"].astype(np.float32)
         barrier = d[f"{t}__barrier"].astype(np.float32)
         dvar = d[f"{t}__dvar"].astype(np.float64)
-        # real_t is what the C entry point takes; derive S the way C does.
+        # sif_real is what the C entry point takes; derive S the way C does.
         sigma = np.sqrt(d[f"{t}__S"]).astype(np.float32)
         S = sigma.astype(np.float64) ** 2
 
@@ -68,8 +73,14 @@ def main():
     n = len(cases[0][0])
 
     with open(args.out, "w") as fh:
-        fh.write(f"""#ifndef __SIF_TESTS_EP_EMU_CASES_H__
-#define __SIF_TESTS_EP_EMU_CASES_H__
+        fh.write(f"""/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef SIF_TESTS_EP_EMU_CASES_H
+#define SIF_TESTS_EP_EMU_CASES_H
 
 /*
  * GENERATED FILE -- do not edit.
@@ -78,7 +89,7 @@ def main():
  * (sha256 {wh}) on {datetime.date.today().isoformat()}.
  *
  * Reference values from the Python model the network was fitted with. The C
- * emulator must reproduce the multiplicity to the precision real_t can hold;
+ * emulator must reproduce the multiplicity to the precision sif_real can hold;
  * anything worse means a feature is being computed differently, which no
  * physical invariant would detect.
  */
@@ -109,7 +120,7 @@ def main():
         fh.write("static const int EP_EMU_IN_DOMAIN[] = {"
                  + ", ".join(f"EP_EMU_IN_DOMAIN_{i}"
                              for i in range(len(cases))) + "};\n")
-        fh.write("\n#endif /* __SIF_TESTS_EP_EMU_CASES_H__ */\n")
+        fh.write("\n#endif /* SIF_TESTS_EP_EMU_CASES_H */\n")
 
     print(f"{len(cases)} cases of {n} radii -> {args.out}")
     print(f"  weights sha256 {wh}")

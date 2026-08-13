@@ -1,26 +1,26 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "sif/io/catalog_io.h"
 #include "sif/utils/logger.h"
-
-/* scanf needs a different conversion for float vs double. */
-#ifdef __SIF_USE_DOUBLE
-#  define __SIF_SCN_REAL "%lf"
-#else
-#  define __SIF_SCN_REAL "%f"
-#endif
 
 #include <stdio.h>
 #include <stdlib.h>
 
-int sif_catalog_write_ascii(const sif_catalog_t* catalog, const char* filepath) {
+int sif_catalog_write_ascii(
+  const sif_catalog_t* catalog, const char* filepath) {
   if (!catalog || !filepath) {
     SIF_LOG_ERROR("io", "invalid arguments for write_catalog_ascii");
-    return 1;
+    return SIF_ERR_INVALID;
   }
 
   FILE* file = fopen(filepath, "w");
   if (!file) {
     SIF_LOG_ERROR("io", "failed to open %s for writing", filepath);
-    return 1;
+    return SIF_ERR_IO;
   }
 
   /* Write the total number of voids as a header for easier loading */
@@ -28,15 +28,16 @@ int sif_catalog_write_ascii(const sif_catalog_t* catalog, const char* filepath) 
 
   /* Write the void data */
   for (uint64_t i = 0; i < catalog->n_voids; i++) {
-    fprintf(file, "%f %f %f %f\n", catalog->cx[i], catalog->cy[i],
-      catalog->cz[i], catalog->radii[i]);
+    fprintf(file,
+      SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL "\n",
+      catalog->cx[i], catalog->cy[i], catalog->cz[i], catalog->radii[i]);
   }
 
   fclose(file);
 
-  SIF_LOG_INFO("io", "saved %" PRIu64 " voids to %s (ASCII)", catalog->n_voids,
-    filepath);
-  return 0;
+  SIF_LOG_INFO(
+    "io", "saved %" PRIu64 " voids to %s (ASCII)", catalog->n_voids, filepath);
+  return SIF_OK;
 }
 
 sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
@@ -66,11 +67,12 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
   }
 
   for (uint64_t i = 0; i < n_voids; i++) {
-    real_t x, y, z, r;
+    sif_real x, y, z, r;
     if (fscanf(file,
-          __SIF_SCN_REAL " " __SIF_SCN_REAL " " __SIF_SCN_REAL " " __SIF_SCN_REAL,
-          &x, &y, &z, &r) != 4) {
-      SIF_LOG_ERROR("io", "failed reading void %" PRIu64 " from %s", i, filepath);
+          SIF_SCN_REAL " " SIF_SCN_REAL " " SIF_SCN_REAL " " SIF_SCN_REAL, &x,
+          &y, &z, &r) != 4) {
+      SIF_LOG_ERROR(
+        "io", "failed reading void %" PRIu64 " from %s", i, filepath);
       sif_catalog_free(catalog);
       fclose(file);
       return NULL;
@@ -86,7 +88,8 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
   catalog->n_voids = n_voids;
 
   fclose(file);
-  SIF_LOG_INFO("io", "loaded %" PRIu64 " voids from %s (ASCII)", n_voids, filepath);
+  SIF_LOG_INFO(
+    "io", "loaded %" PRIu64 " voids from %s (ASCII)", n_voids, filepath);
 
   return catalog;
 }

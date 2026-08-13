@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #define PYSIF_MAIN_MODULE
 #include "py_common.h"
 
@@ -5,7 +11,7 @@
 #include "sif/core/system.h"
 
 /* --- Submodule Initialization Hooks --- */
-extern PyObject* py_sif_init_structures(void);
+extern int py_sif_register_types(PyObject* module);
 extern PyObject* py_sif_init_io(void);
 extern PyObject* py_sif_init_measure(void);
 extern PyObject* py_sif_init_model(void);
@@ -31,8 +37,7 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
     return NULL;
   }
 
-  sif_fft_config_t fft_cfg = {
-    .skip_tuning = (bool)skip_tuning};
+  sif_fft_config_t fft_cfg = {.skip_tuning = (bool)skip_tuning};
 
   sif_omp_config_t omp_cfg = {.n_threads = (uint32_t)threads};
 
@@ -94,19 +99,61 @@ static PyObject* py_sif_setting_get(
 
 static PyMethodDef sif_module_methods[] = {
   {"init", (PyCFunction)py_sif_init, METH_VARARGS | METH_KEYWORDS,
-    "Initialize the SIF backend hardware configuration (OpenMP/FFTW)."},
+    "init(verbose=False, threads=0, skip_tuning=False, save_memory=False, "
+    "log_level=2)\n"
+    "--\n\n"
+    "Start the library. Call this before anything else.\n\n"
+    "Brings up the logger, the thread ceiling, the settings table and the\n"
+    "FFTW plan cache. Calling it twice warns and does nothing.\n\n"
+    "Args:\n"
+    "    verbose: Log everything and report timings. Overrides log_level.\n"
+    "    threads: Thread ceiling; 0 leaves OpenMP's own default.\n"
+    "    skip_tuning: Take FFTW's estimated plan instead of tuning. Faster\n"
+    "        to start, slower to transform; worth setting for short runs.\n"
+    "    save_memory: Trade speed for a smaller footprint where possible.\n"
+    "    log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none."},
   {"finalize", (PyCFunction)py_sif_finalize, METH_NOARGS,
-    "Finalize the SIF library and safely free global memory architectures."},
+    "finalize()\n"
+    "--\n\n"
+    "Shut the library down, releasing everything init() acquired.\n\n"
+    "Saves the settings table if it changed and tears down the FFTW plan\n"
+    "cache. Nothing else may be called afterwards without init()."},
   {"set_setting", (PyCFunction)py_sif_setting_set, METH_VARARGS | METH_KEYWORDS,
-    "Dynamically override an internal C library runtime setting."},
+    "set_setting(key, value)\n"
+    "--\n\n"
+    "Set a persistent runtime setting.\n\n"
+    "Settings live in a file under $HOME/.sif and survive between runs.\n"
+    "Values may reference environment variables ($HOME, ${USER}), which are\n"
+    "expanded when set rather than when read.\n\n"
+    "Args:\n"
+    "    key: Setting name.\n"
+    "    value: Value to store."},
   {"get_setting", (PyCFunction)py_sif_setting_get, METH_VARARGS | METH_KEYWORDS,
-    "Retrieve the current state of an internal C library runtime setting."},
+    "get_setting(key, fallback=None)\n"
+    "--\n\n"
+    "Read a persistent runtime setting.\n\n"
+    "If the key is absent and a fallback is given, the fallback is stored\n"
+    "under that key and returned, so the next call finds it.\n\n"
+    "Args:\n"
+    "    key: Setting name.\n"
+    "    fallback: Value to install and return if the key is absent.\n\n"
+    "Returns:\n"
+    "    str: The setting's value, or None if absent with no fallback."},
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef sif_module = {
   PyModuleDef_HEAD_INIT,
   .m_name = "pysif",
-  .m_doc = "SIF: Extreme Void Library Python Bindings",
+  .m_doc = "sif: cosmic void finding and analysis.\n\n"
+           "Call init() before anything else and finalize() when done.\n\n"
+           "The data structures live here in the package root -- Field, Grid,\n"
+           "Catalog and the rest -- and the operations on them are grouped\n"
+           "into submodules: io for reading and writing, finders for void\n"
+           "identification, measure for measurements taken from data, and\n"
+           "model for theoretical predictions.\n\n"
+           "pysif.real is the NumPy scalar type matching the precision the\n"
+           "library was built with, so np.zeros(n, dtype=pysif.real) gives\n"
+           "arrays the bindings take without a conversion copy.",
   .m_size = -1,
   .m_methods = sif_module_methods,
 };
@@ -121,10 +168,11 @@ PyMODINIT_FUNC PyInit_pysif(void) {
     return NULL;
   }
 
-  /* The NumPy scalar type matching real_t, so callers can write
+  /* The NumPy scalar type matching sif_real, so callers can write
    * np.zeros(n, dtype=pysif.real) and get arrays the bindings take without a
    * conversion copy. It is the type object (np.float32 / np.float64) rather
-   * than a dtype instance, which also makes pysif.real(value) work as a cast. */
+   * than a dtype instance, which also makes pysif.real(value) work as a cast.
+   */
   PyObject* real_type = PyArray_TypeObjectFromType(NPY_REAL_T);
   if (!real_type) {
     Py_DECREF(m);
@@ -138,13 +186,14 @@ PyMODINIT_FUNC PyInit_pysif(void) {
 
   PyObject* sys_modules = PyImport_GetModuleDict();
 
-  /* 2. Initialize and Attach Submodules */
-  PyObject* mod_structures = py_sif_init_structures();
-  if (mod_structures) {
-    PyDict_SetItemString(sys_modules, "pysif.structures", mod_structures);
-    PyModule_AddObject(m, "structures", mod_structures);
-  } else {
-    return NULL; /* Fail hard if core structures fail to load */
+  /* 2. The data structures live in the package root rather than a submodule.
+   * They are the nouns the whole library is written in terms of, and every
+   * submodule below takes or returns them, so pysif.Field is where a user
+   * expects to find it. The submodules that follow are namespaces of
+   * operations, which is a different thing and stays separate. */
+  if (py_sif_register_types(m) < 0) {
+    Py_DECREF(m);
+    return NULL;
   }
 
   PyObject* mod_io = py_sif_init_io();

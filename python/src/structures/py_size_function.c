@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_size_function.h"
 #include "structures/py_catalog.h"
 #include <numpy/arrayobject.h>
@@ -149,17 +155,24 @@ static PyGetSetDef sifSizeFunction_getset[] = {
   {NULL}};
 
 PyTypeObject sifSizeFunctionType = {
-  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "pysif.structures.SizeFunction",
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "pysif.SizeFunction",
   .tp_basicsize = sizeof(sifSizeFunctionObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifSizeFunction_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "SIF size function data container.",
+  .tp_doc = "SizeFunction()\n"
+            "--\n\n"
+            "A void size function: number density of voids per radius bin.\n\n"
+            "Returned by pysif.measure.size_function_catalog() and by the\n"
+            "models in pysif.model. One container serves both, so a\n"
+            "measurement and a prediction can be compared directly -- but\n"
+            "counts and err are meaningful only for a measurement, and are\n"
+            "zero for a model.\n\n"
+            "Not constructed directly.",
   .tp_getset = sifSizeFunction_getset,
   .tp_init = sifSizeFunction_init,
   .tp_new = PyType_GenericNew,
 };
-
 
 PyObject* py_sif_wrap_size_function(sif_size_function_t* vsf) {
   sifSizeFunctionObject* obj =

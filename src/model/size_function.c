@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 /*
  * Excursion-set void size functions: Sheth & van de Weygaert (2004) and the
  * volume-conserving Vdn variant, in the notation of Jennings, Li & Hu, MNRAS
@@ -9,20 +15,20 @@
  * which radius goes into the volume denominator.
  */
 
-#include "sif/model/sizefunction.h"
+#include "sif/model/size_function.h"
 
-#include "sif/model/deltamoments.h"
-#include "sif/model/excursionset.h"
-#include "structures/results_internal.h"
+#include "sif/model/delta_moments.h"
+#include "sif/model/excursion_set.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "structures/results_internal.h"
 
 #include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 
-#define __TAG "vsf_model"
+#define TAG "vsf_model"
 
 /* --- Spherical evolution --- */
 
@@ -34,17 +40,17 @@
 
 /* Below this the closed forms lose more than half their digits to
  * cancellation, while the series are exact to double precision. */
-#define __EDS_SERIES_SWITCH 1e-2
+#define EDS_SERIES_SWITCH 1e-2
 
-#define __EDS_ETA_MIN 1e-8
-#define __EDS_ETA_MAX 30.0
+#define EDS_ETA_MIN 1e-8
+#define EDS_ETA_MAX 30.0
 
-#define __BRENT_TOL      1e-12
-#define __BRENT_MAX_ITER 100
+#define BRENT_TOL      1e-12
+#define BRENT_MAX_ITER 100
 
 /* sinh(eta) - eta, whose leading terms cancel exactly. */
-static double __sinh_minus(double eta) {
-  if (eta < __EDS_SERIES_SWITCH) {
+static double sinh_minus(double eta) {
+  if (eta < EDS_SERIES_SWITCH) {
     const double e2 = eta * eta;
     return eta * e2 / 6.0 * (1.0 + e2 / 20.0 + e2 * e2 / 840.0);
   }
@@ -52,13 +58,13 @@ static double __sinh_minus(double eta) {
 }
 
 /* delta_L(eta), decreasing from 0. */
-static double __eds_linear(double eta) {
-  return -0.15 * pow(6.0 * __sinh_minus(eta), 2.0 / 3.0);
+static double eds_linear(double eta) {
+  return -0.15 * pow(6.0 * sinh_minus(eta), 2.0 / 3.0);
 }
 
 /* delta_NL(eta), decreasing from 0 to -1. */
-static double __eds_nonlinear(double eta) {
-  if (eta < __EDS_SERIES_SWITCH) {
+static double eds_nonlinear(double eta) {
+  if (eta < EDS_SERIES_SWITCH) {
     /* (9/2) (eta^3/6)^2 / (eta^2/2)^3 is exactly 1, so the ratio is taken
      * between the bracketed corrections rather than the raw differences,
      * which would cancel away nine digits before dividing. */
@@ -74,7 +80,7 @@ static double __eds_nonlinear(double eta) {
 
 /* Brent's method on g(eta) == target. Both g above are smooth and strictly
  * monotone. */
-static int __brent(
+static int brent(
   double (*g)(double), double target, double lo, double hi, double* root) {
 
   double a = lo, b = hi;
@@ -85,15 +91,19 @@ static int __brent(
     return SIF_ERR_RANGE;
 
   if (fabs(fa) < fabs(fb)) {
-    double t = a; a = b; b = t;
-    t = fa; fa = fb; fb = t;
+    double t = a;
+    a = b;
+    b = t;
+    t = fa;
+    fa = fb;
+    fb = t;
   }
 
   double c = a, fc = fa, d = 0.0;
   bool bisected = true;
 
-  for (int it = 0; it < __BRENT_MAX_ITER; it++) {
-    if (fb == 0.0 || fabs(b - a) < __BRENT_TOL * (fabs(b) + 1.0))
+  for (int it = 0; it < BRENT_MAX_ITER; it++) {
+    if (fb == 0.0 || fabs(b - a) < BRENT_TOL * (fabs(b) + 1.0))
       break;
 
     double s;
@@ -106,12 +116,11 @@ static int __brent(
     }
 
     const double bound = 0.25 * (3.0 * a + b);
-    bool take_bisection =
-      !(s > fmin(bound, b) && s < fmax(bound, b)) ||
-      (bisected && fabs(s - b) >= 0.5 * fabs(b - c)) ||
-      (!bisected && fabs(s - b) >= 0.5 * fabs(c - d)) ||
-      (bisected && fabs(b - c) < __BRENT_TOL) ||
-      (!bisected && fabs(c - d) < __BRENT_TOL);
+    bool take_bisection = !(s > fmin(bound, b) && s < fmax(bound, b)) ||
+                          (bisected && fabs(s - b) >= 0.5 * fabs(b - c)) ||
+                          (!bisected && fabs(s - b) >= 0.5 * fabs(c - d)) ||
+                          (bisected && fabs(b - c) < BRENT_TOL) ||
+                          (!bisected && fabs(c - d) < BRENT_TOL);
 
     if (take_bisection)
       s = 0.5 * (a + b);
@@ -131,8 +140,12 @@ static int __brent(
     }
 
     if (fabs(fa) < fabs(fb)) {
-      double t = a; a = b; b = t;
-      t = fa; fa = fb; fb = t;
+      double t = a;
+      a = b;
+      b = t;
+      t = fa;
+      fa = fb;
+      fb = t;
     }
   }
 
@@ -140,61 +153,60 @@ static int __brent(
   return SIF_OK;
 }
 
-real_t sif_delta_nonlinear(real_t delta_linear, sif_option_t opt) {
+sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt) {
   const double d = (double)delta_linear;
 
   if (!(d < 0.0)) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "delta_linear is %g, must be strictly negative; only the expanding "
       "branch of the spherical solution is implemented",
       d);
-    return (real_t)0.0;
+    return (sif_real)0.0;
   }
 
-  if ((opt & __SIF_SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
+  if ((opt & SIF__SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
     const double c = SIF_SPHERICAL_EXPANSION_C;
-    return (real_t)(pow(1.0 - d / c, -c) - 1.0);
+    return (sif_real)(pow(1.0 - d / c, -c) - 1.0);
   }
 
   double eta;
-  if (__brent(__eds_linear, d, __EDS_ETA_MIN, __EDS_ETA_MAX, &eta) != SIF_OK) {
-    SIF_LOG_ERROR(__TAG,
+  if (brent(eds_linear, d, EDS_ETA_MIN, EDS_ETA_MAX, &eta) != SIF_OK) {
+    SIF_LOG_ERROR(TAG,
       "delta_linear = %g lies outside the range the parametric solution is "
       "bracketed over",
       d);
-    return (real_t)0.0;
+    return (sif_real)0.0;
   }
 
-  return (real_t)__eds_nonlinear(eta);
+  return (sif_real)eds_nonlinear(eta);
 }
 
-real_t sif_delta_linear(real_t delta_nonlinear, sif_option_t opt) {
+sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt) {
   const double d = (double)delta_nonlinear;
 
   if (!(d < 0.0) || !(d > -1.0)) {
-    SIF_LOG_ERROR(__TAG,
+    SIF_LOG_ERROR(TAG,
       "delta_nonlinear is %g, must lie strictly between -1 and 0; -1 is total "
       "evacuation and is reached only asymptotically",
       d);
-    return (real_t)0.0;
+    return (sif_real)0.0;
   }
 
-  if ((opt & __SIF_SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
+  if ((opt & SIF__SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
     const double c = SIF_SPHERICAL_EXPANSION_C;
-    return (real_t)(c * (1.0 - pow(1.0 + d, -1.0 / c)));
+    return (sif_real)(c * (1.0 - pow(1.0 + d, -1.0 / c)));
   }
 
   double eta;
-  if (__brent(__eds_nonlinear, d, __EDS_ETA_MIN, __EDS_ETA_MAX, &eta) !=
-      SIF_OK) {
-    SIF_LOG_ERROR(__TAG,
+  if (brent(eds_nonlinear, d, EDS_ETA_MIN, EDS_ETA_MAX, &eta) != SIF_OK) {
+    SIF_LOG_ERROR(TAG,
       "delta_nonlinear = %g lies outside the range the parametric solution is "
       "bracketed over",
       d);
-    return (real_t)0.0;
+    return (sif_real)0.0;
   }
 
-  return (real_t)__eds_linear(eta);
+  return (sif_real)eds_linear(eta);
 }
 
 /* --- The two size functions --- */
@@ -209,46 +221,46 @@ real_t sif_delta_linear(real_t delta_nonlinear, sif_option_t opt) {
  * by V(r) instead of V(r_L). With a constant F the Jacobian dln r_L/dln r is
  * one, so the two differ by exactly F^3.
  */
-static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
-  uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t delta_v,
-  real_t delta_c, sif_option_t opt, bool conserve_volume) {
+static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
+  uint32_t n_points, const sif_real* radii, uint32_t n_radii, sif_real delta_v,
+  sif_real delta_c, sif_option opt, bool conserve_volume) {
 
   if (!radii || n_radii == 0) {
-    SIF_LOG_ERROR(__TAG, "no radii to evaluate");
+    SIF_LOG_ERROR(TAG, "no radii to evaluate");
     return NULL;
   }
 
   for (uint32_t i = 0; i < n_radii; i++) {
     if (!(radii[i] > 0.0f)) {
-      SIF_LOG_ERROR(__TAG, "radius %u is %g, must be strictly positive", i,
-        (double)radii[i]);
+      SIF_LOG_ERROR(
+        TAG, "radius %u is %g, must be strictly positive", i, (double)radii[i]);
       return NULL;
     }
   }
 
   /* The expansion factor, (1 + delta_NL)^(-1/3): the same mass occupies
    * 1/(1 + delta_NL) times the volume. */
-  const real_t delta_nl = sif_delta_nonlinear(delta_v, opt);
+  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, opt);
   if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
     return NULL;
   const double factor = pow(1.0 + (double)delta_nl, -1.0 / 3.0);
 
   /* The barriers are calibrated against top-hat smoothing, so the window is
    * not the caller's to choose here. */
-  const sif_option_t moment_opt = SIF_DELTA_FILTER_TOP_HAT;
+  const sif_option moment_opt = SIF_DELTA_FILTER_TOP_HAT;
 
-  real_t* lagrangian = malloc((size_t)n_radii * sizeof(real_t));
+  sif_real* lagrangian = malloc((size_t)n_radii * sizeof(sif_real));
   if (!lagrangian) {
-    SIF_LOG_ERROR(__TAG, "failed to allocate the Lagrangian radii");
+    SIF_LOG_ERROR(TAG, "failed to allocate the Lagrangian radii");
     return NULL;
   }
   for (uint32_t i = 0; i < n_radii; i++)
-    lagrangian[i] = (real_t)((double)radii[i] / factor);
+    lagrangian[i] = (sif_real)((double)radii[i] / factor);
 
-  sif_delta_moments_t* moments = sif_delta_moments_pk(
-    k, pk, n_points, lagrangian, n_radii, 0, moment_opt);
-  real_t* slope =
-    sif_sigma_slope_pk(k, pk, n_points, lagrangian, n_radii, moment_opt);
+  sif_delta_moments_t* moments =
+    sif_delta_moments_pk(k, pk, n_points, lagrangian, n_radii, 0, moment_opt);
+  sif_real* slope =
+    sif_delta_sigma_slope_pk(k, pk, n_points, lagrangian, n_radii, moment_opt);
 
   if (!moments || !slope) {
     free(lagrangian);
@@ -257,10 +269,11 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
     return NULL;
   }
 
-  const real_t* sigma = sif_delta_moments_sigma(moments, 0);
-  real_t* f = sif_multiplicity_function_svdw(sigma, n_radii, delta_v, delta_c);
+  const sif_real* sigma = sif_delta_moments_sigma(moments, 0);
+  sif_real* f =
+    sif_svdw_multiplicity_function(sigma, n_radii, delta_v, delta_c);
 
-  sif_size_function_t* out = sif_size_function_alloc(n_radii);
+  sif_size_function_t* out = sif__size_function_alloc(n_radii);
 
   if (!f || !out) {
     free(lagrangian);
@@ -274,11 +287,11 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
   out->options = opt;
   out->r_min = radii[0];
   out->r_max = radii[n_radii - 1];
-  memcpy(out->r_centers, radii, (size_t)n_radii * sizeof(real_t));
-  sif_edges_from_centers(radii, n_radii, out->r_edges);
+  memcpy(out->r_centers, radii, (size_t)n_radii * sizeof(sif_real));
+  sif__edges_from_centers(radii, n_radii, out->r_edges);
 
-  const bool per_radius = (opt & __SIF_VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR;
-  const double four_thirds_pi = 4.0 / 3.0 * M_PI;
+  const bool per_radius = (opt & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR;
+  const double four_thirds_pi = 4.0 / 3.0 * SIF_PI;
 
   for (uint32_t i = 0; i < n_radii; i++) {
     const double r_e = (double)radii[i];
@@ -296,7 +309,7 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
     if (per_radius)
       value /= r_e;
 
-    out->vsf[i] = (real_t)(value > 0.0 ? value : 0.0);
+    out->vsf[i] = (sif_real)(value > 0.0 ? value : 0.0);
   }
 
   free(lagrangian);
@@ -307,18 +320,18 @@ static sif_size_function_t* __size_function(const real_t* k, const real_t* pk,
   return out;
 }
 
-sif_size_function_t* sif_size_function_svdw(const real_t* k, const real_t* pk,
-  uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t delta_v,
-  real_t delta_c, sif_option_t opt) {
+sif_size_function_t* sif_size_function_svdw(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt) {
 
-  return __size_function(
+  return size_function(
     k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, false);
 }
 
-sif_size_function_t* sif_size_function_vdn(const real_t* k, const real_t* pk,
-  uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t delta_v,
-  real_t delta_c, sif_option_t opt) {
+sif_size_function_t* sif_size_function_vdn(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt) {
 
-  return __size_function(
+  return size_function(
     k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, true);
 }

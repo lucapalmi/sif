@@ -1,5 +1,25 @@
-#ifndef __SIF_FFT_H__
-#define __SIF_FFT_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file fft.h
+ * @brief FFTW wrapper: forward and backward transforms of a grid, and the
+ * spectral operations done between them. Private to the library.
+ *
+ * Two objects, with different lifetimes. The manager owns the process-global
+ * FFTW state -- the plan cache and its wisdom file -- and lives from
+ * sif_init() to sif_finalize(). A workspace owns the buffers and plans for one
+ * grid size and is created and destroyed around a piece of work.
+ *
+ * The transforms are real-to-complex, so the Fourier-space array holds only
+ * half the modes; the rest follow by Hermitian symmetry and are never stored.
+ */
+
+#ifndef SIF__MATH_FFT_H
+#define SIF__MATH_FFT_H
 
 #include <fftw3.h>
 #include <stdbool.h>
@@ -9,9 +29,9 @@
 #include "sif/structures/grid.h"
 
 /* --- FFTW Precision Wrapper --- */
-#ifdef __SIF_USE_DOUBLE
-typedef fftw_complex sif_real_complex_t;
-typedef fftw_plan sif_real_fftw_plan_t;
+#ifdef SIF_USE_DOUBLE
+typedef fftw_complex sif_real_complex;
+typedef fftw_plan sif_real_fftw_plan;
 
 #  define real_fftw_init_threads                fftw_init_threads
 #  define real_fftw_plan_with_nthreads          fftw_plan_with_nthreads
@@ -28,8 +48,8 @@ typedef fftw_plan sif_real_fftw_plan_t;
 #  define real_fftw_execute_dft_r2c             fftw_execute_dft_r2c
 #  define real_fftw_execute_dft_c2r             fftw_execute_dft_c2r
 #else
-typedef fftwf_complex sif_real_complex_t;
-typedef fftwf_plan sif_real_fftw_plan_t;
+typedef fftwf_complex sif_real_complex;
+typedef fftwf_plan sif_real_fftw_plan;
 
 #  define real_fftw_init_threads       fftwf_init_threads
 #  define real_fftw_plan_with_nthreads fftwf_plan_with_nthreads
@@ -48,31 +68,37 @@ typedef fftwf_plan sif_real_fftw_plan_t;
 #  define real_fftw_execute_dft_c2r           fftwf_execute_dft_c2r
 #endif
 
-/* * @brief Global manager for FFTW state, flags, and wisdom.
+/**
+ * @brief Global manager for FFTW state, flags, and wisdom.
  */
 typedef struct {
   unsigned int flags;
   char* wisdom_dir;
 } sif_fft_manager_t;
 
-/* * @brief Ephemeral workspace for specific grid operations.
+/**
+ * @brief Ephemeral workspace for specific grid operations.
  *
  * @note delta_k_cpy doubles as the real-space output buffer: the backward
  * transform is executed in place on it. It is owned by the workspace until
- * sif_fft_workspace_take_real_buffer() hands it over.
+ * sif__fft_workspace_take_real_buffer() hands it over.
  */
 typedef struct {
   sif_fft_manager_t* mgr;
   uint32_t n_cells;
-  sif_real_complex_t* delta_k;
-  sif_real_complex_t* delta_k_cpy;
-  sif_real_fftw_plan_t forward_plan;
-  sif_real_fftw_plan_t backward_plan;
+  sif_real_complex* delta_k;
+  sif_real_complex* delta_k_cpy;
+  sif_real_fftw_plan forward_plan;
+  sif_real_fftw_plan backward_plan;
 } sif_fft_workspace_t;
 
-typedef enum { FILTER_NONE, FILTER_TOP_HAT, FILTER_GAUSSIAN } sif_filter_type_t;
+typedef enum {
+  SIF__FILTER_NONE,
+  SIF__FILTER_TOP_HAT,
+  SIF__FILTER_GAUSSIAN
+} sif_filter_type_t;
 
-/*
+/**
  * @brief Creates the fft manager
  *
  * @param skip_tuning Use FFTW_ESTIMATE instead of FFTW_MEASURE
@@ -81,21 +107,21 @@ typedef enum { FILTER_NONE, FILTER_TOP_HAT, FILTER_GAUSSIAN } sif_filter_type_t;
  *
  * @return The initialized fft manager
  */
-NODISCARD sif_fft_manager_t* sif_fft_manager_init(
+SIF_NODISCARD sif_fft_manager_t* sif__fft_manager_init(
   bool skip_tuning, const char* wisdom_dir);
 
-/*
+/**
  * @brief Closes an fft manager
  *
  *@param mgr The fft manager to finalize
  */
-void sif_fft_manager_finalize(sif_fft_manager_t* mgr);
+void sif__fft_manager_finalize(sif_fft_manager_t* mgr);
 
-/*
+/**
  * @brief Allocates a fft workspace
  *
  * Allocates the spectrum buffer only. The forward plan is created lazily by
- * the first sif_fft_grid_forward, against the caller's own density field, so
+ * the first sif__fft_grid_forward, against the caller's own density field, so
  * that planning never needs a scratch buffer the size of the spectrum.
  *
  * @param mgr The global fft manager
@@ -103,18 +129,19 @@ void sif_fft_manager_finalize(sif_fft_manager_t* mgr);
  *
  * @return The initialized fft workspace
  */
-NODISCARD sif_fft_workspace_t* sif_fft_workspace_alloc(
+SIF_NODISCARD sif_fft_workspace_t* sif__fft_workspace_alloc(
   sif_fft_manager_t* mgr, uint32_t n_cells);
 
-/*
+/**
  * @brief Allocates the real-space buffer and plans the backward transform
  *
  * @return SIF_OK on success, SIF_ERR_ALLOC on failure. Must succeed before
- * sif_fft_apply_filter or sif_fft_grid_backward are called.
+ * sif__fft_apply_filter or sif__fft_grid_backward are called.
  */
-int sif_fft_workspace_init_backward(sif_fft_workspace_t* ws, sif_fft_manager_t* mgr);
+int sif__fft_workspace_init_backward(
+  sif_fft_workspace_t* ws, sif_fft_manager_t* mgr);
 
-/*
+/**
  * @brief Detaches the real-space buffer and transfers ownership to the caller
  *
  * The workspace can no longer run a backward transform afterwards. Use this
@@ -123,21 +150,22 @@ int sif_fft_workspace_init_backward(sif_fft_workspace_t* ws, sif_fft_manager_t* 
  *
  * @return The buffer, or NULL if the workspace never allocated one
  */
-NODISCARD real_t* sif_fft_workspace_take_real_buffer(sif_fft_workspace_t* ws);
+SIF_NODISCARD sif_real* sif__fft_workspace_take_real_buffer(
+  sif_fft_workspace_t* ws);
 
-/*
+/**
  * @brief Frees an fft workspace, including the real-space buffer if it has not
  * been taken
  *
  *@param ws The workspace to free
  */
-void sif_fft_workspace_free(sif_fft_workspace_t* ws);
+void sif__fft_workspace_free(sif_fft_workspace_t* ws);
 
-/*
+/**
  * @brief Apply a filter to the fourier-space density field
  *
  * Reads delta_k and writes the filtered result into the real-space buffer,
- * which sif_fft_grid_backward then transforms in place.
+ * which sif__fft_grid_backward then transforms in place.
  *
  * @param ws The fft workspace
  * @param filter The filter to apply
@@ -147,13 +175,13 @@ void sif_fft_workspace_free(sif_fft_workspace_t* ws);
  * @return SIF_OK on success, SIF_ERR_INVALID if the backward stage was never
  * initialized or the filter is unsupported, SIF_ERR_ALLOC on failure
  */
-int sif_fft_apply_filter(
-  sif_fft_workspace_t* ws, sif_filter_type_t filter, real_t r, real_t box_length);
+int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
+  sif_real r, sif_real box_length);
 
-/*
+/**
  * @brief Execute the real-to-complex fft
  *
- * Creates the forward plan on the first call, planning against grid->delta
+ * Creates the forward plan on the first call, planning against grid->values
  * itself. The plan is then reused, so every later call must pass a buffer with
  * the same alignment (everything sif allocates is cache-line aligned).
  *
@@ -163,16 +191,16 @@ int sif_fft_apply_filter(
  * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
  * if the plan could not be created
  */
-int sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
+int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
 
-/*
+/**
  * @brief Divide out the Cloud-In-Cell assignment window from delta_k
  *
  * CIC deposition convolves the field with a triangular kernel, whose transform
  * is prod_i sinc^2(pi k_i / N). Any subsequent filtering sees a field that has
  * already been smoothed by it, so it has to be removed first. Operates in
  * place on delta_k and is independent of any filter radius, so it belongs
- * between sif_fft_grid_forward and the first sif_fft_apply_filter.
+ * between sif__fft_grid_forward and the first sif__fft_apply_filter.
  *
  * @note The correction diverges towards the Nyquist corner, where it reaches a
  * factor of ~15. That is harmless as long as the filter applied afterwards
@@ -182,9 +210,9 @@ int sif_fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
  *
  * @return SIF_OK, or SIF_ERR_INVALID if the workspace has no spectrum
  */
-int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws);
+int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws);
 
-/*
+/**
  * @brief Replace the phases of delta_k with random ones, in place
  *
  * Produces a surrogate field with the same power spectrum and no higher-order
@@ -207,15 +235,15 @@ int sif_fft_deconvolve_cic(sif_fft_workspace_t* ws);
  *
  * @return SIF_OK, or SIF_ERR_INVALID if the workspace has no spectrum
  */
-int sif_fft_randomize_phases(
+int sif__fft_randomize_phases(
   sif_fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes);
 
-/* Highest order sif_fft_spectral_moments will accept. Past this the k^(2j)
- * weighting is so steep that the sum is entirely a statement about the
+/** @brief Highest order sif__fft_spectral_moments will accept. Past this the
+ * k^(2j) weighting is so steep that the sum is entirely a statement about the
  * smallest scale on the grid, whatever that happens to be. */
 #define FFT_MAX_MOMENT_ORDER 4
 
-/*
+/**
  * @brief Spectral moments of the filtered field, evaluated in Fourier space
  *
  * Computes sigma_j^2(R) = sum_{k != 0} k^(2j) |delta_k|^2 W^2(kR) for every
@@ -234,8 +262,8 @@ int sif_fft_randomize_phases(
  * @note The k^(2j) weighting puts all the numerical risk at high k. With a
  * top-hat window W^2 falls only as k^-4, so the j = 2 sum is dominated by the
  * modes just below Nyquist and its value is set by the grid resolution rather
- * than by the field. Use FILTER_GAUSSIAN when sigma_2 has to mean something,
- * and read high_k_fraction before trusting any moment.
+ * than by the field. Use SIF__FILTER_GAUSSIAN when sigma_2 has to mean
+ * something, and read high_k_fraction before trusting any moment.
  *
  * @param ws The fft workspace, after a forward transform
  * @param filter The filter to evaluate the moments under
@@ -255,11 +283,11 @@ int sif_fft_randomize_phases(
  *
  * @return SIF_OK, or SIF_ERR_INVALID / SIF_ERR_ALLOC
  */
-int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t filter,
-  real_t r, real_t box_length, uint8_t max_order, uint64_t n_tracers,
-  double* sigma_sq, double* high_k_fraction);
+int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
+  sif_filter_type_t filter, sif_real r, sif_real box_length, uint8_t max_order,
+  uint64_t n_tracers, double* sigma_sq, double* high_k_fraction);
 
-/*
+/**
  * @brief Execute the complex-to-real fft, normalized and compacted
  *
  * The transform runs in place on the workspace's real-space buffer, which is
@@ -269,8 +297,9 @@ int sif_fft_spectral_moments(const sif_fft_workspace_t* ws, sif_filter_type_t fi
  * @param ws The fft workspace
  *
  * @return The buffer, still owned by the workspace (see
- * sif_fft_workspace_take_real_buffer), or NULL if the backward stage is missing
+ * sif__fft_workspace_take_real_buffer), or NULL if the backward stage is
+ * missing
  */
-real_t* sif_fft_grid_backward(sif_fft_workspace_t* ws);
+sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws);
 
-#endif /* __SIF_FFT_H__ */
+#endif /* SIF__MATH_FFT_H */

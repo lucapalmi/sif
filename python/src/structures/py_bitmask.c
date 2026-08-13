@@ -1,3 +1,9 @@
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
 #include "py_bitmask.h"
 #include <numpy/arrayobject.h>
 
@@ -56,11 +62,11 @@ static PyObject* sifBitmask_get_words(PyObject* self_obj, void* closure) {
   return array;
 }
 
-
 static PyGetSetDef sifBitmask_getset[] = {
   {"n_bits", sifBitmask_get_n_bits, NULL,
     "The total number of bits in the bitmask", NULL},
-  {"words", sifBitmask_get_words, NULL, "1D NumPy array of underlying 64-bit words", NULL},
+  {"words", sifBitmask_get_words, NULL,
+    "1D NumPy array of underlying 64-bit words", NULL},
   {NULL}};
 
 /* --- Methods --- */
@@ -120,23 +126,34 @@ static PyObject* sifBitmask_get(PyObject* self_obj, PyObject* args) {
 }
 
 static PyMethodDef sifBitmask_methods[] = {
-  {"clear_all", (PyCFunction)sifBitmask_clear_all, METH_NOARGS, "Clear all bits."},
-  {"count_set", (PyCFunction)sifBitmask_count_set, METH_NOARGS, "Count the number of set bits."},
-  {"set", (PyCFunction)sifBitmask_set, METH_VARARGS, "Set a bit at given index."},
-  {"unset", (PyCFunction)sifBitmask_unset, METH_VARARGS, "Unset a bit at given index."},
-  {"get", (PyCFunction)sifBitmask_get, METH_VARARGS, "Get value of bit at given index."},
+  {"clear_all", (PyCFunction)sifBitmask_clear_all, METH_NOARGS,
+    "Clear all bits."},
+  {"count_set", (PyCFunction)sifBitmask_count_set, METH_NOARGS,
+    "Count the number of set bits."},
+  {"set", (PyCFunction)sifBitmask_set, METH_VARARGS,
+    "Set a bit at given index."},
+  {"unset", (PyCFunction)sifBitmask_unset, METH_VARARGS,
+    "Unset a bit at given index."},
+  {"get", (PyCFunction)sifBitmask_get, METH_VARARGS,
+    "Get value of bit at given index."},
   {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */
 
 PyTypeObject sifBitmaskType = {
-  PyVarObject_HEAD_INIT(NULL, 0)
-  .tp_name = "pysif.structures.Bitmask", /* Updated */
+  PyVarObject_HEAD_INIT(NULL, 0).tp_name = "pysif.Bitmask", /* Updated */
   .tp_basicsize = sizeof(sifBitmaskObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifBitmask_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "SIF bitmask object.",
+  .tp_doc =
+    "Bitmask(n_bits)\n"
+    "--\n\n"
+    "A dense array of bits, packed 64 to a word.\n\n"
+    "Used where one boolean per grid cell would otherwise cost a byte:\n"
+    "at 1024**3 cells that is 128 MiB rather than 1 GiB.\n\n"
+    "Args:\n"
+    "    n_bits: Number of bits. Must be non-zero.",
   .tp_methods = sifBitmask_methods,
   .tp_getset = sifBitmask_getset,
   .tp_init = sifBitmask_init,

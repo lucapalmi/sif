@@ -1,28 +1,48 @@
-#ifndef __SIF_MODEL_DELTAMOMENTS_H__
-#define __SIF_MODEL_DELTAMOMENTS_H__
+/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+/**
+ * @file delta_moments.h
+ * @brief Spectral moments and the covariance of the smoothed field, evaluated
+ * from a tabulated power spectrum.
+ *
+ * The modelled counterpart to the measured moments in `measure/`: same
+ * container, same window conventions, so a measurement and a prediction can be
+ * compared without converting between them.
+ *
+ * Everything here quadratures the supplied table directly rather than
+ * interpolating it, so accuracy follows from how finely P(k) was sampled. See
+ * the note on sif_delta_covariance_pk() for what "finely" means.
+ */
+
+#ifndef SIF_MODEL_DELTA_MOMENTS_H
+#define SIF_MODEL_DELTA_MOMENTS_H
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/deltamoments.h"
+#include "sif/structures/delta_moments.h"
 
 /* Largest number of radii a covariance is built over. */
 #define SIF_COV_MAX_RADII 4096
 
-/*
+/**
  * @brief Index of S(i, j) in a packed lower triangle, for j <= i.
  *
  * Row-major over the lower triangle, in the ascending order of the radii.
  */
 #define SIF_COV_INDEX(i, j) ((size_t)(i) * ((size_t)(i) + 1) / 2 + (size_t)(j))
 
-/*
+/**
  * @brief Number of entries in a packed lower triangle of n rows.
  */
 #define SIF_COV_SIZE(n) ((size_t)(n) * ((size_t)(n) + 1) / 2)
 
-/*
+/**
  * @brief Evaluates the spectral moments from a tabulated power spectrum.
  *
  * @param k Wavenumbers, strictly positive and strictly increasing
@@ -36,11 +56,11 @@
  *
  * @return Newly allocated moment set, or NULL on invalid input or failure.
  */
-NODISCARD sif_delta_moments_t* sif_delta_moments_pk(const real_t* k,
-  const real_t* pk, uint32_t n_points, const real_t* radii, uint32_t n_radii,
-  uint8_t order, sif_option_t opt);
+SIF_NODISCARD sif_delta_moments_t* sif_delta_moments_pk(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, uint8_t order, sif_option opt);
 
-/*
+/**
  * @brief Logarithmic slope dln(sigma)/dln(R) of the r.m.s. density contrast.
  *
  * Evaluated by differentiating the window under the integral, so it is exact
@@ -57,10 +77,11 @@ NODISCARD sif_delta_moments_t* sif_delta_moments_pk(const real_t* k,
  * @return Newly allocated array of n_radii slopes, negative where sigma falls
  * with R, released with sif_free_aligned, or NULL on invalid input.
  */
-NODISCARD real_t* sif_sigma_slope_pk(const real_t* k, const real_t* pk,
-  uint32_t n_points, const real_t* radii, uint32_t n_radii, sif_option_t opt);
+SIF_NODISCARD sif_real* sif_delta_sigma_slope_pk(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_option opt);
 
-/*
+/**
  * @brief Covariance of the smoothed density field between every pair of
  * smoothing radii.
  *
@@ -103,12 +124,12 @@ NODISCARD real_t* sif_sigma_slope_pk(const real_t* k, const real_t* pk,
  * on its diagonal. Pass NULL to skip.
  *
  * @note Evaluated by differentiating the window under the integral, as
- * sif_sigma_slope_pk does, rather than by differencing the matrix. That is not
- * a refinement: a finite difference of the diagonal converges only at second
- * order in the radius spacing, so the value it returns depends on how finely
- * the caller sampled `radii` -- by around 3% at 100 radii and 8% at 50. Any
- * consumer that treats this as a property of the field rather than of the grid
- * needs the form computed here.
+ * sif_delta_sigma_slope_pk does, rather than by differencing the matrix. That
+ * is not a refinement: a finite difference of the diagonal converges only at
+ * second order in the radius spacing, so the value it returns depends on how
+ * finely the caller sampled `radii` -- by around 3% at 100 radii and 8% at 50.
+ * Any consumer that treats this as a property of the field rather than of the
+ * grid needs the form computed here.
  *
  * @note Carries units of 1 / sigma^2. The dimensionless combination is
  * 1 / (4 S <(d delta / dS)^2>), the squared correlation between the walk and
@@ -119,12 +140,13 @@ NODISCARD real_t* sif_sigma_slope_pk(const real_t* k, const real_t* pk,
  *
  * @return Newly allocated packed lower triangle of SIF_COV_SIZE(n_radii)
  * doubles, S(i, j) at SIF_COV_INDEX(i, j) for j <= i. Double rather than
- * real_t, since a single-precision factorization of a realistic radius grid
+ * sif_real, since a single-precision factorization of a realistic radius grid
  * reaches a non-positive pivot and fails. Released with sif_free_aligned, or
  * NULL on invalid input.
  */
-NODISCARD double* sif_delta_covariance_pk(const real_t* k, const real_t* pk,
-  uint32_t n_points, const real_t* radii, uint32_t n_radii, real_t* sigma,
-  real_t* high_k_fraction, double* deriv_variance, sif_option_t opt);
+SIF_NODISCARD double* sif_delta_covariance_pk(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_real* sigma, sif_real* high_k_fraction,
+  double* deriv_variance, sif_option opt);
 
-#endif /* __SIF_MODEL_DELTAMOMENTS_H__ */
+#endif /* SIF_MODEL_DELTA_MOMENTS_H */
