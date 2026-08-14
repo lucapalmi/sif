@@ -72,6 +72,28 @@ typedef uint32_t sif_option;
 /** @} */
 
 /**
+ * @defgroup opt_mesh Chain mesh options
+ * @brief Bit 16, deliberately outside the 8-14 range the per-entry-point
+ * families reuse: a mesh is built from inside several of those calls, and a
+ * flag that collided with one of them would be read as the other's.
+ * @{
+ */
+/**
+ * Release sif_chain_mesh_t::original_indices once the mesh is in canonical
+ * order, instead of keeping it.
+ *
+ * The map back to field order costs 8 bytes per particle -- 25 GiB at 3.4e9
+ * tracers -- and the finders never read it. It is still built and still sorted
+ * on, so the mesh is byte-for-byte the one a default build produces; only the
+ * key is dropped afterwards. The cost is that
+ * sif_chain_mesh_find_nearest_open() and sif_chain_mesh_find_nearest_pbc()
+ * can no longer name their answer and refuse.
+ */
+#define SIF_MESH_DROP_INDICES (1u << 16)
+#define SIF__MESH_MASK        (1u << 16)
+/** @} */
+
+/**
  * @defgroup opt_profiles Profile algorithm
  * @brief Which estimator computes the radial profiles.
  * @{

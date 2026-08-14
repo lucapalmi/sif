@@ -25,18 +25,22 @@ static int sifChainMesh_init(
   /* "d" writes a full double, so this must not be a sif_real. */
   double box_length_in;
   PyObject* field_obj = NULL;
+  int drop_indices = 0;
 
-  static char* kwlist[] = {"n_cells", "box_length", "field", NULL};
+  static char* kwlist[] = {
+    "n_cells", "box_length", "field", "drop_indices", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!", kwlist, &n_cells,
-        &box_length_in, &sifFieldType, &field_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!|p", kwlist, &n_cells,
+        &box_length_in, &sifFieldType, &field_obj, &drop_indices)) {
     return -1;
   }
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
 
+  const sif_option opt = drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT;
+
   sif_chain_mesh_t* tmp =
-    sif_chain_mesh_alloc(n_cells, (sif_real)box_length_in, field->field);
+    sif_chain_mesh_alloc(n_cells, (sif_real)box_length_in, field->field, opt);
 
   if (!tmp) {
     PyErr_SetString(PyExc_ValueError,
@@ -119,6 +123,8 @@ static PyObject* sifChainMesh_get_weights(PyObject* self_obj, void* closure) {
 static PyObject* sifChainMesh_get_original_idx(
   PyObject* self_obj, void* closure) {
   sifChainMeshObject* self = (sifChainMeshObject*)self_obj;
+  if (!self->mesh->original_indices)
+    Py_RETURN_NONE;
 
   npy_intp dims[1] = {self->mesh->n_particles};
   PyObject* array = PyArray_SimpleNewFromData(
@@ -163,7 +169,9 @@ static PyGetSetDef sifChainMesh_getset[] = {
   {"vz", sifChainMesh_get_vz, NULL, "Z velocities", NULL},
   {"weights", sifChainMesh_get_weights, NULL, "Per-particle weights", NULL},
   {"original_indices", sifChainMesh_get_original_idx, NULL,
-    "Map from mesh order back to field order. Always present.", NULL},
+    "Map from mesh order back to field order, or None when the mesh was "
+    "built with drop_indices=True.",
+    NULL},
   {"cell_offsets", sifChainMesh_get_cell_offsets, NULL, "Cell offsets", NULL},
   {NULL}};
 
@@ -181,23 +189,27 @@ PyTypeObject sifChainMeshType = {
   .tp_dealloc = sifChainMesh_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
   .tp_doc =
-    "ChainMesh(n_cells, box_length, field, allocate_weights=False, "
-    "allocate_velocities=False)\n"
+    "ChainMesh(n_cells, box_length, field, drop_indices=False)\n"
     "--\n\n"
     "A uniform spatial bin over a periodic box, for neighbour queries.\n\n"
     "Particles are copied into cell order, so the members of a cell sit\n"
-    "contiguously in memory. Only the payloads you ask for are copied,\n"
-    "and each costs another pass over the field and as much memory\n"
-    "again. original_indices is the exception and is always built: a mesh\n"
-    "that cannot say which particle an answer refers to cannot answer a\n"
-    "neighbour query at all.\n\n"
+    "contiguously in memory. Velocities and weights are mirrored from the\n"
+    "field when it carries them, each costing another pass over the field\n"
+    "and as much memory again.\n\n"
+    "original_indices is always built, and not as a convenience: the\n"
+    "scatter claims slots atomically, so the order inside a cell is a race\n"
+    "until each cell's run is sorted by source index. Without that key two\n"
+    "identical runs give different meshes. drop_indices releases it once\n"
+    "the sort is done -- the same mesh, 8 bytes per particle lighter (25\n"
+    "GiB at 3.4e9 tracers) -- at the cost of nearest-neighbour queries,\n"
+    "which have no way left to name their answer.\n\n"
     "Every coordinate must lie in [0, box_length).\n\n"
     "Args:\n"
     "    n_cells: Cells per side.\n"
     "    box_length: Physical side length of the box.\n"
     "    field: Particle field to bin.\n"
-    "    allocate_weights: Copy the per-particle weights.\n"
-    "    allocate_velocities: Copy the velocities.",
+    "    drop_indices: Release the field index map after construction.\n"
+    "        original_indices then reads back as None.",
   .tp_methods = sifChainMesh_methods,
   .tp_getset = sifChainMesh_getset,
   .tp_init = sifChainMesh_init,

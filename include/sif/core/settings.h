@@ -25,6 +25,25 @@
 #include "sif/core/macros.h"
 
 /**
+ * @brief Default for the `fft_tuning_max_gib` setting.
+ *
+ * FFTW_MEASURE picks its plan by *running* the transform, repeatedly, so the
+ * cost of tuning grows with the transform while the benefit does not: one
+ * better plan, however large the grid. Past some size the planning outlasts
+ * the run it was meant to speed up -- measured on a 2250^3 grid it does not
+ * finish in any useful time at all -- so above this many GiB of spectrum the
+ * library plans both transforms with FFTW_ESTIMATE and says so.
+ *
+ * 16 GiB sits just above a 1500^3 single-precision spectrum (12.6 GiB), which
+ * tunes in reasonable time, and below 2048^3 (32 GiB), which does not. Raise it
+ * if a grid between those is worth the wait; 0 turns tuning off outright.
+ *
+ * This is a ceiling, not a request: `skip_tuning` still decides whether tuning
+ * is wanted at all, and the cap only ever takes it away.
+ */
+#define SIF__FFT_TUNING_MAX_GIB_DEFAULT "16"
+
+/**
  * @brief Set a runtime setting, creating it if absent and overwriting if not.
  *
  * The value takes effect immediately and the table is flagged for saving at

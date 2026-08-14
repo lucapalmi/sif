@@ -174,7 +174,10 @@ SIF_NODISCARD sif_tessellation_t* sif_tessellation_approx(
     return NULL;
   }
 
-  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(mesh_cells, box_len, field);
+  /* The index map has to stay: both dispatch branches below answer with
+   * sif_chain_mesh_find_nearest_*(), whose result is a field index. */
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(mesh_cells, box_len, field, SIF_DEFAULT);
   if (!mesh) {
     SIF_LOG_ERROR("tessellation", "Failed to allocate chain mesh.");
     sif_free_aligned(tess->volumes);

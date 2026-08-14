@@ -57,9 +57,15 @@ typedef struct {
 
   /** Weights in the same order, or NULL if the field carries none. */
   sif_real* weights;
-  /** Index of each particle in the source field. Always present: the mesh
-   *  reorders particles, so this is the only way to relate a query result
-   *  back to the field it came from. */
+  /**
+   * Index of each particle in the source field: the only way to relate a
+   * query result back to the field it came from, since the mesh reorders
+   * particles.
+   *
+   * Always built, because the construction sorts on it (see
+   * sif_chain_mesh_alloc()), but NULL afterwards when the mesh was built with
+   * #SIF_MESH_DROP_INDICES.
+   */
   uint64_t* original_indices;
 
   uint64_t n_particles;
@@ -76,20 +82,28 @@ typedef struct {
  *
  * The mesh mirrors the field: velocities and weights are copied if the field
  * carries them and not otherwise, since there is nothing else a caller could
- * ask for. The map back to field indices is always built -- a mesh that cannot
- * say which particle an answer refers to cannot answer the queries this
- * structure exists for -- which costs 8 bytes per particle on top of the 12 or
- * 24 the positions take, or 25 GiB at 3.4e9 tracers.
+ * ask for.
+ *
+ * The map back to field indices is always *built*, and not because a caller
+ * might want it: the scatter claims slots with an atomic, so which particle
+ * lands where inside a cell is a race, and sorting each cell's run by source
+ * index is what replaces that with an order determined by the input alone.
+ * Without it two identical runs produce different meshes. It costs 8 bytes per
+ * particle on top of the 12 or 24 the positions take, or 25 GiB at 3.4e9
+ * tracers, so #SIF_MESH_DROP_INDICES releases it again once the sort is done --
+ * same mesh, 8 bytes per particle lighter, at the price of the two
+ * sif_chain_mesh_find_nearest_*() entry points.
  *
  * @param n_cells Cells per side.
  * @param box_length Physical side length of the box.
  * @param field Particle field to bin. Every coordinate must be in
  * [0, box_length); the call fails if any particle lies outside.
+ * @param opt Honours #SIF_MESH_DROP_INDICES. #SIF_DEFAULT keeps everything.
  * @return The mesh, owned by the caller and released with
  * sif_chain_mesh_free(). NULL on invalid input or allocation failure.
  */
-SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(
-  uint32_t n_cells, sif_real box_length, const sif_field_t* field);
+SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
+  sif_real box_length, const sif_field_t* field, sif_option opt);
 
 /**
  * @brief Release a chain mesh and everything it owns.
@@ -104,9 +118,11 @@ void sif_chain_mesh_free(sif_chain_mesh_t* mesh);
  * candidate found is closer than the nearest possible point of the next shell,
  * so the answer is exact rather than restricted to the starting cell.
  *
- * @param mesh The mesh.
+ * @param mesh The mesh. Must carry sif_chain_mesh_t::original_indices, so not
+ * one built with #SIF_MESH_DROP_INDICES.
  * @param px,py,pz Query point, in [0, box_length) on every axis.
- * @return Index into the original field, or UINT64_MAX if the mesh is empty.
+ * @return Index into the original field, or UINT64_MAX if the mesh is empty or
+ * cannot name its particles.
  */
 uint64_t sif_chain_mesh_find_nearest_open(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);
@@ -117,9 +133,11 @@ uint64_t sif_chain_mesh_find_nearest_open(
  * As sif_chain_mesh_find_nearest_open(), except that separations are taken
  * through the nearest periodic image and the shell walk wraps at the faces.
  *
- * @param mesh The mesh.
+ * @param mesh The mesh. Must carry sif_chain_mesh_t::original_indices, so not
+ * one built with #SIF_MESH_DROP_INDICES.
  * @param px,py,pz Query point, in [0, box_length) on every axis.
- * @return Index into the original field, or UINT64_MAX if the mesh is empty.
+ * @return Index into the original field, or UINT64_MAX if the mesh is empty or
+ * cannot name its particles.
  */
 uint64_t sif_chain_mesh_find_nearest_pbc(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);

@@ -47,6 +47,19 @@ typedef fftw_plan sif_real_fftw_plan;
 #  define real_fftw_free                        fftw_free
 #  define real_fftw_execute_dft_r2c             fftw_execute_dft_r2c
 #  define real_fftw_execute_dft_c2r             fftw_execute_dft_c2r
+#  define real_fftw_alignment_of                fftw_alignment_of
+#  define real_fftw_forget_wisdom               fftw_forget_wisdom
+
+/**
+ * @brief Basename of the wisdom file.
+ *
+ * Tagged with the precision because FFTW keeps two entirely separate wisdom
+ * namespaces: `fftw_import_wisdom_from_filename` rejects a file written by
+ * `fftwf_export_wisdom_to_filename` outright. Sharing one name between a float
+ * build and a double build would have each reject the other's file and then
+ * overwrite it, so the two would take turns destroying accumulated wisdom.
+ */
+#  define SIF__FFT_WISDOM_FILE "sif-f64.wisdom"
 #else
 typedef fftwf_complex sif_real_complex;
 typedef fftwf_plan sif_real_fftw_plan;
@@ -66,6 +79,11 @@ typedef fftwf_plan sif_real_fftw_plan;
 #  define real_fftw_free                      fftwf_free
 #  define real_fftw_execute_dft_r2c           fftwf_execute_dft_r2c
 #  define real_fftw_execute_dft_c2r           fftwf_execute_dft_c2r
+#  define real_fftw_alignment_of              fftwf_alignment_of
+#  define real_fftw_forget_wisdom             fftwf_forget_wisdom
+
+/** @brief Basename of the wisdom file; see the double-precision branch. */
+#  define SIF__FFT_WISDOM_FILE                "sif-f32.wisdom"
 #endif
 
 /**
@@ -90,6 +108,19 @@ typedef struct {
   sif_real_complex* delta_k_cpy;
   sif_real_fftw_plan forward_plan;
   sif_real_fftw_plan backward_plan;
+
+  /**
+   * Planner quality, resolved once from the manager and used for **both**
+   * transforms.
+   *
+   * One field rather than a decision at each plan site, because the two used
+   * to disagree: the backward plan measured while the forward silently settled
+   * for FFTW_ESTIMATE, so `skip_tuning` described only half of what the
+   * workspace did. Whatever this says, both transforms are planned to it or
+   * neither is -- including when it is downgraded mid-flight, which is why it
+   * is mutable. See fft_ensure_forward_plan().
+   */
+  unsigned int plan_flags;
 } sif_fft_workspace_t;
 
 typedef enum {
@@ -120,9 +151,14 @@ void sif__fft_manager_finalize(sif_fft_manager_t* mgr);
 /**
  * @brief Allocates a fft workspace
  *
- * Allocates the spectrum buffer only. The forward plan is created lazily by
- * the first sif__fft_grid_forward, against the caller's own density field, so
- * that planning never needs a scratch buffer the size of the spectrum.
+ * Allocates the spectrum buffer only; the forward plan is created lazily by
+ * the first sif__fft_grid_forward().
+ *
+ * Also fixes the planner quality for both transforms, from @p mgr and the
+ * `fft_tuning_max_gib` ceiling, which is what makes `skip_tuning` mean the
+ * same thing in both directions. A tuned workspace with no wisdom for this
+ * size pays for that with a transient scratch buffer during forward planning;
+ * see sif_fft_workspace_t::plan_flags and #SIF__FFT_TUNING_MAX_GIB_DEFAULT.
  *
  * @param mgr The global fft manager
  * @param n_cells the number of cells for the fft
@@ -181,12 +217,14 @@ int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
 /**
  * @brief Execute the real-to-complex fft
  *
- * Creates the forward plan on the first call, planning against grid->values
- * itself. The plan is then reused, so every later call must pass a buffer with
- * the same alignment (everything sif allocates is cache-line aligned).
+ * Creates the forward plan on the first call. The plan is then reused, so
+ * every later call must pass a buffer with the same alignment (everything sif
+ * allocates is cache-line aligned).
  *
  * @param ws The fft workspace
- * @param grid The real-space cubic grid to transform. Not modified.
+ * @param grid The real-space cubic grid to transform. Not modified: an r2c
+ * transform preserves its input by default, and a tuned plan measures against
+ * a scratch buffer rather than against this one.
  *
  * @return SIF_OK on success, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC
  * if the plan could not be created

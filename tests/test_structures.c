@@ -223,7 +223,7 @@ static void test_chain_mesh(void) {
   sif_field_t* field = sif_field_alloc(n_p);
   sif_field_assign_positions(field, x, y, z);
 
-  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(8, box, field);
+  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT);
   CHECK(mesh != NULL, "alloc returned NULL for a valid field");
 
   if (mesh) {
@@ -260,7 +260,7 @@ static void test_chain_mesh(void) {
   /* The map back to the field is not optional: it is the only thing that makes
    * a query answer usable, so every mesh carries it and it must be a genuine
    * permutation of the field's indices. */
-  sif_chain_mesh_t* idx_mesh = sif_chain_mesh_alloc(8, box, field);
+  sif_chain_mesh_t* idx_mesh = sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT);
   CHECK(idx_mesh != NULL, "mesh allocation failed");
   if (idx_mesh) {
     CHECK(idx_mesh->original_indices != NULL,
@@ -288,20 +288,67 @@ static void test_chain_mesh(void) {
     sif_chain_mesh_free(idx_mesh);
   }
 
+  /*
+   * SIF_MESH_DROP_INDICES releases the map *after* it has been sorted on, so
+   * the claim worth testing is not that the array is gone -- it is that the
+   * mesh underneath is the same one. If the flag ever turned into "skip
+   * building it", the canonicalization would lose its key and these two
+   * orderings would drift apart.
+   */
+  sif_chain_mesh_t* kept = sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT);
+  sif_chain_mesh_t* dropped =
+    sif_chain_mesh_alloc(8, box, field, SIF_MESH_DROP_INDICES);
+
+  CHECK(kept != NULL && dropped != NULL, "mesh allocation failed");
+
+  if (kept && dropped) {
+    CHECK(dropped->original_indices == NULL,
+      "SIF_MESH_DROP_INDICES should have released the index map");
+    CHECK(kept->original_indices != NULL,
+      "SIF_DEFAULT should have kept the index map");
+
+    int differs = 0;
+    for (uint64_t i = 0; i < kept->n_particles; i++) {
+      if (kept->x[i] != dropped->x[i] || kept->y[i] != dropped->y[i] ||
+          kept->z[i] != dropped->z[i])
+        differs++;
+    }
+    CHECK(differs == 0,
+      "dropping the index map changed the particle order in %d slots", differs);
+
+    for (uint64_t c = 0; c <= kept->total_cells; c++) {
+      if (kept->cell_offsets[c] != dropped->cell_offsets[c])
+        differs++;
+    }
+    CHECK(differs == 0, "dropping the index map changed the cell offsets");
+
+    /* And the queries that need the map refuse instead of answering with a
+     * mesh offset. The ERROR line this prints is the point, not a failure. */
+    CHECK(
+      sif_chain_mesh_find_nearest_pbc(dropped, 1.0f, 1.0f, 1.0f) == UINT64_MAX,
+      "find_nearest_pbc should refuse a mesh with no index map");
+    CHECK(
+      sif_chain_mesh_find_nearest_open(dropped, 1.0f, 1.0f, 1.0f) == UINT64_MAX,
+      "find_nearest_open should refuse a mesh with no index map");
+  }
+
+  sif_chain_mesh_free(kept);
+  sif_chain_mesh_free(dropped);
+
   /* Out-of-range coordinates are rejected, not silently folded. The field owns
    * its positions, so the corruption has to go into its copy: writing to the
    * caller's x[] would not reach the mesh. */
   field->x[10] = box + 1.0f;
-  CHECK(sif_chain_mesh_alloc(8, box, field) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT) == NULL,
     "a particle outside the box should be rejected");
   field->x[10] = -1.0f;
-  CHECK(sif_chain_mesh_alloc(8, box, field) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT) == NULL,
     "a negative coordinate should be rejected");
   field->x[10] = 0.0f / 0.0f; /* NaN */
-  CHECK(sif_chain_mesh_alloc(8, box, field) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT) == NULL,
     "a NaN coordinate should be rejected");
 
-  CHECK(sif_chain_mesh_alloc(8, box, NULL) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, NULL, SIF_DEFAULT) == NULL,
     "NULL field should be rejected");
   sif_chain_mesh_free(NULL); /* must not crash */
 

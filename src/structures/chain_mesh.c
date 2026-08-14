@@ -59,8 +59,8 @@ static int chain_mesh_validate_field(
   return SIF_OK;
 }
 
-sif_chain_mesh_t* sif_chain_mesh_alloc(
-  uint32_t n_cells, sif_real box_length, const sif_field_t* field) {
+sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
+  const sif_field_t* field, sif_option opt) {
 
   if (!field) {
     SIF_LOG_ERROR("chain_mesh", "cannot build a mesh from a NULL field");
@@ -126,10 +126,12 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(
   mesh->weights =
     field->weights ? sif_malloc_aligned(n_particles * sizeof(sif_real)) : NULL;
 
-  /* Never optional. The mesh reorders particles, so an index into it means
-   * nothing to a caller holding the field -- the map back is the only way a
-   * query result can be used, and answering queries is what the structure is
-   * for. It also gives the canonicalization below something to sort on. */
+  /* Never optional at construction. The mesh reorders particles, so an index
+   * into it means nothing to a caller holding the field -- the map back is the
+   * only way a query result can be used, and answering queries is what the
+   * structure is for. More than that, it is what the canonicalization sorts
+   * on, so a mesh cannot even be built deterministically without it.
+   * SIF_MESH_DROP_INDICES releases it after that sort, not instead of it. */
   mesh->original_indices = sif_malloc_aligned(n_particles * sizeof(uint64_t));
 
   /* NUMA-friendly malloc (unmapped virtual memory) */
@@ -146,6 +148,20 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(
   if (chain_mesh_create(mesh, field) != SIF_OK) {
     sif_chain_mesh_free(mesh);
     return NULL;
+  }
+
+  /* chain_mesh_create() has canonicalized by now, so the sort key has done its
+   * job and the mesh is in its final order either way. Dropping it here rather
+   * than never allocating it is the whole point: the order this mesh is in is
+   * the one the key produced. */
+  if (opt & SIF_MESH_DROP_INDICES) {
+    sif_free_aligned(mesh->original_indices);
+    mesh->original_indices = NULL;
+
+    SIF_LOG_TRACE("chain_mesh",
+      "released the field index map (%.2f GiB); nearest-neighbour queries are "
+      "unavailable on this mesh",
+      (double)(n_particles * sizeof(uint64_t)) / (1024.0 * 1024.0 * 1024.0));
   }
 
   return mesh;
@@ -533,6 +549,16 @@ uint64_t sif_chain_mesh_find_nearest_open(
   if (!mesh || mesh->n_particles == 0)
     return UINT64_MAX;
 
+  /* The answer is a field index, which is exactly what a mesh built with
+   * SIF_MESH_DROP_INDICES threw away. Refuse rather than hand back a mesh
+   * offset that means nothing to the caller. */
+  if (!mesh->original_indices) {
+    SIF_LOG_ERROR("chain_mesh",
+      "this mesh was built with SIF_MESH_DROP_INDICES and cannot name its "
+      "particles; rebuild it without that flag to query neighbours");
+    return UINT64_MAX;
+  }
+
   const int32_t n = (int32_t)mesh->n_cells;
 
   int32_t cx = (int32_t)(px / mesh->cell_length);
@@ -581,6 +607,13 @@ uint64_t sif_chain_mesh_find_nearest_pbc(
 
   if (!mesh || mesh->n_particles == 0)
     return UINT64_MAX;
+
+  if (!mesh->original_indices) {
+    SIF_LOG_ERROR("chain_mesh",
+      "this mesh was built with SIF_MESH_DROP_INDICES and cannot name its "
+      "particles; rebuild it without that flag to query neighbours");
+    return UINT64_MAX;
+  }
 
   const int32_t n = (int32_t)mesh->n_cells;
 

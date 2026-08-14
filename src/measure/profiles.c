@@ -265,7 +265,10 @@ int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
 
   SIF_LOG_TRACE("profiles", "building a %u^3 chain mesh", n_cells);
 
-  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(n_cells, box_length, field);
+  /* This estimator walks cells and reads the mesh's own payload arrays; it
+   * never has to name a particle in field order, so the index map goes. */
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(n_cells, box_length, field, SIF_MESH_DROP_INDICES);
 
   if (!mesh) {
     SIF_LOG_ERROR("profiles",
@@ -591,7 +594,8 @@ int sif_profiles_voronoi(const sif_catalog_t* cat, const sif_field_t* field,
    * velocities from the field, indexed by what find_nearest returns, which is
    * an index into the field rather than into the mesh's own ordering. */
   const uint32_t n_cells = mesh_resolution(cat, box_length, ext);
-  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(n_cells, box_length, field);
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(n_cells, box_length, field, SIF_DEFAULT);
 
   if (!mesh) {
     SIF_LOG_ERROR("profiles",

@@ -207,8 +207,11 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     sif_grid_to_density_contrast(g);
 
     /* The finder borrows the mesh, so the field it was built from is dead
-     * weight from here on and is released before the run. */
-    sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f);
+     * weight from here on and is released before the run. The index map is
+     * dead weight too -- no finder reads it -- so this doubles as coverage
+     * that the rescaling really does not need it. */
+    sif_chain_mesh_t* mesh =
+      sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
     CHECK(mesh != NULL, "chain mesh construction failed");
     sif_field_free(f);
 

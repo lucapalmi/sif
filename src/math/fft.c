@@ -14,6 +14,7 @@
 #include <unistd.h>
 
 #include "core/system_internal.h"
+#include "sif/core/settings.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
@@ -23,6 +24,10 @@
 static inline uint64_t fft_complex_count(uint32_t n) {
   return (uint64_t)n * n * (uint64_t)(n / 2 + 1);
 }
+
+/* Room for a wisdom path. Overlong directories are truncated by snprintf and
+ * then simply fail to open, which is the right outcome: no wisdom, no crash. */
+#define PATH_CAP 512
 
 sif_fft_manager_t* sif__fft_manager_init(
   bool skip_tuning, const char* wisdom_dir) {
@@ -57,6 +62,137 @@ void sif__fft_manager_finalize(sif_fft_manager_t* mgr) {
   free(mgr);
 }
 
+/* FFTW_MEASURE is 0, so "is this workspace tuning?" can only be asked the
+ * other way round. */
+static inline bool fft_is_tuned(const sif_fft_workspace_t* ws) {
+  return (ws->plan_flags & FFTW_ESTIMATE) == 0;
+}
+
+/*
+ * Whether this workspace is allowed to tune, and the one place that decides.
+ *
+ * Tuning is asked for by the manager and granted here, subject to a size cap
+ * (see SIF__FFT_TUNING_MAX_GIB_DEFAULT). It has to be one decision for the
+ * whole workspace rather than one per plan: a cap that took tuning away from
+ * only the transform that happened to notice it would put back exactly the
+ * forward/backward split this file went to some trouble to remove.
+ */
+static unsigned int fft_resolve_plan_flags(
+  const sif_fft_manager_t* mgr, uint32_t n_cells, uint64_t spectrum_bytes) {
+
+  /* Not tuning in the first place; the cap has nothing to take away. */
+  if (mgr->flags & FFTW_ESTIMATE)
+    return mgr->flags;
+
+  const char* raw =
+    sif_setting_get("fft_tuning_max_gib", SIF__FFT_TUNING_MAX_GIB_DEFAULT);
+
+  char* end = NULL;
+  double cap_gib = raw ? strtod(raw, &end) : -1.0;
+
+  /* A malformed cap must not read as "no limit": that is the failure mode the
+   * cap exists to prevent. Fall back to the documented default instead. */
+  if (!raw || end == raw || !(cap_gib >= 0.0)) {
+    cap_gib = strtod(SIF__FFT_TUNING_MAX_GIB_DEFAULT, NULL);
+    SIF_LOG_WARNING("fft_context",
+      "fft_tuning_max_gib is not a non-negative number ('%s'); using %g",
+      raw ? raw : "(unset)", cap_gib);
+  }
+
+  const double gib = (double)spectrum_bytes / (1024.0 * 1024.0 * 1024.0);
+  if (gib <= cap_gib)
+    return mgr->flags;
+
+  SIF_LOG_INFO("fft_context",
+    "a %u^3 spectrum is %.1f GiB, over the %g GiB fft_tuning_max_gib ceiling; "
+    "planning both transforms with FFTW_ESTIMATE. Tuning at this size costs "
+    "far more in planning than it returns over a run",
+    n_cells, gib, cap_gib);
+
+  return FFTW_ESTIMATE;
+}
+
+/*
+ * The wisdom file, and why there is only one of it.
+ *
+ * FFTW's export writes the whole process-global wisdom, not the transform just
+ * planned, so the per-grid-size files this used to keep were never per-size in
+ * content: each was a full snapshot under a name that described only whichever
+ * size happened to finish last. Two sizes in one process wrote two files with
+ * the same contents, and a later single-size run overwrote both with less.
+ *
+ * One cumulative file is what the contents already were. It is re-imported
+ * immediately before every write so that a concurrent job -- a job array
+ * pointed at one $HOME is the normal case here -- contributes rather than
+ * collides: the file that lands is the union of what was on disk and what this
+ * process learned, and the rename makes the swap atomic.
+ */
+static void fft_wisdom_path(
+  const char* wisdom_dir, char* out, size_t out_size) {
+  snprintf(out, out_size, "%s/%s", wisdom_dir, SIF__FFT_WISDOM_FILE);
+}
+
+static void fft_load_wisdom(const sif_fft_manager_t* mgr) {
+  if (!mgr || !mgr->wisdom_dir)
+    return;
+
+  char path[PATH_CAP];
+  fft_wisdom_path(mgr->wisdom_dir, path, sizeof(path));
+
+  if (real_fftw_import_wisdom_from_filename(path) != 0)
+    SIF_LOG_INFO("fft_manager", "loaded wisdom from %s", path);
+}
+
+/*
+ * Writes the accumulated wisdom out.
+ *
+ * Through a temporary and a rename, for the same reason the settings table and
+ * the CIC cache do it: a job array finishes its ranks at roughly the same
+ * moment, all of them pointed at one $HOME, and a half-written wisdom file is
+ * not merely lost -- FFTW refuses to import it, so every later run silently
+ * falls back to an untuned plan until somebody deletes it by hand.
+ *
+ * Called as soon as a plan has been measured rather than at teardown. Measuring
+ * a large transform is the expensive artifact of the whole run -- minutes of it
+ * -- and holding it in memory until the workspace is released means a job that
+ * is killed, or that dies later for unrelated reasons, throws away everything
+ * it paid for and the next run starts from nothing.
+ */
+static void fft_save_wisdom(const sif_fft_manager_t* mgr) {
+  if (!mgr || !mgr->wisdom_dir)
+    return;
+
+  char final_path[PATH_CAP];
+  char tmp_path[PATH_CAP + 32];
+
+  fft_wisdom_path(mgr->wisdom_dir, final_path, sizeof(final_path));
+
+  int written = snprintf(
+    tmp_path, sizeof(tmp_path), "%s.tmp.%ld", final_path, (long)getpid());
+  if (written < 0 || (size_t)written >= sizeof(tmp_path))
+    return;
+
+  /* Merge whatever another process has contributed since we last looked, so
+   * this write adds to the file instead of replacing it. */
+  real_fftw_import_wisdom_from_filename(final_path);
+
+  /* FFTW's export returns non-zero on success, unlike most of C. */
+  if (real_fftw_export_wisdom_to_filename(tmp_path) == 0) {
+    SIF_LOG_WARNING("fft_manager", "failed to export wisdom to %s", tmp_path);
+    remove(tmp_path);
+    return;
+  }
+
+  if (rename(tmp_path, final_path) != 0) {
+    SIF_LOG_WARNING(
+      "fft_manager", "failed to install the wisdom file %s", final_path);
+    remove(tmp_path);
+    return;
+  }
+
+  SIF_LOG_TRACE("fft_manager", "wisdom saved to %s", final_path);
+}
+
 sif_fft_workspace_t* sif__fft_workspace_alloc(
   sif_fft_manager_t* mgr, uint32_t n_cells) {
   if (!mgr || n_cells == 0) {
@@ -75,22 +211,24 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
   ws->forward_plan = NULL;
   ws->backward_plan = NULL;
 
-  if (mgr->wisdom_dir) {
-    char specific_wisdom[512];
-    snprintf(specific_wisdom, sizeof(specific_wisdom), "%s/grid_%u.wisdom",
-      mgr->wisdom_dir, n_cells);
-    if (real_fftw_import_wisdom_from_filename(specific_wisdom) != 0) {
-      SIF_LOG_INFO("fft_manager", "loaded wisdom file %s", specific_wisdom);
-    }
-  }
-
   const uint64_t complex_cells = fft_complex_count(n_cells);
+  const uint64_t spectrum_bytes = complex_cells * sizeof(sif_real_complex);
 
-  ws->delta_k = real_fftw_malloc(complex_cells * sizeof(sif_real_complex));
+  /* Fixed here, for both transforms, so that the workspace has one planner
+   * quality rather than one per plan site. */
+  ws->plan_flags = fft_resolve_plan_flags(mgr, n_cells, spectrum_bytes);
+
+  /* After the cap, not before: an untuned workspace has no use for wisdom it
+   * cannot be asked to match, and loading it would only announce a file for a
+   * run that then estimates everything. */
+  if (fft_is_tuned(ws))
+    fft_load_wisdom(mgr);
+
+  ws->delta_k = real_fftw_malloc(spectrum_bytes);
   if (!ws->delta_k) {
     SIF_LOG_ERROR("fft_context",
       "failed to allocate the spectrum buffer (%" PRIu64 " bytes)",
-      complex_cells * sizeof(sif_real_complex));
+      spectrum_bytes);
     free(ws);
     return NULL;
   }
@@ -100,25 +238,34 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
 }
 
 /*
- * Plans the forward transform against the buffers it will actually run on.
+ * Plans the forward transform, at the workspace's one planner quality.
  *
- * Deferring the plan to the first transform is what keeps the workspace down
- * to a single spectrum-sized allocation. FFTW_MEASURE overwrites its planning
- * input, so planning at construction time needed a throwaway scratch buffer as
- * large as the spectrum itself -- a second 42 GiB at n_cells = 2250, alive at
- * exactly the moment the caller is still holding the density field. Planning
- * here instead lets the caller's own field be the input, at the price of
- * restricting the planner to modes that leave that input intact: a tuned plan
- * when wisdom for this size exists, FFTW_ESTIMATE otherwise.
+ * The awkward part is that measuring means *executing*, repeatedly, over
+ * whatever arrays the planner is handed -- and the natural input here is the
+ * caller's own density field, which is not ours to destroy. That used to be
+ * settled by quietly dropping the forward plan to FFTW_ESTIMATE while the
+ * backward plan went on measuring, which made `skip_tuning` a statement about
+ * half the workspace. It is settled here instead by giving the planner a
+ * scratch input of its own, so a tuned workspace really does tune both
+ * transforms.
  *
- * That trade is one-sided in our favour. The forward transform runs once per
- * workspace, and FFTW_MEASURE pays for its better plan by executing the
- * transform repeatedly while planning -- more than an untuned plan costs for a
- * single execution. The backward plan, which runs once per radius, still
- * measures (it plans against its own freshly allocated buffer).
+ * Three paths, in order of preference:
  *
- * FFTW_WISDOM_ONLY returns NULL rather than measuring when no wisdom applies,
- * so neither branch can touch `in`.
+ *   1. Wisdom. FFTW_WISDOM_ONLY returns NULL rather than measuring, so it
+ *      cannot touch `in`, and when it succeeds there is nothing left to
+ *      measure -- the usual case for a grid size that has been run before.
+ *   2. Not tuning. FFTW_ESTIMATE does not execute anything, so it plans
+ *      against `in` directly and costs nothing.
+ *   3. Tuning, no wisdom. Allocate n^3 reals, measure against that, free it.
+ *      The scratch is alive only across the planning call, but it is the size
+ *      of the grid (42 GiB at n_cells = 2250) and it is alive at exactly the
+ *      moment the caller is still holding the density field -- so this is the
+ *      expensive path, and the warning says so.
+ *
+ * If that scratch cannot be had, the *workspace* drops to FFTW_ESTIMATE rather
+ * than this plan alone: the backward transform reads plan_flags too, and the
+ * one thing this function must not do is reintroduce the split it exists to
+ * remove.
  */
 static int fft_ensure_forward_plan(
   sif_fft_workspace_t* ws, const sif_real* in) {
@@ -130,18 +277,76 @@ static int fft_ensure_forward_plan(
 
   real_fftw_plan_with_nthreads(sif__system_max_threads());
 
+  /* 1. Wisdom, at this workspace's quality. */
   ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-    n, n, n, (sif_real*)in, ws->delta_k, ws->mgr->flags | FFTW_WISDOM_ONLY);
+    n, n, n, (sif_real*)in, ws->delta_k, ws->plan_flags | FFTW_WISDOM_ONLY);
 
+  /* 3. Tuning with nothing in the wisdom file: buy the planner a scratch. */
+  if (!ws->forward_plan && fft_is_tuned(ws)) {
+    const uint64_t real_bytes = (uint64_t)n * n * n * sizeof(sif_real);
+    const double gib = (double)real_bytes / (1024.0 * 1024.0 * 1024.0);
+
+    /* Only worth interrupting anyone over once the scratch is a real amount of
+     * memory. Below that it is an implementation detail. */
+    if (real_bytes >= (1ull << 30)) {
+      SIF_LOG_WARNING("fft_context",
+        "no wisdom for a %u^3 grid, so tuning the forward transform needs a "
+        "scratch copy of it (%.1f GiB) alongside the caller's own, for the "
+        "duration of the planning; pass skip_tuning to plan both transforms "
+        "with FFTW_ESTIMATE instead",
+        n, gib);
+    } else {
+      SIF_LOG_TRACE("fft_context",
+        "tuning the forward transform for a %u^3 grid on a %.1f MiB scratch "
+        "buffer",
+        n, gib * 1024.0);
+    }
+
+    sif_real* scratch = sif_malloc_aligned((size_t)real_bytes);
+
+    /* The plan is executed later against `in` through the new-array interface,
+     * which only accepts a buffer of the same alignment class as the one it
+     * was planned on. Everything sif allocates is cache-line aligned, so this
+     * holds -- but it is cheap to confirm and fatal to assume. */
+    if (scratch && real_fftw_alignment_of(scratch) ==
+                     real_fftw_alignment_of((sif_real*)in)) {
+      ws->forward_plan = real_fftw_plan_dft_r2c_3d(
+        n, n, n, scratch, ws->delta_k, ws->plan_flags);
+
+      /* Banked before the scratch is even released: this is the only point in
+       * the run where the measurement exists and has not yet been paid for
+       * twice. */
+      if (ws->forward_plan)
+        fft_save_wisdom(ws->mgr);
+    }
+
+    sif_free_aligned(scratch); /* NULL-safe */
+
+    /* Whichever way it failed -- no scratch, wrong alignment, no plan -- the
+     * fall-through below is about to plan against `in`, and that is only safe
+     * for a planner that does not execute. Downgrading the workspace rather
+     * than this one plan is also what keeps the two transforms in step. */
+    if (!ws->forward_plan) {
+      SIF_LOG_WARNING("fft_context",
+        "could not tune the forward transform; dropping the whole workspace "
+        "to FFTW_ESTIMATE so both transforms are planned alike");
+      ws->plan_flags = FFTW_ESTIMATE;
+    }
+  }
+
+  /* 2. Not tuning, either by request or by the downgrade above. */
   if (!ws->forward_plan) {
     ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-      n, n, n, (sif_real*)in, ws->delta_k, FFTW_ESTIMATE);
+      n, n, n, (sif_real*)in, ws->delta_k, ws->plan_flags);
   }
 
   if (!ws->forward_plan) {
     SIF_LOG_ERROR("fft_context", "failed to create the forward plan");
     return SIF_ERR_ALLOC;
   }
+
+  SIF_LOG_TRACE("fft_context", "forward plan created (%s)",
+    fft_is_tuned(ws) ? "tuned" : "estimated");
 
   return SIF_OK;
 }
@@ -165,8 +370,28 @@ int sif__fft_workspace_init_backward(
     return SIF_ERR_ALLOC;
   }
 
+  /*
+   * ws->plan_flags, not mgr->flags: the forward plan may have had to downgrade
+   * the workspace, and the two are planned alike or not at all. The buffer is
+   * the workspace's own, so measuring here is free of the scratch the forward
+   * plan needs.
+   *
+   * Wisdom is asked first even though a plain plan call would consult it
+   * anyway, because the two-step is what makes "did we have to measure?"
+   * answerable -- and there is nothing to write back for a plan that came out
+   * of the file.
+   */
   ws->backward_plan = real_fftw_plan_dft_c2r_3d(ws->n_cells, ws->n_cells,
-    ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy, mgr->flags);
+    ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy,
+    ws->plan_flags | FFTW_WISDOM_ONLY);
+
+  if (!ws->backward_plan) {
+    ws->backward_plan = real_fftw_plan_dft_c2r_3d(ws->n_cells, ws->n_cells,
+      ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy, ws->plan_flags);
+
+    if (ws->backward_plan && fft_is_tuned(ws))
+      fft_save_wisdom(ws->mgr);
+  }
 
   if (!ws->backward_plan) {
     SIF_LOG_ERROR("fft_context", "failed to create the backward plan");
@@ -175,47 +400,10 @@ int sif__fft_workspace_init_backward(
     return SIF_ERR_ALLOC;
   }
 
+  SIF_LOG_TRACE("fft_context", "backward plan created (%s)",
+    fft_is_tuned(ws) ? "tuned" : "estimated");
+
   return SIF_OK;
-}
-
-/*
- * Writes the accumulated FFTW wisdom for this grid size.
- *
- * Through a temporary and a rename, for the same reason the settings table and
- * the CIC cache do it: a job array finishes its ranks at roughly the same
- * moment, all of them pointed at one $HOME, and a half-written wisdom file is
- * not merely lost -- FFTW refuses to import it, so every later run silently
- * falls back to an untuned plan until somebody deletes it by hand.
- */
-static void fft_export_wisdom(const char* wisdom_dir, uint32_t n_cells) {
-  char final_path[512];
-  char tmp_path[576];
-
-  int written = snprintf(
-    final_path, sizeof(final_path), "%s/grid_%u.wisdom", wisdom_dir, n_cells);
-  if (written < 0 || (size_t)written >= sizeof(final_path))
-    return;
-
-  written = snprintf(
-    tmp_path, sizeof(tmp_path), "%s.tmp.%ld", final_path, (long)getpid());
-  if (written < 0 || (size_t)written >= sizeof(tmp_path))
-    return;
-
-  /* FFTW's export returns non-zero on success, unlike most of C. */
-  if (real_fftw_export_wisdom_to_filename(tmp_path) == 0) {
-    SIF_LOG_WARNING("fft_manager", "failed to export wisdom to %s", tmp_path);
-    remove(tmp_path);
-    return;
-  }
-
-  if (rename(tmp_path, final_path) != 0) {
-    SIF_LOG_WARNING(
-      "fft_manager", "failed to install the wisdom file %s", final_path);
-    remove(tmp_path);
-    return;
-  }
-
-  SIF_LOG_INFO("fft_manager", "exported wisdom to %s", final_path);
 }
 
 sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
@@ -240,8 +428,8 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
     return;
   }
 
-  if (ws->mgr && ws->mgr->wisdom_dir)
-    fft_export_wisdom(ws->mgr->wisdom_dir, ws->n_cells);
+  /* Nothing to save here: wisdom is written the moment a plan is measured,
+   * see fft_save_wisdom(). */
 
   if (ws->forward_plan)
     real_fftw_destroy_plan(ws->forward_plan);
