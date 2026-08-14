@@ -44,6 +44,22 @@
 #define SIF__FFT_TUNING_MAX_GIB_DEFAULT "16"
 
 /**
+ * @brief Default for the `cic_tile_particles` setting.
+ *
+ * The CIC deposit sorts particles by destination slab through an index array
+ * of 8 bytes each, and does it a tile at a time so that array does not scale
+ * with the field: 512 MiB here, against 27 GB for a 3.4e9-tracer field sorted
+ * in one go and 69 GB at 8.6e9.
+ *
+ * Tiling is also the faster arrangement -- the deposit's indirect reads stay
+ * inside a slice of the coordinates instead of ranging over all of them -- and
+ * the gain is broad enough that this does not want tuning. Lower it if the
+ * scratch is still too much; the cost is one extra pass over the slabs per
+ * tile, which only starts to show when the tiles get small.
+ */
+#define SIF__CIC_TILE_PARTICLES_DEFAULT "67108864"
+
+/**
  * @brief Set a runtime setting, creating it if absent and overwriting if not.
  *
  * The value takes effect immediately and the table is flagged for saving at

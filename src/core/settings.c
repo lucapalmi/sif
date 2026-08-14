@@ -327,6 +327,7 @@ void sif__settings_init(const char* default_dir) {
   sif_setting_get("fft_wisdom_dir", path);
 
   sif_setting_get("fft_tuning_max_gib", SIF__FFT_TUNING_MAX_GIB_DEFAULT);
+  sif_setting_get("cic_tile_particles", SIF__CIC_TILE_PARTICLES_DEFAULT);
 }
 
 void sif__settings_finalize(void) {

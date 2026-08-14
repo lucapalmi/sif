@@ -26,12 +26,14 @@ static int sifChainMesh_init(
   double box_length_in;
   PyObject* field_obj = NULL;
   int drop_indices = 0;
+  int consume_field = 0;
 
   static char* kwlist[] = {
-    "n_cells", "box_length", "field", "drop_indices", NULL};
+    "n_cells", "box_length", "field", "drop_indices", "consume_field", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!|p", kwlist, &n_cells,
-        &box_length_in, &sifFieldType, &field_obj, &drop_indices)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!|pp", kwlist, &n_cells,
+        &box_length_in, &sifFieldType, &field_obj, &drop_indices,
+        &consume_field)) {
     return -1;
   }
 
@@ -39,8 +41,14 @@ static int sifChainMesh_init(
 
   const sif_option opt = drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT;
 
-  sif_chain_mesh_t* tmp =
-    sif_chain_mesh_alloc(n_cells, (sif_real)box_length_in, field->field, opt);
+  /* The consuming form empties the field rather than copying it. That is safe
+   * to expose directly because a sif.Field hands out no views into its arrays
+   * -- it degrades to an empty field, and every method still works on it. */
+  sif_chain_mesh_t* tmp = consume_field
+                            ? sif_chain_mesh_alloc_consume(n_cells,
+                                (sif_real)box_length_in, field->field, opt)
+                            : sif_chain_mesh_alloc(n_cells,
+                                (sif_real)box_length_in, field->field, opt);
 
   if (!tmp) {
     PyErr_SetString(PyExc_ValueError,
@@ -189,13 +197,21 @@ PyTypeObject sifChainMeshType = {
   .tp_dealloc = sifChainMesh_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
   .tp_doc =
-    "ChainMesh(n_cells, box_length, field, drop_indices=False)\n"
+    "ChainMesh(n_cells, box_length, field, drop_indices=False,\n"
+    "          consume_field=False)\n"
     "--\n\n"
     "A uniform spatial bin over a periodic box, for neighbour queries.\n\n"
     "Particles are copied into cell order, so the members of a cell sit\n"
     "contiguously in memory. Velocities and weights are mirrored from the\n"
     "field when it carries them, each costing another pass over the field\n"
     "and as much memory again.\n\n"
+    "That copy means the field's arrays and the mesh's are both alive\n"
+    "while the mesh is built -- at 3.4e9 tracers, 81 GB to describe 40 GB\n"
+    "of particles. consume_field takes the field's storage over instead of\n"
+    "copying it, needing one spare column (4 bytes per particle) rather\n"
+    "than a second copy of every payload. The field is left empty and\n"
+    "must not be relied on afterwards; it is still safe to hold and to\n"
+    "delete, and n_particles reads back as 0.\n\n"
     "original_indices is always built, and not as a convenience: the\n"
     "scatter claims slots atomically, so the order inside a cell is a race\n"
     "until each cell's run is sorted by source index. Without that key two\n"
@@ -209,7 +225,10 @@ PyTypeObject sifChainMeshType = {
     "    box_length: Physical side length of the box.\n"
     "    field: Particle field to bin.\n"
     "    drop_indices: Release the field index map after construction.\n"
-    "        original_indices then reads back as None.",
+    "        original_indices then reads back as None.\n"
+    "    consume_field: Build the mesh out of the field's own storage,\n"
+    "        emptying it. The field is consumed whether or not the call\n"
+    "        succeeds, so do not pass a field you still need.",
   .tp_methods = sifChainMesh_methods,
   .tp_getset = sifChainMesh_getset,
   .tp_init = sifChainMesh_init,

@@ -332,6 +332,63 @@ static void test_chain_mesh(void) {
       "find_nearest_open should refuse a mesh with no index map");
   }
 
+  /*
+   * The consuming constructor must be indistinguishable from the copying one.
+   * It bins the same particles into the same cells and canonicalizes on the
+   * same key, so the only thing that may differ is where the storage came
+   * from -- and if the deferred permutation is wrong, the positions land in
+   * the wrong slots and this catches it immediately.
+   */
+  sif_field_t* victim = sif_field_alloc(n_p);
+  sif_field_assign_positions(victim, x, y, z);
+
+  sif_chain_mesh_t* consumed =
+    sif_chain_mesh_alloc_consume(8, box, victim, SIF_DEFAULT);
+  CHECK(consumed != NULL, "consuming mesh allocation failed");
+
+  if (kept && consumed) {
+    CHECK(consumed->n_particles == kept->n_particles,
+      "consuming mesh holds %llu particles, expected %llu",
+      (unsigned long long)consumed->n_particles,
+      (unsigned long long)kept->n_particles);
+
+    int differs = 0;
+    for (uint64_t i = 0; i < kept->n_particles; i++) {
+      if (kept->x[i] != consumed->x[i] || kept->y[i] != consumed->y[i] ||
+          kept->z[i] != consumed->z[i] ||
+          kept->original_indices[i] != consumed->original_indices[i])
+        differs++;
+    }
+    CHECK(differs == 0,
+      "consuming and copying constructors disagree in %d slots", differs);
+
+    for (uint64_t c = 0; c <= kept->total_cells; c++) {
+      if (kept->cell_offsets[c] != consumed->cell_offsets[c])
+        differs++;
+    }
+    CHECK(differs == 0, "consuming constructor produced different cells");
+
+    /* Queries still work, so the payload really did move rather than being
+     * left in field order and merely relabelled. */
+    int wrong = 0;
+    for (uint64_t p = 0; p < n_p; p += 37) {
+      uint64_t got =
+        sif_chain_mesh_find_nearest_pbc(consumed, x[p], y[p], z[p]);
+      if (got >= n_p || x[got] != x[p] || y[got] != y[p] || z[got] != z[p])
+        wrong++;
+    }
+    CHECK(
+      wrong == 0, "%d self-queries on the consuming mesh were wrong", wrong);
+  }
+
+  /* The field it ate must be left empty and still safe to release. */
+  CHECK(
+    victim->n_particles == 0, "a consumed field should report no particles");
+  CHECK(victim->x == NULL && victim->y == NULL && victim->z == NULL,
+    "a consumed field should hold no position arrays");
+  sif_field_free(victim); /* must not double-free the mesh's storage */
+
+  sif_chain_mesh_free(consumed);
   sif_chain_mesh_free(kept);
   sif_chain_mesh_free(dropped);
 

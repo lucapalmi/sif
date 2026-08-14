@@ -24,6 +24,12 @@
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
+/* Buckets the CIC counting sort splits a tile into. Fixed rather than taken
+ * from the thread count, so the deposit order -- and with it the last bits of
+ * every cell -- is a property of the input alone; see
+ * grid_cic_deposit_tile(). */
+#define GRID_CIC_CHUNKS 256
+
 static inline uint64_t grid_flat_index(
   const sif_grid_t* grid, uint32_t ix, uint32_t iy, uint32_t iz) {
   return (uint64_t)ix * grid->n_cells * grid->n_cells +
@@ -297,62 +303,45 @@ static inline uint32_t cic_cell_x(sif_real x, sif_real inv_cell, uint32_t N) {
   return (ix >= N) ? 0u : ix;
 }
 
-static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
-  const sif_real* ys, const sif_real* zs, const sif_real* weights,
-  uint64_t n_particles) {
+/*
+ * Bins one run of particles by destination slab and deposits it.
+ *
+ * The counting sort is what lets the deposit hand each thread one contiguous
+ * run of particles that all land in the slab it owns -- without it, a thread
+ * would have to test every particle against its own range and skip most of
+ * them. `counts` and `sorted` are scratch owned by the caller so that a run
+ * over many tiles allocates them once; both are indexed from zero within the
+ * tile, while the values stored in `sorted` are indices into the whole field.
+ *
+ * The chunk count is fixed rather than taken from the thread count, so the
+ * bucket layout -- and therefore the order weight is accumulated in -- is a
+ * property of the input alone. A grid that changed in its last bits with the
+ * number of cores would make the cache keyed on it worthless, and would put a
+ * thread count into every reproducibility claim downstream.
+ */
+static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
+  const sif_real* xs, const sif_real* ys, const sif_real* zs,
+  const sif_real* weights, uint64_t tile_lo, uint64_t tile_hi, uint64_t* counts,
+  uint64_t* sorted, uint32_t N, sif_real idx, uint32_t base_width) {
 
-  const uint32_t N = grid->n_cells;
-  const sif_real idx = (sif_real)N / (sif_real)grid->box_length;
+  const int n_chunks = GRID_CIC_CHUNKS;
+  const uint64_t tile_n = tile_hi - tile_lo;
+  const uint64_t chunk_size = (tile_n + n_chunks - 1) / n_chunks;
 
-  int32_t n_slabs = sif__system_max_threads();
-  n_slabs = ((int)N < n_slabs) ? (int)N : n_slabs;
+  memset(counts, 0, (size_t)n_chunks * n_slabs * sizeof(uint64_t));
 
-  grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
-  if (!slabs) {
-    SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
-    return;
-  }
-
-  /*
-   * The particles are bucketed by destination slab before anything is
-   * deposited, in a counting sort across four passes: count, prefix-sum,
-   * scatter, deposit. Sorting first is what lets pass 4 hand each thread one
-   * contiguous run of particles that all land in the slab it owns -- without
-   * it, a thread would have to test every particle against its own range and
-   * skip most of them.
-   *
-   * The chunk count is fixed rather than taken from the thread count, so the
-   * bucket layout -- and therefore the order weight is accumulated in -- is a
-   * property of the input alone. A grid that changed in its last bits with the
-   * number of cores would make the cache keyed on it worthless, and would put
-   * a thread count into every reproducibility claim downstream.
-   */
-  const int n_chunks = 256;
-
-  /* pass 1: how many particles each (chunk, slab) pair owns. Each chunk writes
-   * its own row, so the counts need no synchronization. */
-
-  uint64_t* counts = calloc(n_chunks * n_slabs, sizeof(uint64_t));
-  if (!counts) {
-    SIF_LOG_ERROR("grid_cic", "failed to allocate counts array");
-    SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
-    grid_slabs_free(slabs, n_slabs);
-    return;
-  }
-
-  uint32_t base_width = N / n_slabs;
-  uint64_t chunk_size = (n_particles + n_chunks - 1) / n_chunks;
-
+/* pass 1: how many particles each (chunk, slab) pair owns. Each chunk writes
+ * its own row, so the counts need no synchronization. */
 #pragma omp parallel for schedule(static, 1)
   for (int c = 0; c < n_chunks; c++) {
-    uint64_t start = c * chunk_size;
+    uint64_t start = tile_lo + (uint64_t)c * chunk_size;
     uint64_t end =
-      (start + chunk_size > n_particles) ? n_particles : start + chunk_size;
+      (start + chunk_size > tile_hi) ? tile_hi : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
       uint32_t ix = cic_cell_x(xs[p], idx, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
-      counts[c * n_slabs + target_slab]++;
+      counts[(uint64_t)c * n_slabs + target_slab]++;
     }
   }
 
@@ -365,51 +354,38 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
 
   for (int32_t slab = 0; slab < n_slabs; slab++) {
     for (int c = 0; c < n_chunks; c++) {
-      uint64_t flat_idx = c * n_slabs + slab;
+      uint64_t flat_idx = (uint64_t)c * n_slabs + slab;
       uint64_t count = counts[flat_idx];
       counts[flat_idx] = current_offset;
       current_offset += count;
     }
   }
 
-  /* pass 3: scatter the particle indices into their slab's run. Each chunk
-   * advances only its own offsets, so again no synchronization -- and the
-   * order within a slab is the order the chunks were laid out in, not the
-   * order the threads happened to finish.
-   *
-   * Indices rather than copies of the coordinates: 8 bytes per particle
-   * instead of 24 (or 32 with weights), at the price of the indirect read in
-   * pass 4. */
-
-  uint64_t* sorted_indices = malloc(n_particles * sizeof(uint64_t));
-  if (!sorted_indices) {
-    SIF_LOG_ERROR("grid_cic", "failed to allocate index array");
-    free(counts);
-    grid_slabs_free(slabs, n_slabs);
-    return;
-  }
-
+/* pass 3: scatter the particle indices into their slab's run. Each chunk
+ * advances only its own offsets, so again no synchronization -- and the order
+ * within a slab is the order the chunks were laid out in, not the order the
+ * threads happened to finish.
+ *
+ * Indices rather than copies of the coordinates: 8 bytes per particle instead
+ * of 24 (or 32 with weights), at the price of the indirect read in pass 4. */
 #pragma omp parallel for schedule(static, 1)
   for (int c = 0; c < n_chunks; c++) {
-    uint64_t start = c * chunk_size;
+    uint64_t start = tile_lo + (uint64_t)c * chunk_size;
     uint64_t end =
-      (start + chunk_size > n_particles) ? n_particles : start + chunk_size;
+      (start + chunk_size > tile_hi) ? tile_hi : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
       uint32_t ix = cic_cell_x(xs[p], idx, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
 
-      uint64_t flat_idx = c * n_slabs + target_slab;
-      uint64_t write_idx = counts[flat_idx];
-
-      sorted_indices[write_idx] = p;
-
+      uint64_t flat_idx = (uint64_t)c * n_slabs + target_slab;
+      sorted[counts[flat_idx]] = p;
       counts[flat_idx]++;
     }
   }
 
-  /* pass 4: deposit. One thread per slab, each over its own contiguous run,
-   * writing only into memory it owns. */
+/* pass 4: deposit. One thread per slab, each over its own contiguous run,
+ * writing only into memory it owns. */
 #pragma omp parallel for schedule(static, 1)
   for (int32_t slab_idx = 0; slab_idx < n_slabs; slab_idx++) {
 
@@ -417,8 +393,10 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
      * so the last chunk's entry for a slab is that slab's end -- and the
      * previous slab's end is this one's start, the runs being contiguous. */
     uint64_t slab_start =
-      (slab_idx == 0) ? 0 : counts[(n_chunks - 1) * n_slabs + (slab_idx - 1)];
-    uint64_t slab_end = counts[(n_chunks - 1) * n_slabs + slab_idx];
+      (slab_idx == 0)
+        ? 0
+        : counts[(uint64_t)(n_chunks - 1) * n_slabs + (slab_idx - 1)];
+    uint64_t slab_end = counts[(uint64_t)(n_chunks - 1) * n_slabs + slab_idx];
 
     grid_slab_t* slab = &slabs[slab_idx];
     const uint32_t x0 = slab->ix_start;
@@ -429,7 +407,7 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
       /* The indirection costs less than it looks: consecutive entries in a
        * slab's run come from the same chunk, so the reads walk the coordinate
        * arrays in roughly increasing order rather than jumping about. */
-      uint64_t orig_p = sorted_indices[p];
+      uint64_t orig_p = sorted[p];
 
       const sif_real cx = xs[orig_p] * idx;
       const sif_real cy = ys[orig_p] * idx;
@@ -490,6 +468,91 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
       s_values[grid_slab_flat_index(slab, lix1, iy1, iz1)] += w11 * mz1;
     }
   }
+}
+
+/*
+ * Particles per tile, and why the sort is tiled at all.
+ *
+ * The index array is 8 bytes per particle. Sorting the whole field at once
+ * makes that 27 GB at 3.4e9 tracers and 69 GB at 8.6e9 -- for a scratch buffer
+ * that never leaves this function. Tiling caps it at this many entries
+ * regardless of how many particles there are.
+ *
+ * It is also faster, which is not the trade one expects from a memory fix. The
+ * deposit reads coordinates through the sorted indices, and over a whole field
+ * those reads range over every position; confined to a tile they stay in a
+ * slice of it, and the array itself is faulted in once and then reused. What
+ * tiling costs is one extra pass over the slabs per tile, so the useful range
+ * is wide but not unbounded -- measured, anything from a few tiles to a few
+ * dozen beats the untiled sort, and the gain flattens well before the tiles
+ * get small enough to matter.
+ */
+static uint64_t grid_cic_tile_size(void) {
+  const char* raw =
+    sif_setting_get("cic_tile_particles", SIF__CIC_TILE_PARTICLES_DEFAULT);
+
+  char* end = NULL;
+  double v = raw ? strtod(raw, &end) : -1.0;
+
+  if (!raw || end == raw || !(v >= 1.0)) {
+    v = strtod(SIF__CIC_TILE_PARTICLES_DEFAULT, NULL);
+    SIF_LOG_WARNING("grid_cic",
+      "cic_tile_particles is not a positive number ('%s'); using %.0f",
+      raw ? raw : "(unset)", v);
+  }
+
+  return (uint64_t)v;
+}
+
+static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
+  const sif_real* ys, const sif_real* zs, const sif_real* weights,
+  uint64_t n_particles) {
+
+  const uint32_t N = grid->n_cells;
+  const sif_real idx = (sif_real)N / (sif_real)grid->box_length;
+
+  int32_t n_slabs = sif__system_max_threads();
+  n_slabs = ((int)N < n_slabs) ? (int)N : n_slabs;
+
+  grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
+  if (!slabs) {
+    SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
+    return;
+  }
+
+  uint64_t tile_n = grid_cic_tile_size();
+  if (tile_n > n_particles)
+    tile_n = n_particles;
+  if (tile_n == 0)
+    tile_n = 1;
+
+  uint64_t* counts =
+    malloc((size_t)GRID_CIC_CHUNKS * n_slabs * sizeof(uint64_t));
+  uint64_t* sorted_indices = malloc(tile_n * sizeof(uint64_t));
+
+  if (!counts || !sorted_indices) {
+    SIF_LOG_ERROR("grid_cic", "failed to allocate the counting-sort scratch");
+    SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
+    free(counts);
+    free(sorted_indices);
+    grid_slabs_free(slabs, n_slabs);
+    return;
+  }
+
+  const uint32_t base_width = N / n_slabs;
+
+  SIF_LOG_TRACE("grid_cic",
+    "binning %" PRIu64 " particles in %" PRIu64 " tile(s) of %" PRIu64
+    " (%.2f GiB of sort scratch)",
+    n_particles, (n_particles + tile_n - 1) / tile_n, tile_n,
+    (double)(tile_n * sizeof(uint64_t)) / (1024.0 * 1024.0 * 1024.0));
+
+  for (uint64_t lo = 0; lo < n_particles; lo += tile_n) {
+    const uint64_t hi = (lo + tile_n > n_particles) ? n_particles : lo + tile_n;
+
+    grid_cic_deposit_tile(slabs, n_slabs, xs, ys, zs, weights, lo, hi, counts,
+      sorted_indices, N, idx, base_width);
+  }
 
   grid_cic_reduce_ghost_cells(slabs, n_slabs);
 
@@ -523,6 +586,10 @@ static int grid_cache_enabled(void) {
 /*
  * Version of the CIC deposition itself.
  *
+ * Bumped to 2 when the counting sort became tiled: the same particles are
+ * deposited, but a tile at a time, so weight accumulates into a cell in a
+ * different order and the sums move in their last bits.
+ *
  * Folded into every cache key, so that changing how weight is deposited -- a
  * boundary fix, a different rounding, a change of accumulation order -- makes
  * every existing entry a miss instead of leaving it silently valid. Without
@@ -532,7 +599,7 @@ static int grid_cache_enabled(void) {
  *
  * Bump it whenever grid_compute_cic() stops producing bit-identical output.
  */
-#define GRID_CIC_VERSION 1u
+#define GRID_CIC_VERSION 2u
 
 /* Blocks the content hash splits each array into. Fixed rather than derived
  * from the thread count, so the key is a property of the data alone: a grid

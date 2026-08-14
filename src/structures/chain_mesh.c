@@ -14,7 +14,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field);
+static int chain_mesh_create(
+  sif_chain_mesh_t* mesh, const sif_field_t* field, bool consume);
 
 static inline int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
 
@@ -59,8 +60,13 @@ static int chain_mesh_validate_field(
   return SIF_OK;
 }
 
-sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
-  const sif_field_t* field, sif_option opt) {
+/*
+ * Everything both constructors need before the payload columns exist: the
+ * geometry, the cell table and the permutation the binning writes into. The
+ * payload pointers are left NULL for the caller to either allocate or steal.
+ */
+static sif_chain_mesh_t* chain_mesh_new(
+  uint32_t n_cells, sif_real box_length, const sif_field_t* field) {
 
   if (!field) {
     SIF_LOG_ERROR("chain_mesh", "cannot build a mesh from a NULL field");
@@ -76,55 +82,17 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
   if (chain_mesh_validate_field(field, box_length) != SIF_OK)
     return NULL;
 
-  sif_chain_mesh_t* mesh = malloc(sizeof(sif_chain_mesh_t));
+  sif_chain_mesh_t* mesh = calloc(1, sizeof(sif_chain_mesh_t));
   if (!mesh)
     return NULL;
 
-  uint64_t n_particles = field->n_particles;
+  const uint64_t n_particles = field->n_particles;
 
   mesh->n_cells = n_cells;
   mesh->box_length = box_length;
   mesh->total_cells = (uint64_t)n_cells * n_cells * n_cells;
   mesh->cell_length = box_length / (sif_real)n_cells;
   mesh->n_particles = n_particles;
-
-  /* Padded so each sub-array of the block starts on a cache line, exactly as
-   * the field lays its own out. */
-  uint64_t padded_n = sif_field_padded_n(n_particles);
-
-  /* 1. Unified Position Block */
-  mesh->_position_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
-  if (!mesh->_position_block) {
-    free(mesh);
-    return NULL;
-  }
-  mesh->x = mesh->_position_block;
-  mesh->y = mesh->_position_block + padded_n;
-  mesh->z = mesh->_position_block + (2 * padded_n);
-
-  /* 2. Unified Velocity Block, mirroring the field: there is nothing to copy
-   * if the field carries no velocities, and nothing a caller could want the
-   * mesh to hold that the field does not have. */
-  if (field->vx) {
-    mesh->_velocity_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
-    if (!mesh->_velocity_block) {
-      sif_free_aligned(mesh->_position_block);
-      free(mesh);
-      return NULL;
-    }
-    mesh->vx = mesh->_velocity_block;
-    mesh->vy = mesh->_velocity_block + padded_n;
-    mesh->vz = mesh->_velocity_block + (2 * padded_n);
-  } else {
-    mesh->_velocity_block = NULL;
-    mesh->vx = NULL;
-    mesh->vy = NULL;
-    mesh->vz = NULL;
-  }
-
-  /* 3. Independent Arrays. Weights mirror the field for the same reason. */
-  mesh->weights =
-    field->weights ? sif_malloc_aligned(n_particles * sizeof(sif_real)) : NULL;
 
   /* Never optional at construction. The mesh reorders particles, so an index
    * into it means nothing to a caller holding the field -- the map back is the
@@ -138,14 +106,76 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
   mesh->cell_offsets =
     sif_malloc_aligned((1 + mesh->total_cells) * sizeof(uint64_t));
 
-  /* Final safety check for the independent arrays */
-  if (!mesh->cell_offsets || !mesh->original_indices ||
-      (field->weights && !mesh->weights)) {
-    sif_chain_mesh_free(mesh); /* We can safely call the free function now */
+  if (!mesh->cell_offsets || !mesh->original_indices) {
+    sif_chain_mesh_free(mesh);
     return NULL;
   }
 
-  if (chain_mesh_create(mesh, field) != SIF_OK) {
+  return mesh;
+}
+
+/* Releases the index map once it has served as the canonicalization key; see
+ * SIF_MESH_DROP_INDICES. */
+static void chain_mesh_apply_options(sif_chain_mesh_t* mesh, sif_option opt) {
+  if (!(opt & SIF_MESH_DROP_INDICES))
+    return;
+
+  sif_free_aligned(mesh->original_indices);
+  mesh->original_indices = NULL;
+
+  SIF_LOG_TRACE("chain_mesh",
+    "released the field index map (%.2f GiB); nearest-neighbour queries are "
+    "unavailable on this mesh",
+    (double)(mesh->n_particles * sizeof(uint64_t)) /
+      (1024.0 * 1024.0 * 1024.0));
+}
+
+sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
+  const sif_field_t* field, sif_option opt) {
+
+  sif_chain_mesh_t* mesh = chain_mesh_new(n_cells, box_length, field);
+  if (!mesh)
+    return NULL;
+
+  /* Padded so each sub-array of the block starts on a cache line, exactly as
+   * the field lays its own out. */
+  const uint64_t n_particles = mesh->n_particles;
+  const uint64_t padded_n = sif_field_padded_n(n_particles);
+
+  /* 1. Unified Position Block */
+  mesh->_position_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
+  if (!mesh->_position_block) {
+    sif_chain_mesh_free(mesh);
+    return NULL;
+  }
+  mesh->x = mesh->_position_block;
+  mesh->y = mesh->_position_block + padded_n;
+  mesh->z = mesh->_position_block + (2 * padded_n);
+
+  /* 2. Unified Velocity Block, mirroring the field: there is nothing to copy
+   * if the field carries no velocities, and nothing a caller could want the
+   * mesh to hold that the field does not have. */
+  if (field->vx) {
+    mesh->_velocity_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
+    if (!mesh->_velocity_block) {
+      sif_chain_mesh_free(mesh);
+      return NULL;
+    }
+    mesh->vx = mesh->_velocity_block;
+    mesh->vy = mesh->_velocity_block + padded_n;
+    mesh->vz = mesh->_velocity_block + (2 * padded_n);
+  }
+
+  /* 3. Independent Arrays. Weights mirror the field for the same reason. */
+  if (field->weights) {
+    mesh->weights = sif_malloc_aligned(n_particles * sizeof(sif_real));
+    if (!mesh->weights) {
+      sif_chain_mesh_free(mesh);
+      return NULL;
+    }
+  }
+
+  if (chain_mesh_create(mesh, field, false) != SIF_OK) {
     sif_chain_mesh_free(mesh);
     return NULL;
   }
@@ -154,15 +184,75 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
    * job and the mesh is in its final order either way. Dropping it here rather
    * than never allocating it is the whole point: the order this mesh is in is
    * the one the key produced. */
-  if (opt & SIF_MESH_DROP_INDICES) {
-    sif_free_aligned(mesh->original_indices);
-    mesh->original_indices = NULL;
+  chain_mesh_apply_options(mesh, opt);
 
-    SIF_LOG_TRACE("chain_mesh",
-      "released the field index map (%.2f GiB); nearest-neighbour queries are "
-      "unavailable on this mesh",
-      (double)(n_particles * sizeof(uint64_t)) / (1024.0 * 1024.0 * 1024.0));
+  return mesh;
+}
+
+sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
+  uint32_t n_cells, sif_real box_length, sif_field_t* field, sif_option opt) {
+
+  sif_chain_mesh_t* mesh = chain_mesh_new(n_cells, box_length, field);
+  if (!mesh)
+    return NULL;
+
+  /*
+   * The handover. Both lay their blocks out through sif_field_padded_n(), so
+   * the mesh's views land on the field's sub-arrays exactly; that shared rule
+   * is the reason this can be a pointer assignment rather than a copy.
+   *
+   * The two alias for the duration of the build, deliberately: the binning
+   * passes read the particles through the field, and they read them before
+   * anything is moved. Only once that is done does the field let go.
+   */
+  const uint64_t padded_n = sif_field_padded_n(mesh->n_particles);
+
+  mesh->_position_block = field->_position_block;
+  mesh->x = mesh->_position_block;
+  mesh->y = mesh->_position_block + padded_n;
+  mesh->z = mesh->_position_block + (2 * padded_n);
+
+  if (field->vx) {
+    mesh->_velocity_block = field->_velocity_block;
+    mesh->vx = mesh->_velocity_block;
+    mesh->vy = mesh->_velocity_block + padded_n;
+    mesh->vz = mesh->_velocity_block + (2 * padded_n);
   }
+
+  mesh->weights = field->weights;
+
+  const int status = chain_mesh_create(mesh, field, true);
+
+  /*
+   * Emptied on either outcome. By this point the storage belongs to the mesh
+   * and, if the build got as far as permuting, no longer holds what the field
+   * said it did -- so a field left pointing into it would be both a double
+   * owner and a liar about its own contents.
+   *
+   * original_indices is the field's own map from a Morton sort it may have
+   * had; the mesh built its own and has no use for it.
+   */
+  sif_free_aligned(field->original_indices);
+
+  field->_position_block = NULL;
+  field->_velocity_block = NULL;
+  field->x = field->y = field->z = NULL;
+  field->vx = field->vy = field->vz = NULL;
+  field->weights = NULL;
+  field->original_indices = NULL;
+  field->n_particles = 0;
+  field->state_flags = 0;
+
+  if (status != SIF_OK) {
+    sif_chain_mesh_free(mesh);
+    return NULL;
+  }
+
+  SIF_LOG_TRACE("chain_mesh",
+    "took over the field's payload columns (%.2f GiB); the field is now empty",
+    (double)(3 * padded_n * sizeof(sif_real)) / (1024.0 * 1024.0 * 1024.0));
+
+  chain_mesh_apply_options(mesh, opt);
 
   return mesh;
 }
@@ -264,7 +354,82 @@ static void chain_mesh_canonicalize(sif_chain_mesh_t* mesh) {
   }
 }
 
-static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field) {
+/* dst[i] = src[perm[i]]. Random reads, sequential writes -- the opposite of
+ * the scatter, and the better half of the trade when the two arrays overlap. */
+static void chain_mesh_gather(
+  sif_real* dst, const sif_real* src, const uint64_t* perm, uint64_t n) {
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < n; i++)
+    dst[i] = src[perm[i]];
+}
+
+/*
+ * Reorders one payload column in place, through a scratch column.
+ *
+ * The alternative is following the permutation's cycles, which needs no
+ * scratch at all -- but a cycle walk is inherently serial per cycle and jumps
+ * randomly on both sides, where this is one parallel gather and one parallel
+ * copy, both of them streaming on the write side. At these particle counts the
+ * bandwidth matters more than the 4 bytes per particle.
+ */
+static void chain_mesh_permute_column(
+  sif_real* arr, sif_real* scratch, const uint64_t* perm, uint64_t n) {
+
+  chain_mesh_gather(scratch, arr, perm, n);
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < n; i++)
+    arr[i] = scratch[i];
+}
+
+/*
+ * Puts every payload column into mesh order, for a mesh whose columns *are*
+ * the field's.
+ *
+ * PASS 3 has already left original_indices holding, for each destination slot,
+ * the particle that belongs there -- which is exactly the gather permutation.
+ * One scratch column serves every array in turn, so the extra memory is 4
+ * bytes per particle no matter how many payloads the field carries.
+ */
+static int chain_mesh_permute_payloads(sif_chain_mesh_t* mesh) {
+  const uint64_t n_p = mesh->n_particles;
+
+  sif_real* scratch = sif_malloc_aligned(n_p * sizeof(sif_real));
+  if (!scratch) {
+    SIF_LOG_ERROR("chain_mesh",
+      "failed to allocate the %.2f GiB reorder column",
+      (double)(n_p * sizeof(sif_real)) / (1024.0 * 1024.0 * 1024.0));
+    return SIF_ERR_ALLOC;
+  }
+
+  const uint64_t* perm = mesh->original_indices;
+
+  chain_mesh_permute_column(mesh->x, scratch, perm, n_p);
+  chain_mesh_permute_column(mesh->y, scratch, perm, n_p);
+  chain_mesh_permute_column(mesh->z, scratch, perm, n_p);
+
+  if (mesh->vx) {
+    chain_mesh_permute_column(mesh->vx, scratch, perm, n_p);
+    chain_mesh_permute_column(mesh->vy, scratch, perm, n_p);
+    chain_mesh_permute_column(mesh->vz, scratch, perm, n_p);
+  }
+
+  if (mesh->weights)
+    chain_mesh_permute_column(mesh->weights, scratch, perm, n_p);
+
+  sif_free_aligned(scratch);
+  return SIF_OK;
+}
+
+/*
+ * @param consume Whether the mesh's payload columns are the field's own. When
+ * they are, PASS 3 cannot scatter into them -- it would overwrite particles it
+ * has not read yet -- so it records the permutation only and
+ * chain_mesh_permute_payloads() moves the data afterwards.
+ */
+static int chain_mesh_create(
+  sif_chain_mesh_t* mesh, const sif_field_t* field, bool consume) {
 
   if (!mesh || !field)
     return SIF_ERR_INVALID;
@@ -363,15 +528,23 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field) {
         write_pos[flat_idx] += run_length;
       }
 
-      /* Scatter Payload WITHOUT any atomic locks */
+      /* Scatter Payload WITHOUT any atomic locks.
+       *
+       * The `consume` test is loop-invariant, so it costs nothing the branch
+       * predictor does not already know; when it is set the payload move is
+       * deferred and only the permutation is recorded here. */
       for (uint64_t j = 0; j < run_length; j++) {
         uint64_t p_idx = i + j;
         uint64_t pos = base_pos + j;
 
+        mesh->original_indices[pos] = p_idx;
+
+        if (consume)
+          continue;
+
         mesh->x[pos] = field->x[p_idx];
         mesh->y[pos] = field->y[p_idx];
         mesh->z[pos] = field->z[p_idx];
-        mesh->original_indices[pos] = p_idx;
 
         /* The mesh arrays exist exactly when the field's do, so one test
          * covers both and there is no "allocated but nothing to put in it"
@@ -390,6 +563,10 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field) {
   }
 
   sif_free_aligned(write_pos);
+
+  /* Deferred until the scatter has finished reading every particle. */
+  if (consume && chain_mesh_permute_payloads(mesh) != SIF_OK)
+    return SIF_ERR_ALLOC;
 
   chain_mesh_canonicalize(mesh);
 

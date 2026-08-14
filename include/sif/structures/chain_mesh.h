@@ -106,6 +106,37 @@ SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
   sif_real box_length, const sif_field_t* field, sif_option opt);
 
 /**
+ * @brief Build a mesh out of a field's own storage, emptying the field.
+ *
+ * Identical to sif_chain_mesh_alloc() in every observable way -- same binning,
+ * same canonical order, same mesh -- except that it takes the field's payload
+ * blocks over instead of copying them. sif_chain_mesh_alloc() has both the
+ * field's positions and the mesh's alive at once, which at 3.4e9 tracers is
+ * 81 GB to describe 40 GB of particles, and that duplication is the largest
+ * single allocation in a typical run.
+ *
+ * Reordering in place still needs somewhere to shuffle through, but only one
+ * array at a time rather than all of them: the cost falls from a full copy of
+ * every payload to a single column, 4 bytes per particle instead of 12 or more.
+ *
+ * @param n_cells Cells per side.
+ * @param box_length Physical side length of the box.
+ * @param field Particle field to bin, **consumed**. On return it is a valid
+ * but empty field -- no particles, no payloads -- which the caller still owns
+ * and must still release with sif_field_free().
+ * @param opt As sif_chain_mesh_alloc().
+ * @return The mesh, owned by the caller and released with
+ * sif_chain_mesh_free(). NULL on invalid input or allocation failure.
+ *
+ * @warning The field is emptied whether or not this succeeds. A failure part
+ * way through has already taken the storage, and handing back a field pointing
+ * at memory the mesh now owns would be worse than handing back an empty one.
+ * Use sif_chain_mesh_alloc() where the field has to survive the call.
+ */
+SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
+  uint32_t n_cells, sif_real box_length, sif_field_t* field, sif_option opt);
+
+/**
  * @brief Release a chain mesh and everything it owns.
  * @param mesh Mesh to free. NULL is accepted and ignored.
  */

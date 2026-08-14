@@ -238,6 +238,81 @@ static void test_cic_mass(void) {
 }
 
 /*
+ * The counting sort runs a tile at a time so its index array does not scale
+ * with the field. How many tiles that takes is a memory decision and must not
+ * be a physics one: the same particles have to land in the same cells whether
+ * they are sorted in one pass or twenty.
+ *
+ * Exact equality is not the claim -- weight accumulates into a cell in tile
+ * order, so the last bits move, which is why GRID_CIC_VERSION was bumped. What
+ * must hold is that no particle is dropped, duplicated, or deposited into the
+ * wrong cell, and a tile-boundary bug shows up as all three.
+ */
+static void test_cic_tiling_is_invisible(void) {
+  printf("cic tiling does not change the field\n");
+
+  sif_real *x = malloc(N_P * sizeof(sif_real)),
+           *y = malloc(N_P * sizeof(sif_real)),
+           *z = malloc(N_P * sizeof(sif_real));
+  make_positions(x, y, z);
+
+  sif_field_t* f = sif_field_alloc(N_P);
+  sif_field_assign_positions(f, x, y, z);
+
+  const uint32_t n = 16;
+  const uint64_t total = (uint64_t)n * n * n;
+
+  /* One tile for the whole field, against tiles small enough that a boundary
+   * falls inside almost every chunk. */
+  const char* tilings[] = {"100000000", "997", "64", "7"};
+  sif_real* reference = malloc(total * sizeof(sif_real));
+
+  for (int t = 0; t < 4; t++) {
+    sif_setting_set("cic_tile_particles", tilings[t]);
+
+    sif_grid_t* g = sif_grid_alloc(n, BOX);
+    sif_grid_assign_cic(g, f);
+
+    const sif_real cell_vol = g->cell_length * g->cell_length * g->cell_length;
+    double sum = 0.0;
+    for (uint64_t i = 0; i < total; i++)
+      sum += (double)g->values[i];
+    sum *= (double)cell_vol;
+
+    CHECK(fabs(sum - (double)N_P) / (double)N_P < 1e-4,
+      "tile size %s deposited %.6g particles, expected %llu", tilings[t], sum,
+      (unsigned long long)N_P);
+
+    if (t == 0) {
+      memcpy(reference, g->values, total * sizeof(sif_real));
+    } else {
+      double worst = 0.0;
+      for (uint64_t i = 0; i < total; i++) {
+        double d = fabs((double)g->values[i] - (double)reference[i]);
+        if (d > worst)
+          worst = d;
+      }
+      /* Against the mean cell occupancy, so the tolerance means something. */
+      const double mean = (double)N_P / (double)total / (double)cell_vol;
+      CHECK(worst < 1e-4 * mean,
+        "tile size %s moved a cell by %.3g (mean occupancy %.3g)", tilings[t],
+        worst, mean);
+    }
+
+    sif_grid_free(g);
+  }
+
+  sif_setting_set("cic_tile_particles", SIF__CIC_TILE_PARTICLES_DEFAULT);
+
+  free(reference);
+  sif_field_free(f);
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
+/*
  * The .xgrid cache has to key on what actually determines the grid.
  *
  * It used to key on the particle count, the box, a flag saying whether weights
@@ -485,6 +560,7 @@ int main(void) {
   test_sort_permutes_everything();
   test_require_helpers();
   test_cic_mass();
+  test_cic_tiling_is_invisible();
   test_cic_cache_keys_on_content();
   test_cic_rejects_out_of_box();
   test_wrap_periodic();
