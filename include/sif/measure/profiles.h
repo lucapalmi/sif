@@ -96,23 +96,35 @@ static inline const sif_real* sif_velocity_profiles_get(
  * Either output may be omitted, and only what is asked for is computed --
  * velocities in particular cost a second payload in the mesh.
  *
+ * Densities are cumulative -- each bin is the contrast enclosed within its
+ * outer edge, which is what the spherical-evolution mapping expects -- while
+ * velocities are differential, the mean radial velocity of that shell alone.
+ *
+ * A void with a non-positive radius is skipped and leaves a row of zeros;
+ * there is no profile to measure around it.
+ *
  * @param cat Voids to profile.
  * @param field Particle field. Must carry velocities if @p out_vel is wanted.
- * @param box_length Physical side length of the box.
- * @param ext Outer edge of the profile, in units of each void's radius.
- * @param n_bins Radial bins per profile.
+ * @param box_length Physical side length of the box. Must be positive.
+ * @param ext Outer edge of the profile, in units of each void's radius. Must
+ * be positive.
+ * @param n_bins Radial bins per profile. Must be non-zero.
  * @param opt Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN.
  * @param out_dens Address of a density set pointer, or NULL to skip. If it
  * points at NULL a set is allocated; otherwise the existing one is filled.
  * @param out_vel Address of a velocity set pointer, or NULL to skip. Same
  * convention.
+ * @return SIF_OK, SIF_ERR_INVALID for a bad argument or a request for
+ * velocities from a field that has none, or SIF_ERR_ALLOC.
  *
- * @note Reports failure by logging and leaving the outputs NULL, rather than
- * by a status code.
+ * @note On any failure both outputs are left NULL, including a set this call
+ * allocated before a later step failed. A caller may therefore check either
+ * the status or the pointers.
  */
-void sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
-  sif_real box_length, sif_real ext, uint32_t n_bins, sif_option opt,
-  sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel);
+SIF_NODISCARD int sif_profiles_mesh(const sif_catalog_t* cat,
+  const sif_field_t* field, sif_real box_length, sif_real ext, uint32_t n_bins,
+  sif_option opt, sif_density_profiles_t** out_dens,
+  sif_velocity_profiles_t** out_vel);
 
 /**
  * @brief Stack radial profiles from a Voronoi tessellation.
@@ -121,10 +133,14 @@ void sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
  * a nearest-neighbour query at every voxel, so it costs ~1e6 queries per void
  * and does not scale to production catalogues. It is kept for future work and
  * is not exercised by the test suite. Use sif_profiles_mesh() instead.
+ *
+ * Arguments, return value and failure behaviour are as sif_profiles_mesh(),
+ * with the addition of @p tess, whose per-cell volumes weight each tracer's
+ * contribution and which must cover the same field.
  */
-void sif_profiles_voronoi(const sif_catalog_t* cat, const sif_field_t* field,
-  const sif_tessellation_t* tess, sif_real box_length, sif_real ext,
-  uint32_t n_bins, sif_option opt, sif_density_profiles_t** out_dens,
-  sif_velocity_profiles_t** out_vel);
+SIF_NODISCARD int sif_profiles_voronoi(const sif_catalog_t* cat,
+  const sif_field_t* field, const sif_tessellation_t* tess, sif_real box_length,
+  sif_real ext, uint32_t n_bins, sif_option opt,
+  sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel);
 
 #endif /* SIF_MEASURE_PROFILES_H */

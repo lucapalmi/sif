@@ -7,12 +7,19 @@
 #include "sif/utils/str.h"
 
 #include <ctype.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 int sif_str_decode_format(
   const char* fmt, sif_col_target_t* targets_out, int max_cols) {
+  if (!fmt || !targets_out || max_cols <= 0)
+    return 0;
+
   int col_count = 0;
+
+  /* Unrecognized characters fall through the switch and are skipped, which is
+   * what lets a format be written with separators for readability. It is also
+   * why a typo yields a short layout instead of an error, and why the caller
+   * has to compare the count against what it expected. */
   for (int i = 0; fmt[i] != '\0' && col_count < max_cols; i++) {
     switch (fmt[i]) {
     case '*':
@@ -49,14 +56,24 @@ int sif_str_decode_format(
       break;
     }
   }
+
   return col_count;
 }
 
 int sif_str_extract_next_real(
   char** cursor, char delimiter, sif_real* out_val) {
-  if (!cursor || !*cursor || **cursor == '\0' || **cursor == '\n')
+  if (!cursor || !*cursor || !out_val)
     return 0;
 
+  if (**cursor == '\0' || **cursor == '\n')
+    return 0;
+
+  /* Leading whitespace is skipped, except when the delimiter is itself a
+   * whitespace character other than a space -- a tab-separated file has
+   * meaningful tabs, and eating them would merge two empty columns into one.
+   * A newline reached here ends the line: the row had fewer columns than the
+   * format asked for, which the caller needs to be able to tell apart from a
+   * column that merely failed to parse. */
   while (isspace((unsigned char)**cursor) &&
          (**cursor != delimiter || delimiter == ' ')) {
     if (**cursor == '\n')
@@ -65,9 +82,17 @@ int sif_str_extract_next_real(
   }
 
   char* endptr;
+
+  /* strtod, not strtof, even in a single-precision build: parsing at full
+   * precision and narrowing once is correct, while parsing at float precision
+   * would round twice. It reads the decimal point according to LC_NUMERIC,
+   * which sif never changes and CPython deliberately leaves at "C". */
   *out_val = (sif_real)strtod(*cursor, &endptr);
 
   if (endptr == *cursor) {
+    /* Nothing numeric here. The field is still consumed -- a text column in a
+     * numeric file reads as 0.0 rather than derailing the whole row -- so the
+     * cursor has to be walked to the next separator by hand. */
     while (**cursor != '\0' && **cursor != '\n' && **cursor != delimiter) {
       (*cursor)++;
     }

@@ -1345,6 +1345,166 @@ static void test_pipeline(void) {
   free(pk);
 }
 
+/*
+ * The semi-analytic up-crossing baseline, against the Monte Carlo it
+ * approximates.
+ *
+ * This is the only caller of sif__ep_features_fill and
+ * sif__ep_multiplicity_upcrossing in the tree -- the emulator reaches the
+ * baseline through the diagonal entry point instead -- so without this the
+ * reference the whole emulator corrects would never be evaluated at all.
+ *
+ * Musso-Sheth is exact only for a high barrier, where a first crossing and any
+ * crossing coincide. The tolerance below is therefore loose on purpose: what is
+ * being pinned is that the baseline is the right shape and the right order of
+ * magnitude, not that it agrees to per cent.
+ */
+static void test_upcrossing_baseline(void) {
+  printf("up-crossing baseline vs the Monte Carlo\n");
+
+  sif_real* k = malloc(N_K * sizeof(sif_real));
+  sif_real* pk = malloc(N_K * sizeof(sif_real));
+  power_law(k, pk, -2.0);
+
+  {
+    const sif_real eight[1] = {8.0f};
+    sif_real s8[1];
+    double* c = sif_delta_covariance_pk(
+      k, pk, N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
+    if (c) {
+      const double scale = (0.8 / (double)s8[0]) * (0.8 / (double)s8[0]);
+      for (uint32_t i = 0; i < N_K; i++)
+        pk[i] = (sif_real)((double)pk[i] * scale);
+      sif_free_aligned(c);
+    }
+  }
+
+  const uint32_t n = 40;
+  const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(400000);
+
+  sif_real* radii = log_radii(n, 1.0, 30.0);
+  sif_real* sigma = malloc(n * sizeof(sif_real));
+  double* dv = malloc(n * sizeof(double));
+
+  double* cov =
+    sif_delta_covariance_pk(k, pk, N_K, radii, n, sigma, NULL, dv, SIF_DEFAULT);
+  CHECK(cov != NULL, "the covariance returned NULL");
+
+  /* A tall barrier, which is the regime the approximation is exact in. */
+  sif_real* barrier =
+    cov ? sif_ep_barrier_smt(sigma, n, 1.2f, 0.4f, 0.87f) : NULL;
+  CHECK(barrier != NULL, "the barrier returned NULL");
+
+  if (cov && barrier) {
+    sif_ep_features_t f;
+    CHECK(sif__ep_features_init(&f, n) == SIF_OK, "features allocation failed");
+
+    /* The exact derivative variance, so the baseline is not measuring the
+     * radius grid. The NULL fallback is exercised separately below. */
+    CHECK(sif__ep_features_fill(&f, radii, n, cov, barrier, dv) == SIF_OK,
+      "the local description could not be built");
+
+    /* gamma2 is a squared correlation and lives in (0, 1] by
+     * Cauchy-Schwarz -- the same inequality fill_core checks. */
+    int gamma_ok = 1, rate_ok = 1;
+    for (uint32_t i = 0; i < n; i++) {
+      if (!(f.gamma2[i] > 0.0 && f.gamma2[i] <= 1.0))
+        gamma_ok = 0;
+      if (!(f.f_up[i] >= 0.0))
+        rate_ok = 0;
+    }
+    CHECK(gamma_ok, "gamma2 left (0, 1]");
+    CHECK(rate_ok, "the up-crossing rate went negative");
+
+    sif_real* base = sif__ep_multiplicity_upcrossing(&f, radii, n);
+    CHECK(base != NULL, "the baseline multiplicity returned NULL");
+
+    sif_real* mc = sif_ep_multiplicity_function(
+      radii, n, cov, barrier, n_paths, 4321u, NULL, SIF_DEFAULT);
+    CHECK(mc != NULL, "the Monte Carlo returned NULL");
+
+    if (base && mc) {
+      double int_base = 0.0, int_mc = 0.0;
+      for (uint32_t i = 0; i + 1 < n; i++) {
+        const double dr = (double)radii[i + 1] - (double)radii[i];
+        int_base += (double)base[i] * dr;
+        int_mc += (double)mc[i] * dr;
+      }
+
+      CHECK(int_base > 0.0, "the baseline is identically zero");
+      CHECK(int_base <= 1.0,
+        "the baseline integrates to %.4f, above the one crossing per path it "
+        "can represent",
+        int_base);
+
+      /* The hazard construction is what bounds this: 1 - exp(-Lambda) cannot
+       * leave [0, 1] however the rate behaves. */
+      int negative = 0;
+      for (uint32_t i = 0; i + 1 < n; i++)
+        if (base[i] < 0.0f)
+          negative = 1;
+      CHECK(!negative, "the baseline went negative");
+
+      const double ratio = int_mc > 0.0 ? int_base / int_mc : 0.0;
+      CHECK(ratio > 0.7 && ratio < 1.3,
+        "the baseline crossing fraction is %.4f against the Monte Carlo's "
+        "%.4f (ratio %.3f); Musso-Sheth should be within tens of per cent "
+        "here, not a factor",
+        int_base, int_mc, ratio);
+      printf("  baseline %.4f, Monte Carlo %.4f, ratio %.3f\n", int_base,
+        int_mc, ratio);
+    }
+
+    sif_free_aligned(base);
+    sif_free_aligned(mc);
+
+    /*
+     * The differenced fallback at two radii, which is the degenerate case: no
+     * three-point stencil exists, so the derivative variance has to come from
+     * the single available pair. The value is asserted rather than merely the
+     * determinism, because a buffer left as the allocator returned it is often
+     * reproducible -- freshly mapped pages are zero -- and a test that only
+     * compared two runs would pass on uninitialized memory.
+     */
+    sif_ep_features_t g;
+    CHECK(sif__ep_features_init(&g, 2) == SIF_OK, "small init failed");
+
+    const sif_real two_r[2] = {radii[0], radii[1]};
+    const sif_real two_b[2] = {barrier[0], barrier[1]};
+    const double s0 = (double)sigma[0] * (double)sigma[0];
+    const double s1 = (double)sigma[1] * (double)sigma[1];
+    const double off = 0.5 * (double)sigma[0] * (double)sigma[1];
+    double two_cov[3] = {s0, off, s1};
+
+    const int rc = sif__ep_features_fill(&g, two_r, 2, two_cov, two_b, NULL);
+    CHECK(rc == SIF_OK, "the two-radius fallback returned %d", rc);
+
+    /* V = (S1 + S0 - 2 S(1,0)) / (S1 - S0)^2, the same one-pair difference the
+     * larger grids use, and gamma2 = 1 / (4 S V) follows. */
+    const double h = s1 - s0;
+    const double v_expect = (s1 + s0 - 2.0 * off) / (h * h);
+
+    for (uint32_t i = 0; i < 2; i++) {
+      const double s = (i == 0) ? s0 : s1;
+      const double expect = 1.0 / (4.0 * s * v_expect);
+      CHECK(fabs(g.gamma2[i] - expect) < 1e-9 * expect,
+        "gamma2[%u] from the two-radius fallback is %.12g, expected %.12g", i,
+        g.gamma2[i], expect);
+    }
+
+    sif__ep_features_free(&g);
+    sif__ep_features_free(&f);
+  }
+
+  free(dv);
+  sif_free_aligned(cov);
+  sif_free_aligned(barrier);
+  free(sigma);
+  free(radii);
+  free(k);
+  free(pk);
+}
+
 static void test_covariance_guards(void) {
   printf("covariance validation\n");
 
@@ -1408,10 +1568,8 @@ static void test_covariance_guards(void) {
 }
 
 int main(void) {
-  sif_config_t cfg = {.fft_config = NULL,
-    .omp_config = NULL,
-    .verbose = false,
-    .log_level = SIF_LOG_LEVEL_ERROR};
+  sif_config_t cfg = {
+    .fft_config = NULL, .omp_config = NULL, .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 
   test_covariance_diagonal();
@@ -1431,6 +1589,7 @@ int main(void) {
   test_binning();
   test_guards();
   test_pipeline();
+  test_upcrossing_baseline();
 
   sif_finalize();
 

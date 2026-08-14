@@ -12,7 +12,7 @@
  * caller with contiguous data. The running form -- #SIF_CRC32_INIT,
  * sif_crc32_update(), sif_crc32_final() -- chains several buffers into one
  * checksum, which is what the binary writers need: a field's coordinates,
- * velocities and masses live in separate allocations but are one payload.
+ * velocities and weights live in separate allocations but are one payload.
  */
 
 #ifndef SIF_UTILS_CRC32_H

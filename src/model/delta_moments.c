@@ -153,7 +153,6 @@ sif_delta_moments_t* sif_delta_moments_pk(const sif_real* k, const sif_real* pk,
       }
     }
 
-    /* The warnings live outside the parallel loop so their order is stable. */
     for (uint8_t j = 0; j < n_moments; j++) {
       const double s = total[j] * prefactor;
       const size_t at = m->offsets[j] + r;
@@ -164,6 +163,9 @@ sif_delta_moments_t* sif_delta_moments_pk(const sif_real* k, const sif_real* pk,
     }
   }
 
+  /* The diagnostics run outside the parallel region, so a caller comparing two
+   * runs sees the same warnings in the same order rather than in whatever
+   * order the threads happened to finish. */
   for (uint32_t r = 0; r < n_radii; r++) {
     for (uint8_t j = 0; j < n_moments; j++) {
       const size_t at = m->offsets[j] + r;
@@ -506,3 +508,7 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
 
   return cov;
 }
+
+#undef TAG
+#undef HIGH_K_WARN_LEVEL
+#undef COV_K_BLOCK

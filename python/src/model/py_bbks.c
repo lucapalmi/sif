@@ -44,8 +44,17 @@ PyObject* py_sif_bbks_g(PyObject* self, PyObject* args, PyObject* kwds) {
   sif_option options;
   if (py_sif_bbks_g_option(g_mode, &options) != 0)
     return NULL;
-  return PyFloat_FromDouble(
-    (double)sif_bbks_g((sif_real)gamma, (sif_real)w, options));
+
+  /* The range check above makes this unreachable today. Checked anyway, so
+   * that a change to the C domain surfaces as an exception rather than as a
+   * float that was never written. */
+  sif_real value;
+  if (sif_bbks_g((sif_real)gamma, (sif_real)w, options, &value) != SIF_OK) {
+    PyErr_SetString(PyExc_ValueError, "bbks_g rejected its arguments");
+    return NULL;
+  }
+
+  return PyFloat_FromDouble((double)value);
 }
 
 PyObject* py_sif_bbks_number_density_differential(

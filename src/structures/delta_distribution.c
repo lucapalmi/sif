@@ -14,9 +14,20 @@
 
 #define TAG "delta"
 
+/*
+ * One PDF per radius, laid out as n_radii rows of n_bins in a single block.
+ *
+ * The edges are shared by every row rather than stored per radius: the
+ * histogram range is a property of the measurement, not of the scale, and
+ * comparing a PDF at 5 Mpc against one at 20 requires that they were binned
+ * identically. Keeping one edge array makes that structural instead of a
+ * convention the estimators have to remember.
+ */
 sif_delta_distribution_t* sif__delta_distribution_alloc(
   uint32_t n_radii, uint32_t n_bins) {
 
+  /* calloc for the struct, so the free below is safe from the first failure
+   * onwards. */
   sif_delta_distribution_t* dist = calloc(1, sizeof(sif_delta_distribution_t));
   if (!dist) {
     SIF_LOG_ERROR(TAG, "failed to allocate the delta distribution struct");
@@ -25,6 +36,11 @@ sif_delta_distribution_t* sif__delta_distribution_alloc(
 
   dist->n_radii = n_radii;
   dist->n_bins = n_bins;
+
+  /* n_samples is filled by the estimator with the cell count it histogrammed,
+   * not with the number that landed in range: a row integrates to the fraction
+   * that fell inside delta_bounds, and recovering the outliers means knowing
+   * the denominator. */
   dist->n_samples = 0;
 
   dist->radii = sif_malloc_aligned((size_t)n_radii * sizeof(sif_real));
@@ -42,6 +58,8 @@ sif_delta_distribution_t* sif__delta_distribution_alloc(
   return dist;
 }
 
+/* Accepts a partially built object, which is what lets the allocator above
+ * clean up after itself on any failure path rather than unwinding by hand. */
 void sif_delta_distribution_free(sif_delta_distribution_t* dist) {
   if (!dist)
     return;
@@ -50,3 +68,5 @@ void sif_delta_distribution_free(sif_delta_distribution_t* dist) {
   sif_free_aligned(dist->distributions);
   free(dist);
 }
+
+#undef TAG

@@ -133,17 +133,30 @@ static double g_exact(double g, double w) {
  * is what lets the number-density routines below thread the choice straight
  * through from their own options.
  */
-sif_real sif_bbks_g(sif_real gamma, sif_real w, sif_option opt) {
+int sif_bbks_g(sif_real gamma, sif_real w, sif_option opt, sif_real* out) {
+  if (!out) {
+    SIF_LOG_ERROR(TAG, "sif_bbks_g needs somewhere to put the result");
+    return SIF_ERR_INVALID;
+  }
+
   const double g = (double)gamma;
 
   if (!(g > 0.0) || !(g < 1.0)) {
     SIF_LOG_ERROR(TAG, "gamma is %g, must lie strictly in (0, 1)", g);
-    return (sif_real)0.0;
+    return SIF_ERR_INVALID;
   }
 
-  return (sif_real)(((opt & SIF__BBKS_G_MASK) == SIF_BBKS_G_EXACT)
+  /* Through an out-parameter rather than the return value, which is the one
+   * entry point here that cannot use a sentinel: G is legitimately zero where
+   * the exact form underflows at very negative w, and the fitted form dips
+   * slightly below zero there, so no value in the reals is free to mean
+   * "invalid". The spherical maps two files over keep returning their value
+   * precisely because 0 is unreachable for them. */
+  *out = (sif_real)(((opt & SIF__BBKS_G_MASK) == SIF_BBKS_G_EXACT)
                       ? g_exact(g, (double)w)
                       : g_fitted(g, (double)w));
+
+  return SIF_OK;
 }
 
 /* --- The differential number density of maxima --- */
@@ -202,10 +215,14 @@ sif_real* sif_bbks_number_density_differential(const sif_real* nu,
   for (uint32_t i = 0; i < size; i++) {
     const double n = (double)nu[i];
     const double rs = (double)r_star[i];
-    const sif_real w = (sif_real)(gamma[i] * n);
+    const double gm = (double)gamma[i];
 
-    const double g = exact ? g_exact((double)gamma[i], (double)w)
-                           : g_fitted((double)gamma[i], (double)w);
+    /* w = gamma * nu, kept in double throughout. Rounding it to sif_real on
+     * the way in would put a float's worth of error into the argument of an
+     * expression that is exponentially sensitive to it. */
+    const double w = gm * n;
+
+    const double g = exact ? g_exact(gm, w) : g_fitted(gm, w);
 
     const double density = exp(-0.5 * n * n) / (four_pi_sq * rs * rs * rs) * g;
 
@@ -384,9 +401,9 @@ sif_real* sif_bbks_number_density_cumulative(
 
     for (int i = 0; i <= n; i++) {
       const double nu = nu_lo + i * h;
-      const sif_real w = (sif_real)(g * nu);
+      const double w = g * nu;
 
-      const double gv = exact ? g_exact(g, (double)w) : g_fitted(g, (double)w);
+      const double gv = exact ? g_exact(g, w) : g_fitted(g, w);
 
       const double integrand = exp(-0.5 * nu * nu) * gv;
 
@@ -601,3 +618,5 @@ sif_size_function_t* sif_size_function_bbks(
 
   return out;
 }
+
+#undef TAG

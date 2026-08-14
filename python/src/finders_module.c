@@ -18,7 +18,7 @@ static PyMethodDef finders_methods[] = {
     "threshold. The radii therefore come from the data rather than from the\n"
     "ladder, which is why this needs the particles as well as the grid.\n\n"
     "The mesh is borrowed and never freed, so it can be reused across runs\n"
-    "at different thresholds. It only needs positions: masses, velocities\n"
+    "at different thresholds. It only needs positions: weights, velocities\n"
     "and original indices are never read.\n\n"
     "Args:\n"
     "    grid: Density contrast field. Smoothed in place and restored\n"

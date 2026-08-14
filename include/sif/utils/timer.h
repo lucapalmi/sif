@@ -45,7 +45,7 @@ void sif_timer_stop(sif_timer_t* timer);
  * visibly over a long run.
  *
  * @param timer Timer to read.
- * @return Elapsed time in milliseconds.
+ * @return Elapsed time in milliseconds, or -1.0 if @p timer is NULL.
  *
  * @warning Only meaningful once sif_timer_stop() has been called. Reading a
  * timer that was started but never stopped returns whatever the uninitialized

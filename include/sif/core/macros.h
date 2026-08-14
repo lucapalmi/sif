@@ -284,10 +284,25 @@ typedef float sif_real;
  */
 #define SIF_PI ((sif_real)3.14159265358979323846)
 
-/** @brief Assumed cache-line size, in bytes. Override at configure time. */
+/** @brief Assumed cache-line size, in bytes. Override at configure time.
+ *
+ * Must be a power of two and at least `sizeof(void*)`.
+ */
 #ifndef SIF_CACHE_LINE
 #  define SIF_CACHE_LINE 64
 #endif
+
+/* The allocator rounds sizes with `(n + SIF_CACHE_LINE - 1) & ~(SIF_CACHE_LINE
+ * - 1)`, and posix_memalign() demands a power-of-two multiple of sizeof(void*).
+ * A value that is neither would not fail anywhere visible -- every allocation
+ * in the library would just return NULL -- so it is rejected here instead. C99
+ * has no _Static_assert, and a negative array bound is the portable way to fail
+ * at compile time. */
+#define SIF__CACHE_LINE_IS_VALID                                               \
+  (SIF_CACHE_LINE >= (int)sizeof(void*) &&                                     \
+    (SIF_CACHE_LINE & (SIF_CACHE_LINE - 1)) == 0)
+
+typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 
 /* ------------------------------------------------------------------ */
 /* 3. compiler hints                                                   */
@@ -315,6 +330,51 @@ typedef float sif_real;
 #  define SIF_ALIGN_T
 
 #endif
+
+/**
+ * @defgroup bit_intrinsics Bit-counting intrinsics
+ * @brief Population count and trailing-zero count, with portable fallbacks.
+ *
+ * Wrapped here rather than called directly, for the same reason as everything
+ * else in this section: a raw `__builtin_` in library code compiles nowhere
+ * but GCC and Clang, and the failure is a build error in a file that has
+ * nothing to do with portability. The fallbacks are the textbook loops --
+ * slower, but only reached on a compiler that has no intrinsic to offer.
+ * @{
+ */
+#if defined(__GNUC__) || defined(__clang__)
+
+#  define SIF_POPCOUNT_U64(x) ((uint32_t)__builtin_popcountll((uint64_t)(x)))
+#  define SIF_CTZ_U32(x)      ((uint32_t)__builtin_ctz((uint32_t)(x)))
+
+#else
+
+/** @brief Set bits in a 64-bit word. Undefined for no compiler at all. */
+static inline uint32_t sif__popcount_u64(uint64_t x) {
+  uint32_t n = 0;
+  while (x) {
+    x &= x - 1; /* clears the lowest set bit */
+    n++;
+  }
+  return n;
+}
+
+/** @brief Trailing zeros in a 32-bit word. Undefined for x == 0, matching
+ *  __builtin_ctz. */
+static inline uint32_t sif__ctz_u32(uint32_t x) {
+  uint32_t n = 0;
+  while ((x & 1u) == 0u) {
+    x >>= 1;
+    n++;
+  }
+  return n;
+}
+
+#  define SIF_POPCOUNT_U64(x) sif__popcount_u64((uint64_t)(x))
+#  define SIF_CTZ_U32(x)      sif__ctz_u32((uint32_t)(x))
+
+#endif
+/** @} */
 
 /* ------------------------------------------------------------------ */
 /* 4. status codes                                                     */

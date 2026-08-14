@@ -43,6 +43,26 @@ static int validate(const sif_nn_t* nn, const double* x, double* out) {
     return SIF_ERR_INVALID;
   }
 
+  if (nn->n_in == 0 || nn->n_in > SIF__NN_MAX_WIDTH) {
+    SIF_LOG_ERROR(TAG, "%u inputs; the scratch buffers hold %d", nn->n_in,
+      SIF__NN_MAX_WIDTH);
+    return SIF_ERR_INVALID;
+  }
+
+  /* sd divides every input, so a zero -- a feature that was constant across
+   * the training set -- turns the whole evaluation into infinities rather than
+   * failing anywhere near the cause. Checked here because the weights are
+   * generated, and a generator bug is exactly what this would look like. */
+  for (uint32_t i = 0; i < nn->n_in; i++) {
+    if (nn->sd[i] == 0.0) {
+      SIF_LOG_ERROR(TAG,
+        "input %u has zero scale; the standardization is "
+        "degenerate and the network cannot be evaluated",
+        i);
+      return SIF_ERR_INVALID;
+    }
+  }
+
   uint32_t width = nn->n_in;
 
   for (uint32_t l = 0; l < nn->n_layers; l++) {
@@ -66,12 +86,6 @@ static int validate(const sif_nn_t* nn, const double* x, double* out) {
     width = ly->n_out;
   }
 
-  if (nn->n_in == 0 || nn->n_in > SIF__NN_MAX_WIDTH) {
-    SIF_LOG_ERROR(TAG, "%u inputs; the scratch buffers hold %d", nn->n_in,
-      SIF__NN_MAX_WIDTH);
-    return SIF_ERR_INVALID;
-  }
-
   if (width != nn->n_out) {
     SIF_LOG_ERROR(TAG,
       "the last layer produces %u outputs but the network declares %u", width,
@@ -88,10 +102,15 @@ static int validate(const sif_nn_t* nn, const double* x, double* out) {
  * The accumulation runs (row, input, output) rather than (row, output, input),
  * which turns the innermost loop into a unit-stride multiply-add over the
  * output width instead of a dot product with a reduction. Both do the same
- * arithmetic; only this one vectorizes without the compiler having to prove
- * anything about reassociation, which matters because the release build is
- * built with -ffast-math off for this file's callers and we want the same
- * answer either way.
+ * arithmetic, but only this one vectorizes without the compiler having to
+ * reassociate anything, so the answer does not depend on how aggressively it
+ * decided to.
+ *
+ * That last point is worth a caveat: the release build compiles this file with
+ * -ffast-math like the rest of the library, so agreement with the Python
+ * reference is to a few ulp rather than bit for bit. tests/test_ep_emu.c holds
+ * it to 5e-7, which is float rounding on the emulator's own output and not a
+ * physics allowance.
  */
 static void layer(
   const sif_nn_layer_t* ly, const double* src, double* dst, uint32_t n_rows) {
@@ -169,3 +188,5 @@ int sif__nn_eval(
 
   return SIF_OK;
 }
+
+#undef TAG

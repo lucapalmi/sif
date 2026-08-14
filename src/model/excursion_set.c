@@ -580,3 +580,5 @@ sif_real* sif_ep_multiplicity_function(const sif_real* radii, uint32_t n_radii,
   sif_free_aligned(counts);
   return f;
 }
+
+#undef TAG

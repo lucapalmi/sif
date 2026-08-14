@@ -17,6 +17,22 @@
 #define OCTREE_MAX_DEPTH SIF_MORTON_BITS
 
 /*
+ * Entries every depth-first traversal below must be able to hold.
+ *
+ * A pop replaces one entry with up to eight children, so the stack grows by
+ * seven per level, and the build caps the depth: the true bound is
+ * 1 + 7 * OCTREE_MAX_DEPTH = 148. Rounded up to 8 per level, which is the same
+ * bound stated in the form the loops make obvious.
+ *
+ * Sizing this at OCTREE_MAX_DEPTH instead -- one entry per level, as if the
+ * traversal held a single path -- is a stack smash on any tree deeper than
+ * three levels, and it is only the eight-way push that makes it so. Nothing
+ * about the array's declaration says which of the two it should be, which is
+ * why it is named here rather than spelled out at each use.
+ */
+#define OCTREE_STACK_CAP (8 * OCTREE_MAX_DEPTH)
+
+/*
  * Nodes to allocate up front, from the leaf count the split threshold implies.
  *
  * A tree of L leaves holds (8L - 1) / 7 nodes when every internal node splits
@@ -47,6 +63,19 @@ static void octree_subdivide(sif_octree_t* tree, uint32_t node_idx,
 sif_octree_t* sif_octree_alloc(sif_field_t* field, uint32_t max_per_leaf) {
   if (!field || field->n_particles == 0 || max_per_leaf == 0) {
     SIF_LOG_ERROR("octree", "invalid field or max_per_leaf");
+    return NULL;
+  }
+
+  /* Node ranges are uint32_t pairs, which is what keeps a node at 16 bytes and
+   * four of them in a cache line. Past 4 G particles that stops being a
+   * trade-off and becomes a silent truncation -- the root would claim
+   * n_particles mod 2^32 and index a fraction of the field with no sign that
+   * anything was dropped -- so it is refused here instead. */
+  if (field->n_particles > UINT32_MAX) {
+    SIF_LOG_ERROR("octree",
+      "%" PRIu64 " particles exceeds the %u the node ranges can index; use the "
+      "chain mesh for a field this large",
+      field->n_particles, UINT32_MAX);
     return NULL;
   }
 
@@ -91,7 +120,7 @@ sif_octree_t* sif_octree_alloc(sif_field_t* field, uint32_t max_per_leaf) {
   tree->count = 1;
   tree->nodes[0].first_child = OCTREE_LEAF_NODE;
   tree->nodes[0].p_start = 0;
-  tree->nodes[0].p_counting = field->n_particles;
+  tree->nodes[0].p_counting = (uint32_t)field->n_particles;
   tree->nodes[0].padding = 0;
 
   octree_subdivide(tree, 0, field, tree->root_center[0], tree->root_center[1],
@@ -138,9 +167,27 @@ static void octree_subdivide(sif_octree_t* tree, uint32_t node_idx,
     return;
   }
 
-  /* Reallocate if we don't have room for 8 more children */
+  /* Room for eight more children, or grow. Failing to grow is survivable and
+   * deliberately not fatal: the node simply stays a leaf holding more than
+   * max_per_leaf particles, every query still returns the right answer, and
+   * only the cost changes. That is why this returns rather than unwinding. */
   if (tree->count + 8 > tree->capacity) {
-    uint32_t new_capacity = tree->capacity * 2;
+    /* Doubling in uint32 wraps once capacity passes 2^31, and a wrapped value
+     * is smaller than the current one -- realloc would then shrink the array
+     * that the next eight writes run off the end of. */
+    uint64_t grown = (uint64_t)tree->capacity * 2;
+    if (grown > UINT32_MAX)
+      grown = UINT32_MAX;
+
+    if (grown < (uint64_t)tree->count + 8) {
+      SIF_LOG_ERROR("octree",
+        "the node array cannot grow past %u entries; leaving an oversized "
+        "leaf",
+        UINT32_MAX);
+      return;
+    }
+
+    const uint32_t new_capacity = (uint32_t)grown;
     sif_octree_node_t* new_nodes =
       realloc(tree->nodes, (size_t)new_capacity * sizeof(sif_octree_node_t));
     if (!new_nodes) {
@@ -224,7 +271,16 @@ typedef struct {
   sif_real half_span;
 } octree_stack_t;
 
-/* --- Math Helper: Point-to-Box Distance Squared --- */
+/*
+ * Squared distance from a point to the nearest point of an axis-aligned box,
+ * and zero when the point is inside it.
+ *
+ * This is the pruning test every traversal below rests on: it is a lower bound
+ * on the distance to anything in the subtree, so a box already farther than
+ * the best candidate cannot improve on it and the whole subtree is skipped.
+ * Squared throughout, because comparing squares orders the same way and skips
+ * a square root per node.
+ */
 static inline sif_real sq_dist_point_aabb(sif_real px, sif_real py, sif_real pz,
   sif_real cx, sif_real cy, sif_real cz, sif_real hs) {
   sif_real min_x = cx - hs, max_x = cx + hs;
@@ -272,7 +328,7 @@ uint64_t sif_octree_find_nearest(const sif_octree_t* tree,
 
   /* Each pop can push at most 8 children, and the depth is capped at build
    * time, so this bound cannot be exceeded. */
-  octree_stack_t stack[8 * OCTREE_MAX_DEPTH];
+  octree_stack_t stack[OCTREE_STACK_CAP];
   int32_t sp = 0;
 
   stack[sp].node_idx = 0;
@@ -282,13 +338,18 @@ uint64_t sif_octree_find_nearest(const sif_octree_t* tree,
   stack[sp].half_span = tree->root_half_span;
   sp++;
 
+  /* SIF_REAL_MAX_VAL rather than an infinity: the release build carries
+   * -ffast-math, which is entitled to assume infinities never occur. */
   sif_real best_dist2 = SIF_REAL_MAX_VAL;
   uint64_t best_p = UINT64_MAX;
 
   while (sp > 0) {
     const octree_stack_t cur = stack[--sp];
 
-    /* The bound may have tightened since this entry was pushed. */
+    /* Re-tested on pop, not only on push. An entry can sit on the stack while
+     * the near-first descent finds a much closer particle, and by the time it
+     * comes back up the box that looked promising is already out of the
+     * running. Cheap to check twice, expensive to explore once. */
     if (sq_dist_point_aabb(px, py, pz, cur.cx, cur.cy, cur.cz, cur.half_span) >=
         best_dist2) {
       continue;
@@ -311,7 +372,16 @@ uint64_t sif_octree_find_nearest(const sif_octree_t* tree,
       continue;
     }
 
-    /* Push the octant holding the query point last so it is popped first. */
+    /*
+     * Push the octant holding the query point last so it is popped first.
+     *
+     * Order is the whole of the optimization. Descending into the octant that
+     * contains the query finds a real neighbour almost immediately, and every
+     * box test afterwards is against that tight bound rather than against
+     * infinity -- which is what lets the far siblings be rejected outright
+     * instead of explored. Visiting them first would still give the right
+     * answer, and would visit most of the tree to do it.
+     */
     uint8_t near_octant = 0;
     if (px >= cur.cx)
       near_octant |= 1;
@@ -362,10 +432,14 @@ uint64_t sif_octree_search_radius(const sif_octree_t* tree,
     return 0;
   }
 
+  /* Compared squared, so the per-particle test below needs no square root. */
   sif_real radius2 = radius * radius;
+
+  /* Keeps counting after the buffer fills -- see the header on why the return
+   * may exceed max_capacity. The write is guarded, the increment is not. */
   uint64_t found_count = 0;
 
-  octree_stack_t stack[OCTREE_MAX_DEPTH];
+  octree_stack_t stack[OCTREE_STACK_CAP];
   int top = 0;
 
   stack[top++] = (octree_stack_t){0, tree->root_center[0], tree->root_center[1],
@@ -395,6 +469,9 @@ uint64_t sif_octree_search_radius(const sif_octree_t* tree,
       for (int i = 0; i < 8; i++) {
         sif_octree_node_t* child = &tree->nodes[node->first_child + i];
 
+        /* Empty leaves are the common case on clustered data -- a split puts
+         * every particle in two or three octants and leaves the rest bare --
+         * so skipping them here saves most of the pushes. */
         if (child->first_child == UINT32_MAX && child->p_counting == 0)
           continue;
 
@@ -425,7 +502,7 @@ uint64_t sif_octree_search_box(const sif_octree_t* tree,
   }
 
   uint64_t found_count = 0;
-  octree_stack_t stack[OCTREE_MAX_DEPTH];
+  octree_stack_t stack[OCTREE_STACK_CAP];
   int top = 0;
 
   stack[top++] = (octree_stack_t){0, tree->root_center[0], tree->root_center[1],
@@ -460,6 +537,12 @@ uint64_t sif_octree_search_box(const sif_octree_t* tree,
         sif_real child_cy = curr.cy + ((i & 2) ? q_span : -q_span);
         sif_real child_cz = curr.cz + ((i & 4) ? q_span : -q_span);
 
+        /* Interval overlap on all three axes, which is the separating-axis
+         * test for two boxes: they intersect unless some axis separates them.
+         * Inclusive, so a query box touching a cell face still descends into
+         * it -- the particle test inside is inclusive too, and the two have to
+         * agree or a point exactly on the boundary is pruned before it can be
+         * accepted. */
         if (min_x <= child_cx + q_span && max_x >= child_cx - q_span &&
             min_y <= child_cy + q_span && max_y >= child_cy - q_span &&
             min_z <= child_cz + q_span && max_z >= child_cz - q_span) {

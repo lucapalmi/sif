@@ -5,8 +5,10 @@
  */
 
 #include "sif/io/catalog_io.h"
+
 #include "sif/utils/logger.h"
 
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -23,17 +25,27 @@ int sif_catalog_write_ascii(
     return SIF_ERR_IO;
   }
 
-  /* Write the total number of voids as a header for easier loading */
+  /* The count goes first so the reader can allocate the catalogue once,
+   * instead of growing it a void at a time or scanning the file twice. */
   fprintf(file, "%" PRIu64 "\n", catalog->n_voids);
 
-  /* Write the void data */
+  /* SIF_PRI_REAL round-trips: a catalogue written and read back gives the same
+   * radii bit for bit, which is what lets a size function computed from the
+   * file match one computed in memory. */
   for (uint64_t i = 0; i < catalog->n_voids; i++) {
     fprintf(file,
       SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL "\n",
       catalog->cx[i], catalog->cy[i], catalog->cz[i], catalog->radii[i]);
   }
 
-  fclose(file);
+  /* fprintf() reports nothing useful per call, so the stream's error flag and
+   * the flush inside fclose() are what say whether the file actually reached
+   * the disk. Without this a full quota reads back as a short catalogue. */
+  const bool ok = (ferror(file) == 0);
+  if (fclose(file) != 0 || !ok) {
+    SIF_LOG_ERROR("io", "failed to flush %s to disk", filepath);
+    return SIF_ERR_IO;
+  }
 
   SIF_LOG_INFO(
     "io", "saved %" PRIu64 " voids to %s (ASCII)", catalog->n_voids, filepath);
@@ -66,6 +78,9 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
     return NULL;
   }
 
+  /* Rows are required to be there: the header said how many, and a file that
+   * stops short is truncated rather than merely small. Reading fewer would
+   * hand back a catalogue whose tail is uninitialized memory. */
   for (uint64_t i = 0; i < n_voids; i++) {
     sif_real x, y, z, r;
     if (fscanf(file,
@@ -84,7 +99,8 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
     catalog->radii[i] = r;
   }
 
-  /* Update the size tracking variable since we bypassed the append function */
+  /* Filled in directly rather than through sif_catalog_append(), so the size
+   * has to be set by hand. */
   catalog->n_voids = n_voids;
 
   fclose(file);

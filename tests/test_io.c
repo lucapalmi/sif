@@ -42,13 +42,14 @@ static int failures = 0;
     }                                                                          \
   } while (0)
 
-#define N_P 1000u
+#define N_P     1000u
 #define N_CELLS 8u
-#define BOX 100.0f
+#define BOX     100.0f
 
 static const char* FIELD_PATH = "test_io.xfield";
 static const char* GRID_PATH = "test_io.xgrid";
 static const char* CAT_PATH = "test_io.cat";
+static const char* ASCII_PATH = "test_io.txt";
 
 /* Flip one bit inside the payload, past the 64-byte header. */
 static void corrupt_payload(const char* path, long offset_in_payload) {
@@ -68,7 +69,7 @@ static sif_field_t* make_field(void) {
     return NULL;
   sif_field_reserve_positions(f);
   sif_field_reserve_velocities(f);
-  sif_field_reserve_masses(f);
+  sif_field_reserve_weights(f);
   for (uint64_t i = 0; i < N_P; i++) {
     f->x[i] = (sif_real)((double)i * 0.31379);
     f->y[i] = (sif_real)((double)i * 1.70021);
@@ -76,7 +77,7 @@ static sif_field_t* make_field(void) {
     f->vx[i] = (sif_real)(-(double)i * 0.5);
     f->vy[i] = (sif_real)((double)i * 0.25);
     f->vz[i] = (sif_real)((double)i * 0.125);
-    f->masses[i] = (sif_real)(1.0 + (double)i * 1e-3);
+    f->weights[i] = (sif_real)(1.0 + (double)i * 1e-3);
   }
   return f;
 }
@@ -104,7 +105,7 @@ static void test_field_roundtrip(void) {
   sif_field_t* g = sif_field_alloc(N_P);
   sif_field_reserve_positions(g);
   sif_field_reserve_velocities(g);
-  sif_field_reserve_masses(g);
+  sif_field_reserve_weights(g);
 
   CHECK(sif_field_read_into(FIELD_PATH, g) == SIF_OK, "read failed");
 
@@ -112,7 +113,7 @@ static void test_field_roundtrip(void) {
   for (uint64_t i = 0; i < N_P; i++) {
     if (f->x[i] != g->x[i] || f->y[i] != g->y[i] || f->z[i] != g->z[i] ||
         f->vx[i] != g->vx[i] || f->vy[i] != g->vy[i] || f->vz[i] != g->vz[i] ||
-        f->masses[i] != g->masses[i]) {
+        f->weights[i] != g->weights[i]) {
       identical = 0;
       break;
     }
@@ -153,7 +154,7 @@ static void test_field_corruption(void) {
   sif_field_t* g = sif_field_alloc(N_P);
   sif_field_reserve_positions(g);
   sif_field_reserve_velocities(g);
-  sif_field_reserve_masses(g);
+  sif_field_reserve_weights(g);
   CHECK(sif_field_read_into(FIELD_PATH, g) == SIF_ERR_IO,
     "a flipped payload bit should fail the checksum");
   sif_field_free(g);
@@ -240,6 +241,160 @@ static void test_catalog_roundtrip(void) {
   sif_catalog_free(cat);
 }
 
+/* Write an ASCII table verbatim, so a test can say exactly what the file
+ * looks like -- including whether it ends in a newline. */
+static void write_text(const char* body) {
+  FILE* f = fopen(ASCII_PATH, "w");
+  if (!f)
+    return;
+  fputs(body, f);
+  fclose(f);
+}
+
+/* Read ASCII_PATH into a fresh field sized from the file itself. */
+static sif_field_t* read_ascii(const char* fmt, char delim, uint32_t skip) {
+  sif_field_t* f = sif_field_alloc(0);
+  if (!f)
+    return NULL;
+  if (sif_field_read_ascii(f, ASCII_PATH, fmt, delim, skip) != SIF_OK) {
+    sif_field_free(f);
+    return NULL;
+  }
+  return f;
+}
+
+static void test_ascii_field(void) {
+  printf("ASCII field input\n");
+
+  /* A last line with no terminator is still a row. Counting newlines alone
+   * drops it, and drops it silently, since the same count decides how many
+   * rows the parser then goes looking for. */
+  write_text("1 2 3\n4 5 6\n7 8 9");
+  sif_field_t* f = read_ascii("xyz", ' ', 0);
+  CHECK(f != NULL, "read of an unterminated file failed");
+  if (f) {
+    CHECK(f->n_particles == 3, "unterminated last line: got %llu rows, not 3",
+      (unsigned long long)f->n_particles);
+    CHECK(f->x[2] == 7 && f->y[2] == 8 && f->z[2] == 9,
+      "unterminated last line read as (%g %g %g)", (double)f->x[2],
+      (double)f->y[2], (double)f->z[2]);
+    sif_field_free(f);
+  }
+
+  /* Blank lines, comments and a row that runs out of columns are not
+   * particles. Counting one leaves an entry whose components were never
+   * assigned, which reads as a particle at whatever the allocator handed
+   * back -- the origin on a fresh page, arbitrary coordinates otherwise. */
+  write_text("# a comment\n"
+             "1 2 3\n"
+             "\n"
+             "; another comment\n"
+             "4 5 6\n"
+             "   \n"
+             "7 8\n"
+             "10 11 12\n"
+             "\n");
+  f = read_ascii("xyz", ' ', 0);
+  CHECK(f != NULL, "read of a file with blanks and comments failed");
+  if (f) {
+    CHECK(f->n_particles == 3, "noise lines: got %llu rows, not 3",
+      (unsigned long long)f->n_particles);
+    CHECK(f->x[0] == 1 && f->x[1] == 4 && f->x[2] == 10,
+      "noise lines shifted the data");
+    CHECK(f->y[2] == 11 && f->z[2] == 12,
+      "the short row was counted as a particle");
+    sif_field_free(f);
+  }
+
+  /* Skipped header lines are not rows either, whatever they contain. */
+  write_text("n_particles = 2\n1 2 3\n4 5 6\n");
+  f = read_ascii("xyz", ' ', 1);
+  CHECK(f != NULL, "read with a header failed");
+  if (f) {
+    CHECK(f->n_particles == 2 && f->x[0] == 1,
+      "header line was counted as a particle");
+    sif_field_free(f);
+  }
+
+  /* Velocities, an ignored column, and a non-space delimiter. */
+  write_text("1,2,3,99,-1,-2,-3\n4,5,6,99,-4,-5,-6\n");
+  f = read_ascii("xyz*uvw", ',', 0);
+  CHECK(f != NULL, "comma-delimited read failed");
+  if (f) {
+    CHECK(f->n_particles == 2, "comma-delimited: got %llu rows, not 2",
+      (unsigned long long)f->n_particles);
+    CHECK(f->vx != NULL && f->vx[1] == -4 && f->vz[1] == -6,
+      "velocity columns did not land");
+    CHECK(f->z[1] == 6, "the ignored column was not skipped");
+    sif_field_free(f);
+  }
+
+  /* Reserving is a no-op on a block that is already there, so a second pass
+   * with a mass-only format keeps the positions the first pass loaded. */
+  write_text("1 2 3 100\n4 5 6 200\n");
+  f = read_ascii("xyz*", ' ', 0);
+  CHECK(f != NULL, "first pass failed");
+  if (f) {
+    CHECK(sif_field_read_ascii(f, ASCII_PATH, "***m", ' ', 0) == SIF_OK,
+      "mass-only second pass failed");
+    CHECK(f->x[1] == 4 && f->z[1] == 6, "the second pass lost the positions");
+    CHECK(f->weights != NULL && f->weights[1] == 200, "weights did not land");
+    sif_field_free(f);
+  }
+
+  /* A field that already has a count is filled to it and no further. */
+  write_text("1 2 3\n4 5 6\n7 8 9\n");
+  f = sif_field_alloc(2);
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xyz", ' ', 0) == SIF_OK,
+    "read into a pre-sized field failed");
+  CHECK(
+    f->n_particles == 2 && f->x[1] == 4, "a pre-sized field was not respected");
+  sif_field_free(f);
+}
+
+static void test_ascii_field_rejections(void) {
+  printf("ASCII field input rejects bad input\n");
+
+  write_text("1 2 3\n");
+  sif_field_t* f = sif_field_alloc(4);
+  if (!f)
+    return;
+
+  /* decode_format skips what it does not recognize and returns a count, so a
+   * typo yields a short layout rather than an error. Zero columns is where
+   * that stops being recoverable: every line would be consumed and nothing
+   * written, leaving a field of uninitialized memory that reads as loaded. */
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "", ' ', 0) == SIF_ERR_INVALID,
+    "an empty format should be SIF_ERR_INVALID");
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "?!", ' ', 0) == SIF_ERR_INVALID,
+    "a format of unknown characters should be SIF_ERR_INVALID");
+
+  /* Position and velocity are reserved as one block each, so naming two of
+   * the three would allocate the third and never write it. */
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xy", ' ', 0) == SIF_ERR_INVALID,
+    "a partial position should be SIF_ERR_INVALID");
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xyzu", ' ', 0) == SIF_ERR_INVALID,
+    "a partial velocity should be SIF_ERR_INVALID");
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "m", ' ', 0) == SIF_ERR_INVALID,
+    "a mass-only format on a field with no positions should be rejected");
+
+  CHECK(
+    sif_field_read_ascii(NULL, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_INVALID,
+    "a NULL field should be SIF_ERR_INVALID");
+  CHECK(sif_field_read_ascii(f, "test_io_does_not_exist.txt", "xyz", ' ', 0) ==
+          SIF_ERR_IO,
+    "a missing file should be SIF_ERR_IO");
+  sif_field_free(f);
+
+  /* A file of nothing but noise yields no particles, which is a failure and
+   * not an empty field: the caller would otherwise carry on with one. */
+  write_text("# only\n\n; comments\n");
+  f = sif_field_alloc(0);
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_IO,
+    "a file with no data rows should be SIF_ERR_IO");
+  sif_field_free(f);
+}
+
 int main(void) {
   sif_init(SIF_CONFIG_QUIET);
 
@@ -248,10 +403,13 @@ int main(void) {
   test_field_corruption();
   test_grid_roundtrip();
   test_catalog_roundtrip();
+  test_ascii_field();
+  test_ascii_field_rejections();
 
   remove(FIELD_PATH);
   remove(GRID_PATH);
   remove(CAT_PATH);
+  remove(ASCII_PATH);
 
   sif_finalize();
 

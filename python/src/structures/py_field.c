@@ -251,7 +251,7 @@ static PyMethodDef sifField_methods[] = {
     "Reorder the particles along a 3D Morton curve, in place.\n\n"
     "Puts particles that are close in space close in memory, which is what\n"
     "the octree requires and what makes the neighbour queries fast. The\n"
-    "permutation is kept, so velocities and masses assigned afterwards are\n"
+    "permutation is kept, so velocities and weights assigned afterwards are\n"
     "matched to their own particles automatically."},
   {"refresh_bounds", (PyCFunction)sifField_refresh_bounds, METH_NOARGS,
     "refresh_bounds()\n"
@@ -273,7 +273,7 @@ PyTypeObject sifFieldType = {
     "Field(capacity=0)\n"
     "--\n\n"
     "A particle field: positions, and optionally velocities and\n"
-    "masses.\n\n"
+    "weights.\n\n"
     "The container every other structure is built from. Fill it with\n"
     "from_numpy(), or read one off disk with pysif.io.read_field().\n\n"
     "Args:\n"

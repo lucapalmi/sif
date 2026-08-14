@@ -10,10 +10,10 @@
 static PyMethodDef io_methods[] = {
   {"write_field", (PyCFunction)pysif_write_field, METH_VARARGS | METH_KEYWORDS,
     "write_field(filepath, box_length, x, y, z, vx=None, vy=None, vz=None, "
-    "masses=None)\n"
+    "weights=None)\n"
     "--\n\n"
     "Write particle arrays to an .xfield binary.\n\n"
-    "Velocity and mass blocks are written only if given, and the header\n"
+    "Velocity and weight blocks are written only if given, and the header\n"
     "records which. A checksum of the payload goes in the header, so a\n"
     "reader can tell a truncated or corrupted file from a good one.\n\n"
     "Args:\n"
@@ -22,7 +22,7 @@ static PyMethodDef io_methods[] = {
     "        has to be supplied here.\n"
     "    x, y, z: Position components.\n"
     "    vx, vy, vz: Velocity components, or None.\n"
-    "    masses: Per-particle masses, or None for an equal-mass field."},
+    "    weights: Per-particle weights, or None for an unweighted field."},
 
   {"read_field", (PyCFunction)pysif_read_field, METH_VARARGS | METH_KEYWORDS,
     "read_field(filepath, wrap=False)\n"
@@ -54,14 +54,15 @@ static PyMethodDef io_methods[] = {
     "Args:\n"
     "    filepath: Input path.\n\n"
     "Returns:\n"
-    "    dict: n_particles, box_length, has_masses, has_velocities,\n"
+    "    dict: n_particles, box_length, has_weights, has_velocities,\n"
     "    version."},
 
   {"write_grid", (PyCFunction)pysif_write_grid, METH_VARARGS | METH_KEYWORDS,
     "write_grid(filepath, grid)\n"
     "--\n\n"
     "Write a grid to an .xgrid binary.\n\n"
-    "Records whether the cells hold mass or density contrast, along with a\n"
+    "Records whether the cells hold a density or a density contrast, along "
+    "with a\n"
     "checksum of the payload.\n\n"
     "Args:\n"
     "    filepath: Output path, truncated if it exists.\n"
@@ -88,8 +89,9 @@ static PyMethodDef io_methods[] = {
     "Args:\n"
     "    filepath: Input path.\n"
     "    format: One character per column: 'x', 'y', 'z' for positions,\n"
-    "        'u', 'v', 'w' for velocities, 'm' for mass, '*' or '/' to skip\n"
-    "        a column. So 'xyz*m' reads position, skips one, then mass.\n"
+    "        'u', 'v', 'w' for velocities, 'm' for the per-particle weight, "
+    "'*' or '/' to skip\n"
+    "        a column. So 'xyz*m' reads position, skips one, then the weight.\n"
     "    delimiter: Column separator; ' ' for whitespace.\n"
     "    skip_lines: Header lines to skip.\n\n"
     "Returns:\n"

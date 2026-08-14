@@ -44,8 +44,12 @@ static void fill_histogram(sif_size_function_t* vsf, const sif_catalog_t* cat,
 
   const sif_real inv_width = 1.0f / width;
 
-/* The array-section reduction gives each thread a private copy of the bins,
- * so the data-dependent index below is safe. */
+/* The array-section reduction gives each thread a private copy of the bins, so
+ * the data-dependent index below is a private write rather than a scatter into
+ * shared memory. It is an OpenMP 4.5 feature, which CMakeLists requires
+ * explicitly; the alternative is the hand-rolled per-thread scratch that
+ * sif__fft_spectral_moments uses, and here the loop is over voids rather than
+ * over cells, so the reduction's clarity is worth more than the control. */
 #pragma omp parallel for schedule(static) reduction(+ : out_counts[ : n_bins])
   for (uint64_t i = 0; i < cat->n_voids; i++) {
     const sif_real r = cat->radii[i];
@@ -164,11 +168,16 @@ sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
   return vsf;
 }
 
-/* * Internal helper to safely interpolate a VSF value at a specific radius
+/*
+ * Reads one size function at an arbitrary radius.
+ *
+ * Outside the bin centres the nearest one is held flat rather than
+ * extrapolated: a size function falls steeply with radius, and a log-log line
+ * continued past the last populated bin produces a confident number where the
+ * catalogue has no voids at all.
  */
 static void interpolate_vsf(const sif_size_function_t* vsf, sif_real r_target,
   sif_real* out_val, sif_real* out_err) {
-  /* If we are completely outside the centers, return 0 */
   if (r_target <= vsf->r_centers[0]) {
     *out_val = vsf->vsf[0];
     *out_err = vsf->err[0];
@@ -212,11 +221,32 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
   uint32_t n_vsfs, uint32_t master_bins, const sif_interval_t* domains,
   sif_option options) {
 
-  if (!vsfs || n_vsfs == 0 || master_bins == 0)
+  if (!vsfs || n_vsfs == 0 || master_bins == 0) {
+    SIF_LOG_ERROR("size_function", "invalid arguments to combine");
     return NULL;
+  }
 
-  uint32_t merge_strategy = (options & SIF__VSF_MERGE_MASK);
-  bool use_ln_bins = (options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
+  for (uint32_t i = 0; i < n_vsfs; i++) {
+    if (!vsfs[i] || vsfs[i]->n_bins == 0) {
+      SIF_LOG_ERROR("size_function", "size function %u is missing or empty", i);
+      return NULL;
+    }
+  }
+
+  const uint32_t merge_strategy = (options & SIF__VSF_MERGE_MASK);
+  const bool use_ln_bins = (options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
+
+  /* The mask admits four values and only three are defined. An unrecognized
+   * one used to match none of the branches below, leaving every master bin at
+   * whatever the allocator returned -- a result-shaped object full of nothing.
+   */
+  if (merge_strategy != SIF_VSF_MERGE_MEAN &&
+      merge_strategy != SIF_VSF_MERGE_MEDIAN &&
+      merge_strategy != SIF_VSF_MERGE_STITCH) {
+    SIF_LOG_ERROR(
+      "size_function", "unrecognized merge strategy in the options bitmask");
+    return NULL;
+  }
 
   /* 1. Determine absolute bounds across all domains */
   sif_real abs_min = SIF_REAL_MAX_VAL;
@@ -314,9 +344,22 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
       master->err[b] = (sif_real)(SIF_REAL_SQRT(sum_e2) / valid_count);
     } else if (merge_strategy == SIF_VSF_MERGE_MEDIAN) {
       sif_sort_real_array(temp_vals, valid_count);
-      master->vsf[b] = temp_vals[valid_count / 2];
-      /* For median error, taking the mean of errors is a stable proxy without
-       * heavy bootstrapping */
+
+      /* An even count has no single middle element, and taking the upper one
+       * biases the merge high -- consistently, in the same direction, for
+       * every bin. Averaging the two is the definition every other tool uses.
+       */
+      if (valid_count % 2 == 0) {
+        const double a = (double)temp_vals[valid_count / 2 - 1];
+        const double b_val = (double)temp_vals[valid_count / 2];
+        master->vsf[b] = (sif_real)(0.5 * (a + b_val));
+      } else {
+        master->vsf[b] = temp_vals[valid_count / 2];
+      }
+
+      /* The errors are not re-sorted alongside the values, which does not
+       * matter because only their mean is taken: a stable proxy for the
+       * spread of a median without bootstrapping it. */
       double sum_e = 0.0;
       for (uint32_t k = 0; k < valid_count; k++)
         sum_e += temp_errs[k];

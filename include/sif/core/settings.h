@@ -15,7 +15,8 @@
  *
  * @warning The table is not synchronized. Reads are safe once the settings are
  * populated, but calling sif_setting_set() concurrently with any other access
- * is a data race.
+ * is a data race -- and so is sif_setting_get() with a fallback, which writes
+ * the fallback into the table when the key is absent.
  */
 
 #ifndef SIF_CORE_SETTINGS_H
@@ -30,10 +31,14 @@
  * finalization. Environment references in @p value are expanded now, not at
  * read time, so a later change to the environment is not picked up.
  *
- * Keys are truncated at 63 characters, values at 255.
+ * Keys are truncated at 63 characters, values at 255, with a warning.
  *
  * @param key Setting name. Ignored if NULL, or if called before sif_init().
  * @param value Raw value, possibly containing environment references.
+ *
+ * @note The file format is one `key = value` per line with no escaping, so a
+ * key containing `=` or a newline, or a value containing a newline, would not
+ * read back as what was written and is rejected with a warning.
  *
  * @warning Adding a new key may reallocate the table, which invalidates every
  * pointer previously returned by sif_setting_get().
@@ -50,8 +55,9 @@ void sif_setting_set(const char* key, const char* value);
  * @param fallback Value to install and return if the key is absent. May be
  * NULL to query without creating.
  * @return The expanded value, owned by the settings table -- the caller must
- * neither free nor modify it. Returns @p fallback if the table is not yet
- * populated, and NULL if the key is absent and no fallback was given.
+ * neither free nor modify it. Returns @p fallback unexpanded if the table is
+ * not yet populated or the entry could not be created, and NULL if the key is
+ * absent and no fallback was given.
  *
  * @warning The returned pointer is valid only until the next
  * sif_setting_set(), including the implicit one this function performs when it

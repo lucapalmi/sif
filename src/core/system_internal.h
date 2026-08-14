@@ -15,7 +15,6 @@
 #ifndef SIF__CORE_SYSTEM_INTERNAL_H
 #define SIF__CORE_SYSTEM_INTERNAL_H
 
-#include <stdbool.h>
 #include <stdint.h>
 
 #include "math/fft.h"
@@ -25,21 +24,21 @@
 typedef struct {
   /** Minimum level a message must reach to be printed. */
   uint8_t level;
-  /** Report timings and trace-level detail. */
-  bool verbose;
 } sif_logger_state_t;
 
 /** @brief Everything the library holds between init and finalize. */
 typedef struct {
   sif_logger_state_t logger;
 
-  uint8_t save_memory;
-  /** Thread ceiling actually in force, as reported by the OpenMP runtime. */
+  /** Thread ceiling actually in force, as reported by the OpenMP runtime --
+   *  which may be lower than the one requested. */
   uint32_t max_threads;
+
+  /** NULL if FFTW could not be brought up; transforms then fail individually
+   *  rather than taking the process down at init. */
   sif_fft_manager_t* fft_mgr;
 
   sif_timer_t total_runtime_timer;
-  sif_timer_t scratch_timer;
 } sif_system_state_t;
 
 /**
@@ -76,8 +75,14 @@ int sif__system_thread_num(void);
  */
 
 /**
- * @brief Load the settings table, creating @p default_dir if necessary.
- * @param default_dir Directory holding the settings file.
+ * @brief Load the settings table, and seed it with the library's defaults.
+ *
+ * Missing or unreadable files are not an error: the table is simply the
+ * defaults, and the first sif__settings_finalize() writes it out.
+ *
+ * @param default_dir Existing directory holding the `config` file. Also the
+ * root the default cache and wisdom paths are derived from when there is no
+ * HOME to express them against.
  */
 void sif__settings_init(const char* default_dir);
 

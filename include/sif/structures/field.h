@@ -6,7 +6,7 @@
 
 /**
  * @file field.h
- * @brief The particle field: positions, velocities and masses, in
+ * @brief The particle field: positions, velocities and weights, in
  * structure-of-arrays layout.
  *
  * Coordinates are held as three separate arrays rather than as interleaved
@@ -15,7 +15,7 @@
  *
  * **A field always owns every buffer it points at.** There used to be a
  * borrowing mode (`FIELD_POINTS`) alongside per-array ownership bits. It could
- * not be honoured: assigning masses or velocities to a sorted field silently
+ * not be honoured: assigning weights or velocities to a sorted field silently
  * took ownership anyway so the incoming data could be permuted, and
  * sif_field_sort_morton() reallocates unconditionally, which detached the field
  * from the caller's arrays with no diagnostic. What is left describes the state
@@ -92,8 +92,9 @@ typedef struct {
   sif_real* vy;
   sif_real* vz;
 
-  /** Per-particle mass, or NULL for an equal-mass field. */
-  sif_real* masses;
+  /** Per-particle weight -- a mass, a luminosity, a selection weight -- or
+   *  NULL, which every consumer reads as a weight of 1. */
+  sif_real* weights;
   /** Where each particle sat before the Morton sort, or NULL if unsorted. */
   uint64_t* original_indices;
 
@@ -157,10 +158,10 @@ int sif_field_reserve_positions(sif_field_t* field);
 int sif_field_reserve_velocities(sif_field_t* field);
 
 /**
- * @brief Allocate the mass array without filling it.
+ * @brief Allocate the weight array without filling it.
  * @see sif_field_reserve_positions
  */
-int sif_field_reserve_masses(sif_field_t* field);
+int sif_field_reserve_weights(sif_field_t* field);
 
 /**
  * @brief Copy positions into the field.
@@ -195,15 +196,15 @@ int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
   const sif_real* vy, const sif_real* vz);
 
 /**
- * @brief Copy per-particle masses into the field.
+ * @brief Copy per-particle weights into the field.
  *
  * @param field The field.
- * @param masses Masses in the caller's original particle order.
+ * @param weights Weights in the caller's original particle order.
  * @return SIF_OK, SIF_ERR_INVALID on bad arguments, SIF_ERR_ALLOC on failure.
  *
  * @note Same permutation rule as sif_field_assign_velocities().
  */
-int sif_field_assign_masses(sif_field_t* field, const sif_real* masses);
+int sif_field_assign_weights(sif_field_t* field, const sif_real* weights);
 
 /**
  * @brief Fold every coordinate into [0, box_length) periodically.

@@ -424,7 +424,6 @@ int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
-    .verbose = false,
     .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 

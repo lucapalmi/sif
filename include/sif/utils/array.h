@@ -94,8 +94,11 @@ SIF_NODISCARD sif_real* sif_array_logspace(
  * @brief Sum of every element.
  * @return The sum; 0 for an empty or NULL array.
  *
- * @note Summed with an OpenMP reduction, so the order of accumulation depends
- * on the thread count and the result can differ in the last bits between runs.
+ * @note The array is split into a fixed number of blocks, each accumulated in
+ * `double` and combined in index order, so the result depends on the input
+ * alone and not on how many threads happened to run. It is also markedly more
+ * accurate than a running `sif_real` total in a single-precision build, where
+ * a few million similar terms are enough to stall the accumulator.
  */
 SIF_NODISCARD sif_real sif_array_sum(const sif_real* arr, uint64_t size);
 
@@ -104,6 +107,13 @@ SIF_NODISCARD sif_real sif_array_sum(const sif_real* arr, uint64_t size);
  * @return The minimum, or 0 for an empty or NULL array -- which is
  * indistinguishable from a genuine minimum of 0. Check @p size first if the
  * difference matters.
+ *
+ * @warning The release build compiles with `-ffast-math`, which lets the
+ * compiler assume no NaN ever occurs, so an array containing one has no
+ * defined result. The reduction is seeded with #SIF_REAL_MAX_VAL rather than
+ * with the first element, which keeps a NaN from capturing everything behind
+ * it wherever the comparison does behave -- but that is damage control, not a
+ * guarantee. Screen for NaN before reducing if the data can carry it.
  */
 SIF_NODISCARD sif_real sif_array_min(const sif_real* arr, uint64_t size);
 
@@ -112,6 +122,8 @@ SIF_NODISCARD sif_real sif_array_min(const sif_real* arr, uint64_t size);
  * @return The maximum, or 0 for an empty or NULL array -- which is
  * indistinguishable from a genuine maximum of 0. Check @p size first if the
  * difference matters.
+ *
+ * @warning NaN carries the same caveat as sif_array_min().
  */
 SIF_NODISCARD sif_real sif_array_max(const sif_real* arr, uint64_t size);
 

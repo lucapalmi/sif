@@ -50,13 +50,16 @@ typedef struct {
   sif_real* y;
   sif_real* z;
 
-  sif_real* vx; /**< Velocities in the same order, or NULL if not requested. */
+  /** Velocities in the same order, or NULL if the field carries none. */
+  sif_real* vx;
   sif_real* vy;
   sif_real* vz;
 
-  /** Masses in the same order, or NULL if not requested. */
-  sif_real* masses;
-  /** Index of each particle in the source field, or NULL if not requested. */
+  /** Weights in the same order, or NULL if the field carries none. */
+  sif_real* weights;
+  /** Index of each particle in the source field. Always present: the mesh
+   *  reorders particles, so this is the only way to relate a query result
+   *  back to the field it came from. */
   uint64_t* original_indices;
 
   uint64_t n_particles;
@@ -71,23 +74,22 @@ typedef struct {
 /**
  * @brief Allocate a chain mesh and bin a field into it.
  *
- * Only the payloads that are asked for are copied, since each one costs a full
- * pass over the field and as much memory again.
+ * The mesh mirrors the field: velocities and weights are copied if the field
+ * carries them and not otherwise, since there is nothing else a caller could
+ * ask for. The map back to field indices is always built -- a mesh that cannot
+ * say which particle an answer refers to cannot answer the queries this
+ * structure exists for -- which costs 8 bytes per particle on top of the 12 or
+ * 24 the positions take, or 25 GiB at 3.4e9 tracers.
  *
  * @param n_cells Cells per side.
  * @param box_length Physical side length of the box.
  * @param field Particle field to bin. Every coordinate must be in
  * [0, box_length); the call fails if any particle lies outside.
- * @param allocate_masses Copy the per-particle masses.
- * @param allocate_velocities Copy the velocities.
- * @param allocate_original_indices Keep the map back to field indices.
- * Required by the find_nearest queries, which return one of these.
  * @return The mesh, owned by the caller and released with
  * sif_chain_mesh_free(). NULL on invalid input or allocation failure.
  */
-SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
-  sif_real box_length, const sif_field_t* field, bool allocate_masses,
-  bool allocate_velocities, bool allocate_original_indices);
+SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(
+  uint32_t n_cells, sif_real box_length, const sif_field_t* field);
 
 /**
  * @brief Release a chain mesh and everything it owns.
@@ -102,10 +104,9 @@ void sif_chain_mesh_free(sif_chain_mesh_t* mesh);
  * candidate found is closer than the nearest possible point of the next shell,
  * so the answer is exact rather than restricted to the starting cell.
  *
- * @param mesh The mesh, built with `allocate_original_indices`.
+ * @param mesh The mesh.
  * @param px,py,pz Query point, in [0, box_length) on every axis.
- * @return Index into the original field, or UINT64_MAX if the mesh is empty or
- * was built without original indices.
+ * @return Index into the original field, or UINT64_MAX if the mesh is empty.
  */
 uint64_t sif_chain_mesh_find_nearest_open(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);
@@ -116,10 +117,9 @@ uint64_t sif_chain_mesh_find_nearest_open(
  * As sif_chain_mesh_find_nearest_open(), except that separations are taken
  * through the nearest periodic image and the shell walk wraps at the faces.
  *
- * @param mesh The mesh, built with `allocate_original_indices`.
+ * @param mesh The mesh.
  * @param px,py,pz Query point, in [0, box_length) on every axis.
- * @return Index into the original field, or UINT64_MAX if the mesh is empty or
- * was built without original indices.
+ * @return Index into the original field, or UINT64_MAX if the mesh is empty.
  */
 uint64_t sif_chain_mesh_find_nearest_pbc(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);

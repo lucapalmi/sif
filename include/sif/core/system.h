@@ -47,10 +47,12 @@ typedef struct {
   sif_fft_config_t* fft_config;
   /** OpenMP settings, or NULL for the defaults. */
   sif_omp_config_t* omp_config;
-  /** Log everything and report timings. Forces #log_level to TRACE. */
-  bool verbose;
   /** Minimum level a message must reach to be printed; one of the
-   *  SIF_LOG_LEVEL_* constants. Ignored when #verbose is set. */
+   *  SIF_LOG_LEVEL_* constants. SIF_LOG_LEVEL_TRACE is the verbose mode.
+   *
+   *  @warning The field is always honoured, and SIF_LOG_LEVEL_TRACE is 0 --
+   *  so a zero-initialized sif_config_t asks for trace logging, not for the
+   *  default. Set it explicitly, or use one of the presets below. */
   uint8_t log_level;
 } sif_config_t;
 
@@ -65,7 +67,9 @@ typedef struct {
  * to outlive the call, and the library never frees them.
  *
  * @note Terminates the process if the system state cannot be allocated, on the
- * grounds that a caller has no useful way to continue from that.
+ * grounds that a caller has no useful way to continue from that. Every other
+ * failure is reported and survived: a run that cannot bring up FFTW, or cannot
+ * create its cache directories, still does everything that does not need them.
  */
 void sif_init(sif_config_t* config);
 
@@ -92,24 +96,19 @@ void sif_finalize(void);
 
 /** @brief Trace-level logging, timings reported. */
 #define SIF_CONFIG_VERBOSE                                                     \
-  (&(sif_config_t){.fft_config = NULL,                                         \
-    .omp_config = NULL,                                                        \
-    .verbose = true,                                                           \
-    .log_level = SIF_LOG_LEVEL_TRACE})
+  (&(sif_config_t){                                                            \
+    .fft_config = NULL, .omp_config = NULL, .log_level = SIF_LOG_LEVEL_TRACE})
 
 /** @brief Warnings and errors only. */
 #define SIF_CONFIG_QUIET                                                       \
   (&(sif_config_t){.fft_config = NULL,                                         \
     .omp_config = NULL,                                                        \
-    .verbose = false,                                                          \
     .log_level = SIF_LOG_LEVEL_WARNING})
 
 /** @brief The default: informational messages and above. */
 #define SIF_CONFIG_STANDARD                                                    \
-  (&(sif_config_t){.fft_config = NULL,                                         \
-    .omp_config = NULL,                                                        \
-    .verbose = false,                                                          \
-    .log_level = SIF_LOG_LEVEL_INFO})
+  (&(sif_config_t){                                                            \
+    .fft_config = NULL, .omp_config = NULL, .log_level = SIF_LOG_LEVEL_INFO})
 
 /** @} */
 

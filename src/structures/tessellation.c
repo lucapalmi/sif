@@ -15,7 +15,24 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* --- Edge Tracking Helpers --- */
+/*
+ * EXPERIMENTAL, and approximate by construction: there is no exact Delaunay
+ * or Voronoi construction behind this yet.
+ *
+ * Both methods here answer "which particle is nearest?" at a great many sample
+ * points and call the tally a volume. That is a Monte Carlo estimate of each
+ * Voronoi cell, converging as 1/sqrt(samples) for the random method and as the
+ * voxel size for the grid one -- good enough to weight a profile, not good
+ * enough to be called a tessellation in the geometric sense. The neighbour
+ * graph the voxel method builds is likewise an approximation: two cells count
+ * as adjacent if any two neighbouring voxels have them as owners, which finds
+ * every real face but can also invent one where three cells nearly meet.
+ *
+ * See sif_profiles_voronoi() for the estimator that consumes it, which carries
+ * the same warning.
+ */
+
+/* --- edge tracking --- */
 
 typedef struct {
   uint64_t p1;
@@ -36,9 +53,18 @@ static int edge_cmp(const void* a, const void* b) {
   return 0;
 }
 
-static void voxel_layer(const sif_field_t* field, const sif_chain_mesh_t* mesh,
-  uint64_t* layer_out, sif_real* volumes, int32_t iz, int32_t grid_dim,
-  sif_real voxel_len, sif_real vol_per_voxel, bool is_pbc) {
+/*
+ * Fills one z-layer of the voxel grid with the owner of each voxel, and adds
+ * that voxel's volume to whichever particle owns it.
+ *
+ * A layer at a time, rather than the whole grid, because the grid is sized to
+ * roughly one voxel per particle: holding it all would cost another array the
+ * size of the field, while adjacency only ever needs the layer being scanned
+ * and the one after it.
+ */
+static void voxel_layer(const sif_chain_mesh_t* mesh, uint64_t* layer_out,
+  sif_real* volumes, int32_t iz, int32_t grid_dim, sif_real voxel_len,
+  sif_real vol_per_voxel, bool is_pbc) {
 
 #pragma omp parallel for schedule(static)
   for (int32_t ix = 0; ix < grid_dim; ix++) {
@@ -55,6 +81,12 @@ static void voxel_layer(const sif_field_t* field, const sif_chain_mesh_t* mesh,
 
       layer_out[ix * grid_dim + iy] = nearest_idx;
 
+      /* Atomic because the owner is data-dependent: two threads working
+       * different (ix, iy) columns can land on the same particle, and which
+       * ones do is a property of the point distribution rather than of the
+       * loop. The result is a sum of floats in thread order, so it is
+       * reproducible only to rounding -- acceptable for a volume that is a
+       * Monte Carlo estimate to begin with. */
       if (nearest_idx != UINT64_MAX) {
 #pragma omp atomic
         volumes[nearest_idx] += vol_per_voxel;
@@ -84,6 +116,10 @@ SIF_NODISCARD sif_tessellation_t* sif_tessellation_approx(
   tess->neighbor_offsets = NULL;
   tess->neighbor_indices = NULL;
 
+  /* Rounded up to a whole cache line so the vectorized fill below runs to the
+   * end with no masked tail. It buys nothing for the atomic accumulation
+   * later: particles adjacent in index share a line whatever the total length
+   * is, and that contention is inherent to accumulating per particle. */
   uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
   uint64_t padded_n =
     (field->n_particles + align_elements - 1) & ~(align_elements - 1);
@@ -138,8 +174,7 @@ SIF_NODISCARD sif_tessellation_t* sif_tessellation_approx(
     return NULL;
   }
 
-  sif_chain_mesh_t* mesh =
-    sif_chain_mesh_alloc(mesh_cells, box_len, field, false, false, true);
+  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(mesh_cells, box_len, field);
   if (!mesh) {
     SIF_LOG_ERROR("tessellation", "Failed to allocate chain mesh.");
     sif_free_aligned(tess->volumes);
@@ -228,7 +263,7 @@ SIF_NODISCARD sif_tessellation_t* sif_tessellation_approx(
     }
 
     // Initialize Z=0
-    voxel_layer(field, mesh, layer_zero, tess->volumes, 0, grid_dim, voxel_len,
+    voxel_layer(mesh, layer_zero, tess->volumes, 0, grid_dim, voxel_len,
       vol_per_voxel, is_pbc);
     memcpy(layer_current, layer_zero, elements_per_layer * sizeof(uint64_t));
 
@@ -237,7 +272,7 @@ SIF_NODISCARD sif_tessellation_t* sif_tessellation_approx(
 
       // Prepare the NEXT layer
       if (iz < grid_dim - 1) {
-        voxel_layer(field, mesh, layer_next, tess->volumes, iz + 1, grid_dim,
+        voxel_layer(mesh, layer_next, tess->volumes, iz + 1, grid_dim,
           voxel_len, vol_per_voxel, is_pbc);
       } else if (is_pbc) {
         // Periodic wrap: DO NOT re-add volumes, just copy the IDs from

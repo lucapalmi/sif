@@ -429,10 +429,8 @@ static void test_guards(void) {
 }
 
 int main(void) {
-  sif_config_t cfg = {.fft_config = NULL,
-    .omp_config = NULL,
-    .verbose = false,
-    .log_level = SIF_LOG_LEVEL_ERROR};
+  sif_config_t cfg = {
+    .fft_config = NULL, .omp_config = NULL, .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 
   test_against_reference();

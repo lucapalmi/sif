@@ -461,6 +461,13 @@ C99, no compiler extensions outside `macros.h`. Anything compiler-specific
 (`__attribute__`, builtins, pragmas) is wrapped in a `SIF_*` macro there with a
 neutral fallback, so the rest of the tree stays clean.
 
+**The target is C99 on POSIX**, and `<unistd.h>`, `<sys/stat.h>` and the rest of
+that surface may be used directly. Windows is not a supported platform: a
+`#ifdef _WIN32` branch in library code buys a file that compiles on a system
+nobody builds or tests sif on, and hides the fact that the neighbouring file
+would not. Anything genuinely platform-dependent goes behind a `SIF_*` macro in
+`macros.h`, like everything else.
+
 The library is parallel: anything writing to shared state from an OpenMP region
 uses the `SIF_ATOMIC_*` wrappers. Do not assume a thread count, and do not let a
 result depend on scheduling — a reduction whose answer changes with thread count

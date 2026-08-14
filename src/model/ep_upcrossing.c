@@ -112,6 +112,24 @@ void sif__ep_features_free(sif_ep_features_t* f) {
 static void deriv_variance_differenced(
   const double* cov, const double* S, uint32_t n, double* V) {
 
+  /* Two radii leave no stencil at all: the central difference needs three
+   * points and so do both one-sided forms. The single available pair is used
+   * for every entry, which is first order at best -- but it is a value, and
+   * the alternative here was to leave the buffer as the allocator returned it.
+   */
+  if (n < 3) {
+    const double h = S[n - 1] - S[0];
+    const double v =
+      (h != 0.0)
+        ? (S[n - 1] + S[0] - 2.0 * sif__ep_cov_get(cov, n - 1, 0)) / (h * h)
+        : 0.0;
+
+    for (uint32_t i = 0; i < n; i++)
+      V[i] = v;
+
+    return;
+  }
+
   for (uint32_t i = 1; i + 1 < n; i++) {
     const double h = S[i + 1] - S[i - 1];
     V[i] = (S[i + 1] + S[i - 1] - 2.0 * sif__ep_cov_get(cov, i + 1, i - 1)) /
@@ -119,14 +137,12 @@ static void deriv_variance_differenced(
   }
 
   /* One-sided at the ends, so no radius is left without a value. */
-  if (n >= 3) {
-    double h = S[2] - S[0];
-    V[0] = (S[2] + S[0] - 2.0 * sif__ep_cov_get(cov, 2, 0)) / (h * h);
-    h = S[n - 1] - S[n - 3];
-    V[n - 1] =
-      (S[n - 1] + S[n - 3] - 2.0 * sif__ep_cov_get(cov, n - 1, n - 3)) /
-      (h * h);
-  }
+  double h = S[2] - S[0];
+  V[0] = (S[2] + S[0] - 2.0 * sif__ep_cov_get(cov, 2, 0)) / (h * h);
+
+  h = S[n - 1] - S[n - 3];
+  V[n - 1] =
+    (S[n - 1] + S[n - 3] - 2.0 * sif__ep_cov_get(cov, n - 1, n - 3)) / (h * h);
 }
 
 /*
@@ -196,6 +212,7 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
     Bd[i] = (double)barrier[i];
 
   int bad = 0;
+  uint32_t first_bad = 0;
 
   for (uint32_t i = 0; i < n; i++) {
     const double S = f->S[i];
@@ -205,6 +222,8 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
      * matrix is not a covariance, or the difference above has gone wrong. */
     const double four_sv = 4.0 * S * V[i];
     if (!(four_sv >= 1.0)) {
+      if (bad == 0)
+        first_bad = i;
       bad++;
       f->gamma2[i] = 1.0;
       f->y[i] = 0.0;
@@ -236,9 +255,9 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
   if (bad > 0) {
     SIF_LOG_ERROR(TAG,
       "at %d of %u radii the walk correlates with its own derivative more "
-      "strongly than Cauchy-Schwarz allows, which means the matrix is not a "
-      "covariance; check how it was built",
-      bad, n);
+      "strongly than Cauchy-Schwarz allows, first at radius %g, which means "
+      "the matrix is not a covariance; check how it was built",
+      bad, n, (double)radii[first_bad]);
     return SIF_ERR_RANGE;
   }
 
@@ -386,3 +405,5 @@ sif_real* sif__ep_multiplicity_upcrossing(
   free(lam);
   return out;
 }
+
+#undef TAG

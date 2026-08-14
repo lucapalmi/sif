@@ -223,8 +223,7 @@ static void test_chain_mesh(void) {
   sif_field_t* field = sif_field_alloc(n_p);
   sif_field_assign_positions(field, x, y, z);
 
-  sif_chain_mesh_t* mesh =
-    sif_chain_mesh_alloc(8, box, field, false, false, true);
+  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(8, box, field);
   CHECK(mesh != NULL, "alloc returned NULL for a valid field");
 
   if (mesh) {
@@ -258,35 +257,51 @@ static void test_chain_mesh(void) {
     sif_chain_mesh_free(mesh);
   }
 
-  /* A mesh built without original_indices must refuse to answer queries rather
-   * than dereference NULL. */
-  sif_chain_mesh_t* no_idx =
-    sif_chain_mesh_alloc(8, box, field, false, false, false);
-  CHECK(no_idx != NULL, "alloc without original_indices failed");
-  if (no_idx) {
-    CHECK(
-      sif_chain_mesh_find_nearest_pbc(no_idx, 1.0f, 1.0f, 1.0f) == UINT64_MAX,
-      "query without original_indices should return UINT64_MAX");
-    CHECK(
-      sif_chain_mesh_find_nearest_open(no_idx, 1.0f, 1.0f, 1.0f) == UINT64_MAX,
-      "query without original_indices should return UINT64_MAX");
-    sif_chain_mesh_free(no_idx);
+  /* The map back to the field is not optional: it is the only thing that makes
+   * a query answer usable, so every mesh carries it and it must be a genuine
+   * permutation of the field's indices. */
+  sif_chain_mesh_t* idx_mesh = sif_chain_mesh_alloc(8, box, field);
+  CHECK(idx_mesh != NULL, "mesh allocation failed");
+  if (idx_mesh) {
+    CHECK(idx_mesh->original_indices != NULL,
+      "original_indices must always be allocated");
+
+    uint8_t* seen = calloc(n_p, 1);
+    int bad = 0;
+    for (uint64_t i = 0; i < idx_mesh->n_particles; i++) {
+      const uint64_t o = idx_mesh->original_indices[i];
+      if (o >= n_p || seen[o])
+        bad++;
+      else
+        seen[o] = 1;
+    }
+    CHECK(bad == 0, "original_indices is not a permutation (%d bad)", bad);
+    free(seen);
+
+    /* A query therefore returns something that indexes the field. */
+    const uint64_t hit =
+      sif_chain_mesh_find_nearest_open(idx_mesh, 1.0f, 1.0f, 1.0f);
+    CHECK(hit != UINT64_MAX && hit < n_p,
+      "find_nearest returned %llu, which does not index the field",
+      (unsigned long long)hit);
+
+    sif_chain_mesh_free(idx_mesh);
   }
 
   /* Out-of-range coordinates are rejected, not silently folded. The field owns
    * its positions, so the corruption has to go into its copy: writing to the
    * caller's x[] would not reach the mesh. */
   field->x[10] = box + 1.0f;
-  CHECK(sif_chain_mesh_alloc(8, box, field, false, false, true) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, field) == NULL,
     "a particle outside the box should be rejected");
   field->x[10] = -1.0f;
-  CHECK(sif_chain_mesh_alloc(8, box, field, false, false, true) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, field) == NULL,
     "a negative coordinate should be rejected");
   field->x[10] = 0.0f / 0.0f; /* NaN */
-  CHECK(sif_chain_mesh_alloc(8, box, field, false, false, true) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, field) == NULL,
     "a NaN coordinate should be rejected");
 
-  CHECK(sif_chain_mesh_alloc(8, box, NULL, false, false, true) == NULL,
+  CHECK(sif_chain_mesh_alloc(8, box, NULL) == NULL,
     "NULL field should be rejected");
   sif_chain_mesh_free(NULL); /* must not crash */
 

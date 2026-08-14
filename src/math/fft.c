@@ -8,8 +8,10 @@
 
 #include <math.h>
 #include <omp.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "core/system_internal.h"
 #include "sif/utils/align.h"
@@ -176,6 +178,46 @@ int sif__fft_workspace_init_backward(
   return SIF_OK;
 }
 
+/*
+ * Writes the accumulated FFTW wisdom for this grid size.
+ *
+ * Through a temporary and a rename, for the same reason the settings table and
+ * the CIC cache do it: a job array finishes its ranks at roughly the same
+ * moment, all of them pointed at one $HOME, and a half-written wisdom file is
+ * not merely lost -- FFTW refuses to import it, so every later run silently
+ * falls back to an untuned plan until somebody deletes it by hand.
+ */
+static void fft_export_wisdom(const char* wisdom_dir, uint32_t n_cells) {
+  char final_path[512];
+  char tmp_path[576];
+
+  int written = snprintf(
+    final_path, sizeof(final_path), "%s/grid_%u.wisdom", wisdom_dir, n_cells);
+  if (written < 0 || (size_t)written >= sizeof(final_path))
+    return;
+
+  written = snprintf(
+    tmp_path, sizeof(tmp_path), "%s.tmp.%ld", final_path, (long)getpid());
+  if (written < 0 || (size_t)written >= sizeof(tmp_path))
+    return;
+
+  /* FFTW's export returns non-zero on success, unlike most of C. */
+  if (real_fftw_export_wisdom_to_filename(tmp_path) == 0) {
+    SIF_LOG_WARNING("fft_manager", "failed to export wisdom to %s", tmp_path);
+    remove(tmp_path);
+    return;
+  }
+
+  if (rename(tmp_path, final_path) != 0) {
+    SIF_LOG_WARNING(
+      "fft_manager", "failed to install the wisdom file %s", final_path);
+    remove(tmp_path);
+    return;
+  }
+
+  SIF_LOG_INFO("fft_manager", "exported wisdom to %s", final_path);
+}
+
 sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
   if (!ws || !ws->delta_k_cpy)
     return NULL;
@@ -198,17 +240,8 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
     return;
   }
 
-  if (ws->mgr && ws->mgr->wisdom_dir) {
-    char specific_wisdom[512];
-    snprintf(specific_wisdom, sizeof(specific_wisdom), "%s/grid_%u.wisdom",
-      ws->mgr->wisdom_dir, ws->n_cells);
-    if (real_fftw_export_wisdom_to_filename(specific_wisdom) != 0) {
-      SIF_LOG_INFO("fft_manager", "exported wisdom to %s", specific_wisdom);
-    } else {
-      SIF_LOG_WARNING(
-        "fft_manager", "failed to export wisdom to %s", specific_wisdom);
-    }
-  }
+  if (ws->mgr && ws->mgr->wisdom_dir)
+    fft_export_wisdom(ws->mgr->wisdom_dir, ws->n_cells);
 
   if (ws->forward_plan)
     real_fftw_destroy_plan(ws->forward_plan);
@@ -253,17 +286,25 @@ static sif_real* fft_build_filter_lut(
 #pragma omp parallel for schedule(static)
   for (uint32_t k2 = 0; k2 <= max_k2; k2++) {
     if (k2 == 0) {
-      lut[k2] = 1.0f;
+      /* W(0) = 1 for any normalized window: the k = 0 mode is the mean, which
+       * smoothing must leave alone. */
+      lut[k2] = (sif_real)1.0;
     } else if (filter == SIF__FILTER_TOP_HAT) {
-      sif_real kr = factor * SIF_REAL_SQRT((sif_real)k2);
-      if (kr > 1e-4f) {
-        lut[k2] =
-          3.0f * (SIF_REAL_SIN(kr) - kr * SIF_REAL_COS(kr)) / (kr * kr * kr);
+      const sif_real kr = factor * SIF_REAL_SQRT((sif_real)k2);
+
+      /* The series 3(sin kr - kr cos kr)/(kr)^3 -> 1 as kr -> 0, but evaluated
+       * directly it is a difference of two nearly equal terms divided by a
+       * cube: at kr = 1e-4 the numerator has already lost most of its
+       * significant digits. Below the crossover the limit is the more accurate
+       * answer, not merely the cheaper one. */
+      if (kr > (sif_real)1e-4) {
+        lut[k2] = (sif_real)3.0 * (SIF_REAL_SIN(kr) - kr * SIF_REAL_COS(kr)) /
+                  (kr * kr * kr);
       } else {
-        lut[k2] = 1.0f;
+        lut[k2] = (sif_real)1.0;
       }
     } else {
-      lut[k2] = SIF_REAL_EXP(-0.5f * factor2 * (sif_real)k2);
+      lut[k2] = SIF_REAL_EXP((sif_real)-0.5 * factor2 * (sif_real)k2);
     }
   }
 
@@ -607,9 +648,9 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
     return SIF_ERR_INVALID;
   }
 
-  if (max_order > FFT_MAX_MOMENT_ORDER) {
+  if (max_order > SIF__FFT_MAX_MOMENT_ORDER) {
     SIF_LOG_ERROR("fft_context", "moment order %u exceeds the maximum of %d",
-      max_order, FFT_MAX_MOMENT_ORDER);
+      max_order, SIF__FFT_MAX_MOMENT_ORDER);
     return SIF_ERR_INVALID;
   }
 
@@ -628,14 +669,26 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   /*
    * Three accumulators per order -- the measured sum, the window sum behind
    * the shot-noise term, and the part of the measured sum above half Nyquist.
-   * Per-thread scratch rather than an OpenMP array reduction, which would
-   * require a newer OpenMP than the rest of the library assumes.
+   *
+   * Explicit per-thread scratch rather than an array reduction because the
+   * three live in one allocation and are indexed together; the padding below
+   * is the part that matters. Every thread updates its row once per mode, and
+   * at order 4 three rows of doubles come to 120 bytes -- two threads' rows
+   * would share a cache line and bounce it between cores for the whole triple
+   * loop. Rounding the stride up to a whole line is the same trick
+   * SIF__EP_ROW_PAD plays in the excursion-set walker.
    */
   const int n_threads =
     sif__system_max_threads() > 0 ? sif__system_max_threads() : 1;
-  const size_t stride = 3 * (size_t)n_moments;
 
-  double* scratch = calloc((size_t)n_threads * stride, sizeof(double));
+  const size_t row = 3 * (size_t)n_moments;
+  const size_t per_line = SIF_CACHE_LINE / sizeof(double);
+  const size_t stride = ((row + per_line - 1) / per_line) * per_line;
+
+  /* Aligned, so that the padded stride actually starts each row on a line
+   * boundary rather than merely spacing the rows apart. */
+  double* scratch =
+    sif_calloc_aligned((size_t)n_threads * stride, sizeof(double));
   if (!scratch) {
     SIF_LOG_ERROR("fft_context", "failed to allocate the moment scratch");
     free(lut);
@@ -735,7 +788,7 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
     k_scale *= k_unit2;
   }
 
-  free(scratch);
+  sif_free_aligned(scratch);
 
   return SIF_OK;
 }

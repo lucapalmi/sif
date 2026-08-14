@@ -211,7 +211,12 @@ typedef struct {
  * @param sigma R.m.s. density contrast per radius, strictly positive. Take it
  * from sif_delta_covariance_pk so the barrier and the walk share one variance.
  * @param barrier n_radii barrier heights, in the ascending order of radii,
- * finite and compared as an upcrossing exactly as the Monte Carlo does
+ * **strictly positive** -- stricter than the Monte Carlo, which takes any
+ * finite value. The features here are built from log(B / sigma), and the
+ * correction was trained over nu from 0.23 upward, so the convention is a
+ * positive barrier crossed from below. That is what sif_ep_barrier_smt()
+ * produces; a void threshold enters through its magnitude, as it does in the
+ * BBKS routines.
  * @param deriv_variance n_radii entries: <(d delta / dS)^2> from
  * sif_delta_covariance_pk. REQUIRED, unlike the Monte Carlo path, which has no
  * use for it: differencing it off a covariance converges only at first order,

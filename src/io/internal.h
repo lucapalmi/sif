@@ -22,6 +22,34 @@
 #include <unistd.h>
 
 #include "sif/core/macros.h"
+#include "sif/structures/grid.h"
+
+/**
+ * @brief Write a grid, recording the key of the input it was derived from.
+ *
+ * The keyed form of sif_grid_write(), for the CIC cache. The key goes into
+ * sif_xgrid_header_t::source_key and is what
+ * sif__grid_read_into_keyed() checks against, so that a cache hit has to prove
+ * its provenance rather than being trusted because its filename matched.
+ *
+ * @param source_key Two words identifying the input, or NULL to record none,
+ * which is what sif_grid_write() passes.
+ * @return As sif_grid_write().
+ */
+int sif__grid_write_keyed(
+  const char* filepath, const sif_grid_t* grid, const uint64_t source_key[2]);
+
+/**
+ * @brief Read a grid, requiring it to carry a particular source key.
+ *
+ * @param expect_key Key the file must record, or NULL to accept any file --
+ * which is what the public sif_grid_read_into() passes, since a caller reading
+ * a grid it was handed has no key to check against.
+ * @return As sif_grid_read_into(), with SIF_ERR_IO for a file whose recorded
+ * key differs from @p expect_key or which records none at all.
+ */
+int sif__grid_read_into_keyed(
+  const char* filepath, sif_grid_t* grid, const uint64_t expect_key[2]);
 
 /**
  * @brief Read a large block from a file descriptor using several threads.
@@ -42,7 +70,7 @@ int sif__io_pread_parallel(
   int fd, void* dest, size_t total_bytes, off_t base_offset);
 
 /**
- * @brief Count the data rows in an ASCII file.
+ * @brief Count the lines in an ASCII file, after the header.
  *
  * Reads the file in large blocks and counts newlines, rather than parsing
  * lines, so the cost is a single streaming pass. Used to size a field before
@@ -50,7 +78,12 @@ int sif__io_pread_parallel(
  *
  * @param filepath Path to the file.
  * @param skip_header Header lines to exclude from the count.
- * @return Rows after the header, or 0 if the file could not be opened.
+ * @return Lines after the header, or 0 if the file could not be opened or read.
+ *
+ * @note This is an upper bound on the particle count, not the count itself:
+ * blank and comment lines are counted here and dropped by the parser. Sizing a
+ * field from it therefore over-allocates slightly, which is the intended
+ * trade -- the alternative is parsing the file twice.
  */
 uint64_t sif__io_ascii_row_count(const char* filepath, uint32_t skip_header);
 

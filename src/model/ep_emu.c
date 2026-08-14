@@ -50,6 +50,13 @@ enum {
 /* The lookback: nu where the variance was half its current value. */
 #define EP_EMU_LOOKBACK 0.5
 
+/* Ceiling on the log-correction before it is exponentiated. The trained
+ * correction lives within a factor of a few of one; e^40 is far outside
+ * anything the network produces on real input and still nowhere near
+ * overflowing a double, so this bounds a runaway without touching any answer
+ * the model actually gives. */
+#define EP_EMU_CORR_MAX 40.0
+
 /* --- Validation --- */
 
 static int validate(const sif_real* radii, uint32_t n_radii,
@@ -111,6 +118,24 @@ static int validate(const sif_real* radii, uint32_t n_radii,
         "the derivative variance at radius %u (%g) is %g, must be strictly "
         "positive",
         i, (double)radii[i], deriv_variance[i]);
+      return SIF_ERR_INVALID;
+    }
+    /*
+     * Strictly positive, not merely finite. The features take log(nu) with
+     * nu = B / sigma, so a non-positive barrier produces a NaN that travels
+     * through the network and out into the multiplicity without tripping
+     * anything. The convention here is a positive barrier crossed from below,
+     * which is all sif_ep_barrier_smt() ever produces and the only regime the
+     * correction was trained over -- its nu box starts at 0.23.
+     *
+     * The Monte Carlo in excursion_set.c is deliberately looser: it only ever
+     * compares the walk against the barrier, so any sign is meaningful there.
+     */
+    if (!(barrier[i] > 0.0f)) {
+      SIF_LOG_ERROR(TAG,
+        "the barrier at radius %u (%g) is %g; the emulator needs a strictly "
+        "positive barrier, since its features are built from log(B / sigma)",
+        i, (double)radii[i], (double)barrier[i]);
       return SIF_ERR_INVALID;
     }
     if (!isfinite((double)barrier[i])) {
@@ -385,8 +410,17 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
    * wrong the network is, so the multiplicity cannot come out negative and
    * cannot integrate above one. */
   for (uint32_t i = 0; i < n_bins; i++) {
-    const double scaled = lam[i] * exp(corr[i]);
-    lam[i] = isfinite(scaled) && scaled > 0.0 ? scaled : 0.0;
+    /* Bounded before the exponential, not after it. The network output is
+     * unbounded, and testing the product with isfinite() afterwards is exactly
+     * the pattern sif__ep_cholesky avoids: the release build carries
+     * -ffast-math, under which the compiler may assume no infinity ever
+     * appears and fold the predicate away. A ceiling on the exponent cannot be
+     * optimized out, and at e^40 the hazard already saturates the survival to
+     * one -- so anything above it is the same answer, reached honestly. */
+    const double c = corr[i] < EP_EMU_CORR_MAX ? corr[i] : EP_EMU_CORR_MAX;
+    const double scaled = lam[i] * exp(c);
+
+    lam[i] = scaled > 0.0 ? scaled : 0.0;
   }
 
   sif__ep_survival(lam, radii, n_bins, 1.0 - sif__ep_upper_tail(nu_large), out);
@@ -407,3 +441,5 @@ fail:
   sif__ep_features_free(&f);
   return NULL;
 }
+
+#undef TAG

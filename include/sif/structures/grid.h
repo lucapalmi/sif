@@ -27,11 +27,21 @@
  * The same array means different things at different points in the pipeline,
  * and mixing them up is a physics error that produces numbers rather than a
  * diagnostic -- normalizing an already-normalized field, or measuring moments
- * of a mass grid. The grid therefore records which it is.
+ * of a grid that still holds densities. The grid therefore records which it is.
  */
 typedef enum {
-  SIF_GRID_EMPTY = 0,       /**< Allocated and zeroed; nothing deposited. */
-  SIF_GRID_MASS,            /**< Mass, or tracer count, per cell. */
+  SIF_GRID_EMPTY = 0, /**< Allocated and zeroed; nothing deposited. */
+  /**
+   * Density: accumulated weight **per unit volume**.
+   *
+   * Per unit volume and not per cell -- sif_grid_assign_cic() divides by the
+   * cell volume on its way out. Summing the cells therefore gives the total
+   * weight divided by the cell volume, not the total weight; multiply by
+   * `cell_length^3` to recover it. The distinction cancels in
+   * sif_grid_to_density_contrast(), which normalizes by the mean, and matters
+   * only to code reading these values directly.
+   */
+  SIF_GRID_DENSITY,
   SIF_GRID_DENSITY_CONTRAST /**< delta = rho / rho_mean - 1. */
 } sif_grid_content_t;
 
@@ -43,7 +53,7 @@ typedef struct {
    * Cell values, flat and row-major with z varying fastest.
    *
    * What they mean is recorded in #content, and changes as the pipeline
-   * proceeds: mass per cell after sif_grid_assign_cic(), the density contrast
+   * proceeds: a density after sif_grid_assign_cic(), the density contrast
    * after sif_grid_to_density_contrast() has overwritten them in place.
    */
   sif_real* values;
@@ -69,10 +79,11 @@ typedef struct {
 /**
  * @brief Allocate a zero-initialized cubic grid.
  *
- * @param n_cells Cells per side; the grid holds n_cells^3 of them.
- * @param box_length Physical side length of the box.
+ * @param n_cells Cells per side; the grid holds n_cells^3 of them. Must be
+ * non-zero.
+ * @param box_length Physical side length of the box. Must be positive.
  * @return The grid, owned by the caller and released with sif_grid_free().
- * NULL on allocation failure.
+ * NULL on allocation failure or invalid geometry.
  */
 SIF_NODISCARD sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length);
 
@@ -86,7 +97,7 @@ void sif_grid_free(sif_grid_t* grid);
  * @brief Deposit a particle field onto the grid by Cloud-In-Cell assignment.
  *
  * Each particle contributes to the eight cells surrounding it, weighted by the
- * overlap of a cell-sized cube centred on the particle. Masses are used when
+ * overlap of a cell-sized cube centred on the particle. Weights are used when
  * the field carries them, otherwise every particle counts as one.
  *
  * Every particle coordinate must lie in [0, box_length); the call is rejected
@@ -111,7 +122,7 @@ void sif_grid_free(sif_grid_t* grid);
 void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field);
 
 /**
- * @brief Convert cell masses in place to the density contrast.
+ * @brief Convert cell weights in place to the density contrast.
  *
  * Replaces each cell value with delta = rho / rho_mean - 1, where rho_mean is
  * the mean over all cells. After this the field averages to zero and is bounded

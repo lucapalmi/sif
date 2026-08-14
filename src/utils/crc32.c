@@ -49,6 +49,10 @@ static const uint32_t crc32_table[256] = {
 uint32_t sif_crc32_update(uint32_t crc, const void* data, size_t length) {
   const uint8_t* ptr = (const uint8_t*)data;
 
+  /* The reflected form: the register shifts right and the table is indexed by
+   * the low byte, so the input bits need no reversing on the way in or out.
+   * This is the variant zlib and gzip implement, which means a file written by
+   * sif can be checked against any of them. */
   for (size_t i = 0; i < length; i++) {
     crc = crc32_table[(crc ^ ptr[i]) & 0xFF] ^ (crc >> 8);
   }
@@ -56,7 +60,13 @@ uint32_t sif_crc32_update(uint32_t crc, const void* data, size_t length) {
   return crc;
 }
 
-uint32_t sif_crc32_final(uint32_t crc) { return crc ^ 0xFFFFFFFFu; }
+uint32_t sif_crc32_final(uint32_t crc) {
+  /* The closing complement, matching the all-ones start. Together they are
+   * what makes leading and trailing zero bytes change the result: without
+   * them, a payload of zeros checksums to zero however long it is, and a
+   * truncated file would pass. */
+  return crc ^ 0xFFFFFFFFu;
+}
 
 uint32_t sif_crc32(const void* data, size_t length) {
   return sif_crc32_final(sif_crc32_update(SIF_CRC32_INIT, data, length));

@@ -39,6 +39,22 @@ static int failures = 0;
 
 #define BOX_LENGTH 500.0f
 
+/*
+ * sif_bbks_g reports through an out-parameter, because 0 is a value G actually
+ * takes and so cannot double as an error. Every call below passes a gamma
+ * inside (0, 1), so a failure here is a bug in the test rather than a case
+ * worth handling at each site.
+ */
+static double bbks_g(sif_real gamma, sif_real w, sif_option opt) {
+  sif_real value = (sif_real)0.0;
+  if (sif_bbks_g(gamma, w, opt, &value) != SIF_OK) {
+    printf("  FAIL: sif_bbks_g rejected gamma=%g\n", (double)gamma);
+    failures++;
+    return 0.0;
+  }
+  return (double)value;
+}
+
 static uint64_t rng_state = 0x9E3779B97F4A7C15ULL;
 
 static double uni(void) {
@@ -967,8 +983,7 @@ static void test_bbks_g_asymptote(void) {
     const double g = gammas[i];
     const double w = 30.0;
 
-    const double got =
-      (double)sif_bbks_g((sif_real)g, (sif_real)w, SIF_BBKS_G_FITTED);
+    const double got = bbks_g((sif_real)g, (sif_real)w, SIF_BBKS_G_FITTED);
     const double lead = w * w * w - 3.0 * g * g * w;
     const double rel = fabs(got - lead) / lead;
 
@@ -980,7 +995,7 @@ static void test_bbks_g_asymptote(void) {
   for (int i = 0; i < 3; i++) {
     for (double w = 0.0; w <= 5.0; w += 0.25) {
       const double got =
-        (double)sif_bbks_g((sif_real)gammas[i], (sif_real)w, SIF_BBKS_G_FITTED);
+        bbks_g((sif_real)gammas[i], (sif_real)w, SIF_BBKS_G_FITTED);
       CHECK(
         got > 0.0, "gamma=%g: G(%g) = %g is not positive", gammas[i], w, got);
     }
@@ -1123,8 +1138,8 @@ static void test_bbks_g_exact_vs_fit(void) {
     const sif_real g = (sif_real)gammas[i];
 
     for (double w = 0.5; w <= 8.0; w += 0.1) {
-      const double fit = (double)sif_bbks_g(g, (sif_real)w, SIF_BBKS_G_FITTED);
-      const double exact = (double)sif_bbks_g(g, (sif_real)w, SIF_BBKS_G_EXACT);
+      const double fit = bbks_g(g, (sif_real)w, SIF_BBKS_G_FITTED);
+      const double exact = bbks_g(g, (sif_real)w, SIF_BBKS_G_EXACT);
 
       CHECK(exact > 0.0, "gamma=%g: exact G(%g) = %g is not positive",
         gammas[i], w, exact);
@@ -1155,7 +1170,7 @@ static void test_bbks_g_exact_vs_fit(void) {
     const double w = 25.0;
     const double lead = w * w * w - 3.0 * gammas[i] * gammas[i] * w;
     const double exact =
-      (double)sif_bbks_g((sif_real)gammas[i], (sif_real)w, SIF_BBKS_G_EXACT);
+      bbks_g((sif_real)gammas[i], (sif_real)w, SIF_BBKS_G_EXACT);
     const double rel = fabs(exact - lead) / lead;
 
     CHECK(rel < 1e-3,
@@ -1167,19 +1182,18 @@ static void test_bbks_g_exact_vs_fit(void) {
    * the one the fit was tuned on. */
   for (double g = 0.05; g < 0.99; g += 0.05) {
     for (double w = 0.0; w <= 6.0; w += 0.5) {
-      const double v =
-        (double)sif_bbks_g((sif_real)g, (sif_real)w, SIF_BBKS_G_EXACT);
+      const double v = bbks_g((sif_real)g, (sif_real)w, SIF_BBKS_G_EXACT);
       CHECK(v > 0.0 && v < 1e6, "exact G(gamma=%g, w=%g) = %g is out of range",
         g, w, v);
     }
   }
 
   /* Unlike the fit, the exact G stays positive below zero. */
-  const double below = (double)sif_bbks_g(0.5f, -2.0f, SIF_BBKS_G_EXACT);
+  const double below = bbks_g(0.5f, -2.0f, SIF_BBKS_G_EXACT);
   CHECK(
     below > 0.0, "exact G at w = -2 is %g, expected a small positive", below);
   printf("    exact G(0.5, -2) = %.3e, fitted = %.3e\n", below,
-    (double)sif_bbks_g(0.5f, -2.0f, SIF_BBKS_G_FITTED));
+    bbks_g(0.5f, -2.0f, SIF_BBKS_G_FITTED));
 }
 
 /*
@@ -1631,7 +1645,6 @@ int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
-    .verbose = false,
     .log_level = SIF_LOG_LEVEL_ERROR};
   sif_init(&cfg);
 

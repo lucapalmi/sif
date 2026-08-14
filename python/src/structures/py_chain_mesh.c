@@ -25,31 +25,18 @@ static int sifChainMesh_init(
   /* "d" writes a full double, so this must not be a sif_real. */
   double box_length_in;
   PyObject* field_obj = NULL;
-  int allocate_masses = 0;
-  int allocate_velocities = 0;
 
-  /* Off by default. The map back to field indices costs 8 bytes per particle
-   * -- 25 GiB at 3.4e9 tracers -- and the only thing that reads it is
-   * find_nearest, which nothing consuming a caller-supplied mesh calls: the
-   * finder never touches it, and the tessellation and profile routines build
-   * their own mesh with it enabled. Ask for it when you want
-   * mesh.original_indices itself. */
-  int allocate_original_indices = 0;
+  static char* kwlist[] = {"n_cells", "box_length", "field", NULL};
 
-  static char* kwlist[] = {"n_cells", "box_length", "field", "allocate_masses",
-    "allocate_velocities", "allocate_original_indices", NULL};
-
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!|ppp", kwlist, &n_cells,
-        &box_length_in, &sifFieldType, &field_obj, &allocate_masses,
-        &allocate_velocities, &allocate_original_indices)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!", kwlist, &n_cells,
+        &box_length_in, &sifFieldType, &field_obj)) {
     return -1;
   }
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
 
-  sif_chain_mesh_t* tmp = sif_chain_mesh_alloc(n_cells, (sif_real)box_length_in,
-    field->field, (bool)allocate_masses, (bool)allocate_velocities,
-    (bool)allocate_original_indices);
+  sif_chain_mesh_t* tmp =
+    sif_chain_mesh_alloc(n_cells, (sif_real)box_length_in, field->field);
 
   if (!tmp) {
     PyErr_SetString(PyExc_ValueError,
@@ -125,15 +112,13 @@ static PyObject* sifChainMesh_get_vy(PyObject* self_obj, void* closure) {
 static PyObject* sifChainMesh_get_vz(PyObject* self_obj, void* closure) {
   GET_1D_REAL_ARRAY(vz)
 }
-static PyObject* sifChainMesh_get_masses(PyObject* self_obj, void* closure) {
-  GET_1D_REAL_ARRAY(masses)
+static PyObject* sifChainMesh_get_weights(PyObject* self_obj, void* closure) {
+  GET_1D_REAL_ARRAY(weights)
 }
 
 static PyObject* sifChainMesh_get_original_idx(
   PyObject* self_obj, void* closure) {
   sifChainMeshObject* self = (sifChainMeshObject*)self_obj;
-  if (!self->mesh->original_indices)
-    Py_RETURN_NONE;
 
   npy_intp dims[1] = {self->mesh->n_particles};
   PyObject* array = PyArray_SimpleNewFromData(
@@ -176,11 +161,9 @@ static PyGetSetDef sifChainMesh_getset[] = {
   {"vx", sifChainMesh_get_vx, NULL, "X velocities", NULL},
   {"vy", sifChainMesh_get_vy, NULL, "Y velocities", NULL},
   {"vz", sifChainMesh_get_vz, NULL, "Z velocities", NULL},
-  {"masses", sifChainMesh_get_masses, NULL, "Masses", NULL},
+  {"weights", sifChainMesh_get_weights, NULL, "Per-particle weights", NULL},
   {"original_indices", sifChainMesh_get_original_idx, NULL,
-    "Map from mesh order back to field order, or None unless the mesh was "
-    "built with allocate_original_indices=True",
-    NULL},
+    "Map from mesh order back to field order. Always present.", NULL},
   {"cell_offsets", sifChainMesh_get_cell_offsets, NULL, "Cell offsets", NULL},
   {NULL}};
 
@@ -198,23 +181,23 @@ PyTypeObject sifChainMeshType = {
   .tp_dealloc = sifChainMesh_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
   .tp_doc =
-    "ChainMesh(n_cells, box_length, field, allocate_masses=False, "
-    "allocate_velocities=False, allocate_original_indices=False)\n"
+    "ChainMesh(n_cells, box_length, field, allocate_weights=False, "
+    "allocate_velocities=False)\n"
     "--\n\n"
     "A uniform spatial bin over a periodic box, for neighbour queries.\n\n"
     "Particles are copied into cell order, so the members of a cell sit\n"
     "contiguously in memory. Only the payloads you ask for are copied,\n"
     "and each costs another pass over the field and as much memory\n"
-    "again.\n\n"
+    "again. original_indices is the exception and is always built: a mesh\n"
+    "that cannot say which particle an answer refers to cannot answer a\n"
+    "neighbour query at all.\n\n"
     "Every coordinate must lie in [0, box_length).\n\n"
     "Args:\n"
     "    n_cells: Cells per side.\n"
     "    box_length: Physical side length of the box.\n"
     "    field: Particle field to bin.\n"
-    "    allocate_masses: Copy the per-particle masses.\n"
-    "    allocate_velocities: Copy the velocities.\n"
-    "    allocate_original_indices: Keep the map back to field\n"
-    "        indices. Required by the find_nearest queries.",
+    "    allocate_weights: Copy the per-particle weights.\n"
+    "    allocate_velocities: Copy the velocities.",
   .tp_methods = sifChainMesh_methods,
   .tp_getset = sifChainMesh_getset,
   .tp_init = sifChainMesh_init,

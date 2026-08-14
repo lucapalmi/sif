@@ -25,14 +25,14 @@ PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
   double box_length;
   PyObject *x_obj, *y_obj, *z_obj;
   PyObject *vx_obj = NULL, *vy_obj = NULL, *vz_obj = NULL;
-  PyObject* masses_obj = NULL;
+  PyObject* weights_obj = NULL;
 
   static char* kwlist[] = {
-    "filepath", "box_length", "x", "y", "z", "vx", "vy", "vz", "masses", NULL};
+    "filepath", "box_length", "x", "y", "z", "vx", "vy", "vz", "weights", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "sdOOO|OOOO", kwlist, &filepath,
         &box_length, &x_obj, &y_obj, &z_obj, &vx_obj, &vy_obj, &vz_obj,
-        &masses_obj)) {
+        &weights_obj)) {
     return NULL;
   }
 
@@ -79,11 +79,11 @@ PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
     }
   }
 
-  if (masses_obj && masses_obj != Py_None) {
+  if (weights_obj && weights_obj != Py_None) {
     m_arr = (PyArrayObject*)PyArray_FROM_OTF(
-      masses_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+      weights_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
     if (m_arr)
-      temp_field.masses = (sif_real*)PyArray_DATA(m_arr);
+      temp_field.weights = (sif_real*)PyArray_DATA(m_arr);
   }
 
   /* 3. Release the GIL so Python can do other things while NVMe writes */
@@ -200,7 +200,7 @@ PyObject* pysif_read_field_header(
    * sif_field_t, so reading the field is not a way to recover it. */
   return Py_BuildValue("{s:K,s:d,s:O,s:O,s:I}", "n_particles",
     (unsigned long long)header.n_particles, "box_length", header.box_length,
-    "has_masses", header.has_masses ? Py_True : Py_False, "has_velocities",
+    "has_weights", header.has_weights ? Py_True : Py_False, "has_velocities",
     header.has_velocities ? Py_True : Py_False, "version",
     (unsigned int)header.version);
 }

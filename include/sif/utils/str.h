@@ -29,7 +29,7 @@ typedef enum {
   SIF_COL_VX,
   SIF_COL_VY,
   SIF_COL_VZ,
-  SIF_COL_M /**< Mass. */
+  SIF_COL_M /**< Per-particle weight; see sif_field_t::weights. */
 } sif_col_target_t;
 
 /**
@@ -41,11 +41,11 @@ typedef enum {
  * |---|---|
  * | `x` `y` `z` | position components |
  * | `u` `v` `w` | velocity components |
- * | `m` | mass |
+ * | `m` | per-particle weight (`m` for mass, its usual meaning) |
  * | `*` `/` | ignored column |
  *
  * So `"xyz*m"` describes a file whose first three columns are the position,
- * whose fourth is skipped, and whose fifth is the mass.
+ * whose fourth is skipped, and whose fifth is the weight.
  *
  * @param fmt Format string as above.
  * @param targets_out Written with one entry per decoded column. Must have room

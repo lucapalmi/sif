@@ -61,14 +61,26 @@ SIF_NODISCARD sif_real* sif_bbks_r_star(const sif_delta_moments_t* moments);
 /**
  * @brief The BBKS G function.
  *
- * @param gamma Spectral parameter, strictly inside (0, 1)
- * @param w Peak-height variable, gamma * nu
+ * Reports through @p out rather than through the return value, unlike the
+ * other scalar entry points in the library. G is legitimately zero wherever the
+ * exact form underflows -- which it does at strongly negative @p w -- and the
+ * fitted form dips slightly below zero in the same region, so there is no value
+ * left over to mean "invalid input". Contrast sif_spherical_map_nonlinear(),
+ * which keeps a plain return because its result is strictly negative and 0 is
+ * therefore free to be a sentinel.
+ *
+ * @param gamma Spectral parameter, strictly inside (0, 1). In a normal pipeline
+ * this comes from sif_bbks_gamma(), which cannot produce anything else.
+ * @param w Peak-height variable, gamma * nu. Unrestricted.
  * @param opt SIF_BBKS_G_FITTED (BBKS 1986 eq. 4.4) or SIF_BBKS_G_EXACT
  * (Wu 2020 eqs. 18-19, quadratured)
+ * @param out Written with G(gamma, w) on success, untouched otherwise.
  *
- * @return G(gamma, w), or 0 for gamma outside (0, 1).
+ * @return SIF_OK, or SIF_ERR_INVALID for a NULL @p out or a gamma outside
+ * (0, 1).
  */
-sif_real sif_bbks_g(sif_real gamma, sif_real w, sif_option opt);
+SIF_NODISCARD int sif_bbks_g(
+  sif_real gamma, sif_real w, sif_option opt, sif_real* out);
 
 /**
  * @brief Differential number density of maxima of a Gaussian field, per unit

@@ -39,9 +39,10 @@
  * this call -- which matters, because the finder's own peak sits right on top
  * of whatever the caller is still holding.
  *
- * The mesh only has to carry positions; masses, velocities and original
- * indices are never read, and at these particle counts each of them is a
- * substantial allocation to have made for nothing.
+ * The finder reads only the mesh positions. Velocities and weights ride along
+ * if the field carries them, which at these particle counts is a substantial
+ * allocation for nothing -- so hand this a field stripped of both when the
+ * mesh is being built for the finder alone.
  *
  * @param grid Density contrast field, as produced by
  * sif_grid_to_density_contrast(). Smoothed in place and restored at the end,

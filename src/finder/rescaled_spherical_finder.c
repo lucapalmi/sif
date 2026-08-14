@@ -4,6 +4,75 @@
  * This file is part of sif. See COPYING for the full license text.
  */
 
+/*
+ * The rescaled spherical finder.
+ *
+ * The grid locates voids; the tracers size them. A candidate centre comes from
+ * the smoothed density field exactly as in the plain finder, but its radius is
+ * then measured against the particles: the void is grown outward from the
+ * centre until the enclosed number density first rises to the threshold, and
+ * that crossing radius is what goes in the catalogue. So a radius is a property
+ * of the tracer distribution rather than of the ladder that happened to find
+ * it, and two runs with different ladders describe the same voids.
+ *
+ * What the rung still fixes is the centre and the search range. The rescaled
+ * radius is bounded below by RMIN_FACTOR * radius and above by r_search, about
+ * twice the rung -- the rung is a scale hint, not an answer.
+ *
+ *
+ * Finding the crossing radius
+ * ---------------------------
+ *
+ * The condition is on the *enclosed* density, so the quantity of interest is
+ * n(<d) / (rho_mean * V(d)) - 1 <= threshold, evaluated at every particle
+ * distance d in turn. Written out, that asks for the k-th nearest distance for
+ * every k, which is a full sort of everything inside the search sphere: at
+ * r_search = 200 in a 2250 box, ten million distances sorted per candidate, and
+ * there are millions of candidates.
+ *
+ * Three observations collapse that cost.
+ *
+ * First, the answer is the *outermost* crossing, so the walk starts at
+ * r_search and moves inward and stops at the first radius that satisfies the
+ * condition. Nothing inside that radius is ever examined.
+ *
+ * Second, deciding which shell holds the crossing needs only counts, not
+ * distances. A histogram of squared distances gives, for any bin, the number of
+ * particles inside its lower edge -- and the most permissive test a bin could
+ * possibly pass is its outermost particle carrying the smallest interior count.
+ * If that fails, no particle in the bin can qualify and the whole bin is
+ * skipped without a single distance being looked at. That test is what makes
+ * the walk cheap: it is a proof about a shell, obtained from a counter.
+ *
+ * Third, once a bin does survive the skip test, the exact radius has to come
+ * from particles after all -- but only from that bin. It is re-scanned, its
+ * distances sorted, and walked outside-in. A bin is a far thinner shell than a
+ * mesh cell, so the re-scan visits few cells; see RESOLVE_* for why several
+ * neighbouring bins are resolved together rather than one at a time.
+ *
+ * Squared distances throughout, and bins uniform in d^2, so no square root is
+ * evaluated until the answer is known. The density condition squares cleanly
+ * because both sides are positive:
+ *
+ *   n_in / (vol_factor * d^3) - 1 <= threshold
+ *     <=>  n_in^2 <= ((1 + threshold) * vol_factor)^2 * (d^2)^3
+ *
+ * Bins uniform in d^2 are also finer in radius further out, which is the half
+ * of the range the walk actually spends its time in.
+ *
+ *
+ * Why it is speculative
+ * ---------------------
+ *
+ * Rescaling one candidate is independent of every other, so candidates are
+ * evaluated in parallel -- but accepting a void masks the region around it and
+ * invalidates candidates that were being evaluated at the same time. The run
+ * therefore evaluates a batch against a frozen catalogue, then commits
+ * sequentially and re-tests each acceptance against the catalogue as it now
+ * stands. Commit order is unchanged by the batching, so the catalogue does not
+ * depend on the batch size or the thread count; see BATCH_MAX.
+ */
+
 #include "sif/finder/rescaled_spherical_finder.h"
 
 #include <math.h>
@@ -259,6 +328,14 @@ static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
 
   memset(tpl, 0, sizeof(*tpl));
 
+  /*
+   * The stencil is built once per radius and reused for every candidate, which
+   * is only possible because it is expressed in cell *offsets* from whichever
+   * cell the centre falls in. The distance bounds below are therefore taken
+   * over every position the centre could occupy inside its own cell -- hence
+   * the -1 and +1 -- which makes them conservative for any candidate and lets
+   * one template serve millions of them.
+   */
   const int32_t cell_radius = (int32_t)(r_search / cell_length) + 1;
 
   /*
@@ -334,6 +411,11 @@ static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
         tpl->min_d2[tpl->count] = min_dist2;
         tpl->max_d2[tpl->count] = max_dist2;
 
+        /* The classification is what lets the histogram pass skip work: a cell
+         * wholly inside the core needs no distances at all (it only adds to a
+         * count), and one wholly inside the annulus needs no range test (every
+         * particle in it is known to belong). Only the two boundary classes
+         * pay for a test per particle. */
         if (max_dist2 <= r_core2) {
           tpl->type[tpl->count] = CELL_FULLY_CORE;
         } else if (min_dist2 > r_core2) {
@@ -514,8 +596,18 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
   if (scratch->refine_count > 1)
     sort_real_asc(scratch->refine, scratch->refine_count);
 
+  /*
+   * Outside-in over the exact distances, which is where the answer finally
+   * comes from. current_N is everything at or below the top of the window, so
+   * at each step the particle under test is the outermost one left and
+   * current_N - 1 is what a sphere through it encloses -- the particle sitting
+   * on the surface does not count as inside.
+   */
   for (int32_t k = (int32_t)scratch->refine_count - 1; k >= 0; k--) {
     const sif_real d2_test = scratch->refine[k];
+
+    /* A particle exactly at the centre defines no radius, but it is still
+     * inside every sphere considered below, so it leaves the count. */
     if (d2_test == 0.0f) {
       current_N--;
       continue;
@@ -541,8 +633,26 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
 }
 
 /*
- * Grows the void outwards from `center` until the enclosed number density
- * first rises above (1 + threshold) times the mean.
+ * The rescaling itself: the largest radius at which the enclosed number
+ * density is still at or below (1 + threshold) times the mean.
+ *
+ * Four stages, each one there to avoid work the next would otherwise do.
+ *
+ *   1. A count of the core. Every particle within rmin is inside any radius
+ *      this can return, so if the core alone is already denser than the
+ *      threshold permits, no radius satisfies it and the candidate dies here.
+ *      The first pass over it uses cell occupancies only -- no distances --
+ *      because a cell entirely inside rmin contributes all of its particles
+ *      whatever they are.
+ *
+ *   2. A histogram of the annulus in squared distance. This is the structure
+ *      that replaces sorting: it answers "how many particles lie inside this
+ *      shell" for every shell at once, in one pass and in fixed memory.
+ *
+ *   3. The inward walk, which skips whole bins on counts alone (see the
+ *      n_in_min test below).
+ *
+ *   4. Exact resolution of the surviving bin and its window, in resolve_bin().
  *
  * @return the rescaled radius, or -1 if no acceptable radius exists
  */
@@ -727,9 +837,19 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
     if (b == (int32_t)n_bins - 1)
       hi = r_search2 * (1.0f + 1e-6f);
 
-    /* The most permissive particle this bin could hold is its outermost one
-     * carrying the smallest interior count. If even that is too dense, no
-     * particle in the bin can qualify and none of them need to be touched. */
+    /*
+     * The skip test, and the reason the histogram is enough.
+     *
+     * Density falls as the radius grows and rises as the interior count grows,
+     * so the most permissive particle this bin could possibly hold is one
+     * sitting at the bin's outer edge with only the particles below the bin
+     * inside it. Both of those are known from counters alone: `hi` is the
+     * edge, and total_N - above - count is everything below the bin.
+     *
+     * If that best case is still too dense, every real particle in the bin is
+     * worse -- each is closer in, or has more inside it, or both -- so the bin
+     * cannot contain the crossing and not one of its distances is computed.
+     */
     const sif_real n_in_min = (sif_real)(total_N - above - count);
     if (n_in_min * n_in_min > K2 * hi * hi * hi) {
       above += count;
@@ -811,6 +931,18 @@ typedef struct {
 
   radial_scratch_t* scratch; /* one per thread */
   int n_threads;
+
+  /*
+   * Largest radius in the catalog so far.
+   *
+   * sif__overlap_exact() sizes its search box from this, so it has to be the
+   * real maximum and not the largest radius on the ladder. Rescaling grows a
+   * void out to r_search, about twice the rung it was found at, so the ladder
+   * maximum understates the catalog by up to a factor of two -- and a void
+   * whose centre falls outside the search box is never compared against, which
+   * lets a genuine overlap through. Overestimating only widens the box.
+   */
+  sif_real max_accepted_r;
 } rescaled_ctx_t;
 
 static void ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
@@ -948,6 +1080,12 @@ static int accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
   sif__mark_sphere(
     ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask, grid->cell_length);
 
+  /* Updated here rather than scanned for later, so every overlap test after
+   * this point sizes its search box against a catalog that includes this
+   * void. */
+  if (r > ctx->max_accepted_r)
+    ctx->max_accepted_r = r;
+
   return SIF_OK;
 }
 
@@ -962,13 +1100,14 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
     return NULL;
   }
 
-  /* A mass grid handed to something that expects a density contrast produces
-   * numbers rather than an error. SIF_GRID_EMPTY is not flagged: that is a
-   * grid the caller filled directly, and only the caller knows what is in it.
-   */
-  if (grid->content == SIF_GRID_MASS) {
+  /* A grid still holding densities, handed to something that expects a
+   * density contrast, produces numbers rather than an error. SIF_GRID_EMPTY is
+   * not flagged: that is a grid the caller filled directly, and only the caller
+   * knows what is in it. */
+  if (grid->content == SIF_GRID_DENSITY) {
     SIF_LOG_WARNING(TAG,
-      "this grid still holds masses; call sif_grid_to_density_contrast first");
+      "this grid holds a density, not a density contrast; call "
+      "sif_grid_to_density_contrast first");
   }
 
   if (!mesh->x || mesh->n_particles == 0) {
@@ -990,7 +1129,10 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
     return NULL;
   }
 
-  const sif_real max_radius = ctx.sorted_radii[0];
+  /* The ladder maximum is only a starting point: ctx.max_accepted_r tracks
+   * what the catalog actually holds, which rescaling can push well past this.
+   */
+  ctx.max_accepted_r = 0.0f;
 
   /* Loop invariants: the mean tracer density never changes between radii. */
   const sif_real box_volume =
@@ -1139,7 +1281,7 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         res->cy = cy;
         res->cz = cz;
 
-        if (sif__overlap_exact(ctx.cat, cx, cy, cz, radius, max_radius,
+        if (sif__overlap_exact(ctx.cat, cx, cy, cz, radius, ctx.max_accepted_r,
               grid->box_length, ctx.void_cll, grid->p2_mask,
               overlap_fraction)) {
           res->status = BATCH_REJECTED_MESH;
@@ -1210,7 +1352,7 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
         }
 
         if (sif__overlap_exact(ctx.cat, res->cx, res->cy, res->cz,
-              res->r_scaled, max_radius, grid->box_length, ctx.void_cll,
+              res->r_scaled, ctx.max_accepted_r, grid->box_length, ctx.void_cll,
               grid->p2_mask, overlap_fraction)) {
           stats.rejected_exact++;
           continue;

@@ -59,9 +59,8 @@ static int chain_mesh_validate_field(
   return SIF_OK;
 }
 
-sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
-  const sif_field_t* field, bool allocate_masses, bool allocate_velocities,
-  bool allocate_original_indices) {
+sif_chain_mesh_t* sif_chain_mesh_alloc(
+  uint32_t n_cells, sif_real box_length, const sif_field_t* field) {
 
   if (!field) {
     SIF_LOG_ERROR("chain_mesh", "cannot build a mesh from a NULL field");
@@ -103,8 +102,10 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
   mesh->y = mesh->_position_block + padded_n;
   mesh->z = mesh->_position_block + (2 * padded_n);
 
-  /* 2. Unified Velocity Block (Optional) */
-  if (allocate_velocities) {
+  /* 2. Unified Velocity Block, mirroring the field: there is nothing to copy
+   * if the field carries no velocities, and nothing a caller could want the
+   * mesh to hold that the field does not have. */
+  if (field->vx) {
     mesh->_velocity_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
     if (!mesh->_velocity_block) {
       sif_free_aligned(mesh->_position_block);
@@ -121,21 +122,23 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
     mesh->vz = NULL;
   }
 
-  /* 3. Independent Arrays */
-  mesh->masses =
-    allocate_masses ? sif_malloc_aligned(n_particles * sizeof(sif_real)) : NULL;
-  mesh->original_indices =
-    allocate_original_indices
-      ? sif_malloc_aligned(n_particles * sizeof(uint64_t))
-      : NULL;
+  /* 3. Independent Arrays. Weights mirror the field for the same reason. */
+  mesh->weights =
+    field->weights ? sif_malloc_aligned(n_particles * sizeof(sif_real)) : NULL;
+
+  /* Never optional. The mesh reorders particles, so an index into it means
+   * nothing to a caller holding the field -- the map back is the only way a
+   * query result can be used, and answering queries is what the structure is
+   * for. It also gives the canonicalization below something to sort on. */
+  mesh->original_indices = sif_malloc_aligned(n_particles * sizeof(uint64_t));
 
   /* NUMA-friendly malloc (unmapped virtual memory) */
   mesh->cell_offsets =
     sif_malloc_aligned((1 + mesh->total_cells) * sizeof(uint64_t));
 
   /* Final safety check for the independent arrays */
-  if (!mesh->cell_offsets || (allocate_masses && !mesh->masses) ||
-      (allocate_original_indices && !mesh->original_indices)) {
+  if (!mesh->cell_offsets || !mesh->original_indices ||
+      (field->weights && !mesh->weights)) {
     sif_chain_mesh_free(mesh); /* We can safely call the free function now */
     return NULL;
   }
@@ -155,7 +158,7 @@ void sif_chain_mesh_free(sif_chain_mesh_t* mesh) {
   sif_free_aligned(mesh->_position_block);
   sif_free_aligned(
     mesh->_velocity_block); /* sif_free_aligned handles NULL safely */
-  sif_free_aligned(mesh->masses);
+  sif_free_aligned(mesh->weights);
   sif_free_aligned(mesh->original_indices);
   sif_free_aligned(mesh->cell_offsets);
 
@@ -175,6 +178,74 @@ static inline uint64_t chain_mesh_flat_idx(
   iz = (iz < 0) ? 0 : ((iz >= (int32_t)grid_dim) ? (int32_t)grid_dim - 1 : iz);
 
   return (uint64_t)ix * grid_dim * grid_dim + (uint64_t)iy * grid_dim + iz;
+}
+
+/* Exchanges two entries of the mesh, payload and all. */
+static inline void chain_mesh_swap(
+  sif_chain_mesh_t* mesh, uint64_t a, uint64_t b) {
+
+#define SWAP_REAL(arr)                                                         \
+  do {                                                                         \
+    sif_real t = (arr)[a];                                                     \
+    (arr)[a] = (arr)[b];                                                       \
+    (arr)[b] = t;                                                              \
+  } while (0)
+
+  SWAP_REAL(mesh->x);
+  SWAP_REAL(mesh->y);
+  SWAP_REAL(mesh->z);
+
+  if (mesh->vx) {
+    SWAP_REAL(mesh->vx);
+    SWAP_REAL(mesh->vy);
+    SWAP_REAL(mesh->vz);
+  }
+
+  if (mesh->weights)
+    SWAP_REAL(mesh->weights);
+
+#undef SWAP_REAL
+
+  uint64_t t = mesh->original_indices[a];
+  mesh->original_indices[a] = mesh->original_indices[b];
+  mesh->original_indices[b] = t;
+}
+
+/*
+ * Puts every cell's particles into the order they appear in the source field.
+ *
+ * The scatter claims slots with an atomic, so which chunk reaches a given cell
+ * first is a race: two identical runs order that cell's particles differently.
+ * Everything that walks a cell inherits it -- the stacked profiles sum over one
+ * in floating point, so their last bits move between runs, and a
+ * nearest-neighbour query with an exact distance tie can answer differently
+ * each time, which the Voronoi estimator turns into a different particle owning
+ * a voxel.
+ *
+ * Sorting by the source index replaces that with an order determined by the
+ * input alone. Insertion sort because it is the right algorithm for the shape
+ * of the data: a chain mesh is sized for a handful of particles per cell, and
+ * the slice is a concatenation of a few already-ascending runs, which insertion
+ * sort walks in close to linear time. A pathologically coarse mesh -- every
+ * particle in one cell -- makes it quadratic, but that mesh has already made
+ * every query a linear scan, so it is not the case worth optimizing for.
+ */
+static void chain_mesh_canonicalize(sif_chain_mesh_t* mesh) {
+  const uint64_t n_c = mesh->total_cells;
+
+#pragma omp parallel for schedule(dynamic, 64)
+  for (uint64_t c = 0; c < n_c; c++) {
+    const uint64_t lo = mesh->cell_offsets[c];
+    const uint64_t hi = mesh->cell_offsets[c + 1];
+
+    for (uint64_t i = lo + 1; i < hi; i++) {
+      for (uint64_t j = i;
+        j > lo && mesh->original_indices[j] < mesh->original_indices[j - 1];
+        j--) {
+        chain_mesh_swap(mesh, j, j - 1);
+      }
+    }
+  }
 }
 
 static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field) {
@@ -284,24 +355,18 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field) {
         mesh->x[pos] = field->x[p_idx];
         mesh->y[pos] = field->y[p_idx];
         mesh->z[pos] = field->z[p_idx];
-        if (mesh->original_indices) {
-          mesh->original_indices[pos] = p_idx;
-        }
+        mesh->original_indices[pos] = p_idx;
 
-        if (mesh->masses) {
-          mesh->masses[pos] = field->masses ? field->masses[p_idx] : 1.0f;
-        }
+        /* The mesh arrays exist exactly when the field's do, so one test
+         * covers both and there is no "allocated but nothing to put in it"
+         * case to fill with zeros. */
+        if (mesh->weights)
+          mesh->weights[pos] = field->weights[p_idx];
 
         if (mesh->vx) {
-          if (field->vx) {
-            mesh->vx[pos] = field->vx[p_idx];
-            mesh->vy[pos] = field->vy[p_idx];
-            mesh->vz[pos] = field->vz[p_idx];
-          } else {
-            mesh->vx[pos] = 0.0f;
-            mesh->vy[pos] = 0.0f;
-            mesh->vz[pos] = 0.0f;
-          }
+          mesh->vx[pos] = field->vx[p_idx];
+          mesh->vy[pos] = field->vy[p_idx];
+          mesh->vz[pos] = field->vz[p_idx];
         }
       }
       i += run_length;
@@ -309,6 +374,9 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field) {
   }
 
   sif_free_aligned(write_pos);
+
+  chain_mesh_canonicalize(mesh);
+
   SIF_LOG_TRACE("chain_mesh", "RLE atomic mesh construction complete");
 
   return SIF_OK;
@@ -462,7 +530,7 @@ static inline void scan_cell_pbc(const sif_chain_mesh_t* mesh, sif_real px,
 uint64_t sif_chain_mesh_find_nearest_open(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz) {
 
-  if (!mesh || !mesh->original_indices || mesh->n_particles == 0)
+  if (!mesh || mesh->n_particles == 0)
     return UINT64_MAX;
 
   const int32_t n = (int32_t)mesh->n_cells;
@@ -511,7 +579,7 @@ uint64_t sif_chain_mesh_find_nearest_open(
 uint64_t sif_chain_mesh_find_nearest_pbc(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz) {
 
-  if (!mesh || !mesh->original_indices || mesh->n_particles == 0)
+  if (!mesh || mesh->n_particles == 0)
     return UINT64_MAX;
 
   const int32_t n = (int32_t)mesh->n_cells;

@@ -72,13 +72,14 @@ int sif__delta_validate_options(sif_option opt) {
 sif_fft_workspace_t* sif__delta_prepare_spectrum(
   const sif_grid_t* grid, uint64_t seed, sif_option opt) {
 
-  /* A mass grid handed to something that expects a density contrast produces
-   * numbers rather than an error. SIF_GRID_EMPTY is not flagged: that is a
-   * grid the caller filled directly, and only the caller knows what is in it.
-   */
-  if (grid->content == SIF_GRID_MASS) {
+  /* A grid still holding densities, handed to something that expects a
+   * density contrast, produces numbers rather than an error. SIF_GRID_EMPTY is
+   * not flagged: that is a grid the caller filled directly, and only the caller
+   * knows what is in it. */
+  if (grid->content == SIF_GRID_DENSITY) {
     SIF_LOG_WARNING(SIF__DELTA_TAG,
-      "this grid still holds masses; call sif_grid_to_density_contrast first");
+      "this grid holds a density, not a density contrast; call "
+      "sif_grid_to_density_contrast first");
   }
 
   sif_system_state_t* state = sif__system_state();
@@ -90,7 +91,15 @@ sif_fft_workspace_t* sif__delta_prepare_spectrum(
     return NULL;
   }
 
-  sif__fft_grid_forward(ws, grid);
+  /* Checked, not assumed: planning can fail, and it leaves delta_k holding
+   * whatever the allocator returned. Every moment and every PDF downstream is
+   * computed from that buffer, so an unchecked failure here does not surface
+   * as an error anywhere -- it surfaces as a result. */
+  if (sif__fft_grid_forward(ws, grid) != SIF_OK) {
+    SIF_LOG_ERROR(SIF__DELTA_TAG, "the forward transform failed");
+    sif__fft_workspace_free(ws);
+    return NULL;
+  }
 
   if (!(opt & SIF_DELTA_KEEP_CIC_WINDOW)) {
     if (sif__fft_deconvolve_cic(ws) != SIF_OK) {

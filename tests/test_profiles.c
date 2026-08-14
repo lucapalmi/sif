@@ -33,8 +33,7 @@ int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
-    .verbose = false,
-    .log_level = 3};
+    .log_level = SIF_LOG_LEVEL_WARNING};
   sif_init(&cfg);
 
   sif_real* x = malloc(N_P * sizeof(sif_real));
@@ -57,7 +56,11 @@ int main(void) {
   sif_catalog_append(cat, vx, vy, vz, vr);
 
   sif_density_profiles_t* dens = NULL;
-  sif_profiles_mesh(cat, f, BOX, ext, N_BINS, SIF_PBC_PERIODIC, &dens, NULL);
+  if (sif_profiles_mesh(
+        cat, f, BOX, ext, N_BINS, SIF_PBC_PERIODIC, &dens, NULL) != SIF_OK) {
+    printf("FAIL: sif_profiles_mesh reported an error\n");
+    return 1;
+  }
 
   if (!dens) {
     printf("FAIL: profile computation returned NULL\n");

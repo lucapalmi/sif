@@ -164,13 +164,14 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
     return NULL;
   }
 
-  /* A mass grid handed to something that expects a density contrast produces
-   * numbers rather than an error. SIF_GRID_EMPTY is not flagged: that is a
-   * grid the caller filled directly, and only the caller knows what is in it.
-   */
-  if (grid->content == SIF_GRID_MASS) {
+  /* A grid still holding densities, handed to something that expects a
+   * density contrast, produces numbers rather than an error. SIF_GRID_EMPTY is
+   * not flagged: that is a grid the caller filled directly, and only the caller
+   * knows what is in it. */
+  if (grid->content == SIF_GRID_DENSITY) {
     SIF_LOG_WARNING(TAG,
-      "this grid still holds masses; call sif_grid_to_density_contrast first");
+      "this grid holds a density, not a density contrast; call "
+      "sif_grid_to_density_contrast first");
   }
 
   spherical_ctx_t ctx;

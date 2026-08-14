@@ -50,7 +50,23 @@ typedef struct {
    *  a version 1 file has 0 here, which reads as SIF_GRID_EMPTY -- correct,
    *  since such a file does not say. */
   uint32_t content;
-  char padding[24]; /**< Reserved, to hold the header at 64 bytes. */
+  /**
+   * Key of the input this grid was derived from, or both words zero when the
+   * file does not record one.
+   *
+   * Written only by the CIC cache, which needs to prove that a file it found
+   * by name really came from the field in hand: the geometry check and the
+   * CRC together establish that the file is intact and the right shape, and
+   * neither says anything about which field produced it. A grid written
+   * through sif_grid_write() leaves this zero, which reads as "no provenance
+   * recorded" rather than as a key that failed to match.
+   *
+   * Zero is also what every file written before this field existed carries,
+   * since it sat inside the reserved padding -- so no version bump: an old
+   * file simply declines to prove anything, which is what it could always do.
+   */
+  uint64_t source_key[2];
+  char padding[8]; /**< Reserved, to hold the header at 64 bytes. */
 } sif_xgrid_header_t;
 
 /**
@@ -77,11 +93,12 @@ int sif_grid_read_into(const char* filepath, sif_grid_t* grid);
  * @brief Write a grid to an .xgrid file.
  *
  * @param filepath Path to the output file.
- * @param grid Grid to write.
- * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO if the
- * file could not be written.
+ * @param grid Grid to write. Must carry cell values.
+ * @return SIF_OK, SIF_ERR_INVALID on a NULL argument or a grid without cell
+ * values, or SIF_ERR_IO if the file could not be written -- including a
+ * failure that only surfaces when the last buffered bytes are flushed.
  *
- * @note Writes whatever the cells currently hold, masses or density contrast,
+ * @note Writes whatever the cells currently hold, weights or density contrast,
  * and records which in the header so a reader gets it back.
  */
 int sif_grid_write(const char* filepath, const sif_grid_t* grid);

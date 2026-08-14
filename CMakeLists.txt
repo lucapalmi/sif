@@ -43,7 +43,18 @@ option(SIF_DEBUG_CHECKS "Enable internal assertions" OFF)
 option(SIF_BUILD_TOOLS "Build the offline tools in tools/" OFF)
 
 # OpenMP
+#
+# 4.5 or newer. The measured histograms reduce into array sections
+# (`reduction(+ : counts[ : n_bins])`), which is a 4.5 feature; GCC has had it
+# since 6.1 and Clang since 9, so the floor costs nothing in practice. Stated
+# here rather than discovered as a compile error in one file.
 find_package(OpenMP REQUIRED)
+
+if(OpenMP_C_FOUND AND OpenMP_C_VERSION VERSION_LESS 4.5)
+  message(FATAL_ERROR
+    "sif needs OpenMP 4.5 or newer for array-section reductions; "
+    "the compiler reports ${OpenMP_C_VERSION}")
+endif()
 
 # fftw3
 

@@ -35,7 +35,7 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
   field->vy = NULL;
   field->vz = NULL;
 
-  field->masses = NULL;
+  field->weights = NULL;
   field->original_indices = NULL;
 
   for (int i = 0; i < 3; i++) {
@@ -60,7 +60,7 @@ void sif_field_free(sif_field_t* field) {
 
   sif_free_aligned(field->_position_block);
   sif_free_aligned(field->_velocity_block);
-  sif_free_aligned(field->masses);
+  sif_free_aligned(field->weights);
   sif_free_aligned(field->original_indices);
 
   free(field);
@@ -114,18 +114,18 @@ int sif_field_reserve_velocities(sif_field_t* field) {
     &field->vx, &field->vy, &field->vz, "velocity");
 }
 
-int sif_field_reserve_masses(sif_field_t* field) {
+int sif_field_reserve_weights(sif_field_t* field) {
   if (!field || field->n_particles == 0) {
     SIF_LOG_ERROR("field", "invalid or empty field");
     return SIF_ERR_INVALID;
   }
 
-  if (field->masses)
+  if (field->weights)
     return SIF_OK;
 
-  field->masses = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
-  if (!field->masses) {
-    SIF_LOG_ERROR("field", "failed to allocate the mass array");
+  field->weights = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
+  if (!field->weights) {
+    SIF_LOG_ERROR("field", "failed to allocate the weight array");
     return SIF_ERR_ALLOC;
   }
 
@@ -163,7 +163,7 @@ int sif_field_assign_positions(
   field->z = new_z;
 
   /* The stored permutation described the previous positions, so it is now
-   * meaningless; leaving it in place would let a later assign_masses gather
+   * meaningless; leaving it in place would let a later assign_weights gather
    * through a permutation that no longer belongs to this data. */
   sif_free_aligned(field->original_indices);
   field->original_indices = NULL;
@@ -234,23 +234,23 @@ int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
   return SIF_OK;
 }
 
-int sif_field_assign_masses(sif_field_t* field, const sif_real* masses) {
-  if (!field || !masses) {
-    SIF_LOG_ERROR("field", "invalid masses");
+int sif_field_assign_weights(sif_field_t* field, const sif_real* weights) {
+  if (!field || !weights) {
+    SIF_LOG_ERROR("field", "invalid weights");
     return SIF_ERR_INVALID;
   }
 
   if (field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "cannot assign masses to an empty field");
+    SIF_LOG_ERROR("field", "cannot assign weights to an empty field");
     return SIF_ERR_INVALID;
   }
 
   const int permute = field_needs_permutation(field);
 
-  sif_real* new_masses =
+  sif_real* new_weights =
     sif_malloc_aligned(field->n_particles * sizeof(sif_real));
-  if (!new_masses) {
-    SIF_LOG_ERROR("field", "failed to allocate the mass array");
+  if (!new_weights) {
+    SIF_LOG_ERROR("field", "failed to allocate the weight array");
     return SIF_ERR_ALLOC;
   }
 
@@ -258,13 +258,13 @@ int sif_field_assign_masses(sif_field_t* field, const sif_real* masses) {
     const uint64_t* perm = field->original_indices;
 #pragma omp parallel for schedule(static)
     for (uint64_t i = 0; i < field->n_particles; i++)
-      new_masses[i] = masses[perm[i]];
+      new_weights[i] = weights[perm[i]];
   } else {
-    memcpy(new_masses, masses, field->n_particles * sizeof(sif_real));
+    memcpy(new_weights, weights, field->n_particles * sizeof(sif_real));
   }
 
-  sif_free_aligned(field->masses);
-  field->masses = new_masses;
+  sif_free_aligned(field->weights);
+  field->weights = new_weights;
 
   return SIF_OK;
 }
@@ -394,11 +394,19 @@ int sif_field_refresh_bounds(sif_field_t* field) {
   field->center[1] = (max_y + min_y) * 0.5f;
   field->center[2] = (max_z + min_z) * 0.5f;
 
+  /* The bounding *cube*, sized by the widest axis, because the Morton
+   * quantization and the octree both subdivide a cube -- see the note in
+   * sif_field_sort_morton(). */
   sif_real dx = max_x - min_x;
   sif_real dy = max_y - min_y;
   sif_real dz = max_z - min_z;
   sif_real max_dim = dx > dy ? (dx > dz ? dx : dz) : (dy > dz ? dy : dz);
 
+  /* Padded by 0.1%, so the particles at the extremes fall strictly inside the
+   * cube rather than exactly on its face. A point at the face quantizes to the
+   * first index past the grid, which the clamp in sif_field_quantize() would
+   * fold back onto its neighbour -- putting two distinguishable points in one
+   * cell for no reason other than the bound being tight. */
   field->half_span = (max_dim * 0.5f) * 1.001f;
   field->state_flags |= SIF_FIELD_STATE_BOUNDS_VALID;
 
@@ -415,8 +423,16 @@ int sif_field_require_bounds(sif_field_t* field) {
   return sif_field_refresh_bounds(field);
 }
 
-/* --- Morton Sorting Utilities --- */
+/* --- Morton sorting --- */
 
+/*
+ * Inserts two zero bits after every bit of a 21-bit value, so three of these
+ * interleave into one 64-bit word.
+ *
+ * The five shift-and-mask steps are the standard doubling trick: each one
+ * spreads the bits twice as far apart as the last, in log time rather than by
+ * looping over 21 bits. 21 is SIF_MORTON_BITS, and 3 * 21 = 63 is what fits.
+ */
 static inline uint64_t spread_bits_3(uint32_t v) {
   uint64_t x = v & 0x1FFFFF; /* 21 bits */
   x = (x | (x << 32)) & 0x1F00000000FFFFULL;
@@ -427,6 +443,14 @@ static inline uint64_t spread_bits_3(uint32_t v) {
   return x;
 }
 
+/*
+ * The Morton (Z-order) code: the three quantized coordinates interleaved bit
+ * by bit, x in the lowest of each triple.
+ *
+ * Sorting on this orders points by recursive octant -- which is exactly the
+ * order an octree visits its children in, and the whole reason the octree can
+ * store a contiguous particle range per node instead of a member list.
+ */
 static inline uint64_t morton_3d(uint32_t x, uint32_t y, uint32_t z) {
   return spread_bits_3(x) | (spread_bits_3(y) << 1) | (spread_bits_3(z) << 2);
 }
@@ -436,6 +460,25 @@ typedef struct {
   uint64_t morton_code;
 } particle_sort_t;
 
+/*
+ * Least-significant-digit radix sort on the 64-bit Morton code, one byte per
+ * pass.
+ *
+ * Radix rather than a comparison sort because the key is a fixed-width integer
+ * and n runs to hundreds of millions: eight linear passes beat n log n
+ * comparisons, and each pass is two loops that parallelize without a
+ * reduction.
+ *
+ * The array is cut into a fixed number of chunks and the histogram is indexed
+ * by *chunk*, not by thread. That is the part worth stating: the counting pass
+ * and the scatter pass have to partition the array identically, because the
+ * scatter writes at offsets the counting pass computed for each piece. Deriving
+ * the partition from omp_get_num_threads() ties it to the team size, and a
+ * runtime with dynamic adjustment enabled is allowed to hand the two regions
+ * teams of different sizes -- at which point the scatter writes at offsets that
+ * describe a different partition and the array is silently shredded. Indexing
+ * by chunk removes the question. grid_compute_cic() chunks for the same reason.
+ */
 static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
   if (n == 0)
     return SIF_OK;
@@ -450,16 +493,16 @@ static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
   particle_sort_t* src = array;
   particle_sort_t* dst = temp;
 
-  /* The per-thread histograms are indexed by omp_get_thread_num(), so they
-   * must be sized by the team the parallel regions below will actually get,
-   * not by the ceiling recorded at init time. Pinning the team size makes the
-   * two agree by construction. */
-  int n_threads = sif__system_max_threads();
-  if (n_threads < 1)
-    n_threads = 1;
+  /* One chunk per available thread: enough to keep them all busy, and few
+   * enough that the serial prefix sum over 256 * n_chunks stays negligible. */
+  int n_chunks = sif__system_max_threads();
+  if (n_chunks < 1)
+    n_chunks = 1;
 
-  uint64_t* global_counts = calloc((size_t)n_threads * 256, sizeof(uint64_t));
-  uint64_t* global_offsets = calloc((size_t)n_threads * 256, sizeof(uint64_t));
+  const uint64_t chunk = n / (uint64_t)n_chunks;
+
+  uint64_t* global_counts = calloc((size_t)n_chunks * 256, sizeof(uint64_t));
+  uint64_t* global_offsets = calloc((size_t)n_chunks * 256, sizeof(uint64_t));
 
   if (!global_counts || !global_offsets) {
     SIF_LOG_ERROR("field", "failed to allocate the radix histograms");
@@ -470,42 +513,43 @@ static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
   }
 
   for (int byte_idx = 0; byte_idx < 8; byte_idx++) {
-    memset(global_counts, 0, (size_t)n_threads * 256 * sizeof(uint64_t));
+    memset(global_counts, 0, (size_t)n_chunks * 256 * sizeof(uint64_t));
 
-#pragma omp parallel num_threads(n_threads)
-    {
-      int tid = sif__system_thread_num();
-      int num_t = sif__system_num_threads();
-      uint64_t chunk = n / num_t;
-      uint64_t start = tid * chunk;
-      uint64_t end = (tid == num_t - 1) ? n : start + chunk;
+    /* count: how many of each byte value each chunk holds */
+#pragma omp parallel for schedule(static)
+    for (int c = 0; c < n_chunks; c++) {
+      const uint64_t start = (uint64_t)c * chunk;
+      const uint64_t end = (c == n_chunks - 1) ? n : start + chunk;
 
       for (uint64_t i = start; i < end; i++) {
         uint8_t byte_val = (src[i].morton_code >> (byte_idx * 8)) & 0xFF;
-        global_counts[tid * 256 + byte_val]++;
+        global_counts[(size_t)c * 256 + byte_val]++;
       }
     }
 
+    /* Prefix sum, byte value major and chunk minor. Ordering it this way is
+     * what makes the sort stable: within one byte value the chunks keep their
+     * order, and within a chunk the scatter below walks in index order. An LSD
+     * radix sort is only correct if every pass is stable. */
     uint64_t current_offset = 0;
     for (int val = 0; val < 256; val++) {
-      for (int tid = 0; tid < n_threads; tid++) {
-        global_offsets[tid * 256 + val] = current_offset;
-        current_offset += global_counts[tid * 256 + val];
+      for (int c = 0; c < n_chunks; c++) {
+        global_offsets[(size_t)c * 256 + val] = current_offset;
+        current_offset += global_counts[(size_t)c * 256 + val];
       }
     }
 
-#pragma omp parallel num_threads(n_threads)
-    {
-      int tid = sif__system_thread_num();
-      int num_t = sif__system_num_threads();
-      uint64_t chunk = n / num_t;
-      uint64_t start = tid * chunk;
-      uint64_t end = (tid == num_t - 1) ? n : start + chunk;
+    /* scatter: each chunk writes into runs no other chunk touches */
+#pragma omp parallel for schedule(static)
+    for (int c = 0; c < n_chunks; c++) {
+      const uint64_t start = (uint64_t)c * chunk;
+      const uint64_t end = (c == n_chunks - 1) ? n : start + chunk;
 
+      /* A private copy, so the increment below is not a shared write. 2 KiB of
+       * frame, which an OpenMP worker stack takes without complaint. */
       uint64_t local_offsets[256];
-      for (int i = 0; i < 256; i++) {
-        local_offsets[i] = global_offsets[tid * 256 + i];
-      }
+      for (int i = 0; i < 256; i++)
+        local_offsets[i] = global_offsets[(size_t)c * 256 + i];
 
       for (uint64_t i = start; i < end; i++) {
         uint8_t byte_val = (src[i].morton_code >> (byte_idx * 8)) & 0xFF;
@@ -590,22 +634,22 @@ int sif_field_sort_morton(sif_field_t* field) {
     new_vel_block = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
   }
 
-  sif_real* new_masses = NULL;
-  if (field->masses) {
-    new_masses = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
+  sif_real* new_weights = NULL;
+  if (field->weights) {
+    new_weights = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
   }
 
   uint64_t* new_indices =
     sif_malloc_aligned(field->n_particles * sizeof(uint64_t));
 
-  if (!new_pos_block || !new_indices || (field->masses && !new_masses) ||
+  if (!new_pos_block || !new_indices || (field->weights && !new_weights) ||
       (field->vx && !new_vel_block)) {
     SIF_LOG_ERROR("field", "OOM during morton permutation reallocation.");
     /* Nothing has been swapped in yet, so releasing the partial allocations
      * leaves the field exactly as it was. */
     sif_free_aligned(new_pos_block);
     sif_free_aligned(new_vel_block);
-    sif_free_aligned(new_masses);
+    sif_free_aligned(new_weights);
     sif_free_aligned(new_indices);
     sif_free_aligned(sort_array);
     return SIF_ERR_ALLOC;
@@ -636,8 +680,8 @@ int sif_field_sort_morton(sif_field_t* field) {
       new_vz[i] = field->vz[old_idx];
     }
 
-    if (new_masses)
-      new_masses[i] = field->masses[old_idx];
+    if (new_weights)
+      new_weights[i] = field->weights[old_idx];
 
     new_indices[i] =
       (field->original_indices) ? field->original_indices[old_idx] : old_idx;
@@ -647,7 +691,7 @@ int sif_field_sort_morton(sif_field_t* field) {
 
   sif_free_aligned(field->_position_block);
   sif_free_aligned(field->_velocity_block);
-  sif_free_aligned(field->masses);
+  sif_free_aligned(field->weights);
   sif_free_aligned(field->original_indices);
 
   field->_position_block = new_pos_block;
@@ -660,7 +704,7 @@ int sif_field_sort_morton(sif_field_t* field) {
   field->vy = new_vy;
   field->vz = new_vz;
 
-  field->masses = new_masses;
+  field->weights = new_weights;
   field->original_indices = new_indices;
 
   field->state_flags |= SIF_FIELD_STATE_MORTON_SORTED;

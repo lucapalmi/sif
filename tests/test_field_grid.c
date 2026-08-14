@@ -6,6 +6,8 @@
 
 /* Covers the field/grid rework: Morton permutation coherence, the require_*
  * helpers, CIC mass weighting and the box contract. */
+#include "sif/core/settings.h"
+#include "sif/core/system.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
 #include "sif/structures/octree.h"
@@ -74,13 +76,13 @@ static void test_velocity_permutation(void) {
   /* Assign in ORIGINAL order, after the sort. */
   CHECK(sif_field_assign_velocities(f, vx, vy, vz) == SIF_OK,
     "assign_velocities failed");
-  CHECK(sif_field_assign_masses(f, m) == SIF_OK, "assign_masses failed");
+  CHECK(sif_field_assign_weights(f, m) == SIF_OK, "assign_weights failed");
 
   int mismatched = 0;
   for (uint64_t i = 0; i < N_P; i++) {
     if (f->vx[i] != f->x[i] || f->vy[i] != f->y[i] || f->vz[i] != f->z[i])
       mismatched++;
-    if (f->masses[i] != f->x[i])
+    if (f->weights[i] != f->x[i])
       mismatched++;
   }
   CHECK(
@@ -185,7 +187,7 @@ static void test_require_helpers(void) {
   printf("  ok\n");
 }
 
-/* CIC must now honour per-particle masses and conserve total mass. */
+/* CIC must now honour per-particle weights and conserve total mass. */
 static void test_cic_mass(void) {
   printf("cic mass weighting and conservation\n");
 
@@ -196,11 +198,11 @@ static void test_cic_mass(void) {
 
   sif_real* m = malloc(N_P * sizeof(sif_real));
   for (uint64_t i = 0; i < N_P; i++)
-    m[i] = 2.0f; /* uniform but != 1, so ignoring masses is detectable */
+    m[i] = 2.0f; /* uniform but != 1, so ignoring weights is detectable */
 
   sif_field_t* f = sif_field_alloc(N_P);
   sif_field_assign_positions(f, x, y, z);
-  sif_field_assign_masses(f, m);
+  sif_field_assign_weights(f, m);
 
   const uint32_t n = 16;
   sif_grid_t* g = sif_grid_alloc(n, BOX);
@@ -232,6 +234,90 @@ static void test_cic_mass(void) {
   free(y);
   free(z);
   free(m);
+  printf("  ok\n");
+}
+
+/*
+ * The .xgrid cache has to key on what actually determines the grid.
+ *
+ * It used to key on the particle count, the box, a flag saying whether weights
+ * existed, and five sampled positions -- so two runs over identical positions
+ * with different mass *values* produced the same key, and the second silently
+ * received the first one's grid. That is the case pinned here: no collision is
+ * involved, it was a guaranteed wrong answer.
+ */
+static void test_cic_cache_keys_on_content(void) {
+  printf("cic cache distinguishes fields by content\n");
+
+  sif_real *x = malloc(N_P * sizeof(sif_real)),
+           *y = malloc(N_P * sizeof(sif_real)),
+           *z = malloc(N_P * sizeof(sif_real));
+  make_positions(x, y, z);
+
+  sif_real* m1 = malloc(N_P * sizeof(sif_real));
+  sif_real* m2 = malloc(N_P * sizeof(sif_real));
+  for (uint64_t i = 0; i < N_P; i++) {
+    m1[i] = 1.0f;
+    m2[i] = 3.0f; /* same positions, three times the weight */
+  }
+
+  /* The cache is opt-in; HOME points into the build tree for the test run, so
+   * this writes nothing outside it. */
+  sif_setting_set("grid_cache_enabled", "1");
+
+  const uint32_t n = 16;
+  const uint64_t total = (uint64_t)n * n * n;
+
+  sif_field_t* f1 = sif_field_alloc(N_P);
+  sif_field_assign_positions(f1, x, y, z);
+  sif_field_assign_weights(f1, m1);
+
+  sif_grid_t* g1 = sif_grid_alloc(n, BOX);
+  sif_grid_assign_cic(g1, f1);
+
+  double sum1 = 0.0;
+  for (uint64_t i = 0; i < total; i++)
+    sum1 += (double)g1->values[i];
+
+  sif_field_t* f2 = sif_field_alloc(N_P);
+  sif_field_assign_positions(f2, x, y, z);
+  sif_field_assign_weights(f2, m2);
+
+  sif_grid_t* g2 = sif_grid_alloc(n, BOX);
+  sif_grid_assign_cic(g2, f2);
+
+  double sum2 = 0.0;
+  for (uint64_t i = 0; i < total; i++)
+    sum2 += (double)g2->values[i];
+
+  CHECK(fabs(sum2 / sum1 - 3.0) < 1e-3,
+    "three times the mass gave %.6g times the grid, not 3 -- the second run "
+    "was served the first one's cache entry",
+    sum2 / sum1);
+
+  /* And the cache must still work: the same field again is a hit, and a hit
+   * has to reproduce the computed grid exactly. */
+  sif_grid_t* g1_again = sif_grid_alloc(n, BOX);
+  sif_grid_assign_cic(g1_again, f1);
+
+  int identical = 1;
+  for (uint64_t i = 0; i < total; i++)
+    if (g1->values[i] != g1_again->values[i])
+      identical = 0;
+  CHECK(identical, "a cache hit did not reproduce the grid bit for bit");
+
+  sif_setting_set("grid_cache_enabled", "0");
+
+  sif_grid_free(g1_again);
+  sif_grid_free(g2);
+  sif_grid_free(g1);
+  sif_field_free(f2);
+  sif_field_free(f1);
+  free(x);
+  free(y);
+  free(z);
+  free(m1);
+  free(m2);
   printf("  ok\n");
 }
 
@@ -369,7 +455,7 @@ static void test_grid_content_tag(void) {
 
   for (uint64_t i = 0; i < g->total_cells; i++)
     g->values[i] = (sif_real)(1.0 + 0.01 * (double)i);
-  g->content = SIF_GRID_MASS;
+  g->content = SIF_GRID_DENSITY;
 
   sif_grid_to_density_contrast(g);
   CHECK(g->content == SIF_GRID_DENSITY_CONTRAST,
@@ -389,13 +475,22 @@ static void test_grid_content_tag(void) {
 }
 
 int main(void) {
+  /* Needed by the cache test and nothing else here: the grid cache is driven
+   * through the settings table, which does not exist until the library is
+   * initialized -- so without this sif_setting_set() is a silent no-op and
+   * the cache test passes without ever enabling the cache. */
+  sif_init(SIF_CONFIG_QUIET);
+
   test_velocity_permutation();
   test_sort_permutes_everything();
   test_require_helpers();
   test_cic_mass();
+  test_cic_cache_keys_on_content();
   test_cic_rejects_out_of_box();
   test_wrap_periodic();
   test_grid_content_tag();
+
+  sif_finalize();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

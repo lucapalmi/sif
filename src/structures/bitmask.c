@@ -27,7 +27,10 @@ sif_bitmask_t* sif_bitmask_alloc(uint64_t n_bits) {
   mask->n_bits = n_bits;
   mask->n_words = (n_bits + 63) >> 6;
 
-  /* calloc zeros the memory automatically */
+  /* Cleared, and load-bearing rather than tidy: the trailing bits of the last
+   * word have no index that can reach them, so nothing will ever write them,
+   * and sif_bitmask_count_set() popcounts whole words on the strength of their
+   * being zero from here on. */
   mask->words = sif_calloc_aligned(mask->n_words, sizeof(uint64_t));
 
   if (!mask->words) {
@@ -67,12 +70,24 @@ uint64_t sif_bitmask_count_set(const sif_bitmask_t* mask) {
   const uint64_t n_words = mask->n_words;
   const uint64_t* words = mask->words;
 
-  /* The trailing bits of the last word past n_bits are guaranteed zero:
-   * the buffer is calloc'd and nothing can set them (every mutator masks the
-   * index to 6 bits and every index is asserted < n_bits). */
+  /*
+   * Whole words, including the last one, with no mask over the tail.
+   *
+   * That is only correct because nothing can set a bit past n_bits: the
+   * mutators take a bit index, and a caller that respects the documented
+   * range never reaches the padding. The allocation cleared it, so the
+   * popcount of the final word counts real bits only.
+   *
+   * Note the precondition is the caller's: SIF_ASSERT compiles away in a
+   * release build, so an out-of-range index there corrupts this count rather
+   * than tripping anything.
+   *
+   * The reduction is over integers, so it is exact and the answer does not
+   * depend on the thread count.
+   */
 #pragma omp parallel for schedule(static) reduction(+ : count)
   for (uint64_t i = 0; i < n_words; i++) {
-    count += (uint64_t)__builtin_popcountll(words[i]);
+    count += SIF_POPCOUNT_U64(words[i]);
   }
 
   return count;

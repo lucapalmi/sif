@@ -12,11 +12,21 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 
-/* Number of sif_real views packed into the arena: cx, cy, cz, radii */
+/*
+ * Number of sif_real views packed into the arena: cx, cy, cz, radii.
+ *
+ * One allocation rather than four, so growth is a single copy and the whole
+ * catalogue is one free. Structure-of-arrays rather than an array of structs
+ * because every consumer sweeps one field at a time -- the size function reads
+ * only radii, the profiles read only the centres -- and a struct would drag
+ * three unused values through cache on each.
+ */
 #define CATALOG_N_VIEWS 4
 
 /* Each view starts on a cache-line boundary, so the per-view stride is the
- * capacity rounded up to a whole number of sif_real per cache line. */
+ * capacity rounded up to a whole number of sif_real per cache line. Without
+ * the rounding, two views would share the line at their boundary and the
+ * threads writing them would contend over it. */
 static inline uint64_t catalog_stride(uint64_t capacity) {
   const uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
   return (capacity + align_elements - 1) & ~(align_elements - 1);
@@ -47,6 +57,16 @@ static sif_real* catalog_block_alloc(uint64_t capacity, sif_real** out_cx,
 /*
  * Moves the stored voids into a freshly allocated arena of `new_capacity` and
  * swaps it in. On failure the catalog is left exactly as it was.
+ *
+ * Always a fresh arena and a copy, never a realloc: realloc may extend in
+ * place, but the address it extends is only guaranteed to keep malloc's
+ * alignment, and the whole point of the arena is that each view starts on a
+ * cache line. Growing in place would also have to move three of the four views
+ * anyway, since the stride changes with the capacity.
+ *
+ * The new arena is filled before the old one is released, so a failure leaves
+ * the catalog untouched and the caller still holding something valid -- which
+ * is what lets sif_catalog_trim() treat a failed trim as merely disappointing.
  */
 static int catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
   sif_real *new_cx, *new_cy, *new_cz, *new_radii;
@@ -61,6 +81,9 @@ static int catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
     return SIF_ERR_ALLOC;
   }
 
+  /* Copying only what is in use, and only what fits: the trim path shrinks,
+   * so new_capacity can be below n_voids and the excess is dropped rather
+   * than run off the end of the new arena. */
   const uint64_t n =
     (catalog->n_voids < new_capacity) ? catalog->n_voids : new_capacity;
 
@@ -85,6 +108,10 @@ static int catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
 }
 
 sif_catalog_t* sif_catalog_alloc(uint64_t initial_capacity) {
+  /* Clamped rather than rejected, so that a catalogue which comes back
+   * non-NULL is always appendable. A caller sizing from an estimate that came
+   * out zero gets something usable instead of a NULL it has to special-case,
+   * and the doubling in append covers the growth from there. */
   if (initial_capacity == 0)
     initial_capacity = 1;
 
@@ -117,6 +144,8 @@ void sif_catalog_free(sif_catalog_t* catalog) {
   if (!catalog)
     return;
 
+  /* One arena, so one free -- the four views point into it and must not be
+   * released individually. */
   sif_free_aligned(catalog->_block);
   free(catalog);
 }
@@ -127,6 +156,10 @@ int sif_catalog_append(
   if (!catalog)
     return SIF_ERR_INVALID;
 
+  /* Doubling, so a finder appending one void at a time pays an amortized
+   * constant per append rather than a copy of the whole catalogue. A finder
+   * cannot know its void count in advance, which is what rules out sizing the
+   * arena once up front. */
   if (catalog->n_voids >= catalog->capacity) {
     int status = catalog_resize(catalog, catalog->capacity << 1);
     if (status != SIF_OK)

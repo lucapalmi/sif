@@ -240,8 +240,13 @@ int sif__fft_randomize_phases(
 
 /** @brief Highest order sif__fft_spectral_moments will accept. Past this the
  * k^(2j) weighting is so steep that the sum is entirely a statement about the
- * smallest scale on the grid, whatever that happens to be. */
-#define FFT_MAX_MOMENT_ORDER 4
+ * smallest scale on the grid, whatever that happens to be.
+ *
+ * @note Must not be below SIF_MAX_MOMENT_ORDER in
+ * `sif/structures/delta_moments.h`, which is what the public API advertises and
+ * what the result containers are sized for. This header is not the place to
+ * include that one, so the two are kept equal by hand. */
+#define SIF__FFT_MAX_MOMENT_ORDER 4
 
 /**
  * @brief Spectral moments of the filtered field, evaluated in Fourier space
@@ -269,7 +274,7 @@ int sif__fft_randomize_phases(
  * @param filter The filter to evaluate the moments under
  * @param r The smoothing radius
  * @param box_length The physical side length of the box
- * @param max_order The highest moment order, at most FFT_MAX_MOMENT_ORDER
+ * @param max_order The highest moment order, at most SIF__FFT_MAX_MOMENT_ORDER
  * @param n_tracers Number of tracers behind the density field. The Poisson
  * term is then subtracted mode by mode, which matters for j >= 1 because the
  * flat shot-noise floor is amplified by k^(2j). Pass 0 to leave it in.

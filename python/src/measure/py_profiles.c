@@ -210,6 +210,7 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
 
   sif_density_profiles_t* dens_out = NULL;
   sif_velocity_profiles_t* vel_out = NULL;
+  int status = SIF_OK;
 
   /* --- Python-Side Dispatcher --- */
   if ((options & SIF__PROFILES_ALGO_MASK) == SIF_PROFILES_ALGO_VORONOI) {
@@ -232,22 +233,23 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
 
     /* The GIL is released for the duration: this is a long, purely numeric
        run across every core and nothing below touches Python state. */
-    Py_BEGIN_ALLOW_THREADS sif_profiles_voronoi(cat->catalog, field->field,
-      c_tess, (sif_real)box_length, (sif_real)ext, n_bins, options, &dens_out,
-      compute_velocity ? &vel_out : NULL);
+    Py_BEGIN_ALLOW_THREADS status = sif_profiles_voronoi(cat->catalog,
+      field->field, c_tess, (sif_real)box_length, (sif_real)ext, n_bins,
+      options, &dens_out, compute_velocity ? &vel_out : NULL);
     Py_END_ALLOW_THREADS
 
   } else {
 
-    Py_BEGIN_ALLOW_THREADS sif_profiles_mesh(cat->catalog, field->field,
-      (sif_real)box_length, (sif_real)ext, n_bins, options, &dens_out,
-      compute_velocity ? &vel_out : NULL);
+    Py_BEGIN_ALLOW_THREADS status = sif_profiles_mesh(cat->catalog,
+      field->field, (sif_real)box_length, (sif_real)ext, n_bins, options,
+      &dens_out, compute_velocity ? &vel_out : NULL);
     Py_END_ALLOW_THREADS
   }
 
-  if (!dens_out) {
+  if (status != SIF_OK) {
     PyErr_SetString(
-      PyExc_RuntimeError, "Backend profile engine execution failed.");
+      status == SIF_ERR_ALLOC ? PyExc_MemoryError : PyExc_ValueError,
+      "Backend profile engine execution failed; see the log for the reason.");
     return NULL;
   }
 

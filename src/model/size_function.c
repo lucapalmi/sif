@@ -230,10 +230,20 @@ static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
     return NULL;
   }
 
+  /* Strictly increasing, not merely positive: r_min, r_max and the bin edges
+   * below are all read off the ends of this array, and sif__edges_from_centers
+   * builds an edge grid that assumes it. sif_size_function_bbks() enforces the
+   * same thing before it differentiates. */
   for (uint32_t i = 0; i < n_radii; i++) {
     if (!(radii[i] > 0.0f)) {
       SIF_LOG_ERROR(
         TAG, "radius %u is %g, must be strictly positive", i, (double)radii[i]);
+      return NULL;
+    }
+    if (i > 0 && !(radii[i] > radii[i - 1])) {
+      SIF_LOG_ERROR(TAG,
+        "radii must be strictly increasing; index %u is %g after %g", i,
+        (double)radii[i], (double)radii[i - 1]);
       return NULL;
     }
   }
@@ -335,3 +345,5 @@ sif_size_function_t* sif_size_function_vdn(const sif_real* k,
   return size_function(
     k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, true);
 }
+
+#undef TAG

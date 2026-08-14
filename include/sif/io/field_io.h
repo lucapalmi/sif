@@ -52,7 +52,7 @@ typedef struct {
   uint32_t version;        /**< #SIF_XFIELD_VERSION. */
   uint64_t n_particles;    /**< Particles in the file. */
   double box_length;       /**< Simulation box size. */
-  uint32_t has_masses;     /**< 1 if a mass block follows. */
+  uint32_t has_weights;    /**< 1 if a weight block follows. */
   uint32_t has_velocities; /**< 1 if vx, vy, vz blocks follow. */
   uint32_t is_double;      /**< 1 if written with a 64-bit sif_real. */
   /** CRC32 of the payload that follows, in the order it is written. Zero in a
@@ -88,15 +88,17 @@ int sif_field_read_into(const char* filepath, sif_field_t* field);
 /**
  * @brief Write a field to a .xfield file.
  *
- * Mass and velocity blocks are written only if the field carries them, and the
- * header records which.
+ * Weight and velocity blocks are written only if the field carries them, and
+ * the header records which.
  *
  * @param filepath Path to the output file.
- * @param field Field to write.
+ * @param field Field to write. Must carry positions; they are the one block
+ * every .xfield has.
  * @param box_length Box length to record in the header. Not otherwise used by
  * the field, so it has to be supplied here.
- * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO if the
- * file could not be written.
+ * @return SIF_OK, SIF_ERR_INVALID on a NULL argument or a field without
+ * positions, or SIF_ERR_IO if the file could not be written -- including a
+ * failure that only surfaces when the last buffered bytes are flushed.
  */
 int sif_field_write(
   const char* filepath, const sif_field_t* field, double box_length);
@@ -104,16 +106,38 @@ int sif_field_write(
 /**
  * @brief Read an ASCII table into an existing field.
  *
- * @param field Field to fill, already allocated with the right particle count.
+ * Blank lines, and lines whose first non-blank character is `#` or `;`, are
+ * skipped wherever they appear. So is a row that runs out of columns before
+ * the format is satisfied -- a partial row is not a particle, and counting one
+ * would leave an entry whose remaining components were never assigned.
+ *
+ * A field whose `n_particles` is 0 is sized from the file. Since the sizing
+ * pass counts lines rather than parsing them, that count is an upper bound,
+ * and `n_particles` is corrected down to what actually loaded. A field that
+ * already has a count is filled to that count and no further; anything left in
+ * the file is reported.
+ *
+ * Reserving is a no-op on a block the field already has, so a format naming
+ * only the weight column can be read into a field whose positions are already
+ * loaded, and they survive.
+ *
+ * @param field Field to fill. Either already sized, or with `n_particles` 0 to
+ * take the count from the file.
  * @param filepath Path to the input file.
  * @param fmt Column layout, one character per column; see
- * sif_str_decode_format() for the alphabet. For example `"xyz*m"`.
+ * sif_str_decode_format() for the alphabet. For example `"xyz*m"`. Position and
+ * velocity must be named in full or not at all: each is reserved as one block,
+ * so `"xy"` would allocate a z array and never write it.
  * @param delimiter Character separating columns. Use `' '` for whitespace.
  * @param skip_header Lines to skip before the data starts.
- * @return SIF_OK, or a negative SIF_ERR_* code on failure.
+ * @return SIF_OK, SIF_ERR_INVALID for a NULL argument or a format that names
+ * no usable columns, only part of the position or velocity, or no positions
+ * for a field that has none; SIF_ERR_ALLOC if a block could not be reserved;
+ * SIF_ERR_IO if the file could not be read or held no parsable row.
  *
- * @warning A column that does not parse as a number reads as 0.0 rather than
- * failing; see sif_str_extract_next_real().
+ * @warning A column that is present but does not parse as a number reads as
+ * 0.0 rather than failing; see sif_str_extract_next_real(). Only a *missing*
+ * column causes a row to be skipped.
  */
 int sif_field_read_ascii(sif_field_t* field, const char* filepath,
   const char* fmt, char delimiter, uint32_t skip_header);

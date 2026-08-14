@@ -13,13 +13,28 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Item ids are stored as int32_t (-1 marks "empty"), so this is the hard cap.
+/*
+ * Item ids are stored as int32_t (-1 marks "empty"), so this is the hard cap.
+ *
+ * Signed and 32-bit on purpose. The structure is two arrays of one id each per
+ * cell and per item, so the width is half the memory of the whole index; and
+ * a signed sentinel means "empty" costs no extra field and no reserved
+ * positive value that a real id might collide with. The price is this cap,
+ * which a field of more than 2 G items has to reach for the chain mesh
+ * instead.
  */
 #define CLL_MAX_CAPACITY ((uint64_t)INT32_MAX)
 
 /*
  * Maps one physical coordinate onto a cell index, honoring the boundary
  * convention the list was created with.
+ *
+ * The two conventions differ in what they do with a coordinate outside the
+ * box, and both answers are deliberate: periodic wraps it, because the box has
+ * no outside; open clamps it into the edge cell, because a particle just past
+ * the boundary is still nearest to what is just inside. Neither rejects,
+ * since a caller inserting a stray coordinate wants it indexed somewhere
+ * rather than dropped without trace.
  */
 static inline uint32_t cll_axis_index(
   const sif_cell_linked_list_t* cll, sif_real c) {
@@ -89,8 +104,13 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
     return NULL;
   }
 
-  /* -1 == empty. Only `head` needs initializing: insert always writes
-   * next[item_idx] before anything can read it. */
+  /* 0xFF bytes is -1 in two's complement, which is the empty marker: memset
+   * fills the whole head array in one pass where a loop would write one cell
+   * at a time, and total_cells is n^3.
+   *
+   * Only `head` needs it. `next` is written by insert before anything can
+   * follow the chain into it, so pre-filling it would be work whose result is
+   * always overwritten. */
   memset(cll->head, 0xFF, cll->total_cells * sizeof(int32_t));
 
   SIF_LOG_TRACE("cell_linked_list",
@@ -125,12 +145,17 @@ int sif_cell_linked_list_ensure_capacity(
     return SIF_ERR_RANGE;
   }
 
+  /* Doubling first, then the request, so a caller inserting one item at a time
+   * pays a copy per doubling rather than per insert. The clamp is reachable
+   * only from the doubling, since the request was bounded above. */
   uint64_t new_capacity = cll->capacity << 1;
   if (new_capacity < required_capacity)
     new_capacity = required_capacity;
   if (new_capacity > CLL_MAX_CAPACITY)
     new_capacity = CLL_MAX_CAPACITY;
 
+  /* Only `next` grows. `head` is sized by the cell count, which is geometry
+   * and does not change with the number of items in the list. */
   int32_t* new_next = sif_malloc_aligned(new_capacity * sizeof(int32_t));
   if (!new_next) {
     SIF_LOG_ERROR("cell_linked_list",
@@ -171,6 +196,11 @@ int sif_cell_linked_list_insert(sif_cell_linked_list_t* cll, uint64_t item_idx,
   const uint64_t flat_idx = (uint64_t)ix * cll->n_cells * cll->n_cells +
                             (uint64_t)iy * cll->n_cells + (uint64_t)iz;
 
+  /* Push onto the front of the cell's chain: the new item inherits whatever
+   * head pointed at, and head points at it. O(1) with no tail pointer, at the
+   * price of a chain in reverse insertion order -- which nothing depends on,
+   * since a cell's contents are a set. These two lines are also why the
+   * header calls insertion thread-unsafe. */
   cll->next[item_idx] = cll->head[flat_idx];
   cll->head[flat_idx] = (int32_t)item_idx;
 

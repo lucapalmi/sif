@@ -23,17 +23,14 @@ extern PyObject* py_sif_init_finders(void);
 
 static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
   /* Default values */
-  int verbose = 0;
   int threads = 0;
   int skip_tuning = 0;
-  int save_memory = 0;
   int log_level = 2; /* SIF_LOG_LEVEL_INFO */
 
-  static char* kwlist[] = {
-    "verbose", "threads", "skip_tuning", "save_memory", "log_level", NULL};
+  static char* kwlist[] = {"threads", "skip_tuning", "log_level", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|pippi", kwlist, &verbose,
-        &threads, &skip_tuning, &save_memory, &log_level)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "|ipi", kwlist, &threads, &skip_tuning, &log_level)) {
     return NULL;
   }
 
@@ -43,7 +40,6 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
 
   sif_config_t config = {.fft_config = &fft_cfg,
     .omp_config = &omp_cfg,
-    .verbose = (bool)verbose,
     .log_level = (uint8_t)log_level};
 
   sif_init(&config);
@@ -99,19 +95,17 @@ static PyObject* py_sif_setting_get(
 
 static PyMethodDef sif_module_methods[] = {
   {"init", (PyCFunction)py_sif_init, METH_VARARGS | METH_KEYWORDS,
-    "init(verbose=False, threads=0, skip_tuning=False, save_memory=False, "
-    "log_level=2)\n"
+    "init(threads=0, skip_tuning=False, log_level=2)\n"
     "--\n\n"
     "Start the library. Call this before anything else.\n\n"
     "Brings up the logger, the thread ceiling, the settings table and the\n"
     "FFTW plan cache. Calling it twice warns and does nothing.\n\n"
     "Args:\n"
-    "    verbose: Log everything and report timings. Overrides log_level.\n"
     "    threads: Thread ceiling; 0 leaves OpenMP's own default.\n"
     "    skip_tuning: Take FFTW's estimated plan instead of tuning. Faster\n"
     "        to start, slower to transform; worth setting for short runs.\n"
-    "    save_memory: Trade speed for a smaller footprint where possible.\n"
-    "    log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none."},
+    "    log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none.\n"
+    "        0 is the verbose mode: everything, timings included."},
   {"finalize", (PyCFunction)py_sif_finalize, METH_NOARGS,
     "finalize()\n"
     "--\n\n"

@@ -208,8 +208,7 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
 
     /* The finder borrows the mesh, so the field it was built from is dead
      * weight from here on and is released before the run. */
-    sif_chain_mesh_t* mesh =
-      sif_chain_mesh_alloc(MESH_CELLS, BOX, f, false, false, false);
+    sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f);
     CHECK(mesh != NULL, "chain mesh construction failed");
     sif_field_free(f);
 
@@ -234,8 +233,7 @@ int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
-    .verbose = false,
-    .log_level = 3 /* WARNING */};
+    .log_level = SIF_LOG_LEVEL_WARNING};
   sif_init(&cfg);
 
   run_case("defaults", 0, 0.0f);
