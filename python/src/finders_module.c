@@ -7,9 +7,8 @@
 #include "finders/py_finders.h"
 
 static PyMethodDef finders_methods[] = {
-  {"rescaled_spherical", (PyCFunction)py_sif_finder_rescaled_spherical,
-    METH_VARARGS | METH_KEYWORDS,
-    "rescaled_spherical(grid, mesh, radii, threshold, overlap_fraction=0.0, "
+  {"exodus", (PyCFunction)py_sif_finder_exodus, METH_VARARGS | METH_KEYWORDS,
+    "exodus(grid, mesh, radii, threshold, overlap_fraction=0.0, "
     "consume_grid=False)\n"
     "--\n\n"
     "Find voids, growing each to the radius its tracers support.\n\n"
@@ -41,8 +40,8 @@ static PyMethodDef finders_methods[] = {
     "Find voids as fixed-radius spheres on a density grid.\n\n"
     "Walks the radii from largest to smallest, accepting a sphere wherever\n"
     "one does not overlap a void already accepted. Voids therefore come out\n"
-    "with radii drawn from the ladder you passed in; use\n"
-    "rescaled_spherical() to get radii from the data.\n\n"
+    "with radii drawn from the ladder you passed in; use exodus() to get\n"
+    "radii from the data.\n\n"
     "Args:\n"
     "    grid: Density contrast field. Smoothed in place and restored\n"
     "        afterwards unless consume_grid is set.\n"
@@ -58,7 +57,7 @@ static PyMethodDef finders_methods[] = {
     METH_VARARGS | METH_KEYWORDS,
     "suggest_mesh_cells(n_particles, box_length, max_radius=0.0)\n"
     "--\n\n"
-    "Suggest a ChainMesh resolution for rescaled_spherical().\n\n"
+    "Suggest a ChainMesh resolution for exodus().\n\n"
     "Resolution changes only speed and memory -- the catalogue is identical\n"
     "at any resolution -- so it is safe to tune and worth tuning.\n\n"
     "Args:\n"
@@ -78,9 +77,9 @@ static struct PyModuleDef finders_module = {PyModuleDef_HEAD_INIT,
   .m_doc = "Void finders.\n\n"
            "Both take a density-contrast grid and return a Catalog. They\n"
            "differ in where the radii come from: spherical() can only report\n"
-           "radii from the ladder you pass in, while rescaled_spherical()\n"
-           "grows each void to the radius its tracers actually support, and\n"
-           "so also needs the particles as a ChainMesh.",
+           "radii from the ladder you pass in, while exodus() grows each\n"
+           "void to the radius its tracers actually support, and so also\n"
+           "needs the particles as a ChainMesh.",
   .m_size = -1, .m_methods = finders_methods};
 
 PyObject* py_sif_init_finders(void) { return PyModule_Create(&finders_module); }

@@ -107,7 +107,7 @@ set(SOURCES
 
   # finder
     src/finder/spherical_finder.c
-    src/finder/rescaled_spherical_finder.c
+    src/finder/exodus_finder.c
     src/finder/utils.c
 
   # measure

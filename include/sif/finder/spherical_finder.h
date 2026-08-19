@@ -15,7 +15,7 @@
  * masked, so later and smaller radii cannot re-find the same underdensity.
  *
  * Voids therefore come out with radii drawn from the ladder that was passed in,
- * not from the data. sif_finder_rescaled_spherical() relaxes that by growing
+ * not from the data. sif_finder_exodus() relaxes that by growing
  * each sphere to the radius the tracers actually support.
  */
 

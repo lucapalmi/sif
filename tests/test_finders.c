@@ -13,7 +13,7 @@
  * radii. Exercises the options that take different code paths.
  */
 #include "sif/core/system.h"
-#include "sif/finder/rescaled_spherical_finder.h"
+#include "sif/finder/exodus_finder.h"
 #include "sif/finder/spherical_finder.h"
 #include "sif/structures/catalog.h"
 #include "sif/structures/chain_mesh.h"
@@ -46,7 +46,7 @@ static int failures = 0;
 
 #define CELL (BOX / (sif_real)N_GRID)
 
-/* Mesh resolution for the rescaled finder. The finder used to pick this
+/* Mesh resolution for the exodus finder. The finder used to pick this
  * itself; now that the caller owns the mesh, sif_finder_suggest_mesh_cells
  * does, which also keeps this test honest about the recommended path. */
 #define MESH_CELLS sif_finder_suggest_mesh_cells(N_P, BOX, radii[0])
@@ -198,7 +198,7 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     sif_field_free(f);
   }
 
-  /* --- rescaled spherical finder --- */
+  /* --- exodus finder --- */
   {
     sif_field_t* f = sif_field_alloc(N_P);
     sif_field_assign_positions(f, x, y, z);
@@ -215,11 +215,11 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     CHECK(mesh != NULL, "chain mesh construction failed");
     sif_field_free(f);
 
-    sif_catalog_t* cat = sif_finder_rescaled_spherical(
-      g, mesh, radii, n_radii, -0.7f, overlap, opts);
+    sif_catalog_t* cat =
+      sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, overlap, opts);
     /* Rescaling grows the void until the enclosed density crosses the
      * threshold, which overshoots the geometric hole edge somewhat. */
-    check_catalog("rescaled ", cat, 0.9f, 1.5f);
+    check_catalog("exodus   ", cat, 0.9f, 1.5f);
     sif_catalog_free(cat);
 
     sif_chain_mesh_free(mesh);

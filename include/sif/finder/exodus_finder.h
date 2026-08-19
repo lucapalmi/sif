@@ -5,7 +5,7 @@
  */
 
 /**
- * @file rescaled_spherical_finder.h
+ * @file exodus_finder.h
  * @brief Spherical void finder that grows each void to the radius its tracers
  * support.
  *
@@ -19,8 +19,8 @@
  * chain mesh is for.
  */
 
-#ifndef SIF_FINDER_RESCALED_SPHERICAL_FINDER_H
-#define SIF_FINDER_RESCALED_SPHERICAL_FINDER_H
+#ifndef SIF_FINDER_EXODUS_FINDER_H
+#define SIF_FINDER_EXODUS_FINDER_H
 
 #include <math.h>
 #include <stdint.h>
@@ -31,7 +31,7 @@
 #include "sif/structures/grid.h"
 
 /**
- * @brief Run the rescaled spherical void finder on a density grid.
+ * @brief Run the exodus void finder on a density grid.
  *
  * The mesh is borrowed, never freed: build it once and it can be reused across
  * several runs at different thresholds or radius sets. Building it also means
@@ -62,11 +62,11 @@
  * @return Newly allocated catalogue, released with sif_catalog_free(), or
  * NULL on invalid input or failure.
  */
-SIF_NODISCARD sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
+SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
   sif_real threshold, sif_real overlap_fraction, sif_option opt);
 
-/** @brief Particles per mesh cell that the rescale runs fastest at. The cost
+/** @brief Particles per mesh cell that exodus runs fastest at. The cost
  * splits between per-cell overhead, which grows as the mesh is refined, and
  * per-particle work in the cells straddling the annulus boundaries, which grows
  * as it is coarsened; measured across radii and tracer densities, the balance
@@ -126,4 +126,4 @@ static inline uint32_t sif_finder_suggest_mesh_cells(
   return (uint32_t)n;
 }
 
-#endif /* SIF_FINDER_RESCALED_SPHERICAL_FINDER_H */
+#endif /* SIF_FINDER_EXODUS_FINDER_H */

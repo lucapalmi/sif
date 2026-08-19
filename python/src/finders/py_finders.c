@@ -14,7 +14,7 @@
 
 #include "sif/core/macros.h"
 #include "sif/core/system.h"
-#include "sif/finder/rescaled_spherical_finder.h"
+#include "sif/finder/exodus_finder.h"
 #include "sif/finder/spherical_finder.h"
 
 /* --- Mesh Sizing Helper --- */
@@ -70,9 +70,8 @@ PyObject* py_sif_finder_suggest_mesh_cells(
   return PyLong_FromUnsignedLong(n_cells);
 }
 
-/* --- Rescaled Spherical Finder Wrapper --- */
-PyObject* py_sif_finder_rescaled_spherical(
-  PyObject* self, PyObject* args, PyObject* kwds) {
+/* --- Exodus Finder Wrapper --- */
+PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject *grid_obj = NULL, *mesh_obj = NULL, *radii_obj = NULL;
   double threshold;
   double overlap_frac = 0.0;
@@ -126,15 +125,15 @@ PyObject* py_sif_finder_rescaled_spherical(
    * caller's reference for the whole call, so it cannot be collected here. */
   sif_catalog_t* res_catalog = NULL;
   Py_BEGIN_ALLOW_THREADS res_catalog =
-    sif_finder_rescaled_spherical(c_grid, c_mesh, radii_data, (uint32_t)n_radii,
+    sif_finder_exodus(c_grid, c_mesh, radii_data, (uint32_t)n_radii,
       (sif_real)threshold, (sif_real)overlap_frac, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
   if (!res_catalog) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "Rescaled spherical finder execution failed. Check system logs.");
+    PyErr_SetString(
+      PyExc_RuntimeError, "Exodus finder execution failed. Check system logs.");
     return NULL;
   }
 
@@ -188,7 +187,7 @@ PyObject* py_sif_finder_spherical(
   if (consume_grid)
     options |= SIF_FINDER_CONSUME_GRID;
 
-  /* See the note in the rescaled wrapper: the GIL is released for the run. */
+  /* See the note in the exodus wrapper: the GIL is released for the run. */
   sif_catalog_t* res_catalog = NULL;
   Py_BEGIN_ALLOW_THREADS res_catalog = sif_finder_spherical(c_grid, radii_data,
     (uint32_t)n_radii, (sif_real)threshold, (sif_real)overlap_frac, options);

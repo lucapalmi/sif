@@ -5,7 +5,7 @@
  */
 
 /*
- * The rescaled spherical finder.
+ * The exodus finder.
  *
  * The grid locates voids; the tracers size them. A candidate centre comes from
  * the smoothed density field exactly as in the plain finder, but its radius is
@@ -73,7 +73,7 @@
  * depend on the batch size or the thread count; see BATCH_MAX.
  */
 
-#include "sif/finder/rescaled_spherical_finder.h"
+#include "sif/finder/exodus_finder.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -98,9 +98,9 @@ SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
 
 /* Upper bound on the number of radial bins. Private to this file: it is a
  * tuning constant, not part of the library's interface. */
-#define RESCALED_MAX_BINS 2048
+#define EXODUS_MAX_BINS 2048
 
-#define TAG "rescaled_spherical_finder"
+#define TAG "exodus_finder"
 
 /*
  * Speculation window.
@@ -171,7 +171,7 @@ SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
  * sphere is nearly empty, which is the common case at small radii. */
 #define PARTICLES_PER_BIN 16.0f
 
-#define MAX_RADIAL_BINS RESCALED_MAX_BINS
+#define MAX_RADIAL_BINS EXODUS_MAX_BINS
 #define MIN_RADIAL_BINS 64u
 
 /* Initial capacity of the refinement buffer, which only ever holds the
@@ -943,9 +943,9 @@ typedef struct {
    * lets a genuine overlap through. Overestimating only widens the box.
    */
   sif_real max_accepted_r;
-} rescaled_ctx_t;
+} exodus_ctx_t;
 
-static void ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
+static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   if (!ctx)
     return;
 
@@ -983,7 +983,7 @@ static void ctx_release(rescaled_ctx_t* ctx, sif_grid_t* grid) {
   ctx->cat = NULL;
 }
 
-static int ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
+static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii) {
 
   memset(ctx, 0, sizeof(*ctx));
@@ -1060,7 +1060,7 @@ static int ctx_init(rescaled_ctx_t* ctx, sif_grid_t* grid,
   return SIF_OK;
 }
 
-static int accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
+static int accept_void(exodus_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
   sif_real cy, sif_real cz, sif_real r) {
 
   int status = sif_catalog_append(ctx->cat, cx, cy, cz, r);
@@ -1091,9 +1091,9 @@ static int accept_void(rescaled_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
 
 /* --- Driver --- */
 
-sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
-  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
-  sif_real threshold, sif_real overlap_fraction, sif_option options) {
+sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_real overlap_fraction, sif_option options) {
 
   if (!grid || !grid->values || !mesh || !radii || n_radii == 0) {
     SIF_LOG_ERROR(TAG, "invalid grid, mesh or radii");
@@ -1123,7 +1123,7 @@ sif_catalog_t* sif_finder_rescaled_spherical(sif_grid_t* grid,
     return NULL;
   }
 
-  rescaled_ctx_t ctx;
+  exodus_ctx_t ctx;
   if (ctx_init(&ctx, grid, mesh, radii, n_radii) != SIF_OK) {
     ctx_release(&ctx, grid);
     return NULL;
