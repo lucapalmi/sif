@@ -20,7 +20,9 @@ typedef struct {
 
 extern PyTypeObject sifProfilesType;
 
-/* Functional API Entry Point */
+/* Functional API Entry Points */
 PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* py_sif_profiles_suggest_mesh_cells(
+  PyObject* self, PyObject* args, PyObject* kwds);
 
 #endif /* SIF_PY_MEASURE_PY_PROFILES_H */

@@ -8,23 +8,23 @@
  * @file profiles.h
  * @brief Stacked radial profiles of voids: density and radial velocity.
  *
- * Both estimators fill one row per void, binned in radius scaled by that
+ * The estimator fills one row per void, binned in radius scaled by that
  * void's own radius, so profiles of different-sized voids are directly
  * stackable.
  *
- * The containers are only obtainable from an estimator: they mean nothing
- * until one has filled them, so there is no public allocator, only the frees.
+ * The containers are only obtainable from the estimator: they mean nothing
+ * until it has filled them, so there is no public allocator, only the frees.
  */
 
 #ifndef SIF_MEASURE_PROFILES_H
 #define SIF_MEASURE_PROFILES_H
 
+#include <math.h>
 #include <stdint.h>
 
 #include "sif/core/macros.h"
 #include "sif/structures/catalog.h"
-#include "sif/structures/field.h"
-#include "sif/structures/tessellation.h"
+#include "sif/structures/chain_mesh.h"
 
 /**
  * @brief Stacked radial density profiles, one row per void.
@@ -87,14 +87,19 @@ static inline const sif_real* sif_velocity_profiles_get(
 }
 
 /**
- * @brief Stack radial profiles by binning the particles around each void.
+ * @brief How far a profile reaches when the caller does not say, in units of
+ * each void's own radius.
+ */
+#define SIF_PROFILES_DEFAULT_EXT ((sif_real)5.0)
+
+/**
+ * @brief Stack radial profiles by binning the mesh's tracers around each void.
  *
- * Bins tracers into spherical shells using a chain mesh sized from the mean
- * void radius. Densities come out normalized to the box mean, so a profile
- * approaches 1 far from the void centre.
+ * Densities come out normalized to the box mean, so a profile approaches 1
+ * far from the void centre.
  *
  * Either output may be omitted, and only what is asked for is computed --
- * velocities in particular cost a second payload in the mesh.
+ * velocities in particular are only available from a mesh that carries them.
  *
  * Densities are cumulative -- each bin is the contrast enclosed within its
  * outer edge, which is what the spherical-evolution mapping expects -- while
@@ -104,10 +109,15 @@ static inline const sif_real* sif_velocity_profiles_get(
  * there is no profile to measure around it.
  *
  * @param cat Voids to profile.
- * @param field Particle field. Must carry velocities if @p out_vel is wanted.
- * @param box_length Physical side length of the box. Must be positive.
- * @param ext Outer edge of the profile, in units of each void's radius. Must
- * be positive.
+ * @param mesh Tracers to bin, and the box they live in: the mesh is where the
+ * box length, the tracer count and the mean density all come from, so it has
+ * to hold every tracer of the sample rather than a subset. Built with
+ * sif_profiles_suggest_mesh_cells() unless the caller has a mesh already --
+ * one built for a finder does just as well, and reusing it is the point of
+ * taking a mesh here rather than a field. #SIF_MESH_DROP_INDICES is fine:
+ * this estimator walks cells and never names a tracer in field order.
+ * @param ext Outer edge of the profile, in units of each void's radius.
+ * Anything not positive selects #SIF_PROFILES_DEFAULT_EXT.
  * @param n_bins Radial bins per profile. Must be non-zero.
  * @param opt Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN.
  * @param out_dens Address of a density set pointer, or NULL to skip. If it
@@ -115,32 +125,69 @@ static inline const sif_real* sif_velocity_profiles_get(
  * @param out_vel Address of a velocity set pointer, or NULL to skip. Same
  * convention.
  * @return SIF_OK, SIF_ERR_INVALID for a bad argument or a request for
- * velocities from a field that has none, or SIF_ERR_ALLOC.
+ * velocities from a mesh that has none, or SIF_ERR_ALLOC.
  *
  * @note On any failure both outputs are left NULL, including a set this call
  * allocated before a later step failed. A caller may therefore check either
  * the status or the pointers.
  */
-SIF_NODISCARD int sif_profiles_mesh(const sif_catalog_t* cat,
-  const sif_field_t* field, sif_real box_length, sif_real ext, uint32_t n_bins,
-  sif_option opt, sif_density_profiles_t** out_dens,
-  sif_velocity_profiles_t** out_vel);
+SIF_NODISCARD int sif_profiles(const sif_catalog_t* cat,
+  const sif_chain_mesh_t* mesh, sif_real ext, uint32_t n_bins, sif_option opt,
+  sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel);
+
+/** @brief Tracers per mesh cell that sif_profiles() runs fastest at.
+ *
+ * The walk pays per cell it visits and per tracer it reads, and the two pull
+ * opposite ways: coarser cells overshoot the sphere and read tracers that were
+ * never going to be inside it, finer ones spend the saving on cell overhead --
+ * which is mostly the cache miss on the cell table, not arithmetic. The
+ * balance was measured across a factor of eight in tracer count and six in
+ * void radius, and it sits here in every one of them; notably it does not move
+ * with the void size, which is why this rule does not ask about it.
+ *
+ * Close enough to #SIF_FINDER_MESH_PARTICLES_PER_CELL that one mesh serves
+ * both calls: either constant lands the other within a percent of its own
+ * minimum.
+ */
+#define SIF_PROFILES_MESH_PARTICLES_PER_CELL 36.0
+
+/** @brief Cap on the suggested resolution. The mesh's cell_offsets array alone
+ * is 8 * n_cells^3 bytes, which is already ~130 MiB here. */
+#define SIF_PROFILES_MESH_MAX_CELLS 256u
 
 /**
- * @brief Stack radial profiles from a Voronoi tessellation.
+ * @brief Suggested chain-mesh resolution for sif_profiles().
  *
- * @warning EXPERIMENTAL. This path sweeps a 100^3 voxel grid per void and runs
- * a nearest-neighbour query at every voxel, so it costs ~1e6 queries per void
- * and does not scale to production catalogues. It is kept for future work and
- * is not exercised by the test suite. Use sif_profiles_mesh() instead.
+ * Resolution changes only speed and memory -- the profiles are identical at
+ * any of them -- so it is safe to tune, and a mesh built for something else is
+ * always a valid input. It is worth tuning: the rule this replaces, one cell
+ * per search radius, measured 2.5x slower than the minimum on an ordinary
+ * catalogue and 5x on one of large voids.
  *
- * Arguments, return value and failure behaviour are as sif_profiles_mesh(),
- * with the addition of @p tess, whose per-cell volumes weight each tracer's
- * contribution and which must cover the same field.
+ * Unlike sif_finder_suggest_mesh_cells() there is no floor for the search
+ * sphere having to fit inside the mesh. A profile sphere wider than the box is
+ * capped at one full row of cells inside sif_profiles() instead, so a mesh too
+ * coarse to hold it is slow, never wrong.
+ *
+ * The minimum is broad -- a factor of two either way costs on the order of
+ * 10% -- so being approximate here is the point rather than a shortcoming.
+ *
+ * @param n_particles Tracers the mesh will hold.
+ * @return n_cells to hand to sif_chain_mesh_alloc(), never zero.
  */
-SIF_NODISCARD int sif_profiles_voronoi(const sif_catalog_t* cat,
-  const sif_field_t* field, const sif_tessellation_t* tess, sif_real box_length,
-  sif_real ext, uint32_t n_bins, sif_option opt,
-  sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel);
+static inline uint32_t sif_profiles_suggest_mesh_cells(uint64_t n_particles) {
+  if (n_particles == 0)
+    return 1;
+
+  const double n =
+    cbrt((double)n_particles / SIF_PROFILES_MESH_PARTICLES_PER_CELL);
+
+  if (n >= (double)SIF_PROFILES_MESH_MAX_CELLS)
+    return SIF_PROFILES_MESH_MAX_CELLS;
+  if (n >= 1.0)
+    return (uint32_t)n;
+
+  return 1;
+}
 
 #endif /* SIF_MEASURE_PROFILES_H */

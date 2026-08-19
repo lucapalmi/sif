@@ -7,8 +7,7 @@
 #include "py_profiles.h"
 
 #include "structures/py_catalog.h"
-#include "structures/py_field.h"
-#include "structures/py_tessellation.h"
+#include "structures/py_chain_mesh.h"
 #include <numpy/arrayobject.h>
 
 static void sifProfiles_dealloc(PyObject* self_obj) {
@@ -161,92 +160,72 @@ PyTypeObject sifProfilesType = {
 
 /* --- Functional API Implementation --- */
 
+PyObject* py_sif_profiles_suggest_mesh_cells(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+
+  unsigned long long n_particles;
+
+  static char* kwlist[] = {"n_particles", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "K", kwlist, &n_particles))
+    return NULL;
+
+  /* The C helper folds a zero count into a resolution of 1, which is a legal
+     mesh and so would not fail until the run was pointlessly slow. Here the
+     caller gets told instead. */
+  if (n_particles == 0) {
+    PyErr_SetString(PyExc_ValueError, "need n_particles > 0");
+    return NULL;
+  }
+
+  return PyLong_FromUnsignedLong(
+    sif_profiles_suggest_mesh_cells((uint64_t)n_particles));
+}
+
 PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
-  PyObject* cat_obj;
-  PyObject* field_obj;
-  double box_length, ext;
+  PyObject* cat_obj = NULL;
+  PyObject* mesh_obj = NULL;
   uint32_t n_bins;
 
+  double ext = 0.0; /* 0 selects the library default */
   int compute_velocity = 0;
   int use_pbc = 1;
-  const char* algorithm = "mesh";
-  PyObject* tess_obj = NULL; /* New optional argument */
 
-  /* Added 'tessellation' to the keyword list */
-  static char* kwlist[] = {"catalog", "field", "box_length", "ext", "n_bins",
-    "compute_velocity", "use_pbc", "algorithm", "tessellation", NULL};
+  static char* kwlist[] = {
+    "catalog", "mesh", "n_bins", "ext", "compute_velocity", "use_pbc", NULL};
 
-  /* Format string updated: added 'O' at the end for the optional tess_obj */
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!ddI|ppsO", kwlist,
-        &sifCatalogType, &cat_obj, &sifFieldType, &field_obj, &box_length, &ext,
-        &n_bins, &compute_velocity, &use_pbc, &algorithm, &tess_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!I|dpp", kwlist,
+        &sifCatalogType, &cat_obj, &sifChainMeshType, &mesh_obj, &n_bins, &ext,
+        &compute_velocity, &use_pbc)) {
     return NULL;
   }
 
-  sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
-  sifFieldObject* field = (sifFieldObject*)field_obj;
+  const sif_catalog_t* c_cat = ((sifCatalogObject*)cat_obj)->catalog;
+  const sif_chain_mesh_t* c_mesh = ((sifChainMeshObject*)mesh_obj)->mesh;
 
-  /* Test for the presence of velocities. This used to test an ownership flag
-     instead, which rejected perfectly valid fields; the flags are gone and a
-     field either has velocities or it does not. */
-  if (compute_velocity && !field->field->vx) {
+  /* Checked here as well as in the C call so the message names the mesh the
+     caller passed, rather than arriving as a generic backend failure. */
+  if (compute_velocity && !c_mesh->vx) {
     PyErr_SetString(PyExc_ValueError,
-      "Cannot compute velocity profiles: field missing raw velocities.");
+      "Cannot compute velocity profiles: the mesh carries no velocities. "
+      "Build it from a Field that has them.");
     return NULL;
   }
 
-  uint32_t options = use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
-
-  if (strcmp(algorithm, "mesh") == 0) {
-    options |= SIF_PROFILES_ALGO_MESH;
-  } else if (strcmp(algorithm, "voronoi") == 0) {
-    options |= SIF_PROFILES_ALGO_VORONOI;
-  } else {
-    PyErr_Format(PyExc_ValueError,
-      "Unknown profile mapping algorithm '%s'. Use 'mesh' or 'voronoi'.",
-      algorithm);
-    return NULL;
-  }
+  const uint32_t options = use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
 
   sif_density_profiles_t* dens_out = NULL;
   sif_velocity_profiles_t* vel_out = NULL;
+
+  /* The GIL is released for the duration: this is a long, purely numeric run
+     across every core and nothing below touches Python state. The mesh is
+     borrowed for it; mesh_obj is kept alive by the caller's reference. */
   int status = SIF_OK;
+  Py_BEGIN_ALLOW_THREADS status = sif_profiles(c_cat, c_mesh, (sif_real)ext,
+    n_bins, options, &dens_out, compute_velocity ? &vel_out : NULL);
+  Py_END_ALLOW_THREADS
 
-  /* --- Python-Side Dispatcher --- */
-  if ((options & SIF__PROFILES_ALGO_MASK) == SIF_PROFILES_ALGO_VORONOI) {
-
-    if (tess_obj == NULL || tess_obj == Py_None) {
-      PyErr_SetString(PyExc_ValueError,
-        "Algorithm 'voronoi' requires a valid tessellation "
-        "object passed to the 'tessellation' argument.");
-      return NULL;
-    }
-
-    if (!PyObject_TypeCheck(tess_obj, &sifTessellationType)) {
-      PyErr_SetString(PyExc_TypeError,
-        "The 'tessellation' argument must be a valid "
-        "pysif.Tessellation object.");
-      return NULL;
-    }
-
-    sif_tessellation_t* c_tess = ((sifTessellationObject*)tess_obj)->tess;
-
-    /* The GIL is released for the duration: this is a long, purely numeric
-       run across every core and nothing below touches Python state. */
-    Py_BEGIN_ALLOW_THREADS status = sif_profiles_voronoi(cat->catalog,
-      field->field, c_tess, (sif_real)box_length, (sif_real)ext, n_bins,
-      options, &dens_out, compute_velocity ? &vel_out : NULL);
-    Py_END_ALLOW_THREADS
-
-  } else {
-
-    Py_BEGIN_ALLOW_THREADS status = sif_profiles_mesh(cat->catalog,
-      field->field, (sif_real)box_length, (sif_real)ext, n_bins, options,
-      &dens_out, compute_velocity ? &vel_out : NULL);
-    Py_END_ALLOW_THREADS
-  }
-
-  if (status != SIF_OK) {
+    if (status != SIF_OK) {
     PyErr_SetString(
       status == SIF_ERR_ALLOC ? PyExc_MemoryError : PyExc_ValueError,
       "Backend profile engine execution failed; see the log for the reason.");

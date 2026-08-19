@@ -99,7 +99,6 @@ set(SOURCES
     src/structures/cell_linked_list.c
     src/structures/field.c
     src/structures/octree.c
-    src/structures/tessellation.c
     src/structures/bitmask.c
     src/structures/delta_distribution.c
     src/structures/delta_moments.c

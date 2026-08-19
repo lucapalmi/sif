@@ -48,7 +48,6 @@ set(PYTHON_SOURCES
     ${CMAKE_SOURCE_DIR}/src/structures/py_cell_linked_list.c
     ${CMAKE_SOURCE_DIR}/src/structures/py_octree.c
     ${CMAKE_SOURCE_DIR}/src/structures/py_bitmask.c
-    ${CMAKE_SOURCE_DIR}/src/structures/py_tessellation.c
     ${CMAKE_SOURCE_DIR}/src/structures/py_delta_distribution.c
     ${CMAKE_SOURCE_DIR}/src/structures/py_delta_moments.c
     ${CMAKE_SOURCE_DIR}/src/structures/py_size_function.c

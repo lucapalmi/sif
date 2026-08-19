@@ -16,15 +16,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-/* Side of the auxiliary voxel grid used by the Voronoi estimator. Private to
- * this file: it is a tuning constant, not part of the library's interface. */
-#define PROFILES_GRID_DIM 100
-
-#define WRAP_PBC(val, min_val, box_len)                                        \
-  (SIF_REAL_FMOD(                                                              \
-     SIF_REAL_FMOD((val) - (min_val), (box_len)) + (box_len), (box_len)) +     \
-    (min_val))
-
 /*
  * Elements per per-thread scratch row, rounded up so each thread's row starts
  * on its own cache line.
@@ -94,40 +85,45 @@ void sif_velocity_profiles_free(sif_velocity_profiles_t* profs) {
   free(profs);
 }
 
-/* --- shared setup --- */
+/* --- setup --- */
 
 /*
- * Validates what both estimators need before either allocates anything.
+ * Everything that has to hold before anything is allocated.
  */
-static int validate_inputs(const sif_catalog_t* cat, const sif_field_t* field,
-  sif_real box_length, sif_real ext, uint32_t n_bins,
+static int validate_inputs(const sif_catalog_t* cat,
+  const sif_chain_mesh_t* mesh, uint32_t n_bins,
   const sif_density_profiles_t* const* out_dens,
-  const sif_velocity_profiles_t* const* out_vel, const char* who) {
+  const sif_velocity_profiles_t* const* out_vel) {
 
-  if (!cat || !field || cat->n_voids == 0) {
-    SIF_LOG_ERROR("profiles", "invalid catalogue or field passed to %s", who);
+  if (!cat || cat->n_voids == 0) {
+    SIF_LOG_ERROR("profiles", "no voids to profile");
+    return SIF_ERR_INVALID;
+  }
+
+  /* The mean density divides every profile, and it is the mesh that supplies
+   * both the tracer count and the volume it spreads over. An empty mesh, or
+   * one that cannot name its box, has no mean density to normalize by. */
+  if (!mesh || mesh->n_particles == 0 || !(mesh->box_length > (sif_real)0.0)) {
+    SIF_LOG_ERROR("profiles", "invalid or empty chain mesh");
     return SIF_ERR_INVALID;
   }
 
   if (!out_dens && !out_vel) {
-    SIF_LOG_ERROR("profiles",
-      "both outputs are NULL in %s; there is nothing to compute", who);
+    SIF_LOG_ERROR(
+      "profiles", "both outputs are NULL; there is nothing to compute");
     return SIF_ERR_INVALID;
   }
 
-  /* n_bins divides ext and ext scales every radius, so a zero in either turns
-   * the bin width into 0 or infinity and the bin index into an undefined cast
-   * rather than into a wrong answer. */
-  if (n_bins == 0 || !(ext > (sif_real)0.0) || !(box_length > (sif_real)0.0)) {
-    SIF_LOG_ERROR("profiles",
-      "%s needs n_bins > 0, ext > 0 and box_length > 0 (got %u, %g, %g)", who,
-      n_bins, (double)ext, (double)box_length);
+  /* n_bins divides ext, so a zero turns the bin width into 0 and the bin
+   * index into an undefined cast rather than into a wrong answer. */
+  if (n_bins == 0) {
+    SIF_LOG_ERROR("profiles", "n_bins must be non-zero");
     return SIF_ERR_INVALID;
   }
 
-  if (out_vel && !field->vx) {
+  if (out_vel && !mesh->vx) {
     SIF_LOG_ERROR("profiles",
-      "velocity profiles were requested but the field carries no velocities");
+      "velocity profiles were requested but the mesh carries no velocities");
     return SIF_ERR_INVALID;
   }
 
@@ -137,53 +133,183 @@ static int validate_inputs(const sif_catalog_t* cat, const sif_field_t* field,
 /*
  * Mean tracer density of the box, which normalizes every density profile.
  *
- * Accumulated in double however sif_real is configured, and reduced over a
- * plain OpenMP sum. The weight total runs over every particle in the box: at
- * float precision the running sum stops moving long before it gets there, and
- * because it divides every profile the error would show up as an overall
- * amplitude shift that looks exactly like a physical result.
+ * The mesh summed its own weights when it was built, so this is arithmetic
+ * rather than a pass over the tracers -- which matters when several catalogues
+ * are profiled against one mesh, since each call would otherwise redo it.
  */
-static double mean_density(const sif_field_t* field, sif_real box_length) {
-  const double box_vol =
-    (double)box_length * (double)box_length * (double)box_length;
+static double mean_density(const sif_chain_mesh_t* mesh) {
+  const double box_vol = (double)mesh->box_length * (double)mesh->box_length *
+                         (double)mesh->box_length;
 
-  if (!field->weights)
-    return (double)field->n_particles / box_vol;
+  return mesh->total_weight / box_vol;
+}
 
-  double total_mass = 0.0;
-#pragma omp parallel for reduction(+ : total_mass)
-  for (uint64_t p = 0; p < field->n_particles; p++)
-    total_mass += (double)field->weights[p];
+/* --- inner kernel --- */
 
-  return total_mass / box_vol;
+/*
+ * Everything the per-cell kernel reads that does not change between voids.
+ */
+typedef struct {
+  const sif_real* x;
+  const sif_real* y;
+  const sif_real* z;
+  const sif_real* w;
+  const sif_real* vx;
+  const sif_real* vy;
+  const sif_real* vz;
+  sif_real box_length;
+  sif_real half_box;
+  sif_real inv_box;
+  sif_real cell_length;
+  sif_real half_cell;
+  uint32_t n_bins;
+} bin_ctx_t;
+
+/*
+ * Bins one cell's run of tracers around one void.
+ *
+ * The last four arguments are constants at every call site, so each
+ * instantiation the dispatch below asks for drops the tests it does not need
+ * -- the weight load, the velocity arm, the periodic wrap -- instead of
+ * re-deciding them once per tracer in the innermost loop of the library.
+ *
+ * @p cx,cy,cz is the void centre already placed in the image this cell belongs
+ * to, so the separation is a plain subtraction. Only the fallback path, where
+ * a cell is too wide for one image to cover it, still wraps per tracer.
+ */
+static inline void bin_cell_run(const bin_ctx_t* ctx, uint64_t p_start,
+  uint64_t p_end, sif_real cx, sif_real cy, sif_real cz, sif_real r_max_sq,
+  sif_real inv_bin, sif_real* local_mass, sif_real* local_vrad,
+  uint64_t* local_count, const int do_wrap, const int want_dens,
+  const int want_vel, const int have_w) {
+
+  const sif_real* mx = ctx->x;
+  const sif_real* my = ctx->y;
+  const sif_real* mz = ctx->z;
+  const sif_real box_length = ctx->box_length;
+  const sif_real half_box = ctx->half_box;
+  const uint32_t n_bins = ctx->n_bins;
+
+  /* NO simd pragma here: `bin` below is data-dependent, so the accumulations
+   * are a scatter. Asserting the loop is dependence-free let the vectorizer
+   * drop updates whenever two lanes landed in the same bin, biasing every
+   * profile low by up to ~20% in dense bins. The compiler still vectorizes the
+   * distance arithmetic on its own. */
+  for (uint64_t p = p_start; p < p_end; p++) {
+    sif_real dx = mx[p] - cx;
+    sif_real dy = my[p] - cy;
+    sif_real dz = mz[p] - cz;
+
+    if (do_wrap) {
+      /* Branchless nearest-image wrap. */
+      dx -= box_length * (sif_real)(dx > half_box) -
+            box_length * (sif_real)(dx < -half_box);
+      dy -= box_length * (sif_real)(dy > half_box) -
+            box_length * (sif_real)(dy < -half_box);
+      dz -= box_length * (sif_real)(dz > half_box) -
+            box_length * (sif_real)(dz < -half_box);
+    }
+
+    const sif_real r2 = dx * dx + dy * dy + dz * dz;
+
+    if (r2 <= r_max_sq) {
+      const sif_real r = SIF_REAL_SQRT(r2);
+      const uint32_t bin = (uint32_t)(r * inv_bin);
+
+      if (bin < n_bins) {
+        if (want_dens)
+          local_mass[bin] += have_w ? ctx->w[p] : (sif_real)1.0;
+
+        if (want_vel) {
+          const sif_real inv_r =
+            (r > (sif_real)0.0) ? (sif_real)1.0 / r : (sif_real)0.0;
+          local_vrad[bin] +=
+            (ctx->vx[p] * dx + ctx->vy[p] * dy + ctx->vz[p] * dz) * inv_r;
+          local_count[bin]++;
+        }
+      }
+    }
+  }
 }
 
 /*
- * Chain-mesh resolution: about one cell per search radius.
+ * Places one cell of the walk: which cell of the mesh it is, where the void
+ * centre sits relative to it, and how far the cell is from the sphere.
  *
- * Finer would walk more cells per void than the particles saved are worth;
- * coarser would sweep particles far outside r_max. Capped at 256 because the
- * mesh itself is n^3 cells and a large box with tiny voids would otherwise ask
- * for a mesh bigger than the field.
+ * The image is chosen per cell rather than per tracer, which is what lets the
+ * kernel take the separation as a plain subtraction. The gap it returns -- the
+ * distance from the centre to the cell's slab on this axis, zero when the
+ * centre is inside it -- is a lower bound on the distance to anything the cell
+ * holds, so squaring and summing the three gaps rejects a cell without reading
+ * a single tracer.
+ *
+ * @p idx is off by at most one row, which is what sif_profiles()'s capped
+ * range guarantees, so the wrap is an add rather than a division.
  */
-static uint32_t mesh_resolution(
-  const sif_catalog_t* cat, sif_real box_length, sif_real ext) {
+static inline uint32_t cell_image(int32_t idx, sif_real centre,
+  const bin_ctx_t* ctx, uint32_t n_cells, int is_periodic, sif_real* out_centre,
+  sif_real* out_gap) {
 
-  double sum_radius = 0.0;
-  for (uint64_t i = 0; i < cat->n_voids; i++)
-    sum_radius += (double)cat->radii[i];
+  int32_t w = idx;
+  if (is_periodic) {
+    if (w < 0)
+      w += (int32_t)n_cells;
+    else if (w >= (int32_t)n_cells)
+      w -= (int32_t)n_cells;
+  }
 
-  const double avg_radius = sum_radius / (double)cat->n_voids;
-  if (!(avg_radius > 0.0))
-    return 1;
+  sif_real gap = ((sif_real)w + (sif_real)0.5) * ctx->cell_length - centre;
+  sif_real image = centre;
 
-  const double target = (double)box_length / (avg_radius * (double)ext);
-  if (target >= 256.0)
-    return 256;
-  if (target >= 1.0)
-    return (uint32_t)target;
+  if (is_periodic) {
+    const sif_real k = SIF_REAL_ROUND(gap * ctx->inv_box);
+    gap -= k * ctx->box_length;
+    image += k * ctx->box_length;
+  }
 
-  return 1;
+  gap = SIF_REAL_ABS(gap) - ctx->half_cell;
+
+  *out_centre = image;
+  *out_gap = (gap > (sif_real)0.0) ? gap : (sif_real)0.0;
+  return (uint32_t)w;
+}
+
+/*
+ * Inclusive cell-index range the search sphere spans on one axis.
+ *
+ * A sphere that reaches around the box -- a coarse mesh, or a void far larger
+ * than the one the resolution was chosen for -- spans more indices than the
+ * mesh has cells, and the wrap in the walk would then map two of them onto the
+ * same cell and bin its tracers twice. Capping the walk at one full row visits
+ * every cell exactly once, which is what the minimum-image separation the
+ * estimator takes assumes anyway.
+ *
+ * Computed in double and clamped before the cast: an r_max a few times the box,
+ * which nothing here forbids, overflows an int32 index outright.
+ */
+static inline void axis_cell_range(sif_real centre, sif_real r_max,
+  sif_real inv_cell_len, uint32_t n_cells, int is_periodic, int32_t* out_min,
+  int32_t* out_max) {
+
+  double lo = floor(((double)centre - (double)r_max) * (double)inv_cell_len);
+  double hi = floor(((double)centre + (double)r_max) * (double)inv_cell_len);
+
+  if (is_periodic) {
+    if (hi - lo + 1.0 >= (double)n_cells) {
+      lo = 0.0;
+      hi = (double)n_cells - 1.0;
+    }
+  } else {
+    /* Open boundary: everything outside the box is empty, so the range is
+     * pruned here instead of cell by cell inside the walk. */
+    if (lo < 0.0)
+      lo = 0.0;
+    if (hi > (double)n_cells - 1.0)
+      hi = (double)n_cells - 1.0;
+  }
+
+  *out_min = (int32_t)lo;
+  *out_max = (int32_t)hi;
 }
 
 /* Fills r_edges and, for densities, the volume of the whole sphere out to each
@@ -207,23 +333,33 @@ static void fill_edges(sif_real* r_edges, sif_real* sphere_vols,
   r_edges[n_bins] = ext;
 }
 
-/* --- mesh estimator --- */
+/* --- estimator --- */
 
-int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
-  sif_real box_length, sif_real ext, uint32_t n_bins, sif_option opt,
+int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
+  sif_real ext, uint32_t n_bins, sif_option opt,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
 
-  int status = validate_inputs(cat, field, box_length, ext, n_bins,
+  int status = validate_inputs(cat, mesh, n_bins,
     (const sif_density_profiles_t* const*)out_dens,
-    (const sif_velocity_profiles_t* const*)out_vel, "sif_profiles_mesh");
+    (const sif_velocity_profiles_t* const*)out_vel);
   if (status != SIF_OK)
     return status;
+
+  /* An extension that is not a positive number -- zero, negative, or a NaN
+   * that -ffast-math would let through a comparison either way -- is read as
+   * "no preference" rather than rejected: there is one sensible reach for a
+   * void profile and no reason to make every caller spell it out. */
+  if (!(ext > (sif_real)0.0))
+    ext = SIF_PROFILES_DEFAULT_EXT;
 
   const int compute_dens = (out_dens != NULL);
   const int compute_vel = (out_vel != NULL);
 
-  SIF_LOG_INFO(
-    "profiles", "computing profiles for %" PRIu64 " voids", cat->n_voids);
+  const sif_real box_length = mesh->box_length;
+
+  SIF_LOG_INFO("profiles",
+    "computing profiles for %" PRIu64 " voids out to %g void radii",
+    cat->n_voids, (double)ext);
 
   /* Allocated here only if the caller passed a pointer to NULL; a set it
    * already owns is refilled, which is how a sweep over several catalogues
@@ -261,38 +397,30 @@ int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
   if (compute_vel)
     fill_edges((*out_vel)->r_edges, NULL, n_bins, ext, bin_width);
 
-  const uint32_t n_cells = mesh_resolution(cat, box_length, ext);
-
-  SIF_LOG_TRACE("profiles", "building a %u^3 chain mesh", n_cells);
-
-  /* This estimator walks cells and reads the mesh's own payload arrays; it
-   * never has to name a particle in field order, so the index map goes. */
-  sif_chain_mesh_t* mesh =
-    sif_chain_mesh_alloc(n_cells, box_length, field, SIF_MESH_DROP_INDICES);
-
-  if (!mesh) {
-    SIF_LOG_ERROR("profiles",
-      "failed to build the chain mesh (are all particles inside the box?)");
-    sif_free_aligned(sphere_vols);
-    status = SIF_ERR_ALLOC;
-    goto fail;
-  }
-
+  const uint32_t n_cells = mesh->n_cells;
   const sif_real half_box = box_length * (sif_real)0.5;
   const sif_real inv_cell_len = (sif_real)1.0 / mesh->cell_length;
 
   const sif_real mean_dens =
-    compute_dens ? (sif_real)mean_density(field, box_length) : (sif_real)1.0;
+    compute_dens ? (sif_real)mean_density(mesh) : (sif_real)1.0;
 
   const int is_periodic = ((opt & SIF__PBC_MASK) == SIF_PBC_PERIODIC);
 
-  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
-  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
-  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
-  const sif_real* mm = mesh->weights ? SIF_ASSUME_ALIGNED(mesh->weights) : NULL;
-  const sif_real* mvx = mesh->vx ? SIF_ASSUME_ALIGNED(mesh->vx) : NULL;
-  const sif_real* mvy = mesh->vy ? SIF_ASSUME_ALIGNED(mesh->vy) : NULL;
-  const sif_real* mvz = mesh->vz ? SIF_ASSUME_ALIGNED(mesh->vz) : NULL;
+  const int have_weights = (mesh->weights != NULL);
+
+  const bin_ctx_t ctx = {.x = SIF_ASSUME_ALIGNED(mesh->x),
+    .y = SIF_ASSUME_ALIGNED(mesh->y),
+    .z = SIF_ASSUME_ALIGNED(mesh->z),
+    .w = have_weights ? SIF_ASSUME_ALIGNED(mesh->weights) : NULL,
+    .vx = mesh->vx ? SIF_ASSUME_ALIGNED(mesh->vx) : NULL,
+    .vy = mesh->vy ? SIF_ASSUME_ALIGNED(mesh->vy) : NULL,
+    .vz = mesh->vz ? SIF_ASSUME_ALIGNED(mesh->vz) : NULL,
+    .box_length = box_length,
+    .half_box = half_box,
+    .inv_box = (sif_real)1.0 / box_length,
+    .cell_length = mesh->cell_length,
+    .half_cell = mesh->cell_length * (sif_real)0.5,
+    .n_bins = n_bins};
 
   /* Per-thread bin scratch, allocated once on the heap. These used to be VLAs
    * inside the parallel region, which overflows an OpenMP thread stack (far
@@ -319,13 +447,36 @@ int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
     sif_free_aligned(scratch_vrad);
     sif_free_aligned(scratch_count);
     sif_free_aligned(sphere_vols);
-    sif_chain_mesh_free(mesh);
     status = SIF_ERR_ALLOC;
     goto fail;
   }
 
+/* The flags are literals in each expansion, so the compiler builds one
+ * specialized loop per combination rather than testing them per tracer. */
+#define SIF_BIN_CELL(wrap, dens, vel, wgt)                                     \
+  bin_cell_run(&ctx, p_start, p_end, wrap ? cx : ecx, wrap ? cy : ecy,         \
+    wrap ? cz : ecz, r_max_sq, inv_bin, local_mass, local_vrad, local_count,   \
+    wrap, dens, vel, wgt)
+
+#define SIF_BIN_DISPATCH(wrap)                                                 \
+  do {                                                                         \
+    if (compute_dens && compute_vel) {                                         \
+      if (have_weights)                                                        \
+        SIF_BIN_CELL(wrap, 1, 1, 1);                                           \
+      else                                                                     \
+        SIF_BIN_CELL(wrap, 1, 1, 0);                                           \
+    } else if (compute_dens) {                                                 \
+      if (have_weights)                                                        \
+        SIF_BIN_CELL(wrap, 1, 0, 1);                                           \
+      else                                                                     \
+        SIF_BIN_CELL(wrap, 1, 0, 0);                                           \
+    } else {                                                                   \
+      SIF_BIN_CELL(wrap, 0, 1, 0);                                             \
+    }                                                                          \
+  } while (0)
+
 /* --- core loop --- */
-#pragma omp parallel for schedule(dynamic, 16) num_threads(n_threads)
+#pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
   for (uint64_t i = 0; i < cat->n_voids; i++) {
     sif_real cx = cat->cx[i];
     sif_real cy = cat->cy[i];
@@ -338,8 +489,11 @@ int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
     if (!(rv > (sif_real)0.0))
       continue;
 
-    sif_real r_max = rv * ext;
-    sif_real r_max_sq = r_max * r_max;
+    const sif_real r_max = rv * ext;
+    const sif_real r_max_sq = r_max * r_max;
+
+    /* One reciprocal per void instead of a division per accepted tracer. */
+    const sif_real inv_bin = (sif_real)1.0 / (rv * bin_width);
 
     const int tid = sif__system_thread_num();
     sif_real* local_mass = scratch_mass + (size_t)tid * row_real;
@@ -353,128 +507,71 @@ int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
       memset(local_count, 0, n_bins * sizeof(uint64_t));
     }
 
-    /* Bounding box indices */
-    int32_t ix_min = (int32_t)floor((cx - r_max) * inv_cell_len);
-    int32_t ix_max = (int32_t)floor((cx + r_max) * inv_cell_len);
-    int32_t iy_min = (int32_t)floor((cy - r_max) * inv_cell_len);
-    int32_t iy_max = (int32_t)floor((cy + r_max) * inv_cell_len);
-    int32_t iz_min = (int32_t)floor((cz - r_max) * inv_cell_len);
-    int32_t iz_max = (int32_t)floor((cz + r_max) * inv_cell_len);
+    /* Whether the void centre can be placed once per cell instead of the
+     * separation being wrapped once per tracer.
+     *
+     * Placing it per cell is exact as long as every tracer the walk reaches
+     * lands within half a box of the image chosen for its cell, which holds
+     * when the sphere plus one cell fits inside that half. It is the ordinary
+     * case; a mesh coarse enough to break it -- a couple of cells across the
+     * whole box -- keeps the per-tracer wrap. */
+    const int per_cell_image =
+      !is_periodic || (r_max + mesh->cell_length <= half_box);
+
+    /* Bounding box indices, already capped at one full row and pruned to the
+     * box, so the walk below only has to place them. */
+    int32_t ix_min, ix_max, iy_min, iy_max, iz_min, iz_max;
+    axis_cell_range(
+      cx, r_max, inv_cell_len, n_cells, is_periodic, &ix_min, &ix_max);
+    axis_cell_range(
+      cy, r_max, inv_cell_len, n_cells, is_periodic, &iy_min, &iy_max);
+    axis_cell_range(
+      cz, r_max, inv_cell_len, n_cells, is_periodic, &iz_min, &iz_max);
 
     for (int32_t ix = ix_min; ix <= ix_max; ix++) {
-      int32_t w_ix = ix;
-      if (is_periodic) {
-        w_ix %= (int32_t)n_cells;
-        if (w_ix < 0)
-          w_ix += n_cells;
-      } else if (w_ix < 0 || w_ix >= (int32_t)n_cells) {
-        continue; /* Open boundary: prune cells outside the box */
-      }
+      sif_real ecx, gap_x;
+      const uint32_t w_ix =
+        cell_image(ix, cx, &ctx, n_cells, is_periodic, &ecx, &gap_x);
+
+      /* The sphere does not reach this slab, so nothing in it can be inside
+       * r_max however the other two axes fall. */
+      const sif_real gap_x2 = gap_x * gap_x;
+      if (gap_x2 > r_max_sq)
+        continue;
 
       for (int32_t iy = iy_min; iy <= iy_max; iy++) {
-        int32_t w_iy = iy;
-        if (is_periodic) {
-          w_iy %= (int32_t)n_cells;
-          if (w_iy < 0)
-            w_iy += n_cells;
-        } else if (w_iy < 0 || w_iy >= (int32_t)n_cells) {
-          continue; /* Open boundary: prune cells outside the box */
-        }
+        sif_real ecy, gap_y;
+        const uint32_t w_iy =
+          cell_image(iy, cy, &ctx, n_cells, is_periodic, &ecy, &gap_y);
+
+        const sif_real gap_xy2 = gap_x2 + gap_y * gap_y;
+        if (gap_xy2 > r_max_sq)
+          continue;
 
         for (int32_t iz = iz_min; iz <= iz_max; iz++) {
-          int32_t w_iz = iz;
-          if (is_periodic) {
-            w_iz %= (int32_t)n_cells;
-            if (w_iz < 0)
-              w_iz += n_cells;
-          } else if (w_iz < 0 || w_iz >= (int32_t)n_cells) {
-            continue; /* Open boundary: prune cells outside the box */
-          }
+          sif_real ecz, gap_z;
+          const uint32_t w_iz =
+            cell_image(iz, cz, &ctx, n_cells, is_periodic, &ecz, &gap_z);
 
-          uint64_t flat_idx = (uint64_t)w_ix * n_cells * n_cells +
-                              (uint64_t)w_iy * n_cells + w_iz;
+          /* The corner test that the bounding box cannot do: a cube's corners
+           * hold about a third of its volume, and none of it is in the
+           * sphere. */
+          if (gap_xy2 + gap_z * gap_z > r_max_sq)
+            continue;
 
-          uint64_t p_start = mesh->cell_offsets[flat_idx];
-          uint64_t p_end = mesh->cell_offsets[flat_idx + 1];
+          const uint64_t flat_idx = (uint64_t)w_ix * n_cells * n_cells +
+                                    (uint64_t)w_iy * n_cells + w_iz;
 
-          if (is_periodic) {
-            /* NO simd pragma here: `bin` below is data-dependent, so the
-             * accumulations are a scatter. Asserting the loop is
-             * dependence-free let the vectorizer drop updates whenever two
-             * lanes landed in the same bin, biasing every profile low by up
-             * to ~20% in dense bins. The compiler still vectorizes the
-             * distance arithmetic on its own. */
-            for (uint64_t p = p_start; p < p_end; p++) {
-              sif_real dx = mx[p] - cx;
-              sif_real dy = my[p] - cy;
-              sif_real dz = mz[p] - cz;
+          const uint64_t p_start = mesh->cell_offsets[flat_idx];
+          const uint64_t p_end = mesh->cell_offsets[flat_idx + 1];
 
-              /* Branchless Periodic Boundary Wrap */
-              dx -= box_length * (sif_real)(dx > half_box) -
-                    box_length * (sif_real)(dx < -half_box);
-              dy -= box_length * (sif_real)(dy > half_box) -
-                    box_length * (sif_real)(dy < -half_box);
-              dz -= box_length * (sif_real)(dz > half_box) -
-                    box_length * (sif_real)(dz < -half_box);
+          if (p_start == p_end)
+            continue;
 
-              sif_real r2 = dx * dx + dy * dy + dz * dz;
-
-              /* Mask evaluation - compilers handle this efficiently in SIMD */
-              if (r2 <= r_max_sq) {
-                sif_real r = SIF_REAL_SQRT(r2);
-                uint32_t bin = (uint32_t)(r / (rv * bin_width));
-
-                if (bin < n_bins) {
-                  if (compute_dens) {
-                    sif_real m = mm ? mm[p] : 1.0f;
-                    local_mass[bin] += m;
-                  }
-
-                  if (compute_vel && mvx) {
-                    sif_real inv_r = (r > 0.0f) ? (1.0f / r) : 0.0f;
-                    sif_real v_r =
-                      (mvx[p] * dx + mvy[p] * dy + mvz[p] * dz) * inv_r;
-                    local_vrad[bin] += v_r;
-                    local_count[bin]++;
-                  }
-                }
-              }
-            }
-          } else {
-            /* NO simd pragma here: `bin` below is data-dependent, so the
-             * accumulations are a scatter. Asserting the loop is
-             * dependence-free let the vectorizer drop updates whenever two
-             * lanes landed in the same bin, biasing every profile low by up
-             * to ~20% in dense bins. The compiler still vectorizes the
-             * distance arithmetic on its own. Open boundary: no wrapping. */
-            for (uint64_t p = p_start; p < p_end; p++) {
-              sif_real dx = mx[p] - cx;
-              sif_real dy = my[p] - cy;
-              sif_real dz = mz[p] - cz;
-
-              sif_real r2 = dx * dx + dy * dy + dz * dz;
-
-              if (r2 <= r_max_sq) {
-                sif_real r = SIF_REAL_SQRT(r2);
-                uint32_t bin = (uint32_t)(r / (rv * bin_width));
-
-                if (bin < n_bins) {
-                  if (compute_dens) {
-                    sif_real m = mm ? mm[p] : 1.0f;
-                    local_mass[bin] += m;
-                  }
-
-                  if (compute_vel && mvx) {
-                    sif_real inv_r = (r > 0.0f) ? (1.0f / r) : 0.0f;
-                    sif_real v_r =
-                      (mvx[p] * dx + mvy[p] * dy + mvz[p] * dz) * inv_r;
-                    local_vrad[bin] += v_r;
-                    local_count[bin]++;
-                  }
-                }
-              }
-            }
-          }
+          if (per_cell_image)
+            SIF_BIN_DISPATCH(0);
+          else
+            SIF_BIN_DISPATCH(1);
         }
       }
     }
@@ -508,11 +605,13 @@ int sif_profiles_mesh(const sif_catalog_t* cat, const sif_field_t* field,
     }
   }
 
+#undef SIF_BIN_DISPATCH
+#undef SIF_BIN_CELL
+
   sif_free_aligned(scratch_mass);
   sif_free_aligned(scratch_vrad);
   sif_free_aligned(scratch_count);
   sif_free_aligned(sphere_vols);
-  sif_chain_mesh_free(mesh);
 
   SIF_LOG_INFO("profiles", "profile computation completed");
   return SIF_OK;
@@ -521,261 +620,6 @@ fail:
   /* Every failure leaves both outputs NULL, including one this call allocated
    * before a later step failed. A half-built set the caller cannot tell from a
    * finished one is worse than no set at all. */
-  if (out_dens && *out_dens) {
-    sif_density_profiles_free(*out_dens);
-    *out_dens = NULL;
-  }
-  if (out_vel && *out_vel) {
-    sif_velocity_profiles_free(*out_vel);
-    *out_vel = NULL;
-  }
-  return status;
-}
-
-/* --- Voronoi estimator --- */
-
-int sif_profiles_voronoi(const sif_catalog_t* cat, const sif_field_t* field,
-  const sif_tessellation_t* tess, sif_real box_length, sif_real ext,
-  uint32_t n_bins, sif_option opt, sif_density_profiles_t** out_dens,
-  sif_velocity_profiles_t** out_vel) {
-
-  int status = validate_inputs(cat, field, box_length, ext, n_bins,
-    (const sif_density_profiles_t* const*)out_dens,
-    (const sif_velocity_profiles_t* const*)out_vel, "sif_profiles_voronoi");
-  if (status != SIF_OK)
-    return status;
-
-  if (!tess || !tess->volumes) {
-    SIF_LOG_ERROR("profiles", "the Voronoi estimator needs a tessellation");
-    return SIF_ERR_INVALID;
-  }
-
-  const int compute_dens = (out_dens != NULL);
-  const int compute_vel = (out_vel != NULL);
-
-  SIF_LOG_INFO("profiles",
-    "computing volume-weighted Voronoi profiles for %" PRIu64 " voids",
-    cat->n_voids);
-
-  if (compute_dens && *out_dens == NULL) {
-    *out_dens = density_profiles_alloc(cat->n_voids, n_bins, ext);
-    if (!*out_dens) {
-      SIF_LOG_ERROR("profiles", "OOM allocating density profiles");
-      return SIF_ERR_ALLOC;
-    }
-  }
-
-  if (compute_vel && *out_vel == NULL) {
-    *out_vel = velocity_profiles_alloc(cat->n_voids, n_bins, ext);
-    if (!*out_vel) {
-      SIF_LOG_ERROR("profiles", "OOM allocating velocity profiles");
-      status = SIF_ERR_ALLOC;
-      goto fail;
-    }
-  }
-
-  const sif_real bin_width = ext / (sif_real)n_bins;
-  sif_real* sphere_vols = NULL;
-
-  if (compute_dens) {
-    sphere_vols = sif_malloc_aligned(n_bins * sizeof(sif_real));
-    if (!sphere_vols) {
-      SIF_LOG_ERROR("profiles", "OOM allocating the shell volumes");
-      status = SIF_ERR_ALLOC;
-      goto fail;
-    }
-    fill_edges((*out_dens)->r_edges, sphere_vols, n_bins, ext, bin_width);
-  }
-
-  if (compute_vel)
-    fill_edges((*out_vel)->r_edges, NULL, n_bins, ext, bin_width);
-
-  /* The mesh carries positions only: this estimator reads weights and
-   * velocities from the field, indexed by what find_nearest returns, which is
-   * an index into the field rather than into the mesh's own ordering. */
-  const uint32_t n_cells = mesh_resolution(cat, box_length, ext);
-  sif_chain_mesh_t* mesh =
-    sif_chain_mesh_alloc(n_cells, box_length, field, SIF_DEFAULT);
-
-  if (!mesh) {
-    SIF_LOG_ERROR("profiles",
-      "failed to build the chain mesh (are all particles inside the box?)");
-    sif_free_aligned(sphere_vols);
-    status = SIF_ERR_ALLOC;
-    goto fail;
-  }
-
-  const sif_real mean_dens =
-    compute_dens ? (sif_real)mean_density(field, box_length) : (sif_real)1.0;
-
-  const int is_periodic = ((opt & SIF__PBC_MASK) == SIF_PBC_PERIODIC);
-
-  const sif_real* fm =
-    field->weights ? SIF_ASSUME_ALIGNED(field->weights) : NULL;
-  const sif_real* fvx = field->vx ? SIF_ASSUME_ALIGNED(field->vx) : NULL;
-  const sif_real* fvy = field->vy ? SIF_ASSUME_ALIGNED(field->vy) : NULL;
-  const sif_real* fvz = field->vz ? SIF_ASSUME_ALIGNED(field->vz) : NULL;
-
-  /* Per-thread bin scratch, padded per thread. See the note in
-   * sif_profiles_mesh. */
-  const int n_threads =
-    sif__system_max_threads() > 0 ? sif__system_max_threads() : 1;
-  const size_t row_real = pad_row(n_bins, sizeof(sif_real));
-
-  sif_real* scratch_mass =
-    sif_malloc_aligned((size_t)n_threads * row_real * sizeof(sif_real));
-  sif_real* scratch_vrad =
-    sif_malloc_aligned((size_t)n_threads * row_real * sizeof(sif_real));
-  sif_real* scratch_vol =
-    sif_malloc_aligned((size_t)n_threads * row_real * sizeof(sif_real));
-
-  if (!scratch_mass || !scratch_vrad || !scratch_vol) {
-    SIF_LOG_ERROR("profiles", "OOM allocating the per-thread bin scratch");
-    sif_free_aligned(scratch_mass);
-    sif_free_aligned(scratch_vrad);
-    sif_free_aligned(scratch_vol);
-    sif_free_aligned(sphere_vols);
-    sif_chain_mesh_free(mesh);
-    status = SIF_ERR_ALLOC;
-    goto fail;
-  }
-
-/* --- core loop --- */
-#pragma omp parallel for schedule(dynamic, 1) num_threads(n_threads)
-  for (uint64_t i = 0; i < cat->n_voids; i++) {
-    sif_real cx = cat->cx[i];
-    sif_real cy = cat->cy[i];
-    sif_real cz = cat->cz[i];
-    sif_real rv = cat->radii[i];
-
-    /* A void with no radius has no profile: every bin index would be r/0, and
-     * the cast of the resulting NaN to uint32_t is undefined. The row stays as
-     * the allocator left it, which is zeroed. */
-    if (!(rv > (sif_real)0.0))
-      continue;
-
-    sif_real r_max = rv * ext;
-    sif_real r_max_sq = r_max * r_max;
-
-    /* Local Voxel Grid Definition */
-    sif_real voxel_len = (2.0f * r_max) / (sif_real)PROFILES_GRID_DIM;
-    sif_real vol_per_voxel = voxel_len * voxel_len * voxel_len;
-
-    const int tid = sif__system_thread_num();
-    sif_real* local_mass = scratch_mass + (size_t)tid * row_real;
-    sif_real* local_vrad = scratch_vrad + (size_t)tid * row_real;
-    sif_real* local_vol = scratch_vol + (size_t)tid * row_real;
-
-    if (compute_dens)
-      memset(local_mass, 0, n_bins * sizeof(sif_real));
-    if (compute_vel) {
-      memset(local_vrad, 0, n_bins * sizeof(sif_real));
-      memset(local_vol, 0, n_bins * sizeof(sif_real));
-    }
-
-    /* Sub-Grid Sweep */
-    for (uint32_t ix = 0; ix < PROFILES_GRID_DIM; ix++) {
-      for (uint32_t iy = 0; iy < PROFILES_GRID_DIM; iy++) {
-        for (uint32_t iz = 0; iz < PROFILES_GRID_DIM; iz++) {
-
-          // Physical coordinate of the voxel
-          sif_real px = (cx - r_max) + (ix + 0.5f) * voxel_len;
-          sif_real py = (cy - r_max) + (iy + 0.5f) * voxel_len;
-          sif_real pz = (cz - r_max) + (iz + 0.5f) * voxel_len;
-
-          // Geometric vector from void center to the voxel
-          sif_real dx = px - cx;
-          sif_real dy = py - cy;
-          sif_real dz = pz - cz;
-          sif_real r2 = dx * dx + dy * dy + dz * dz;
-
-          if (r2 <= r_max_sq) {
-            sif_real r = SIF_REAL_SQRT(r2);
-            uint32_t bin = (uint32_t)(r / (rv * bin_width));
-
-            if (bin < n_bins) {
-
-              // Wrap the query point into the box space if it extended beyond
-              // the boundaries
-              /* The chain mesh is anchored at the origin, so wrap into
-               * [0, box_length) rather than into the field's bounding box. */
-              sif_real qx = px, qy = py, qz = pz;
-              if (is_periodic) {
-                qx = WRAP_PBC(px, 0.0f, box_length);
-                qy = WRAP_PBC(py, 0.0f, box_length);
-                qz = WRAP_PBC(pz, 0.0f, box_length);
-              }
-
-              // Query the fast spatial index
-              uint64_t nearest_idx =
-                is_periodic
-                  ? sif_chain_mesh_find_nearest_pbc(mesh, qx, qy, qz)
-                  : sif_chain_mesh_find_nearest_open(mesh, qx, qy, qz);
-
-              if (nearest_idx != UINT64_MAX) {
-
-                // The exact Voronoi volume intersection
-                const sif_real cell_vol = tess->volumes[nearest_idx];
-                if (!(cell_vol > 0.0f))
-                  continue; /* degenerate cell: contributes nothing */
-
-                sif_real vol_fraction = vol_per_voxel / cell_vol;
-
-                if (compute_dens) {
-                  sif_real m = fm ? fm[nearest_idx] : 1.0f;
-                  local_mass[bin] += m * vol_fraction;
-                }
-
-                if (compute_vel && fvx) {
-                  sif_real inv_r = (r > 0.0f) ? (1.0f / r) : 0.0f;
-                  sif_real v_r =
-                    (fvx[nearest_idx] * dx + fvy[nearest_idx] * dy +
-                      fvz[nearest_idx] * dz) *
-                    inv_r;
-
-                  local_vrad[bin] += v_r * vol_per_voxel;
-                  local_vol[bin] += vol_per_voxel;
-                }
-              }
-            }
-          }
-        }
-      }
-    }
-
-    /* Finalize the void's profile */
-    sif_real rv_cubed = rv * rv * rv;
-    sif_real cumulative_mass = 0.0;
-
-    for (uint32_t j = 0; j < n_bins; j++) {
-      uint64_t global_idx = i * n_bins + j;
-
-      if (compute_dens) {
-        cumulative_mass += local_mass[j];
-        sif_real raw_rho = cumulative_mass / (sphere_vols[j] * rv_cubed);
-        (*out_dens)->profiles[global_idx] = (raw_rho / mean_dens) - 1.0;
-      }
-
-      if (compute_vel) {
-        if (local_vol[j] > 0.0f) {
-          (*out_vel)->v_rad[global_idx] = local_vrad[j] / local_vol[j];
-        } else {
-          (*out_vel)->v_rad[global_idx] = 0.0f;
-        }
-      }
-    }
-  }
-
-  sif_free_aligned(scratch_mass);
-  sif_free_aligned(scratch_vrad);
-  sif_free_aligned(scratch_vol);
-  sif_free_aligned(sphere_vols);
-  sif_chain_mesh_free(mesh);
-
-  SIF_LOG_INFO("profiles", "Voronoi profile computation completed");
-  return SIF_OK;
-
-fail:
   if (out_dens && *out_dens) {
     sif_density_profiles_free(*out_dens);
     *out_dens = NULL;

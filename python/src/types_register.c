@@ -24,7 +24,6 @@
 #include "structures/py_grid.h"
 #include "structures/py_octree.h"
 #include "structures/py_size_function.h"
-#include "structures/py_tessellation.h"
 
 /* One table, so adding a type is one line and cannot be half-done: a type that
  * is readied but not added, or added but not readied, is a crash waiting for
@@ -43,7 +42,6 @@ static const struct {
   {"Grid", &sifGridType},
   {"Octree", &sifOctreeType},
   {"SizeFunction", &sifSizeFunctionType},
-  {"Tessellation", &sifTessellationType},
 };
 
 int py_sif_register_types(PyObject* module) {

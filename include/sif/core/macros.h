@@ -94,16 +94,6 @@ typedef uint32_t sif_option;
 /** @} */
 
 /**
- * @defgroup opt_profiles Profile algorithm
- * @brief Which estimator computes the radial profiles.
- * @{
- */
-#define SIF_PROFILES_ALGO_MESH    (0u << 8)
-#define SIF_PROFILES_ALGO_VORONOI (1u << 8)
-#define SIF__PROFILES_ALGO_MASK   (1u << 8)
-/** @} */
-
-/**
  * @defgroup opt_spherical Spherical-evolution mapping
  * @brief How the linear and non-linear density contrasts of a void are mapped
  * onto each other.
@@ -202,16 +192,6 @@ typedef uint32_t sif_option;
 #define SIF_BBKS_G_FITTED (0u << 8)
 #define SIF_BBKS_G_EXACT  (1u << 8)
 #define SIF__BBKS_G_MASK  (1u << 8)
-/** @} */
-
-/**
- * @defgroup opt_tess Tessellation method
- * @brief How the seed points of the tessellation are placed.
- * @{
- */
-#define SIF_TESS_METHOD_RANDOM (0u << 8)
-#define SIF_TESS_METHOD_VOXEL  (1u << 8)
-#define SIF__TESS_METHOD_MASK  (1u << 8)
 /** @} */
 
 /* ------------------------------------------------------------------ */

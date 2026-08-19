@@ -50,9 +50,8 @@ static PyMethodDef measure_methods[] = {
     "    SizeFunction: The merged size function."},
 
   {"profiles", (PyCFunction)py_sif_profiles, METH_VARARGS | METH_KEYWORDS,
-    "profiles(catalog, field, box_length, ext, n_bins, "
-    "compute_velocity=False, use_pbc=True, algorithm='mesh', "
-    "tessellation=None)\n"
+    "profiles(catalog, mesh, n_bins, ext=5.0, compute_velocity=False, "
+    "use_pbc=True)\n"
     "--\n\n"
     "Stack radial density and velocity profiles around voids.\n\n"
     "Radii are scaled by each void's own radius, so profiles of\n"
@@ -60,18 +59,37 @@ static PyMethodDef measure_methods[] = {
     "box mean, so a profile approaches 1 far from the centre.\n\n"
     "Args:\n"
     "    catalog: Voids to profile.\n"
-    "    field: Particle field. Must carry velocities if compute_velocity.\n"
-    "    box_length: Physical side length of the box.\n"
-    "    ext: Outer edge of the profile, in units of each void's radius.\n"
+    "    mesh: ChainMesh of the tracers, which also supplies the box length\n"
+    "        and the mean density -- so it has to hold the whole sample, not\n"
+    "        a subset. Size it with profiles_suggest_mesh_cells(), or reuse\n"
+    "        the mesh a finder was given: any resolution gives the same\n"
+    "        profiles. Must carry velocities if compute_velocity.\n"
     "    n_bins: Radial bins per profile.\n"
-    "    compute_velocity: Also stack the radial velocity profile, which\n"
-    "        costs a second payload in the internal mesh.\n"
-    "    use_pbc: Treat the box as periodic.\n"
-    "    algorithm: 'mesh', or 'voronoi' for the experimental tessellation\n"
-    "        path, which does not scale to production catalogues.\n"
-    "    tessellation: Required by the 'voronoi' algorithm.\n\n"
+    "    ext: Outer edge of the profile, in units of each void's radius.\n"
+    "        Anything not positive selects the default of 5.\n"
+    "    compute_velocity: Also stack the radial velocity profile.\n"
+    "    use_pbc: Treat the box as periodic.\n\n"
     "Returns:\n"
     "    Profiles: The stacked profiles."},
+
+  {"profiles_suggest_mesh_cells",
+    (PyCFunction)py_sif_profiles_suggest_mesh_cells,
+    METH_VARARGS | METH_KEYWORDS,
+    "profiles_suggest_mesh_cells(n_particles)\n"
+    "--\n\n"
+    "Suggest a ChainMesh resolution for profiles().\n\n"
+    "Resolution changes only speed and memory -- the profiles are identical\n"
+    "at any of them -- so a mesh built for something else is always a valid\n"
+    "input, and one sized for finders.exodus() is as good as one sized\n"
+    "here. It is still worth tuning: the minimum is broad, but sitting a\n"
+    "long way off it costs a factor of a few.\n\n"
+    "Args:\n"
+    "    n_particles: Tracers the mesh will hold. The void size does not\n"
+    "        enter: the balance is between cell overhead and tracers read\n"
+    "        outside the sphere, and it lands in the same place whatever\n"
+    "        the voids measure.\n\n"
+    "Returns:\n"
+    "    int: n_cells to pass to ChainMesh."},
 
   {"delta_distribution_grid", (PyCFunction)py_sif_delta_distribution_grid,
     METH_VARARGS | METH_KEYWORDS,

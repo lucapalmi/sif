@@ -58,6 +58,13 @@ typedef struct {
   /** Weights in the same order, or NULL if the field carries none. */
   sif_real* weights;
   /**
+   * Sum of #weights, or #n_particles when the mesh carries none -- either way,
+   * what the box's mean density divides by. Summed once at construction, in
+   * double whatever sif_real is, so a measurement normalized to the box mean
+   * does not pay for a pass over the weights per call.
+   */
+  double total_weight;
+  /**
    * Index of each particle in the source field: the only way to relate a
    * query result back to the field it came from, since the mesh reorders
    * particles.

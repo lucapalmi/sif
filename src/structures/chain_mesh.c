@@ -428,6 +428,30 @@ static int chain_mesh_permute_payloads(sif_chain_mesh_t* mesh) {
  * has not read yet -- so it records the permutation only and
  * chain_mesh_permute_payloads() moves the data afterwards.
  */
+/*
+ * Total weight the mesh holds, summed once here so that everything downstream
+ * that needs a mean density -- which is every measurement normalized to the
+ * box -- gets it for free rather than walking the weights again per call.
+ *
+ * Accumulated in double however sif_real is configured. At float precision a
+ * running sum over a few billion tracers stops moving long before it reaches
+ * the end, and a total that divides a whole measurement would carry that error
+ * into an amplitude that looks physical.
+ */
+static void chain_mesh_sum_weights(sif_chain_mesh_t* mesh) {
+  if (!mesh->weights) {
+    mesh->total_weight = (double)mesh->n_particles;
+    return;
+  }
+
+  double total = 0.0;
+#pragma omp parallel for schedule(static) reduction(+ : total)
+  for (uint64_t p = 0; p < mesh->n_particles; p++)
+    total += (double)mesh->weights[p];
+
+  mesh->total_weight = total;
+}
+
 static int chain_mesh_create(
   sif_chain_mesh_t* mesh, const sif_field_t* field, bool consume) {
 
@@ -569,6 +593,8 @@ static int chain_mesh_create(
     return SIF_ERR_ALLOC;
 
   chain_mesh_canonicalize(mesh);
+
+  chain_mesh_sum_weights(mesh);
 
   SIF_LOG_TRACE("chain_mesh", "RLE atomic mesh construction complete");
 

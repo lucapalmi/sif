@@ -177,7 +177,9 @@ void sif_init(sif_config_t* config) {
 
   /* Shewchuk's exact predicates derive their error bounds from the running
    * machine's floating-point behaviour, once, before any predicate is
-   * evaluated. The Delaunay tessellation is built on them. */
+   * evaluated. Nothing evaluates one at the moment -- the tessellation that
+   * did was removed -- but the initialization has to happen here rather than
+   * at the first call, so it stays. */
   exactinit();
 
   SIF_LOG_INFO("system", "sif library initialized (threads: %u)",
