@@ -51,7 +51,7 @@ static PyMethodDef measure_methods[] = {
 
   {"profiles", (PyCFunction)py_sif_profiles, METH_VARARGS | METH_KEYWORDS,
     "profiles(catalog, mesh, n_bins, ext=5.0, compute_velocity=False, "
-    "use_pbc=True)\n"
+    "use_pbc=True, differential=False)\n"
     "--\n\n"
     "Stack radial density and velocity profiles around voids.\n\n"
     "Radii are scaled by each void's own radius, so profiles of\n"
@@ -68,7 +68,11 @@ static PyMethodDef measure_methods[] = {
     "    ext: Outer edge of the profile, in units of each void's radius.\n"
     "        Anything not positive selects the default of 5.\n"
     "    compute_velocity: Also stack the radial velocity profile.\n"
-    "    use_pbc: Treat the box as periodic.\n\n"
+    "    use_pbc: Treat the box as periodic.\n"
+    "    differential: Make each density bin the contrast of its own shell\n"
+    "        rather than of everything enclosed within its outer edge. The\n"
+    "        one worth measuring from a Tessellation, since a shell is all\n"
+    "        boundary. Velocity bins are shell means either way.\n\n"
     "Returns:\n"
     "    Profiles: The stacked profiles."},
 

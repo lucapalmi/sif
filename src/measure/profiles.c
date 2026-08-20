@@ -7,6 +7,7 @@
 #include "sif/measure/profiles.h"
 
 #include "core/system_internal.h"
+#include "measure/profiles_internal.h"
 #include "sif/core/macros.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/utils/align.h"
@@ -27,8 +28,8 @@ static size_t pad_row(uint32_t n_bins, size_t elem_size) {
 
 /* --- memory --- */
 
-SIF_NODISCARD static sif_density_profiles_t* density_profiles_alloc(
-  uint64_t n_voids, uint32_t n_bins, sif_real ext) {
+sif_density_profiles_t* sif__density_profiles_alloc(
+  uint64_t n_voids, uint32_t n_bins, sif_real ext, bool differential) {
 
   sif_density_profiles_t* profs = malloc(sizeof(sif_density_profiles_t));
   if (!profs)
@@ -37,6 +38,7 @@ SIF_NODISCARD static sif_density_profiles_t* density_profiles_alloc(
   profs->n_voids = n_voids;
   profs->n_bins = n_bins;
   profs->ext = ext;
+  profs->differential = differential;
 
   profs->r_edges = sif_malloc_aligned((n_bins + 1) * sizeof(sif_real));
   profs->profiles = sif_calloc_aligned(n_voids * n_bins, sizeof(sif_real));
@@ -48,7 +50,7 @@ SIF_NODISCARD static sif_density_profiles_t* density_profiles_alloc(
   return profs;
 }
 
-SIF_NODISCARD static sif_velocity_profiles_t* velocity_profiles_alloc(
+sif_velocity_profiles_t* sif__velocity_profiles_alloc(
   uint64_t n_voids, uint32_t n_bins, sif_real ext) {
 
   sif_velocity_profiles_t* profs = malloc(sizeof(sif_velocity_profiles_t));
@@ -312,19 +314,23 @@ static inline void axis_cell_range(sif_real centre, sif_real r_max,
   *out_max = (int32_t)hi;
 }
 
-/* Fills r_edges and, for densities, the volume of the whole sphere out to each
- * bin's outer edge. Edges are in units of the void radius, so the volumes are
- * too and get scaled by rv^3 per void at the end. */
-static void fill_edges(sif_real* r_edges, sif_real* sphere_vols,
-  uint32_t n_bins, sif_real ext, sif_real bin_width) {
+/* Fills r_edges and, for densities, the volume each bin's weight is divided
+ * by: the whole sphere out to the bin's outer edge for a cumulative profile,
+ * the shell between its edges for a differential one. Edges are in units of
+ * the void radius, so the volumes are too and get scaled by rv^3 per void at
+ * the end. */
+static void fill_edges(sif_real* r_edges, sif_real* bin_vols, uint32_t n_bins,
+  sif_real ext, sif_real bin_width, bool differential) {
 
   for (uint32_t j = 0; j < n_bins; j++) {
     r_edges[j] = (sif_real)j * bin_width;
 
-    if (sphere_vols) {
+    if (bin_vols) {
       const sif_real r_outer = (sif_real)(j + 1) * bin_width;
-      sphere_vols[j] =
-        (sif_real)(4.0 / 3.0) * SIF_PI * (r_outer * r_outer * r_outer);
+      const sif_real r_inner = differential ? r_edges[j] : (sif_real)0.0;
+
+      bin_vols[j] = (sif_real)(4.0 / 3.0) * SIF_PI *
+                    (r_outer * r_outer * r_outer - r_inner * r_inner * r_inner);
     }
   }
 
@@ -355,17 +361,21 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   const int compute_dens = (out_dens != NULL);
   const int compute_vel = (out_vel != NULL);
 
+  const bool differential =
+    ((opt & SIF__PROFILES_BIN_MASK) == SIF_PROFILES_DIFFERENTIAL);
+
   const sif_real box_length = mesh->box_length;
 
   SIF_LOG_INFO("profiles",
-    "computing profiles for %" PRIu64 " voids out to %g void radii",
-    cat->n_voids, (double)ext);
+    "computing %s profiles for %" PRIu64 " voids out to %g void radii",
+    differential ? "differential" : "cumulative", cat->n_voids, (double)ext);
 
   /* Allocated here only if the caller passed a pointer to NULL; a set it
    * already owns is refilled, which is how a sweep over several catalogues
    * avoids reallocating the same shape every time. */
   if (compute_dens && *out_dens == NULL) {
-    *out_dens = density_profiles_alloc(cat->n_voids, n_bins, ext);
+    *out_dens =
+      sif__density_profiles_alloc(cat->n_voids, n_bins, ext, differential);
     if (!*out_dens) {
       SIF_LOG_ERROR("profiles", "OOM allocating density profiles");
       return SIF_ERR_ALLOC;
@@ -373,7 +383,7 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   }
 
   if (compute_vel && *out_vel == NULL) {
-    *out_vel = velocity_profiles_alloc(cat->n_voids, n_bins, ext);
+    *out_vel = sif__velocity_profiles_alloc(cat->n_voids, n_bins, ext);
     if (!*out_vel) {
       SIF_LOG_ERROR("profiles", "OOM allocating velocity profiles");
       status = SIF_ERR_ALLOC;
@@ -382,20 +392,21 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   }
 
   const sif_real bin_width = ext / (sif_real)n_bins;
-  sif_real* sphere_vols = NULL;
+  sif_real* bin_vols = NULL;
 
   if (compute_dens) {
-    sphere_vols = sif_malloc_aligned(n_bins * sizeof(sif_real));
-    if (!sphere_vols) {
-      SIF_LOG_ERROR("profiles", "OOM allocating the shell volumes");
+    bin_vols = sif_malloc_aligned(n_bins * sizeof(sif_real));
+    if (!bin_vols) {
+      SIF_LOG_ERROR("profiles", "OOM allocating the bin volumes");
       status = SIF_ERR_ALLOC;
       goto fail;
     }
-    fill_edges((*out_dens)->r_edges, sphere_vols, n_bins, ext, bin_width);
+    fill_edges(
+      (*out_dens)->r_edges, bin_vols, n_bins, ext, bin_width, differential);
   }
 
   if (compute_vel)
-    fill_edges((*out_vel)->r_edges, NULL, n_bins, ext, bin_width);
+    fill_edges((*out_vel)->r_edges, NULL, n_bins, ext, bin_width, false);
 
   const uint32_t n_cells = mesh->n_cells;
   const sif_real half_box = box_length * (sif_real)0.5;
@@ -446,7 +457,7 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
     sif_free_aligned(scratch_mass);
     sif_free_aligned(scratch_vrad);
     sif_free_aligned(scratch_count);
-    sif_free_aligned(sphere_vols);
+    sif_free_aligned(bin_vols);
     status = SIF_ERR_ALLOC;
     goto fail;
   }
@@ -576,10 +587,9 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
       }
     }
 
-    /* The density profile is cumulative and the velocity profile is not.
-     * That is the convention each is used under: an enclosed density contrast
-     * is what the spherical-evolution mapping takes, while a radial velocity
-     * means the mean infall of a shell. */
+    /* A velocity profile is a shell mean whatever the density profile is; a
+     * mean infall over everything inside a radius is not a quantity anyone
+     * wants. */
     const sif_real rv_cubed = rv * rv * rv;
     sif_real cumulative_mass = (sif_real)0.0;
 
@@ -589,10 +599,12 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
       if (compute_dens) {
         cumulative_mass += local_mass[j];
 
-        /* Enclosed weight over the volume of the whole sphere out to this bin's
-         * outer edge -- sphere_vols is in units of the void radius, so rv^3
-         * puts it back in physical units. */
-        const sif_real raw_rho = cumulative_mass / (sphere_vols[j] * rv_cubed);
+        /* Weight over the volume it is spread through: the whole sphere out to
+         * this bin's outer edge, or this shell alone. bin_vols is in units of
+         * the void radius, so rv^3 puts it back in physical units. */
+        const sif_real weight = differential ? local_mass[j] : cumulative_mass;
+        const sif_real raw_rho = weight / (bin_vols[j] * rv_cubed);
+
         (*out_dens)->profiles[global_idx] =
           (raw_rho / mean_dens) - (sif_real)1.0;
       }
@@ -611,7 +623,7 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   sif_free_aligned(scratch_mass);
   sif_free_aligned(scratch_vrad);
   sif_free_aligned(scratch_count);
-  sif_free_aligned(sphere_vols);
+  sif_free_aligned(bin_vols);
 
   SIF_LOG_INFO("profiles", "profile computation completed");
   return SIF_OK;

@@ -20,6 +20,7 @@
 #define SIF_MEASURE_PROFILES_H
 
 #include <math.h>
+#include <stdbool.h>
 #include <stdint.h>
 
 #include "sif/core/macros.h"
@@ -34,9 +35,41 @@ typedef struct {
   uint32_t n_bins;
   /** Outer edge of the profile, in units of each void's own radius. */
   sif_real ext;
+  /**
+   * True when a bin holds the contrast of that shell alone, false when it
+   * holds the contrast enclosed within the bin's outer edge. Set by
+   * #SIF_PROFILES_DIFFERENTIAL, and recorded because the two are not
+   * distinguishable from the values.
+   */
+  bool differential;
   sif_real* r_edges;  /**< n_bins + 1 bin edges, shared by every row. */
   sif_real* profiles; /**< n_voids * n_bins values, row-major. */
 } sif_density_profiles_t;
+
+/**
+ * @brief Radius a density bin's value belongs at, in units of the void radius.
+ *
+ * Not the same edge for the two binnings, and plotting one at the other's
+ * radius shifts the whole curve by half a bin: a cumulative bin holds
+ * everything enclosed within its *outer* edge, while a differential bin is a
+ * shell mean and belongs at its centre. The difference is easy to miss because
+ * both are smooth and only the position of a feature moves -- a void found at
+ * a fixed enclosed contrast puts that contrast exactly at r = R_v, and half a
+ * bin is enough to hide it.
+ *
+ * @param profs The profile set.
+ * @param bin Bin to place, in [0, n_bins).
+ * @return The radius, in units of each void's own radius; multiply by a void's
+ * radius for physical units.
+ */
+static inline sif_real sif_density_profiles_bin_radius(
+  const sif_density_profiles_t* profs, uint32_t bin) {
+  SIF_ASSERT(bin < profs->n_bins);
+
+  return profs->differential
+           ? (profs->r_edges[bin] + profs->r_edges[bin + 1]) * (sif_real)0.5
+           : profs->r_edges[bin + 1];
+}
 
 /**
  * @brief Stacked radial velocity profiles, one row per void.
@@ -101,9 +134,15 @@ static inline const sif_real* sif_velocity_profiles_get(
  * Either output may be omitted, and only what is asked for is computed --
  * velocities in particular are only available from a mesh that carries them.
  *
- * Densities are cumulative -- each bin is the contrast enclosed within its
- * outer edge, which is what the spherical-evolution mapping expects -- while
- * velocities are differential, the mean radial velocity of that shell alone.
+ * Densities are cumulative by default -- each bin is the contrast enclosed
+ * within its outer edge, which is what the spherical-evolution mapping expects
+ * -- and #SIF_PROFILES_DIFFERENTIAL makes each bin the contrast of its own
+ * shell instead. Velocities are the mean radial velocity of a shell either
+ * way.
+ *
+ * Which edge a bin's value belongs at follows from that, and differs between
+ * the two: see sif_density_profiles_bin_radius(), which is what anything
+ * plotting or fitting these should ask.
  *
  * A void with a non-positive radius is skipped and leaves a row of zeros;
  * there is no profile to measure around it.
@@ -111,7 +150,11 @@ static inline const sif_real* sif_velocity_profiles_get(
  * @param cat Voids to profile.
  * @param mesh Tracers to bin, and the box they live in: the mesh is where the
  * box length, the tracer count and the mean density all come from, so it has
- * to hold every tracer of the sample rather than a subset. Built with
+ * to hold every tracer of the sample rather than a subset. A mesh of a
+ * tessellation's samples is equally valid and is what makes the result
+ * volume-weighted rather than tracer-weighted -- see
+ * sif_chain_mesh_alloc_tessellation(), which needs no change here because the
+ * samples carry the tracer weight between them. Built with
  * sif_profiles_suggest_mesh_cells() unless the caller has a mesh already --
  * one built for a finder does just as well, and reusing it is the point of
  * taking a mesh here rather than a field. #SIF_MESH_DROP_INDICES is fine:
@@ -119,7 +162,8 @@ static inline const sif_real* sif_velocity_profiles_get(
  * @param ext Outer edge of the profile, in units of each void's radius.
  * Anything not positive selects #SIF_PROFILES_DEFAULT_EXT.
  * @param n_bins Radial bins per profile. Must be non-zero.
- * @param opt Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN.
+ * @param opt Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN and
+ * SIF_PROFILES_CUMULATIVE / SIF_PROFILES_DIFFERENTIAL.
  * @param out_dens Address of a density set pointer, or NULL to skip. If it
  * points at NULL a set is allocated; otherwise the existing one is filled.
  * @param out_vel Address of a velocity set pointer, or NULL to skip. Same

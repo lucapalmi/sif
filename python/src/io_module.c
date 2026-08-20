@@ -123,11 +123,45 @@ static PyMethodDef io_methods[] = {
     "Returns:\n"
     "    Catalog: The loaded catalogue."},
 
+  {"write_profiles_ascii", (PyCFunction)pysif_write_profiles_ascii,
+    METH_VARARGS | METH_KEYWORDS,
+    "write_profiles_ascii(filepath, profiles, catalog)\n"
+    "--\n\n"
+    "Write stacked profiles as text, one row per void.\n\n"
+    "A row is the void it belongs to and then its profile, so it stands on\n"
+    "its own:\n\n"
+    "    n_voids n_bins ext has_density has_velocity\n"
+    "    r_edge[0] ... r_edge[n_bins]\n"
+    "    cx cy cz radius  density[...]  v_rad[...]\n\n"
+    "Only the two leading lines are ragged, so the table proper loads with\n"
+    "numpy.loadtxt(path, skiprows=2). Bin edges are in units of each void's\n"
+    "own radius; multiply by the radius in the row for physical units.\n"
+    "Whichever of the two profile blocks the Profiles carries is written.\n\n"
+    "Written with enough significant digits to recover the stored values\n"
+    "exactly, so a write/read round trip is lossless.\n\n"
+    "Args:\n"
+    "    filepath: Output path, truncated if it exists.\n"
+    "    profiles: Profiles to write.\n"
+    "    catalog: The catalogue they were measured from, which is where the\n"
+    "        per-void columns come from. Row i is void i, so it has to be\n"
+    "        that catalogue and not another of the same length."},
+
+  {"read_profiles_ascii", (PyCFunction)pysif_read_profiles_ascii,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_profiles_ascii(filepath)\n"
+    "--\n\n"
+    "Read profiles written by write_profiles_ascii().\n\n"
+    "Args:\n"
+    "    filepath: Input path.\n\n"
+    "Returns:\n"
+    "    tuple: (Profiles, Catalog). The Profiles carries whichever blocks\n"
+    "    the file holds; has_density and has_velocity say which."},
+
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
   .m_name = "pysif.io",
-  .m_doc = "Reading and writing fields, grids and catalogues.\n\n"
+  .m_doc = "Reading and writing fields, grids, catalogues and profiles.\n\n"
            "The .xfield and .xgrid binary formats load without parsing or\n"
            "copying, at the cost of being portable only between machines\n"
            "that agree on endianness and on the precision sif was built\n"

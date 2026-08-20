@@ -96,6 +96,7 @@ set(SOURCES
     src/structures/grid.c
     src/structures/catalog.c
     src/structures/chain_mesh.c
+    src/structures/tessellation.c
     src/structures/cell_linked_list.c
     src/structures/field.c
     src/structures/octree.c
@@ -127,6 +128,7 @@ set(SOURCES
   # io
     src/io/core_io.c
     src/io/catalog_io.c
+    src/io/profiles_io.c
     src/io/field_io.c
     src/io/grid_io.c
 

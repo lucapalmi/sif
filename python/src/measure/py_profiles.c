@@ -72,6 +72,32 @@ static PyObject* sifProfiles_get_ext(PyObject* self_obj, void* closure) {
   Py_RETURN_NONE;
 }
 
+static PyObject* sifProfiles_get_differential(
+  PyObject* self_obj, void* closure) {
+  sifProfilesObject* self = (sifProfilesObject*)self_obj;
+  if (!self->dens)
+    Py_RETURN_NONE;
+  return PyBool_FromLong(self->dens->differential);
+}
+
+static PyObject* sifProfiles_get_r_bins(PyObject* self_obj, void* closure) {
+  sifProfilesObject* self = (sifProfilesObject*)self_obj;
+  if (!self->dens)
+    Py_RETURN_NONE;
+
+  const uint32_t n_bins = self->dens->n_bins;
+  npy_intp dims[1] = {n_bins};
+  PyObject* array = PyArray_SimpleNew(1, dims, NPY_REAL_T);
+  if (!array)
+    return NULL;
+
+  sif_real* out = (sif_real*)PyArray_DATA((PyArrayObject*)array);
+  for (uint32_t b = 0; b < n_bins; b++)
+    out[b] = sif_density_profiles_bin_radius(self->dens, b);
+
+  return array;
+}
+
 static PyObject* sifProfiles_get_r_edges(PyObject* self_obj, void* closure) {
   sifProfilesObject* self = (sifProfilesObject*)self_obj;
   sif_real* edges =
@@ -132,7 +158,18 @@ static PyGetSetDef sifProfiles_getset[] = {
   {"n_voids", sifProfiles_get_n_voids, NULL, "Number of voids", NULL},
   {"n_bins", sifProfiles_get_n_bins, NULL, "Number of radial bins", NULL},
   {"ext", sifProfiles_get_ext, NULL, "Maximum scaling radius boundary", NULL},
+  {"differential", sifProfiles_get_differential, NULL,
+    "True when a density bin holds its own shell, False when it holds "
+    "everything enclosed. None if there are no densities.",
+    NULL},
   {"r_edges", sifProfiles_get_r_edges, NULL, "1D array of bin edges", NULL},
+  {"r_bins", sifProfiles_get_r_bins, NULL,
+    "Radius each density bin's value belongs at, in units of the void "
+    "radius: the outer edge for a cumulative profile, the midpoint for a "
+    "differential one. Plot against this, not against bin centres -- for a "
+    "cumulative profile those differ by half a bin, enough to move a feature "
+    "at r = R_v off that mark. None if there are no densities.",
+    NULL},
   {"density", sifProfiles_get_density, NULL, "2D array of density profiles",
     NULL},
   {"velocity", sifProfiles_get_velocity, NULL,
@@ -190,13 +227,14 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
   double ext = 0.0; /* 0 selects the library default */
   int compute_velocity = 0;
   int use_pbc = 1;
+  int differential = 0;
 
-  static char* kwlist[] = {
-    "catalog", "mesh", "n_bins", "ext", "compute_velocity", "use_pbc", NULL};
+  static char* kwlist[] = {"catalog", "mesh", "n_bins", "ext",
+    "compute_velocity", "use_pbc", "differential", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!I|dpp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!I|dppp", kwlist,
         &sifCatalogType, &cat_obj, &sifChainMeshType, &mesh_obj, &n_bins, &ext,
-        &compute_velocity, &use_pbc)) {
+        &compute_velocity, &use_pbc, &differential)) {
     return NULL;
   }
 
@@ -212,7 +250,9 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
   }
 
-  const uint32_t options = use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
+  const uint32_t options =
+    (use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN) |
+    (differential ? SIF_PROFILES_DIFFERENTIAL : SIF_PROFILES_CUMULATIVE);
 
   sif_density_profiles_t* dens_out = NULL;
   sif_velocity_profiles_t* vel_out = NULL;

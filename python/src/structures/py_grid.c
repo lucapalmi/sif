@@ -6,6 +6,8 @@
 
 #include "py_grid.h"
 #include "py_field.h"
+#include "py_tessellation.h"
+#include <stdio.h>
 
 /* --- Lifecycle Methods --- */
 
@@ -61,6 +63,48 @@ static PyObject* sifGrid_assign_cic(
   Py_RETURN_NONE;
 }
 
+static PyObject* sifGrid_assign_cic_tessellation(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  sifGridObject* self = (sifGridObject*)self_obj;
+  PyObject* tess_obj = NULL;
+
+  static char* kwlist[] = {"tessellation", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O!", kwlist, &sifTessellationType, &tess_obj)) {
+    return NULL;
+  }
+
+  sifTessellationObject* py_tess = (sifTessellationObject*)tess_obj;
+
+  /* The C entry point reports its refusals by logging, which a Python caller
+     cannot see, so the two that a caller can actually cause are checked here
+     and raised. */
+  if (!py_tess->tess->samples || py_tess->tess->samples->n_particles == 0) {
+    PyErr_SetString(PyExc_ValueError,
+      "these samples have already been consumed by mesh(consume=True); there "
+      "is nothing left to deposit");
+    return NULL;
+  }
+
+  if (self->grid->box_length != py_tess->tess->box_length) {
+    /* PyErr_Format has no float conversion, so anything carrying a double has
+       to be rendered before it gets there. */
+    char detail[256];
+    snprintf(detail, sizeof(detail),
+      "the grid spans a box of %g but the tessellation was built in one of %g",
+      (double)self->grid->box_length, (double)py_tess->tess->box_length);
+    PyErr_SetString(PyExc_ValueError, detail);
+    return NULL;
+  }
+
+  Py_BEGIN_ALLOW_THREADS sif_grid_assign_cic_tessellation(
+    self->grid, py_tess->tess);
+  Py_END_ALLOW_THREADS
+
+    Py_RETURN_NONE;
+}
+
 static PyObject* sifGrid_to_density_contrast(
   PyObject* self_obj, PyObject* args) {
   sifGridObject* self = (sifGridObject*)self_obj;
@@ -92,6 +136,25 @@ static PyMethodDef sifGrid_methods[] = {
     "if a periodic snapshot has drifted onto the boundary.\n\n"
     "Args:\n"
     "    field: The particle field to deposit."},
+  {"assign_cic_tessellation", (PyCFunction)sifGrid_assign_cic_tessellation,
+    METH_VARARGS | METH_KEYWORDS,
+    "assign_cic_tessellation(tessellation)\n"
+    "--\n\n"
+    "Deposit a Tessellation onto the grid by Cloud-In-Cell assignment.\n\n"
+    "The tessellation's density rather than the tracers': every sample\n"
+    "carries a share of its owner's weight and lands where the owner's cell\n"
+    "actually reaches, so a region with few tracers is filled by whatever\n"
+    "large cells cover it instead of being left empty. Depositing sparse\n"
+    "tracers directly leaves most cells holding nothing and the rest holding\n"
+    "shot noise, and no smoothing afterwards puts back a field that was\n"
+    "never sampled.\n\n"
+    "The result is a density on the same scale and with the same mean as\n"
+    "assign_cic() of the tracers, so to_density_contrast() and everything\n"
+    "downstream treat it identically.\n\n"
+    "Costs the sampling rate times what depositing the tracers would.\n\n"
+    "Args:\n"
+    "    tessellation: The Tessellation to deposit. Its samples must still\n"
+    "        be present -- not one whose mesh(consume=True) has taken them."},
   {"to_density_contrast", (PyCFunction)sifGrid_to_density_contrast, METH_NOARGS,
     "to_density_contrast()\n"
     "--\n\n"

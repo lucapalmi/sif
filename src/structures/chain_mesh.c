@@ -6,6 +6,8 @@
 
 #include "sif/structures/chain_mesh.h"
 
+#include "structures/chain_mesh_internal.h"
+
 #include "core/system_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -689,7 +691,7 @@ static inline void scan_cell_open(const sif_chain_mesh_t* mesh, sif_real px,
 
     if (d2 < *min_dist2) {
       *min_dist2 = d2;
-      *best_idx = mesh->original_indices[p];
+      *best_idx = p;
     }
   }
 }
@@ -720,7 +722,7 @@ static inline void scan_cell_pbc(const sif_chain_mesh_t* mesh, sif_real px,
 
     if (d2 < *min_dist2) {
       *min_dist2 = d2;
-      *best_idx = mesh->original_indices[p];
+      *best_idx = p;
     }
   }
 }
@@ -746,21 +748,11 @@ static inline void scan_cell_pbc(const sif_chain_mesh_t* mesh, sif_real px,
     }                                                                          \
   } while (0)
 
-uint64_t sif_chain_mesh_find_nearest_open(
+uint64_t sif__chain_mesh_find_nearest_slot_open(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz) {
 
   if (!mesh || mesh->n_particles == 0)
     return UINT64_MAX;
-
-  /* The answer is a field index, which is exactly what a mesh built with
-   * SIF_MESH_DROP_INDICES threw away. Refuse rather than hand back a mesh
-   * offset that means nothing to the caller. */
-  if (!mesh->original_indices) {
-    SIF_LOG_ERROR("chain_mesh",
-      "this mesh was built with SIF_MESH_DROP_INDICES and cannot name its "
-      "particles; rebuild it without that flag to query neighbours");
-    return UINT64_MAX;
-  }
 
   const int32_t n = (int32_t)mesh->n_cells;
 
@@ -805,18 +797,11 @@ uint64_t sif_chain_mesh_find_nearest_open(
   return best_idx;
 }
 
-uint64_t sif_chain_mesh_find_nearest_pbc(
+uint64_t sif__chain_mesh_find_nearest_slot_pbc(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz) {
 
   if (!mesh || mesh->n_particles == 0)
     return UINT64_MAX;
-
-  if (!mesh->original_indices) {
-    SIF_LOG_ERROR("chain_mesh",
-      "this mesh was built with SIF_MESH_DROP_INDICES and cannot name its "
-      "particles; rebuild it without that flag to query neighbours");
-    return UINT64_MAX;
-  }
 
   const int32_t n = (int32_t)mesh->n_cells;
 
@@ -871,4 +856,49 @@ uint64_t sif_chain_mesh_find_nearest_pbc(
   }
 
   return best_idx;
+}
+
+/* --- public queries ---
+ *
+ * The shell walk above answers in mesh order because that is what the mesh can
+ * always supply. These translate once, at the end, which is also where the
+ * index map is required: without it there is no field index to give back, and
+ * handing over a mesh slot that means nothing to the caller would be worse
+ * than refusing.
+ */
+
+static uint64_t nearest_field_index(
+  const sif_chain_mesh_t* mesh, uint64_t slot, const char* who) {
+
+  if (!mesh || !mesh->original_indices) {
+    SIF_LOG_ERROR("chain_mesh",
+      "%s: this mesh was built with SIF_MESH_DROP_INDICES and cannot name its "
+      "particles; rebuild it without that flag to query neighbours",
+      who);
+    return UINT64_MAX;
+  }
+
+  return (slot == UINT64_MAX) ? UINT64_MAX : mesh->original_indices[slot];
+}
+
+uint64_t sif_chain_mesh_find_nearest_open(
+  const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz) {
+
+  if (!mesh || !mesh->original_indices)
+    return nearest_field_index(mesh, UINT64_MAX, "find_nearest_open");
+
+  return nearest_field_index(mesh,
+    sif__chain_mesh_find_nearest_slot_open(mesh, px, py, pz),
+    "find_nearest_open");
+}
+
+uint64_t sif_chain_mesh_find_nearest_pbc(
+  const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz) {
+
+  if (!mesh || !mesh->original_indices)
+    return nearest_field_index(mesh, UINT64_MAX, "find_nearest_pbc");
+
+  return nearest_field_index(mesh,
+    sif__chain_mesh_find_nearest_slot_pbc(mesh, px, py, pz),
+    "find_nearest_pbc");
 }

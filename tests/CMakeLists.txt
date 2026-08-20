@@ -25,6 +25,7 @@ set(SIF_TESTS
   test_octree       # build integrity + nearest neighbour vs brute force
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count
+  test_tessellation # sampled Voronoi volumes, and the profiles they give
   test_vsf          # void size function binning, normalization, merging
   test_delta_stats  # Fourier delta PDF, spectral moments, phase shuffle
   test_vsf_models   # SvdW / Vdn size functions and the sigma slope

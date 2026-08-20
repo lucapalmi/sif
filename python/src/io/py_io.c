@@ -6,6 +6,8 @@
 
 #include "py_common.h"
 
+#include "measure/py_profiles.h"
+#include "sif/io/profiles_io.h"
 #include "structures/py_catalog.h"
 #include "structures/py_field.h"
 #include "structures/py_grid.h"
@@ -361,4 +363,90 @@ PyObject* pysif_read_catalog_ascii(
 
   obj->catalog = cat;
   return (PyObject*)obj;
+}
+PyObject* pysif_write_profiles_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  const char* filepath;
+  PyObject* prof_obj;
+  PyObject* cat_obj;
+
+  static char* kwlist[] = {"filepath", "profiles", "catalog", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO!O!", kwlist, &filepath,
+        &sifProfilesType, &prof_obj, &sifCatalogType, &cat_obj)) {
+    return NULL;
+  }
+
+  sifProfilesObject* prof = (sifProfilesObject*)prof_obj;
+  sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
+
+  if (!prof->dens && !prof->vel) {
+    PyErr_SetString(
+      PyExc_ValueError, "these Profiles hold neither densities nor velocities");
+    return NULL;
+  }
+
+  int status = 0;
+  Py_BEGIN_ALLOW_THREADS status =
+    sif_profiles_write_ascii(prof->dens, prof->vel, cat->catalog, filepath);
+  Py_END_ALLOW_THREADS
+
+    if (status != SIF_OK) {
+    return PyErr_Format(
+      status == SIF_ERR_INVALID ? PyExc_ValueError : PyExc_IOError,
+      "Failed to write profiles to %s; see the log for the reason", filepath);
+  }
+
+  Py_RETURN_NONE;
+}
+
+PyObject* pysif_read_profiles_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  const char* filepath;
+  static char* kwlist[] = {"filepath", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
+    return NULL;
+
+  /* Asking for a block the file does not carry is an error, so the header
+     says which to ask for. */
+  int has_dens = 0, has_vel = 0;
+  if (sif_profiles_read_header_ascii(
+        filepath, NULL, NULL, NULL, &has_dens, &has_vel, NULL) != SIF_OK) {
+    return PyErr_Format(
+      PyExc_IOError, "Failed to read profiles from %s", filepath);
+  }
+
+  sif_catalog_t* cat = NULL;
+  sif_density_profiles_t* dens = NULL;
+  sif_velocity_profiles_t* vel = NULL;
+  int status = SIF_OK;
+
+  Py_BEGIN_ALLOW_THREADS status = sif_profiles_read_ascii(
+    filepath, &cat, has_dens ? &dens : NULL, has_vel ? &vel : NULL);
+  Py_END_ALLOW_THREADS
+
+    if (status != SIF_OK) {
+    return PyErr_Format(
+      PyExc_IOError, "Failed to read profiles from %s", filepath);
+  }
+
+  sifProfilesObject* prof =
+    (sifProfilesObject*)sifProfilesType.tp_alloc(&sifProfilesType, 0);
+  sifCatalogObject* cat_obj =
+    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+
+  if (!prof || !cat_obj) {
+    Py_XDECREF(prof);
+    Py_XDECREF(cat_obj);
+    sif_catalog_free(cat);
+    sif_density_profiles_free(dens);
+    sif_velocity_profiles_free(vel);
+    return PyErr_NoMemory();
+  }
+
+  prof->dens = dens;
+  prof->vel = vel;
+  cat_obj->catalog = cat;
+
+  return Py_BuildValue("NN", (PyObject*)prof, (PyObject*)cat_obj);
 }

@@ -31,6 +31,14 @@ static double uni(void) {
          (double)0x20000000000000ULL;
 }
 
+#define CHECK_FLAG(cond, msg)                                                  \
+  do {                                                                         \
+    if (!(cond)) {                                                             \
+      printf("  FAIL: %s\\n", msg);                                            \
+      failures++;                                                              \
+    }                                                                          \
+  } while (0)
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -164,6 +172,49 @@ int main(void) {
     sif_chain_mesh_free(other);
   }
 
+  /* Differential bins, checked against the cumulative ones rather than against
+   * a second brute force: the two are the same measurement apportioned
+   * differently, so summing the shells has to rebuild the enclosed total
+   * exactly. Volumes come from the shared edges, in units of the void radius,
+   * which is enough since the identity is a ratio. */
+  sif_density_profiles_t* diff = NULL;
+  if (sif_profiles(cat, mesh, ext, N_BINS,
+        SIF_PBC_PERIODIC | SIF_PROFILES_DIFFERENTIAL, &diff, NULL) != SIF_OK) {
+    printf("FAIL: differential profile computation failed\n");
+    return 1;
+  }
+
+  CHECK_FLAG(diff->differential, "the differential flag was not recorded");
+  CHECK_FLAG(
+    !dens->differential, "the cumulative set claims to be differential");
+
+  for (uint64_t v = 0; v < cat->n_voids; v++) {
+    const sif_real* cum_row = sif_density_profiles_get(dens, v);
+    const sif_real* diff_row = sif_density_profiles_get(diff, v);
+
+    double running = 0.0;
+
+    for (uint32_t b = 0; b < N_BINS; b++) {
+      const double r_in = (double)dens->r_edges[b];
+      const double r_out = (double)dens->r_edges[b + 1];
+      const double shell = r_out * r_out * r_out - r_in * r_in * r_in;
+      const double sphere = r_out * r_out * r_out;
+
+      running += (1.0 + (double)diff_row[b]) * shell;
+
+      const double enclosed = (1.0 + (double)cum_row[b]) * sphere;
+      const double err =
+        fabs(running - enclosed) / (enclosed > 0.0 ? enclosed : 1.0);
+
+      if (err > 1e-5) {
+        printf("  void %llu bin %2u: shells sum to %.7f, enclosed is %.7f  "
+               "MISMATCH\n",
+          (unsigned long long)v, b, running, enclosed);
+        failures++;
+      }
+    }
+  }
+
   /* Weights. Every tracer carries the same power of two, so both the binned
    * mass and the mean density it is divided by scale by exactly that factor
    * and the contrast has to come back bit for bit unchanged. That exercises
@@ -259,6 +310,7 @@ int main(void) {
     failures, failures == 1 ? "" : "s");
 
   sif_density_profiles_free(dens);
+  sif_density_profiles_free(diff);
   sif_density_profiles_free(dens_w);
   sif_velocity_profiles_free(vel);
   sif_chain_mesh_free(mesh);

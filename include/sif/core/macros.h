@@ -94,6 +94,25 @@ typedef uint32_t sif_option;
 /** @} */
 
 /**
+ * @defgroup opt_profiles Radial density binning
+ * @brief What each bin of a density profile holds.
+ *
+ * CUMULATIVE is the contrast enclosed within a bin's outer edge, which is what
+ * the spherical-evolution mapping takes. DIFFERENTIAL is the contrast of that
+ * shell alone, which is the one worth measuring from a tessellation: a shell
+ * is all boundary, so it is where resolving a cell's overlap with the sphere
+ * rather than counting whole tracers makes the most difference.
+ *
+ * Velocity profiles are differential either way; a mean infall over everything
+ * inside a radius is not a quantity anyone wants.
+ * @{
+ */
+#define SIF_PROFILES_CUMULATIVE   (0u << 8)
+#define SIF_PROFILES_DIFFERENTIAL (1u << 8)
+#define SIF__PROFILES_BIN_MASK    (1u << 8)
+/** @} */
+
+/**
  * @defgroup opt_spherical Spherical-evolution mapping
  * @brief How the linear and non-linear density contrasts of a void are mapped
  * onto each other.

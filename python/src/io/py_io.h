@@ -22,5 +22,9 @@ PyObject* pysif_write_catalog_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_catalog_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_profiles_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_profiles_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds);
 
 #endif /* SIF_PY_IO_PY_IO_H */
