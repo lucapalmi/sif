@@ -34,14 +34,18 @@ typedef struct {
   uint32_t n_bins;
 
   /** Grid cells behind each row. Samples outside the histogram's range are
-   *  counted here but not binned, so a row integrates to the fraction of
-   *  samples that fell in range rather than to 1. Compare the two to find out
-   *  how much of the distribution the bounds are cutting off. */
+   * counted here but not binned, so a row integrates to the fraction of
+   * samples that fell in range rather than to 1. Compare the two to find out
+   * how much of the distribution the bounds are cutting off.
+   */
   uint64_t n_samples;
 
-  sif_real* radii;         /**< n_radii smoothing radii. */
-  sif_real* delta_edges;   /**< n_bins + 1 bin edges, shared by every row. */
-  sif_real* distributions; /**< n_radii * n_bins values, row-major. */
+  /** n_radii smoothing radii. */
+  sif_real* radii;
+  /** n_bins + 1 bin edges, shared by every row. */
+  sif_real* delta_edges;
+  /** n_radii * n_bins values, row-major. */
+  sif_real* distributions;
 } sif_delta_distribution_t;
 
 /**

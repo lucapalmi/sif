@@ -38,7 +38,8 @@
  */
 typedef struct {
   /** Index of the first of eight consecutive children, or UINT32_MAX for a
-   *  leaf. */
+   * leaf.
+   */
   uint32_t first_child;
   /** First particle of this node's range, indexing the Morton-sorted field. */
   uint32_t p_start;
@@ -50,12 +51,17 @@ typedef struct {
 
 /** @brief An octree over one field. */
 typedef struct {
-  sif_octree_node_t* nodes; /**< Flat node array; the root is nodes[0]. */
-  uint32_t capacity;        /**< Nodes allocated. */
-  uint32_t count;           /**< Nodes in use. */
+  /** Flat node array; the root is nodes[0]. */
+  sif_octree_node_t* nodes;
+  /** Nodes allocated. */
+  uint32_t capacity;
+  /** Nodes in use. */
+  uint32_t count;
 
-  sif_real root_center[3]; /**< Centre of the root cube, from the field. */
-  sif_real root_half_span; /**< Half-side of the root cube. */
+  /** Centre of the root cube, from the field. */
+  sif_real root_center[3];
+  /** Half-side of the root cube. */
+  sif_real root_half_span;
 } sif_octree_t;
 
 /**

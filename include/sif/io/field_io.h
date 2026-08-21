@@ -48,17 +48,26 @@
  * configured, for the same reason.
  */
 typedef struct {
-  char magic[4];           /**< #SIF_XFIELD_MAGIC. */
-  uint32_t version;        /**< #SIF_XFIELD_VERSION. */
-  uint64_t n_particles;    /**< Particles in the file. */
-  double box_length;       /**< Simulation box size. */
-  uint32_t has_weights;    /**< 1 if a weight block follows. */
-  uint32_t has_velocities; /**< 1 if vx, vy, vz blocks follow. */
-  uint32_t is_double;      /**< 1 if written with a 64-bit sif_real. */
+  /** #SIF_XFIELD_MAGIC. */
+  char magic[4];
+  /** #SIF_XFIELD_VERSION. */
+  uint32_t version;
+  /** Particles in the file. */
+  uint64_t n_particles;
+  /** Simulation box size. */
+  double box_length;
+  /** 1 if a weight block follows. */
+  uint32_t has_weights;
+  /** 1 if vx, vy, vz blocks follow. */
+  uint32_t has_velocities;
+  /** 1 if written with a 64-bit sif_real. */
+  uint32_t is_double;
   /** CRC32 of the payload that follows, in the order it is written. Zero in a
-   *  version 1 file, which carried no checksum. */
+   * version 1 file, which carried no checksum.
+   */
   uint32_t crc32;
-  char padding[24]; /**< Reserved, to hold the header at 64 bytes. */
+  /** Reserved, to hold the header at 64 bytes. */
+  char padding[24];
 } sif_xfield_header_t;
 
 /**

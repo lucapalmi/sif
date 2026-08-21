@@ -36,17 +36,22 @@
  * translate into box-local coordinates first.
  */
 typedef struct {
-  uint32_t n_cells;     /**< Cells per side. */
-  uint64_t total_cells; /**< n_cells^3. */
-  sif_real box_length;  /**< Physical side length of the box. */
-  sif_real cell_length; /**< Physical side length of one cell. */
+  /** Cells per side. */
+  uint32_t n_cells;
+  /** n_cells^3. */
+  uint64_t total_cells;
+  /** Physical side length of the box. */
+  sif_real box_length;
+  /** Physical side length of one cell. */
+  sif_real cell_length;
 
   /** Backing store for x/y/z. Owned; not for callers. */
   sif_real* _position_block;
   /** Backing store for vx/vy/vz. Owned; not for callers. */
   sif_real* _velocity_block;
 
-  sif_real* x; /**< Positions, reordered so each cell is contiguous. */
+  /** Positions, reordered so each cell is contiguous. */
+  sif_real* x;
   sif_real* y;
   sif_real* z;
 

@@ -30,13 +30,19 @@ typedef struct {
   /** Backing arena holding all four views. Owned; not for callers. */
   sif_real* _block;
 
-  sif_real* cx;    /**< Void centres, x axis. */
-  sif_real* cy;    /**< Void centres, y axis. */
-  sif_real* cz;    /**< Void centres, z axis. */
-  sif_real* radii; /**< Void radii. */
+  /** Void centres, x axis. */
+  sif_real* cx;
+  /** Void centres, y axis. */
+  sif_real* cy;
+  /** Void centres, z axis. */
+  sif_real* cz;
+  /** Void radii. */
+  sif_real* radii;
 
-  uint64_t n_voids;  /**< Entries in use. */
-  uint64_t capacity; /**< Entries the arena can hold before it must grow. */
+  /** Entries in use. */
+  uint64_t n_voids;
+  /** Entries the arena can hold before it must grow. */
+  uint64_t capacity;
 } sif_catalog_t;
 
 /**

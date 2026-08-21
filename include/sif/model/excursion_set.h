@@ -36,7 +36,7 @@
  *
  * @note The mode series is summed to convergence rather than truncated at the
  * four terms of the reference, which keeps it valid as
- * D = |delta_v| / (delta_c + |delta_v|) approaches 1.
+ * `D = |delta_v| / (delta_c + |delta_v|)` approaches 1.
  *
  * @param sigma R.m.s. density contrast per entry, strictly positive
  * @param n Length of sigma

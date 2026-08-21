@@ -69,7 +69,8 @@ typedef struct {
    */
   uint64_t n_empty;
   /** Cells per side of the mesh this was built from, which is also the order
-   * #volumes is in. */
+   * #volumes is in.
+   */
   uint32_t n_cells;
   sif_real box_length;
   /** Volume one sample stands for: box_length^3 / #n_samples. */

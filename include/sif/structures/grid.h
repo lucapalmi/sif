@@ -30,7 +30,8 @@
  * of a grid that still holds densities. The grid therefore records which it is.
  */
 typedef enum {
-  SIF_GRID_EMPTY = 0, /**< Allocated and zeroed; nothing deposited. */
+  /** Allocated and zeroed; nothing deposited. */
+  SIF_GRID_EMPTY = 0,
   /**
    * Density: accumulated weight **per unit volume**.
    *
@@ -42,11 +43,12 @@ typedef enum {
    * only to code reading these values directly.
    */
   SIF_GRID_DENSITY,
-  SIF_GRID_DENSITY_CONTRAST /**< delta = rho / rho_mean - 1. */
+  /** delta = rho / rho_mean - 1. */
+  SIF_GRID_DENSITY_CONTRAST
 } sif_grid_content_t;
 
 /**
- * @brief A cubic grid of `n_cells`^3 cells over a periodic box.
+ * @brief A cubic grid of `n_cells^3` cells over a periodic box.
  */
 typedef struct {
   /**
@@ -61,10 +63,14 @@ typedef struct {
   /** What #values currently holds. */
   sif_grid_content_t content;
 
-  uint32_t n_cells;     /**< Cells per side. */
-  uint64_t total_cells; /**< n_cells^3. */
-  sif_real box_length;  /**< Physical side length of the box. */
-  sif_real cell_length; /**< Physical side length of one cell. */
+  /** Cells per side. */
+  uint32_t n_cells;
+  /** n_cells^3. */
+  uint64_t total_cells;
+  /** Physical side length of the box. */
+  sif_real box_length;
+  /** Physical side length of one cell. */
+  sif_real cell_length;
 
   /**
    * Fast path for the flat index when #n_cells is a power of two: an index can
@@ -72,8 +78,10 @@ typedef struct {
    * when #n_cells is not a power of two, which is the signal to take the
    * general path.
    */
-  uint32_t p2_mask;  /**< n_cells - 1, or 0. */
-  uint32_t p2_shift; /**< log2(n_cells), or 0. */
+  /** n_cells - 1, or 0. */
+  uint32_t p2_mask;
+  /** log2(n_cells), or 0. */
+  uint32_t p2_shift;
 } sif_grid_t;
 
 /**

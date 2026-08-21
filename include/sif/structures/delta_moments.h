@@ -45,25 +45,31 @@
  */
 typedef struct {
   uint32_t n_radii;
-  uint8_t order;     /**< Highest order computed. */
-  uint8_t n_moments; /**< order + 1. */
+  /** Highest order computed. */
+  uint8_t order;
+  /** order + 1. */
+  uint8_t n_moments;
 
-  sif_real* radii; /**< The n_radii smoothing radii. */
+  /** The n_radii smoothing radii. */
+  sif_real* radii;
 
   /** n_moments * n_radii values, order-major: all radii for j = 0, then all
-   *  radii for j = 1, and so on. Read it through sif_delta_moments_sigma()
-   *  rather than indexing by hand. */
+   * radii for j = 1, and so on. Read it through sif_delta_moments_sigma()
+   * rather than indexing by hand.
+   */
   sif_real* sigma;
 
   /** Same layout as #sigma. Fraction of each sum or integral coming from the
-   *  top half of the available k range: above half Nyquist for the grid
-   *  estimator, above half of k_max for the P(k) one. A large value means the
-   *  moment is dominated by the smallest scales the input resolves, and so is
-   *  set by the resolution rather than by the field. */
+   * top half of the available k range: above half Nyquist for the grid
+   * estimator, above half of k_max for the P(k) one. A large value means the
+   * moment is dominated by the smallest scales the input resolves, and so is
+   * set by the resolution rather than by the field.
+   */
   sif_real* high_k_fraction;
 
   /** n_moments + 1 entries. offsets[j] is where order j's block of n_radii
-   *  values starts in #sigma and #high_k_fraction. */
+   * values starts in #sigma and #high_k_fraction.
+   */
   uint32_t* offsets;
 } sif_delta_moments_t;
 

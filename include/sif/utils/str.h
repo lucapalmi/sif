@@ -22,14 +22,16 @@
 
 /** @brief What a column of an ASCII file holds. */
 typedef enum {
-  SIF_COL_IGNORE = 0, /**< Present but not read. */
+  /** Present but not read. */
+  SIF_COL_IGNORE = 0,
   SIF_COL_X,
   SIF_COL_Y,
   SIF_COL_Z,
   SIF_COL_VX,
   SIF_COL_VY,
   SIF_COL_VZ,
-  SIF_COL_M /**< Per-particle weight; see sif_field_t::weights. */
+  /** Per-particle weight; see sif_field_t::weights. */
+  SIF_COL_M
 } sif_col_target_t;
 
 /**
@@ -37,12 +39,17 @@ typedef enum {
  *
  * One character per column, case-insensitive:
  *
- * | char | column |
- * |---|---|
- * | `x` `y` `z` | position components |
- * | `u` `v` `w` | velocity components |
- * | `m` | per-particle weight (`m` for mass, its usual meaning) |
- * | `*` `/` | ignored column |
+ * `x` `y` `z`
+ *   position components
+ *
+ * `u` `v` `w`
+ *   velocity components
+ *
+ * `m`
+ *   per-particle weight (`m` for mass, its usual meaning)
+ *
+ * `*` `/`
+ *   ignored column
  *
  * So `"xyz*m"` describes a file whose first three columns are the position,
  * whose fourth is skipped, and whose fifth is the weight.

@@ -26,8 +26,9 @@
  */
 typedef struct {
   /** Skip plan tuning and take FFTW's estimated plan instead. Faster to set
-   *  up, slower to transform; worth setting for short runs, or for runs with
-   *  many distinct transform sizes. */
+   * up, slower to transform; worth setting for short runs, or for runs with
+   * many distinct transform sizes.
+   */
   bool skip_tuning;
 } sif_fft_config_t;
 
@@ -48,11 +49,12 @@ typedef struct {
   /** OpenMP settings, or NULL for the defaults. */
   sif_omp_config_t* omp_config;
   /** Minimum level a message must reach to be printed; one of the
-   *  SIF_LOG_LEVEL_* constants. SIF_LOG_LEVEL_TRACE is the verbose mode.
+   * SIF_LOG_LEVEL_* constants. SIF_LOG_LEVEL_TRACE is the verbose mode.
    *
-   *  @warning The field is always honoured, and SIF_LOG_LEVEL_TRACE is 0 --
-   *  so a zero-initialized sif_config_t asks for trace logging, not for the
-   *  default. Set it explicitly, or use one of the presets below. */
+   * @warning The field is always honoured, and SIF_LOG_LEVEL_TRACE is 0 --
+   * so a zero-initialized sif_config_t asks for trace logging, not for the
+   * default. Set it explicitly, or use one of the presets below.
+   */
   uint8_t log_level;
 } sif_config_t;
 

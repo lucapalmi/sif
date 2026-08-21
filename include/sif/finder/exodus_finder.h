@@ -75,11 +75,13 @@ SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
  * splits between per-cell overhead, which grows as the mesh is refined, and
  * per-particle work in the cells straddling the annulus boundaries, which grows
  * as it is coarsened; measured across radii and tracer densities, the balance
- * sits here. */
+ * sits here.
+ */
 #define SIF_FINDER_MESH_PARTICLES_PER_CELL 30.0
 
 /** @brief Cap on the suggested resolution. The mesh's cell_offsets array alone
- * is 8 * n_cells^3 bytes, which is already ~1 GiB here. */
+ * is 8 * n_cells^3 bytes, which is already ~1 GiB here.
+ */
 #define SIF_FINDER_MESH_MAX_CELLS 512u
 
 /**

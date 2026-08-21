@@ -9,3 +9,6 @@ runs/
 tools/plots/
 tools/ep_spectra.npz
 tools/ep_validation_mc.npz
+public/
+docs/_build/
+_err.txt

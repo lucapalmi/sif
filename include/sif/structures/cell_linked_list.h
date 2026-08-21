@@ -41,22 +41,27 @@
  * INT32_MAX entries. The sign is what makes the empty marker possible.
  */
 typedef struct {
-  uint32_t n_cells;         /**< Cells per side. */
-  uint64_t total_cells;     /**< n_cells^3. */
-  sif_real box_length;      /**< Physical side length of the box. */
-  sif_real inv_cell_length; /**< n_cells / box_length, kept to avoid a divide
-                             *   in the hot path. */
+  /** Cells per side. */
+  uint32_t n_cells;
+  /** n_cells^3. */
+  uint64_t total_cells;
+  /** Physical side length of the box. */
+  sif_real box_length;
+  /** n_cells / box_length, kept to avoid a divide in the hot path. */
+  sif_real inv_cell_length;
 
   /** First item of each cell, or -1 where the cell is empty. */
   int32_t* head;
   /** Next item in the same cell, or -1 at the end of the chain. Indexed by
-   *  item, not by cell. */
+   * item, not by cell.
+   */
   int32_t* next;
   /** Items #next has room for. */
   uint64_t capacity;
 
   /** SIF_PBC_PERIODIC wraps out-of-box coordinates, SIF_PBC_OPEN clamps them
-   *  to the boundary cell. */
+   * to the boundary cell.
+   */
   uint8_t periodic;
 } sif_cell_linked_list_t;
 

@@ -105,13 +105,13 @@ SIF_NODISCARD sif_real* sif_bbks_number_density_differential(const sif_real* nu,
  * @brief Number density of Gaussian-field maxima above a density threshold,
  * one value per smoothing radius.
  *
- * The threshold is converted per radius as nu_t = |delta| / sigma_0(R), then
- * integrated over nu. Results are clamped at zero.
+ * The threshold is converted per radius as `nu_t = |delta| / sigma_0(R)`,
+ * then integrated over nu. Results are clamped at zero.
  *
  * @note Only the magnitude of `delta` is used. BBKS counts maxima, and for a
- * Gaussian field the density of minima below -|delta| equals the density of
- * maxima above +|delta|, so the same integral serves a void threshold and a
- * peak threshold of the same depth.
+ * Gaussian field the density of minima below `-|delta|` equals the density
+ * of maxima above `+|delta|`, so the same integral serves a void threshold
+ * and a peak threshold of the same depth.
  *
  * @note Carries a factor exp(-nu_t^2/2), so a single-precision build
  * underflows to zero around nu_t ~ 12.

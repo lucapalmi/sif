@@ -33,8 +33,10 @@
 typedef struct {
   /** Packed storage, 64 bits per word. Bits past #n_bits are always zero. */
   uint64_t* words;
-  uint64_t n_bits;  /**< Bits the caller asked for. */
-  uint64_t n_words; /**< Words actually allocated: ceil(n_bits / 64). */
+  /** Bits the caller asked for. */
+  uint64_t n_bits;
+  /** Words actually allocated: ceil(n_bits / 64). */
+  uint64_t n_words;
 } sif_bitmask_t;
 
 /**

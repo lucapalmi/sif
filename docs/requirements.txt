@@ -1,0 +1,7 @@
+# Documentation toolchain. Pinned so a docs build is reproducible and an
+# upgrade is a deliberate commit rather than a surprise in CI.
+sphinx==9.1.0
+myst-parser==5.1.0
+hawkmoth==0.22.0
+libclang==18.1.1
+shibuya==2026.7.12

@@ -44,7 +44,8 @@
 /** @} */
 
 /** @brief Bits per axis in the 3D Morton code. Three of these must fit in a
- *  uint64. */
+ * uint64.
+ */
 #define SIF_MORTON_BITS 21
 
 /**
@@ -84,24 +85,31 @@ typedef struct {
   /** Backing store for vx/vy/vz. Owned; not for callers. */
   sif_real* _velocity_block;
 
-  sif_real* x; /**< Position, x axis. Views into #_position_block. */
+  /** Position, x axis. Views into #_position_block. */
+  sif_real* x;
   sif_real* y;
   sif_real* z;
 
-  sif_real* vx; /**< Velocity, x axis. Views into #_velocity_block. */
+  /** Velocity, x axis. Views into #_velocity_block. */
+  sif_real* vx;
   sif_real* vy;
   sif_real* vz;
 
   /** Per-particle weight -- a mass, a luminosity, a selection weight -- or
-   *  NULL, which every consumer reads as a weight of 1. */
+   * NULL, which every consumer reads as a weight of 1.
+   */
   sif_real* weights;
   /** Where each particle sat before the Morton sort, or NULL if unsorted. */
   uint64_t* original_indices;
 
-  sif_real min_p[3];  /**< Lower corner of the bounding box. */
-  sif_real max_p[3];  /**< Upper corner of the bounding box. */
-  sif_real center[3]; /**< Centre of the bounding cube. */
-  sif_real half_span; /**< Half-side of the bounding cube. */
+  /** Lower corner of the bounding box. */
+  sif_real min_p[3];
+  /** Upper corner of the bounding box. */
+  sif_real max_p[3];
+  /** Centre of the bounding cube. */
+  sif_real center[3];
+  /** Half-side of the bounding cube. */
+  sif_real half_span;
 
   /** Bitwise OR of the SIF_FIELD_STATE_* flags. */
   uint32_t state_flags;

@@ -37,18 +37,26 @@
  * @brief The 64-byte header of an .xgrid file.
  */
 typedef struct {
-  char magic[4];        /**< #SIF_XGRID_MAGIC. */
-  uint32_t version;     /**< #SIF_XGRID_VERSION. */
-  uint32_t n_cells;     /**< Cells per side. */
-  uint32_t is_double;   /**< 1 if written with a 64-bit sif_real. */
-  uint64_t total_cells; /**< n_cells^3. */
-  double box_length;    /**< Simulation box size. */
+  /** #SIF_XGRID_MAGIC. */
+  char magic[4];
+  /** #SIF_XGRID_VERSION. */
+  uint32_t version;
+  /** Cells per side. */
+  uint32_t n_cells;
+  /** 1 if written with a 64-bit sif_real. */
+  uint32_t is_double;
+  /** n_cells^3. */
+  uint64_t total_cells;
+  /** Simulation box size. */
+  double box_length;
   /** CRC32 of the cell data that follows. Zero in a version 1 file, which
-   *  carried no checksum. */
+   * carried no checksum.
+   */
   uint32_t crc32;
   /** What the cells hold, as a #sif_grid_content_t. Written since version 2;
-   *  a version 1 file has 0 here, which reads as SIF_GRID_EMPTY -- correct,
-   *  since such a file does not say. */
+   * a version 1 file has 0 here, which reads as SIF_GRID_EMPTY -- correct,
+   * since such a file does not say.
+   */
   uint32_t content;
   /**
    * Key of the input this grid was derived from, or both words zero when the
@@ -66,7 +74,8 @@ typedef struct {
    * file simply declines to prove anything, which is what it could always do.
    */
   uint64_t source_key[2];
-  char padding[8]; /**< Reserved, to hold the header at 64 bytes. */
+  /** Reserved, to hold the header at 64 bytes. */
+  char padding[8];
 } sif_xgrid_header_t;
 
 /**

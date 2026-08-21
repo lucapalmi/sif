@@ -42,8 +42,10 @@ typedef struct {
    * distinguishable from the values.
    */
   bool differential;
-  sif_real* r_edges;  /**< n_bins + 1 bin edges, shared by every row. */
-  sif_real* profiles; /**< n_voids * n_bins values, row-major. */
+  /** n_bins + 1 bin edges, shared by every row. */
+  sif_real* r_edges;
+  /** n_voids * n_bins values, row-major. */
+  sif_real* profiles;
 } sif_density_profiles_t;
 
 /**
@@ -79,8 +81,10 @@ typedef struct {
   uint32_t n_bins;
   /** Outer edge of the profile, in units of each void's own radius. */
   sif_real ext;
-  sif_real* r_edges; /**< n_bins + 1 bin edges, shared by every row. */
-  sif_real* v_rad;   /**< n_voids * n_bins values, row-major. */
+  /** n_bins + 1 bin edges, shared by every row. */
+  sif_real* r_edges;
+  /** n_voids * n_bins values, row-major. */
+  sif_real* v_rad;
 } sif_velocity_profiles_t;
 
 /**
@@ -196,7 +200,8 @@ SIF_NODISCARD int sif_profiles(const sif_catalog_t* cat,
 #define SIF_PROFILES_MESH_PARTICLES_PER_CELL 36.0
 
 /** @brief Cap on the suggested resolution. The mesh's cell_offsets array alone
- * is 8 * n_cells^3 bytes, which is already ~130 MiB here. */
+ * is 8 * n_cells^3 bytes, which is already ~130 MiB here.
+ */
 #define SIF_PROFILES_MESH_MAX_CELLS 256u
 
 /**

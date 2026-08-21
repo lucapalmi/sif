@@ -173,10 +173,11 @@ typedef uint32_t sif_option;
  * @defgroup opt_delta_shuffle Surrogate field generation
  * @brief How the surrogate field for a PDF comparison is generated.
  *
- * PHASES keeps every |delta_k| and randomizes only the phase, so the realized
+ * PHASES keeps every `|delta_k|` and randomizes only the phase, so the realized
  * P(k) is bit-for-bit the input's and any change in the PDF is attributable to
  * phase information alone. GAUSSIAN additionally resamples the amplitudes from
- * the Rayleigh distribution implied by |delta_k|, which is the correct
+ * the Rayleigh distribution implied by `|delta_k|`, which is the
+ * correct
  * surrogate when the comparison is against a Gaussian random field *ensemble*
  * rather than against this one realization.
  * @{
@@ -272,10 +273,12 @@ typedef double sif_real;
 #  define SIF_REAL_NEXT_AFTER(x, y) nextafter(x, y)
 
 /** printf conversion that round-trips a sif_real exactly: 17 significant
- *  digits are enough to recover any double, 9 any float. */
+ * digits are enough to recover any double, 9 any float.
+ */
 #  define SIF_PRI_REAL "%.17g"
 /** scanf conversion matching sif_real. Getting this wrong is silent: scanf
- *  writes through a pointer whose type it cannot check. */
+ * writes through a pointer whose type it cannot check.
+ */
 #  define SIF_SCN_REAL "%lf"
 
 #else
@@ -399,7 +402,8 @@ static inline uint32_t sif__popcount_u64(uint64_t x) {
 }
 
 /** @brief Trailing zeros in a 32-bit word. Undefined for x == 0, matching
- *  __builtin_ctz. */
+ * __builtin_ctz.
+ */
 static inline uint32_t sif__ctz_u32(uint32_t x) {
   uint32_t n = 0;
   while ((x & 1u) == 0u) {

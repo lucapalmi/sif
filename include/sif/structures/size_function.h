@@ -31,18 +31,24 @@
 typedef struct {
   uint32_t n_bins;
   /** Options the size function was produced with. Records in particular
-   *  whether #vsf is per unit ln R (SIF_VSF_BIN_LN) or per unit R
-   *  (SIF_VSF_BIN_LINEAR), which nothing else in the struct reveals. */
+   * whether #vsf is per unit ln R (SIF_VSF_BIN_LN) or per unit R
+   * (SIF_VSF_BIN_LINEAR), which nothing else in the struct reveals.
+   */
   sif_option options;
 
-  sif_real r_min; /**< Lower edge of the first bin. */
-  sif_real r_max; /**< Upper edge of the last bin. */
+  /** Lower edge of the first bin. */
+  sif_real r_min;
+  /** Upper edge of the last bin. */
+  sif_real r_max;
 
-  sif_real* r_edges;   /**< n_bins + 1 bin edges. */
-  sif_real* r_centers; /**< n_bins bin centres. */
+  /** n_bins + 1 bin edges. */
+  sif_real* r_edges;
+  /** n_bins bin centres. */
+  sif_real* r_centers;
 
   /** Raw void count per bin. Zero for a model, which is evaluated pointwise
-   *  and never counts anything. */
+   * and never counts anything.
+   */
   uint64_t* counts;
   /** Normalized number density per bin: the size function itself. */
   sif_real* vsf;
