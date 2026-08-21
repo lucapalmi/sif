@@ -15,9 +15,10 @@
  * of the tracer distribution rather than of the ladder that happened to find
  * it, and two runs with different ladders describe the same voids.
  *
- * What the rung still fixes is the centre and the search range. The rescaled
- * radius is bounded below by RMIN_FACTOR * radius and above by r_search, about
- * twice the rung -- the rung is a scale hint, not an answer.
+ * What the rung still fixes is the centre and the search range. A cell only
+ * becomes a candidate at rungs at or below its own crossing radius, so the
+ * rung is a lower bound on the answer and r_search, about twice the rung, is
+ * the upper one -- the rung brackets the radius, it does not set it.
  *
  *
  * Finding the crossing radius
@@ -76,6 +77,7 @@
 #include "sif/finder/exodus_finder.h"
 
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -95,10 +97,6 @@
 
 SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
 SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
-
-/* Upper bound on the number of radial bins. Private to this file: it is a
- * tuning constant, not part of the library's interface. */
-#define EXODUS_MAX_BINS 2048
 
 #define TAG "exodus_finder"
 
@@ -138,16 +136,28 @@ SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
 #define CATALOG_INITIAL_CAPACITY 250000
 
 /*
- * Rescaling constants. Fixed, so that a catalog depends only on the grid, the
- * radius ladder and the threshold.
+ * Floor on the rescaled radius, as a fraction of the rung that found the void.
+ * Fixed, so that a catalog depends only on the grid, the radius ladder and the
+ * threshold.
  *
- * RMIN_FACTOR floors the rescaled radius at half the rung that found the
- * void. N_MIN is a noise floor on the density estimate: a sphere whose
- * expected tracer count at the mean density falls below it is too sparsely
- * sampled to say anything, so the walk abandons it. At 0 it never triggers.
+ * At 1 it coincides with the detection limit rather than sitting below it. A
+ * void of geometric size p registers at rung R only once p >= |t|^(1/3) R, and
+ * its crossing radius is p * |t|^(-1/3) -- so a cell is a candidate at R
+ * exactly when its crossing radius is at least R. A rung can therefore never
+ * legitimately return less than it, and any floor under R fences off a range
+ * that only measurement error can reach: a top-hat evaluated on a grid whose
+ * cells are not small against R reads a little too deep, and the tracers then
+ * decline to support the radius the grid implied.
+ *
+ * Rejecting those costs nothing, because the same void meets the next rung
+ * down with a crossing radius comfortably inside its own bracket, and gets a
+ * centre smoothed at its own scale into the bargain. What it buys is that a
+ * radius in the catalog is never one the grid and the tracers disagreed about.
+ *
+ * The enclosed-density condition is the only thing that decides a radius;
+ * nothing here or below asks how the tracers inside are arranged.
  */
-#define RMIN_FACTOR 0.50f
-#define N_MIN       0.0f
+#define RMIN_FACTOR 1.00f
 
 /*
  * --- Per-thread scratch for the radial pass ---
@@ -171,7 +181,7 @@ SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
  * sphere is nearly empty, which is the common case at small radii. */
 #define PARTICLES_PER_BIN 16.0f
 
-#define MAX_RADIAL_BINS EXODUS_MAX_BINS
+#define MAX_RADIAL_BINS 2048u
 #define MIN_RADIAL_BINS 64u
 
 /* Initial capacity of the refinement buffer, which only ever holds the
@@ -547,13 +557,12 @@ static inline uint32_t bin_of(
  * particles qualify, so walking them costs comparisons and decides nothing.
  *
  * @return BIN_FOUND with *out set, BIN_EXHAUSTED if the range holds no
- * acceptable radius, or SIF_ERR_* if the whole search has to be abandoned
+ * acceptable radius, or SIF_ERR_ALLOC if the refinement buffer could not grow
  */
 SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
   radial_scratch_t* scratch, uint32_t bin_lo, uint32_t bin_hi, sif_real lo,
   sif_real hi, sif_real r_core2, sif_real r_search2, sif_real inv_bin_w,
-  uint32_t n_bins, uint32_t current_N, sif_real K2, sif_real vol_factor2,
-  sif_real n_min2, sif_real* out) {
+  uint32_t n_bins, uint32_t current_N, sif_real K2, sif_real* out) {
 
   const sif_real* mx = SIF_ASSUME_ALIGNED(q->mesh->x);
   const sif_real* my = SIF_ASSUME_ALIGNED(q->mesh->y);
@@ -616,10 +625,6 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
     const uint32_t n_in = current_N - 1;
     const sif_real d2_cube = d2_test * d2_test * d2_test;
 
-    /* Below the noise floor the estimate stops being meaningful. */
-    if (vol_factor2 * d2_cube < n_min2)
-      return SIF_ERR_RANGE;
-
     const sif_real rn_in = (sif_real)n_in;
     if (rn_in * rn_in <= K2 * d2_cube) {
       *out = SIF_REAL_SQRT(d2_test);
@@ -632,34 +637,169 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
   return BIN_EXHAUSTED;
 }
 
+/* --- Rescaling diagnostics --- */
+
+/*
+ * Why a rescaling produced no radius.
+ *
+ * The failures are not variations on one theme, and a bare count of them says
+ * nothing about what to change. A crossing below the rung is a void smaller
+ * than this rung can express; a search sphere still underdense at its outer
+ * edge holds one larger than the rung can reach. Those two ask for opposite
+ * corrections to the radius ladder -- extend it down, extend it up -- so they
+ * are counted apart.
+ */
+typedef enum {
+  RESCALE_OK = 0,
+  RESCALE_EMPTY,         /* not one tracer inside r_search */
+  RESCALE_BEYOND_SEARCH, /* still underdense out at r_search */
+  RESCALE_BELOW_RUNG,    /* the crossing lies below the rung itself */
+  RESCALE_DEGENERATE,    /* r_search <= rmin, so there is no annulus */
+  RESCALE_ALLOC,         /* the refinement buffer could not grow */
+  RESCALE_N_REASONS
+} rescale_reason_t;
+
+static const char* const RESCALE_REASON_LABEL[RESCALE_N_REASONS] = {
+  "converged",
+  "search sphere empty",
+  "underdense out to r_search",
+  "smaller than the rung",
+  "degenerate search range",
+  "refinement alloc failed",
+};
+
+/*
+ * Buckets for the r/R histogram.
+ *
+ * The reachable range runs from 1 -- a rung is a lower bound on what it can
+ * return, see RMIN_FACTOR -- to r_search / radius at the top, which is 2 or
+ * more where the ladder-gap guard had to widen the search. The edges are
+ * closely spaced near the bottom, where a well-matched ladder puts nearly
+ * everything, and open out towards the tail that says the rung was far below
+ * the void's own scale.
+ */
+#define RESCALE_N_BUCKETS 6
+
+static const sif_real RESCALE_BUCKET_EDGE[RESCALE_N_BUCKETS - 1] = {
+  1.05f, 1.10f, 1.25f, 1.50f, 2.00f};
+
+static const char* const RESCALE_BUCKET_LABEL[RESCALE_N_BUCKETS] = {
+  "1.00-1.05", "1.05-1.10", "1.10-1.25", "1.25-1.50", "1.50-2.00", ">=2.00"};
+
+/* What every rescaling at one rung did, successes and failures alike. */
+typedef struct {
+  uint64_t n_ok;
+  uint64_t fail[RESCALE_N_REASONS];
+  uint64_t bucket[RESCALE_N_BUCKETS];
+  double ratio_sum;
+  sif_real ratio_min;
+  sif_real ratio_max;
+} rescale_report_t;
+
+/*
+ * Record one successful rescaling, as the ratio of the radius it returned to
+ * the rung that found the candidate. Every success is counted, including the
+ * ones the overlap re-checks go on to reject: what is being described here is
+ * the rescaling, not the catalog.
+ */
+static void rescale_report_add(rescale_report_t* rep, sif_real ratio) {
+  if (rep->n_ok == 0 || ratio < rep->ratio_min)
+    rep->ratio_min = ratio;
+  if (rep->n_ok == 0 || ratio > rep->ratio_max)
+    rep->ratio_max = ratio;
+
+  rep->ratio_sum += (double)ratio;
+  rep->n_ok++;
+
+  uint32_t b = 0;
+  while (b < RESCALE_N_BUCKETS - 1 && ratio >= RESCALE_BUCKET_EDGE[b])
+    b++;
+  rep->bucket[b]++;
+}
+
+/*
+ * The per-rung breakdown, at TRACE. Reasons that did not occur are left out: a
+ * rung usually hits two or three of them, and a fixed table of mostly zeros
+ * buries the ones it did hit.
+ */
+static void rescale_report_log(const rescale_report_t* rep) {
+  uint64_t n_failed = 0;
+  for (int r = RESCALE_OK + 1; r < RESCALE_N_REASONS; r++)
+    n_failed += rep->fail[r];
+
+  const uint64_t n_tried = rep->n_ok + n_failed;
+  if (n_tried == 0)
+    return;
+
+  SIF_LOG_TRACE(TAG,
+    "rescalings attempted:      %7" PRIu64 "  (%" PRIu64 " failed, %.1f%%)",
+    n_tried, n_failed, 100.0 * (double)n_failed / (double)n_tried);
+
+  for (int r = RESCALE_OK + 1; r < RESCALE_N_REASONS; r++) {
+    if (rep->fail[r] == 0)
+      continue;
+
+    SIF_LOG_TRACE(
+      TAG, "  %-26s %7" PRIu64, RESCALE_REASON_LABEL[r], rep->fail[r]);
+  }
+
+  if (rep->n_ok == 0)
+    return;
+
+  SIF_LOG_TRACE(TAG, "rescaled r/R:              min %.2f, mean %.2f, max %.2f",
+    (double)rep->ratio_min, rep->ratio_sum / (double)rep->n_ok,
+    (double)rep->ratio_max);
+
+  /* One line for the shape of it, so the three numbers above are read against
+   * where the bulk actually sits. */
+  char line[256];
+  line[0] = '\0';
+  int off = 0;
+
+  for (uint32_t b = 0; b < RESCALE_N_BUCKETS; b++) {
+    if (rep->bucket[b] == 0)
+      continue;
+
+    const int n = snprintf(line + off, sizeof(line) - (size_t)off,
+      "%s%s %.1f%%", off ? " | " : "", RESCALE_BUCKET_LABEL[b],
+      100.0 * (double)rep->bucket[b] / (double)rep->n_ok);
+
+    if (n < 0 || (size_t)n >= sizeof(line) - (size_t)off)
+      break;
+    off += n;
+  }
+
+  SIF_LOG_TRACE(TAG, "r/R distribution:          %s", line);
+}
+
 /*
  * The rescaling itself: the largest radius at which the enclosed number
  * density is still at or below (1 + threshold) times the mean.
  *
- * Four stages, each one there to avoid work the next would otherwise do.
+ * Three stages, each one there to avoid work the next would otherwise do.
  *
- *   1. A count of the core. Every particle within rmin is inside any radius
- *      this can return, so if the core alone is already denser than the
- *      threshold permits, no radius satisfies it and the candidate dies here.
- *      The first pass over it uses cell occupancies only -- no distances --
- *      because a cell entirely inside rmin contributes all of its particles
- *      whatever they are.
- *
- *   2. A histogram of the annulus in squared distance. This is the structure
+ *   1. A histogram of the annulus in squared distance. This is the structure
  *      that replaces sorting: it answers "how many particles lie inside this
- *      shell" for every shell at once, in one pass and in fixed memory.
+ *      shell" for every shell at once, in one pass and in fixed memory. The
+ *      core is counted here too, since everything inside rmin is inside every
+ *      radius this can return -- but only counted: how the tracers inside a
+ *      void are arranged is not part of the condition.
  *
- *   3. The inward walk, which skips whole bins on counts alone (see the
+ *   2. The inward walk, which skips whole bins on counts alone (see the
  *      n_in_min test below).
  *
- *   4. Exact resolution of the surviving bin and its window, in resolve_bin().
+ *   3. Exact resolution of the surviving bin and its window, in resolve_bin().
+ *
+ * @param[out] reason RESCALE_OK, or which of the three stages gave up.
  *
  * @return the rescaled radius, or -1 if no acceptable radius exists
  */
 SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   sif_real cx, sif_real cy, sif_real cz, sif_real r_search, sif_real threshold,
   sif_real vol_factor, radial_scratch_t* scratch, sif_real rmin,
-  const mesh_template_t* tpl, uint32_t window) {
+  const mesh_template_t* tpl, uint32_t window, uint8_t* reason) {
+
+  *reason = RESCALE_OK;
 
   const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
   const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
@@ -687,43 +827,6 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   uint32_t n_core = 0;
   uint32_t n_shell = 0;
 
-  /* Above this many particles inside rmin the void is already denser than the
-   * threshold allows, so it can be abandoned before doing any distance work. */
-  const sif_real expected_core = vol_factor * rmin * rmin * rmin;
-  uint32_t max_core_particles = 0xFFFFFFFFu;
-  if (expected_core >= N_MIN)
-    max_core_particles = (uint32_t)(expected_core * (1.0f + threshold));
-
-  /* Cheap pre-pass: cell occupancies alone can exceed the core budget. */
-  uint32_t guaranteed_core = 0;
-  for (uint32_t i = 0; i < tpl->count; i++) {
-    if (tpl->type[i] != CELL_FULLY_CORE)
-      continue;
-
-    int32_t ix = q.center_ix + tpl->dx[i];
-    if (ix < 0)
-      ix += N;
-    else if (ix >= N)
-      ix -= N;
-    int32_t iy = q.center_iy + tpl->dy[i];
-    if (iy < 0)
-      iy += N;
-    else if (iy >= N)
-      iy -= N;
-    int32_t iz = q.center_iz + tpl->dz[i];
-    if (iz < 0)
-      iz += N;
-    else if (iz >= N)
-      iz -= N;
-
-    const uint64_t flat = (uint64_t)ix * N * N + (uint64_t)iy * N + iz;
-    guaranteed_core +=
-      (uint32_t)(mesh->cell_offsets[flat + 1] - mesh->cell_offsets[flat]);
-
-    if (guaranteed_core > max_core_particles)
-      return -1.0f;
-  }
-
   /* Histogram geometry. Uniform in d^2, so no square roots are needed to bin;
    * the resulting bins are finer in radius further out, which is the half that
    * matters since the walk starts from the outside. */
@@ -741,8 +844,10 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
       n_bins = (uint32_t)want;
   }
 
-  if (!(span > 0.0f))
+  if (!(span > 0.0f)) {
+    *reason = RESCALE_DEGENERATE;
     return -1.0f;
+  }
 
   const sif_real inv_bin_w = (sif_real)n_bins / span;
   const sif_real bin_w = span / (sif_real)n_bins;
@@ -794,21 +899,21 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
         }
       }
     }
-
-    if (n_core > max_core_particles)
-      return -1.0f;
   }
 
   const uint32_t total_N = n_core + n_shell;
-  if (total_N == 0)
+  if (total_N == 0) {
+    *reason = RESCALE_EMPTY;
     return -1.0f;
+  }
 
-  /* If the whole search sphere is already denser than the threshold there is
-   * no radius in range that satisfies it. */
+  /* The mirror of the walk below: if the whole search sphere is still
+   * underdense, the crossing lies outside it and this rung cannot say where. A
+   * larger rung will. */
   const sif_real expected_search = vol_factor * r_search * r_search * r_search;
-  if (expected_search >= N_MIN) {
-    if (((sif_real)total_N / expected_search) - 1.0f <= threshold)
-      return -1.0f;
+  if (((sif_real)total_N / expected_search) - 1.0f <= threshold) {
+    *reason = RESCALE_BEYOND_SEARCH;
+    return -1.0f;
   }
 
   /* Walk inwards bin by bin. Comparisons are done on squared distances so no
@@ -816,10 +921,8 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
    *   n_in / (vol_factor * d^3) - 1 <= threshold
    *   <=> n_in^2 <= ((threshold + 1) * vol_factor)^2 * (d^2)^3
    */
-  const sif_real vol_factor2 = vol_factor * vol_factor;
   const sif_real K = (threshold + 1.0f) * vol_factor;
   const sif_real K2 = K * K;
-  const sif_real n_min2 = N_MIN * N_MIN;
 
   uint32_t above = 0;   /* particles beyond the bin under examination */
   int32_t b_first = -1; /* outermost bin the walk actually had to open */
@@ -872,9 +975,9 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
     const sif_real win_lo = r_core2 + (sif_real)b_lo * bin_w;
 
     sif_real radius = -1.0f;
-    const int status = resolve_bin(&q, scratch, (uint32_t)b_lo, (uint32_t)b,
-      win_lo, hi, r_core2, r_search2, inv_bin_w, n_bins, total_N - above, K2,
-      vol_factor2, n_min2, &radius);
+    const int status =
+      resolve_bin(&q, scratch, (uint32_t)b_lo, (uint32_t)b, win_lo, hi, r_core2,
+        r_search2, inv_bin_w, n_bins, total_N - above, K2, &radius);
 
     if (status == BIN_FOUND) {
       /* Report how far the walk had to reach, so the next batch can size the
@@ -890,23 +993,26 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
 
       return radius;
     }
-    if (status != BIN_EXHAUSTED)
+    if (status != BIN_EXHAUSTED) {
+      *reason = RESCALE_ALLOC;
       return -1.0f;
+    }
 
     above += window_count;
     b = b_lo; /* the loop's decrement then steps past the window */
   }
 
+  *reason = RESCALE_BELOW_RUNG;
   return -1.0f;
 }
 
 /* --- Speculative batch evaluation --- */
 
 typedef struct {
-  uint8_t status; /* one of BATCH_* below */
+  uint8_t status;         /* one of BATCH_* below */
+  uint8_t rescale_reason; /* a RESCALE_*, set only when the rescaling failed */
   sif_real r_scaled;
   sif_real cx, cy, cz;
-  int32_t proxy_pole;
   uint32_t ix, iy, iz;
 } batch_result_t;
 
@@ -984,7 +1090,8 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
 }
 
 static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
-  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii) {
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_option opt) {
 
   memset(ctx, 0, sizeof(*ctx));
 
@@ -1048,6 +1155,13 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
     SIF_LOG_ERROR(TAG, "the forward FFT failed");
     return SIF_ERR_ALLOC;
   }
+
+  /* Before the first filter and after the transform, which is the only window
+   * in which the assignment window is separable from the smoothing one. The
+   * radii are sorted descending, so the last is the smallest. */
+  if (sif__finder_deconvolve_cic(
+        TAG, ctx->fft_ws, grid, ctx->sorted_radii[n_radii - 1], opt) != SIF_OK)
+    return SIF_ERR_INVALID;
 
   sif_free_aligned(grid->values);
   grid->values = NULL;
@@ -1124,15 +1238,10 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   }
 
   exodus_ctx_t ctx;
-  if (ctx_init(&ctx, grid, mesh, radii, n_radii) != SIF_OK) {
+  if (ctx_init(&ctx, grid, mesh, radii, n_radii, options) != SIF_OK) {
     ctx_release(&ctx, grid);
     return NULL;
   }
-
-  /* The ladder maximum is only a starting point: ctx.max_accepted_r tracks
-   * what the catalog actually holds, which rescaling can push well past this.
-   */
-  ctx.max_accepted_r = 0.0f;
 
   /* Loop invariants: the mean tracer density never changes between radii. */
   const sif_real box_volume =
@@ -1152,8 +1261,12 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
     /* Localization quality for this rung, see MISMATCH_RATIO. */
     double ratio_sum = 0.0;
+    sif_real ratio_min = 0.0f;
     sif_real ratio_max = 0.0f;
     uint64_t n_mismatched = 0;
+
+    /* Every rescaling this rung asks for, whatever becomes of it. */
+    rescale_report_t rescale = {0};
 
     if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_TOP_HAT, radius,
           grid->box_length) != SIF_OK) {
@@ -1177,29 +1290,25 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
      * they can return, or sizes in between are reachable at no rung at all and
      * simply never appear in the catalog.
      *
-     * What limits a rung from below is not RMIN_FACTOR but detection: an
-     * empty void of size p smoothed with a top-hat of radius R registers as
-     * delta = -(p/R)^3, so it only clears the threshold once p >= |t|^(1/3) R.
-     * The previous, larger rung therefore found nothing below
-     * |t|^(1/3) * r_prev, and this rung has to search at least that far out to
-     * meet it.
+     * What a rung reaches is [radius, r_search] in the crossing radius, since
+     * detection puts its own floor at the rung (see RMIN_FACTOR). So the
+     * previous, larger rung returned nothing below r_prev, and this one has to
+     * reach up to r_prev to meet it -- no further, and no less.
+     *
+     * Stated in the crossing radius rather than in the void's geometric size,
+     * which is what an earlier form of this guard used: the smallest void the
+     * previous rung could see had size |t|^(1/3) * r_prev, but the radius it
+     * would have reported for that void is that size divided by |t|^(1/3),
+     * which is r_prev again. Reaching only to the size leaves the band between
+     * them at no rung at all.
      *
      * With the default r_search = 2 * radius this binds only when the ladder
-     * steps by more than a factor of 2 / |t|^(1/3) -- about 2.7 at a threshold
-     * of -0.4 -- so it is a guard against a sparse radius list silently losing
-     * a size range, not a change to how a sensible run behaves. The estimate
-     * assumes an empty spherical void and ignores the grid smoothing, which
-     * makes it err wide; erring wide costs time, erring narrow loses voids.
+     * steps by more than a factor of two, so it is a guard against a sparse
+     * radius list silently losing a size range, not a change to how a sensible
+     * run behaves. Erring wide costs time, erring narrow loses voids.
      */
-    if (i > 0) {
-      sif_real detect = SIF_REAL_POW(SIF_REAL_ABS(threshold), 1.0f / 3.0f);
-      if (detect > 1.0f)
-        detect = 1.0f;
-
-      const sif_real reach = detect * ctx.sorted_radii[i - 1];
-      if (reach > r_search)
-        r_search = reach;
-    }
+    if (i > 0 && ctx.sorted_radii[i - 1] > r_search)
+      r_search = ctx.sorted_radii[i - 1];
 
     mesh_template_t tpl;
     if (template_build(&tpl, ctx.mesh->n_cells, ctx.mesh->cell_length, rmin,
@@ -1264,7 +1373,6 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         res->ix = ix;
         res->iy = iy;
         res->iz = iz;
-        res->proxy_pole = proxy_pole;
 
         if (proxy_pole > 0 &&
             sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, ix, iy,
@@ -1288,11 +1396,13 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           continue;
         }
 
+        uint8_t reason = RESCALE_OK;
         const sif_real r_scaled =
           find_exact_radius(ctx.mesh, cx, cy, cz, r_search, threshold,
-            vol_factor, &ctx.scratch[tid], rmin, &tpl, resolve_window);
+            vol_factor, &ctx.scratch[tid], rmin, &tpl, resolve_window, &reason);
 
         if (r_scaled < 0.0f) {
+          res->rescale_reason = reason;
           res->status = BATCH_REJECTED_RESCALE;
           continue;
         }
@@ -1314,14 +1424,19 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           stats.rejected_proxy++;
           continue;
         case BATCH_REJECTED_MESH:
-          stats.rejected_mesh++;
+          stats.rejected_overlap++;
           continue;
         case BATCH_REJECTED_RESCALE:
           stats.rejected_rescale++;
+          rescale.fail[res->rescale_reason]++;
           continue;
         default:
           break;
         }
+
+        /* Past the switch the rescaling converged, whatever the re-checks
+         * below go on to decide about the void itself. */
+        rescale_report_add(&rescale, res->r_scaled / radius);
 
         const uint64_t flat =
           ctx.candidates.items[ctx.batch_indices[b]].flat_idx;
@@ -1331,23 +1446,19 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           continue;
         }
 
-        if (res->proxy_pole > 0 &&
-            sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, res->ix,
-              res->iy, res->iz, (uint32_t)res->proxy_pole)) {
-          stats.rejected_proxy++;
-          continue;
-        }
-
-        /* The rescaled radius differs from the proxy, so the shrunk-sphere
-         * probe has to be repeated at the true size. */
+        /* Both overlap tests run again here, because the catalog has moved on
+         * since the batch was evaluated -- but at the rescaled radius, which
+         * is the sphere the candidate is actually claiming. The pole distance
+         * phase 1 used belonged to the rung, and the rung is only a lower
+         * bound on that. */
         const int32_t exact_pole =
           (int32_t)(res->r_scaled * (1.0f - overlap_fraction) /
                     grid->cell_length) -
           1;
-        if (exact_pole > 0 && exact_pole != res->proxy_pole &&
+        if (exact_pole > 0 &&
             sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, res->ix,
               res->iy, res->iz, (uint32_t)exact_pole)) {
-          stats.rejected_exact++;
+          stats.rejected_proxy_recheck++;
           continue;
         }
 
@@ -1368,6 +1479,8 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
         const sif_real ratio = res->r_scaled / radius;
         ratio_sum += (double)ratio;
+        if (stats.accepted == 1 || ratio < ratio_min)
+          ratio_min = ratio;
         if (ratio > ratio_max)
           ratio_max = ratio;
         if (ratio > MISMATCH_RATIO)
@@ -1417,12 +1530,17 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     template_free(&tpl);
 
     sif_timer_stop(&timer);
+
+    rescale_report_log(&rescale);
+
+    /* The same ratio again, but over the voids that survived to the catalog:
+     * that is the population the localization warning below is about. */
     if (stats.accepted > 0) {
       SIF_LOG_TRACE(TAG,
-        "localization:         mean r/R %.2f, max %.2f, %" PRIu64
-        " beyond %.1fx",
-        ratio_sum / (double)stats.accepted, (double)ratio_max, n_mismatched,
-        (double)MISMATCH_RATIO);
+        "accepted r/R:              min %.2f, mean %.2f, max %.2f  (%" PRIu64
+        " beyond %.1fx)",
+        (double)ratio_min, ratio_sum / (double)stats.accepted,
+        (double)ratio_max, n_mismatched, (double)MISMATCH_RATIO);
     }
 
     total_mismatched += n_mismatched;

@@ -208,6 +208,7 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
   ws->mgr = mgr;
   ws->delta_k = NULL;
   ws->delta_k_cpy = NULL;
+  ws->cic_inv = NULL;
   ws->forward_plan = NULL;
   ws->backward_plan = NULL;
 
@@ -439,6 +440,8 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
     real_fftw_free(ws->delta_k);
   if (ws->delta_k_cpy)
     sif_free_aligned(ws->delta_k_cpy);
+  if (ws->cic_inv)
+    free(ws->cic_inv);
 
   free(ws);
 }
@@ -531,20 +534,30 @@ int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
   if (!lut)
     return SIF_ERR_ALLOC;
 
+  /* Carried through the same multiply as the filter itself: the assignment
+   * window is separable and the filter is radial, so neither can be folded
+   * into the other's table, but both land on the mode together. */
+  const double* cic = ws->cic_inv;
+
 #pragma omp parallel for schedule(static)
   for (uint32_t ix = 0; ix < N; ix++) {
     int32_t kx = (ix > N_half) ? (int32_t)ix - (int32_t)N : (int32_t)ix;
     uint32_t kx2 = (uint32_t)(kx * kx);
+    const double cx = cic ? cic[ix] : 1.0;
 
     for (uint32_t iy = 0; iy < N; iy++) {
       int32_t ky = (iy > N_half) ? (int32_t)iy - (int32_t)N : (int32_t)iy;
       uint32_t kxy2 = kx2 + (uint32_t)(ky * ky);
+      const double cxy = cx * (cic ? cic[iy] : 1.0);
 
       for (uint32_t iz = 0; iz <= N_half; iz++) {
         uint32_t k2 = kxy2 + (iz * iz);
 
         uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
         sif_real smoothing = lut[k2];
+
+        if (cic)
+          smoothing = (sif_real)((double)smoothing * cxy * cic[iz]);
 
         ws->delta_k_cpy[idx][0] = ws->delta_k[idx][0] * smoothing;
         ws->delta_k_cpy[idx][1] = ws->delta_k[idx][1] * smoothing;
@@ -623,6 +636,52 @@ static inline double fft_sinc(double x) {
   return sin(x) / x;
 }
 
+/*
+ * The window is separable, so the per-axis factor depends only on that axis's
+ * index and one table of N entries covers all three. Built as the reciprocal,
+ * so the hot loops multiply.
+ */
+static double* fft_build_cic_inverse_axis(uint32_t n_cells) {
+  const uint32_t N_half = n_cells >> 1;
+
+  double* axis = malloc((size_t)n_cells * sizeof(double));
+  if (!axis) {
+    SIF_LOG_ERROR("fft_context", "failed to allocate the CIC window table");
+    return NULL;
+  }
+
+  for (uint32_t i = 0; i < n_cells; i++) {
+    int32_t k = (i > N_half) ? (int32_t)i - (int32_t)n_cells : (int32_t)i;
+    double s = fft_sinc(SIF_PI * (double)k / (double)n_cells);
+    axis[i] = 1.0 / (s * s); /* CIC is the NGP window squared */
+  }
+
+  return axis;
+}
+
+int sif__fft_set_cic_correction(sif_fft_workspace_t* ws, int enable) {
+  if (!ws || ws->n_cells == 0) {
+    SIF_LOG_ERROR("fft_context", "invalid workspace");
+    return SIF_ERR_INVALID;
+  }
+
+  if (!enable) {
+    free(ws->cic_inv);
+    ws->cic_inv = NULL;
+    return SIF_OK;
+  }
+
+  if (ws->cic_inv)
+    return SIF_OK;
+
+  ws->cic_inv = fft_build_cic_inverse_axis(ws->n_cells);
+  if (!ws->cic_inv)
+    return SIF_ERR_ALLOC;
+
+  SIF_LOG_TRACE("fft_context", "filtering will correct the CIC window");
+  return SIF_OK;
+}
+
 int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
   if (!ws || !ws->delta_k) {
     SIF_LOG_ERROR("fft_context", "no spectrum to deconvolve");
@@ -630,22 +689,11 @@ int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
   }
 
   const uint32_t N = ws->n_cells;
-  const uint32_t N_half = N >> 1;
   const uint32_t z_dim = N / 2 + 1;
 
-  /* The window is separable, so the per-axis factor only depends on that
-   * axis's index. One table of N entries covers all three. */
-  double* axis = malloc((size_t)N * sizeof(double));
-  if (!axis) {
-    SIF_LOG_ERROR("fft_context", "failed to allocate the CIC window table");
+  double* axis = fft_build_cic_inverse_axis(N);
+  if (!axis)
     return SIF_ERR_ALLOC;
-  }
-
-  for (uint32_t i = 0; i < N; i++) {
-    int32_t k = (i > N_half) ? (int32_t)i - (int32_t)N : (int32_t)i;
-    double s = fft_sinc(SIF_PI * (double)k / (double)N);
-    axis[i] = s * s; /* CIC is the square of the NGP window */
-  }
 
 #pragma omp parallel for schedule(static)
   for (uint32_t ix = 0; ix < N; ix++) {
@@ -653,8 +701,7 @@ int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
     for (uint32_t iy = 0; iy < N; iy++) {
       const double wxy = wx * axis[iy];
       for (uint32_t iz = 0; iz < z_dim; iz++) {
-        const double w = wxy * axis[iz];
-        const double inv = 1.0 / w;
+        const double inv = wxy * axis[iz];
 
         uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
         ws->delta_k[idx][0] = (sif_real)(ws->delta_k[idx][0] * inv);

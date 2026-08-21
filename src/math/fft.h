@@ -121,6 +121,17 @@ typedef struct {
    * is mutable. See fft_ensure_forward_plan().
    */
   unsigned int plan_flags;
+
+  /**
+   * Per-axis reciprocal of the CIC assignment window, or NULL when no
+   * correction is wanted. Set by sif__fft_set_cic_correction().
+   *
+   * It corrects the *filtered* copy rather than delta_k, so the spectrum the
+   * workspace was given stays untouched and an unfiltered backward transform
+   * still reproduces the caller's input exactly. The window is separable, so
+   * n_cells entries cover all three axes.
+   */
+  double* cic_inv;
 } sif_fft_workspace_t;
 
 typedef enum {
@@ -249,6 +260,29 @@ int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
  * @return SIF_OK, or SIF_ERR_INVALID if the workspace has no spectrum
  */
 int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws);
+
+/**
+ * @brief Divide the CIC window out of every filtered field this workspace
+ * produces from here on, instead of out of delta_k itself.
+ *
+ * For callers that filter repeatedly and must also hand the input field back:
+ * a filter applied to a CIC-assigned grid smooths a field that the assignment
+ * already smoothed, so the effective window is wider than the radius named and
+ * its edge is about a cell thick. Correcting inside the filter fixes that
+ * without touching delta_k, so sif__fft_apply_filter() with #SIF__FILTER_NONE
+ * still restores the original field bit for bit.
+ *
+ * Enabling twice is harmless. The correction diverges towards the Nyquist
+ * corner and is only held in check by the filter that carries it, so this is
+ * for top-hat or Gaussian radii of at least about two cells.
+ *
+ * @param ws The workspace, which must know its grid size
+ * @param enable Non-zero to correct, zero to stop correcting and release the
+ * table
+ *
+ * @return SIF_OK, or SIF_ERR_* if the table could not be built
+ */
+int sif__fft_set_cic_correction(sif_fft_workspace_t* ws, int enable);
 
 /**
  * @brief Replace the phases of delta_k with random ones, in place

@@ -56,7 +56,7 @@ typedef uint32_t sif_option;
 
 /**
  * @defgroup opt_finder Finder options
- * @brief Bit 15. Bits 8-14 are free.
+ * @brief Bits 14-15. Bits 8-13 are free.
  * @{
  */
 /**
@@ -69,6 +69,24 @@ typedef uint32_t sif_option;
  * grid anyway.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
+
+/**
+ * Skip deconvolution of the CIC assignment window.
+ *
+ * sif_grid_assign_cic() convolves the field with its own window before the
+ * finder ever sees it, so a top-hat applied on top of that smooths twice: the
+ * effective window is wider than the radius asked for, and it has soft edges
+ * about a cell thick. Both push the measured contrast in a void upward, which
+ * for the exodus finder shows up directly as rescaled radii biased large.
+ * Deconvolution is therefore the default; this flag disables it for grids that
+ * were not built by CIC -- one filled by hand, or from a tessellation, or read
+ * from a file whose assignment is unknown.
+ *
+ * @note The correction grows towards the Nyquist corner, so it is only safe
+ * while the top-hat that follows suppresses those modes. The finders check the
+ * smallest radius against the cell size and warn when it does not.
+ */
+#define SIF_FINDER_KEEP_CIC_WINDOW (1u << 14)
 /** @} */
 
 /**

@@ -177,8 +177,12 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     sif_catalog_t* cat =
       sif_finder_spherical(g, radii, n_radii, -0.7f, overlap, opts);
     /* Fixed radii: the finder can only report one of the requested sizes, so
-     * it always lands at or below the true hole radius. */
-    check_catalog("spherical", cat, 0.55f, 1.05f);
+     * it lands on the rung nearest the hole rather than on the hole itself.
+     * That rung can exceed the hole: an empty hole of radius p smoothed at R
+     * reads as -(p/R)^3, so it still clears a threshold t while
+     * R <= p * |t|^(-1/3), which at -0.7 is 1.13 p. The upper factor allows
+     * that plus a little for the grid. */
+    check_catalog("spherical", cat, 0.55f, 1.15f);
     sif_catalog_free(cat);
 
     if (!(opts & SIF_FINDER_CONSUME_GRID)) {

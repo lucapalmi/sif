@@ -76,7 +76,7 @@ static void ctx_release(spherical_ctx_t* ctx, sif_grid_t* grid) {
 }
 
 static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
-  const sif_real* radii, uint32_t n_radii) {
+  const sif_real* radii, uint32_t n_radii, sif_option opt) {
 
   memset(ctx, 0, sizeof(*ctx));
 
@@ -116,6 +116,13 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
     SIF_LOG_ERROR(TAG, "the forward FFT failed");
     return SIF_ERR_ALLOC;
   }
+
+  /* Before the first filter and after the transform, which is the only window
+   * in which the assignment window is separable from the smoothing one. The
+   * radii are sorted descending, so the last is the smallest. */
+  if (sif__finder_deconvolve_cic(
+        TAG, ctx->fft_ws, grid, ctx->sorted_radii[n_radii - 1], opt) != SIF_OK)
+    return SIF_ERR_INVALID;
 
   /* The density field is no longer needed: from here on the finder works out
    * of the FFT workspace's real-space buffer, which saves a full grid. */
@@ -175,7 +182,7 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
   }
 
   spherical_ctx_t ctx;
-  if (ctx_init(&ctx, grid, radii, n_radii) != SIF_OK) {
+  if (ctx_init(&ctx, grid, radii, n_radii, options) != SIF_OK) {
     ctx_release(&ctx, grid);
     return NULL;
   }
@@ -234,7 +241,7 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
 
       if (sif__overlap_exact(ctx.cat, cx, cy, cz, radius, max_radius,
             grid->box_length, ctx.cll, grid->p2_mask, overlap_fraction)) {
-        stats.rejected_mesh++;
+        stats.rejected_overlap++;
         continue;
       }
 

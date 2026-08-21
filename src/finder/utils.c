@@ -27,7 +27,42 @@ SIF_PURE_FUNCTION inline uint64_t sif__flat_index(
   return (uint64_t)ix * n * n + (uint64_t)iy * n + (uint64_t)iz;
 }
 
-/* --- 2. Candidate scanning --- */
+/* --- 2. Field preparation --- */
+
+/*
+ * Below this many cells per radius the top-hat no longer suppresses the modes
+ * the deconvolution amplifies. At two cells the net gain at the Nyquist corner
+ * is about 1.1; at one it is several, and the finder would be hunting minima
+ * in noise the deconvolution put there itself.
+ */
+#define FINDER_MIN_CELLS_PER_RADIUS 2.0f
+
+int sif__finder_deconvolve_cic(const char* tag, sif_fft_workspace_t* ws,
+  const sif_grid_t* grid, sif_real min_radius, sif_option opt) {
+
+  if (opt & SIF_FINDER_KEEP_CIC_WINDOW) {
+    SIF_LOG_TRACE(tag, "keeping the CIC window, as requested");
+    return SIF_OK;
+  }
+
+  if (min_radius < FINDER_MIN_CELLS_PER_RADIUS * grid->cell_length) {
+    SIF_LOG_WARNING(tag,
+      "the smallest radius is %g, under %.0f cells of %g; deconvolving the "
+      "CIC window amplifies the smallest scales more than the top-hat there "
+      "suppresses them. Refine the grid, drop that radius, or pass "
+      "SIF_FINDER_KEEP_CIC_WINDOW",
+      (double)min_radius, (double)FINDER_MIN_CELLS_PER_RADIUS,
+      (double)grid->cell_length);
+  }
+
+  const int status = sif__fft_set_cic_correction(ws, 1);
+  if (status != SIF_OK)
+    SIF_LOG_ERROR(tag, "failed to set up the CIC window correction");
+
+  return status;
+}
+
+/* --- 3. Candidate scanning --- */
 
 void sif__candidate_buffer_free(sif_candidate_buffer_t* buf) {
   if (!buf)
@@ -140,9 +175,11 @@ void sif__finder_log_radius(const char* tag, sif_real radius,
   SIF_LOG_TRACE(
     tag, "proxy overlap exclusions:  %7" PRIu64, stats->rejected_proxy);
   SIF_LOG_TRACE(
-    tag, "mesh overlap exclusions:   %7" PRIu64, stats->rejected_mesh);
+    tag, "exact overlap exclusions:  %7" PRIu64, stats->rejected_overlap);
   SIF_LOG_TRACE(
     tag, "rescaling failures:        %7" PRIu64, stats->rejected_rescale);
+  SIF_LOG_TRACE(
+    tag, "proxy re-check exclusions: %7" PRIu64, stats->rejected_proxy_recheck);
   SIF_LOG_TRACE(
     tag, "exact re-check exclusions: %7" PRIu64, stats->rejected_exact);
 
@@ -155,7 +192,7 @@ void sif__finder_log_radius(const char* tag, sif_real radius,
   SIF_LOG_FLUSH();
 }
 
-/* --- 3. Geometry --- */
+/* --- 4. Geometry --- */
 
 /*
  * Cheap rejection probe: samples the mask at the six axis poles of the shrunk
@@ -298,7 +335,7 @@ SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalog_t* cat, sif_real cx,
   return 0;
 }
 
-/* --- 4. Marking --- */
+/* --- 5. Marking --- */
 
 SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
   sif_real cy, sif_real cz, sif_real r_true, uint32_t n_cells, uint32_t p2_mask,

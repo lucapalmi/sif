@@ -46,8 +46,13 @@
  * smaller one's radius: they collide when their separation falls below
  * r1 + r2 - overlap_fraction * min(r1, r2). 0 forbids overlap entirely; 1 lets
  * the smaller void's radius be swallowed.
- * @param opt Finder options. Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN and
- * SIF_FINDER_CONSUME_GRID.
+ * @param opt Finder options. Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN,
+ * SIF_FINDER_CONSUME_GRID and SIF_FINDER_KEEP_CIC_WINDOW.
+ *
+ * @note The grid is assumed to have been built by sif_grid_assign_cic(), whose
+ * window is divided back out before the first smoothing so that the top-hat is
+ * the only window applied. Pass SIF_FINDER_KEEP_CIC_WINDOW for a grid that was
+ * filled some other way.
  * @return Newly allocated catalogue, released with sif_catalog_free(), or NULL
  * on invalid input or failure.
  *

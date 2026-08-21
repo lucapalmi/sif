@@ -22,6 +22,8 @@
 #include "sif/structures/cell_linked_list.h"
 #include "sif/structures/grid.h"
 
+#include "math/fft.h"
+
 /* --- index helpers --- */
 
 /**
@@ -63,6 +65,40 @@ static inline void sif__unflatten_index(const sif_grid_t* grid, uint64_t flat,
   *ix = sif__fast_div(flat, (uint64_t)n * n, p2_shift ? 2 * p2_shift : 0);
 }
 
+/* --- field preparation, shared by every finder --- */
+
+/**
+ * @brief Arrange for the CIC assignment window to come back out of every
+ * smoothed field, so the top-hat is the only window a finder ever sees.
+ *
+ * A finder that skipped this would be smoothing an already-smoothed field: the
+ * effective window is wider than the radius it names, with an edge about a
+ * cell thick, and in a void that reads as a contrast biased high -- fewer
+ * candidates at every rung, and for exodus a rescaled radius biased large.
+ * Both finders call this, so a catalogue from one stays comparable with a
+ * catalogue from the other.
+ *
+ * The correction rides on the filter rather than on the stored spectrum, which
+ * is what lets a finder still hand the caller's grid back untouched at the
+ * end.
+ *
+ * The window's reciprocal grows without bound towards the Nyquist corner and
+ * is held in check only by the top-hat carrying it. A radius of at least two
+ * cells does that; below it the smallest scales are amplified instead, so this
+ * warns rather than silently handing back a noisier field than it was given.
+ *
+ * @param tag Subsystem name for the log messages.
+ * @param ws Workspace holding the forward transform.
+ * @param grid The grid the transform came from, read for its cell size.
+ * @param min_radius Smallest smoothing radius the run will use.
+ * @param opt Honours #SIF_FINDER_KEEP_CIC_WINDOW, under which this is a no-op.
+ *
+ * @return SIF_OK, including when the flag skipped the work, or SIF_ERR_* if
+ * the correction could not be set up.
+ */
+int sif__finder_deconvolve_cic(const char* tag, sif_fft_workspace_t* ws,
+  const sif_grid_t* grid, sif_real min_radius, sif_option opt);
+
 /* --- candidate scanning, shared by every finder --- */
 
 /** @brief One candidate cell: its depth and where it sits in the grid. */
@@ -103,9 +139,14 @@ typedef struct {
   uint64_t n_candidates;
   uint64_t rejected_masked;  /**< Already covered by an accepted void. */
   uint64_t rejected_proxy;   /**< Failed the cheap axis-pole overlap probe. */
-  uint64_t rejected_mesh;    /**< Failed the exact pairwise overlap test. */
+  uint64_t rejected_overlap; /**< Failed the exact pairwise overlap test. */
   uint64_t rejected_rescale; /**< Radius rescaling did not converge. */
-  uint64_t rejected_exact;   /**< Failed a re-check after rescaling. */
+
+  /* The same two tests again, at the rescaled radius and against a catalog
+   * that has moved on since. Only a finder that rescales fills these. */
+  uint64_t rejected_proxy_recheck;
+  uint64_t rejected_exact;
+
   uint64_t accepted;
 } sif_finder_radius_stats_t;
 
