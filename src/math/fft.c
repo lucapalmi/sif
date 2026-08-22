@@ -1013,8 +1013,14 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
     /* Poisson noise contributes a flat |delta_k|^2 = N^6 / n_tracers to every
      * mode, so after the 1/N^6 normalization the subtraction is simply the
      * window sum over n_tracers. Left out of `raw` so that high_k_fraction
-     * still describes where the measured power actually sits. */
-    const double shot = n_tracers > 0 ? win * norm / (double)n_tracers : 0.0;
+     * still describes where the measured power actually sits.
+     *
+     * k_scale rather than norm: the 1/(total*total) in norm cancels the
+     * |delta_k|^2 that `sum` carries, and `win` accumulates k2j * windowed
+     * with no |delta_k|^2 in it. Applying norm here divided the subtraction
+     * by a spurious N^6 -- 6.4e19 at N = 2000 -- which made n_tracers a
+     * silent no-op at every grid size worth using. */
+    const double shot = n_tracers > 0 ? win * k_scale / (double)n_tracers : 0.0;
 
     sigma_sq[j] = raw - shot;
     if (high_k_fraction)
