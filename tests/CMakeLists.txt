@@ -22,6 +22,7 @@ set(SIF_TESTS
   test_structures   # bitmask, catalog, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
   test_io           # .xfield/.xgrid round trips, checksums, ASCII catalogues
+  test_sdf          # .sdf container: catalogue round trip, identity, rejections
   test_octree       # build integrity + nearest neighbour vs brute force
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count

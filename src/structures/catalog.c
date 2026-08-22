@@ -8,9 +8,12 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "sif/utils/random.h"
 
 /*
  * Number of sif_real views packed into the arena: cx, cy, cz, radii.
@@ -22,6 +25,50 @@
  * three unused values through cache on each.
  */
 #define CATALOG_N_VIEWS 4
+
+/* --- identity --- */
+
+/*
+ * A fresh identity for a catalogue that has just been allocated.
+ *
+ * Mixed from the wall clock at nanosecond resolution, the process, and the
+ * address of the catalogue itself. The clock alone would collide between two
+ * processes started together, and the address alone collides constantly --
+ * freeing a catalogue and allocating another hands back the same pointer --
+ * so it takes all three, and the nanoseconds are what separate two catalogues
+ * that reuse an address inside one run.
+ *
+ * This is not a random number and does not need to be. It has to be unlikely
+ * to repeat, not unguessable: what it protects against is a mistake, not an
+ * adversary.
+ */
+static uint64_t catalog_id_new(const void* address) {
+  struct timespec now;
+  clock_gettime(CLOCK_REALTIME, &now);
+
+  uint64_t seed = (uint64_t)now.tv_sec * 1000000000ull + (uint64_t)now.tv_nsec;
+  seed ^= (uint64_t)(uintptr_t)address;
+  seed ^= (uint64_t)getpid() << 17;
+
+  const uint64_t id = sif__splitmix64(&seed);
+
+  /* Zero is the library's "no catalogue", so it cannot also be a catalogue. */
+  return id ? id : 0x9E3779B97F4A7C15ull;
+}
+
+/*
+ * The identity of the same catalogue with one more void in it.
+ *
+ * A step rather than a fresh draw: appends happen a million at a time in a
+ * finder, and this is a handful of arithmetic with no clock, no syscall and no
+ * shared state to contend over.
+ */
+static uint64_t catalog_id_step(uint64_t id) {
+  const uint64_t next = sif__splitmix64(&id);
+  return next ? next : 0x9E3779B97F4A7C15ull;
+}
+
+/* --- memory --- */
 
 /* Each view starts on a cache-line boundary, so the per-view stride is the
  * capacity rounded up to a whole number of sif_real per cache line. Without
@@ -124,6 +171,7 @@ sif_catalog_t* sif_catalog_alloc(uint64_t initial_capacity) {
 
   cat->n_voids = 0;
   cat->capacity = initial_capacity;
+  cat->id = catalog_id_new(cat);
 
   cat->_block = catalog_block_alloc(
     initial_capacity, &cat->cx, &cat->cy, &cat->cz, &cat->radii);
@@ -176,6 +224,12 @@ int sif_catalog_append(
   catalog->radii[n] = r;
   catalog->n_voids++;
 
+  /* These are different voids from the ones the catalogue held a moment ago,
+   * so it is a different catalogue. Anything already measured from it keeps
+   * the identity it recorded, and an .sdf file holding that measurement will
+   * now refuse this catalogue -- which is the point. */
+  catalog->id = catalog_id_step(catalog->id);
+
   return SIF_OK;
 }
 
@@ -204,4 +258,8 @@ int sif_catalog_trim(sif_catalog_t* catalog) {
   SIF_LOG_TRACE(
     "void_catalog", "trimmed catalog to %" PRIu64 " voids", catalog->n_voids);
   return SIF_OK;
+}
+
+uint64_t sif_catalog_id(const sif_catalog_t* catalog) {
+  return catalog ? catalog->id : 0;
 }

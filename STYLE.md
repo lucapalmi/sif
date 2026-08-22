@@ -429,6 +429,43 @@ distinguish returns `int`: `SIF_OK` (0) on success, a negative `SIF_ERR_*`
 otherwise. Add new codes to `macros.h`; do not invent local conventions and do
 not return bare `-1`.
 
+**A file format is the exception, and carries its own status enum.** The rule
+above is about *functions*: a caller wants to know that the call failed, and
+`SIF_ERR_*` names every reason a function has. A file format is a different
+kind of thing — its failures are properties of the file, not of the call, and
+"this is not a `.sdf` file", "this one was written by a newer sif" and "this
+one is truncated" lead a caller to do three different things while all three
+would collapse into `SIF_ERR_IO`. So a format may define its own enum,
+`sif_<format>_status_t`, listing them.
+
+Such an enum stays compatible with the library-wide set rather than replacing
+it: success is 0, every failure is negative, the generic conditions **alias**
+the `SIF_ERR_*` code they correspond to, and the format's own codes start at
+`-100` so the generic set keeps room to grow. `!= SIF_OK` and `< 0` therefore
+mean what they mean everywhere else. Every such enum comes with a
+`sif_<format>_strerror()`.
+
+**Where a subsystem has its own status enum, the status travels as an argument,
+not as a return value.** It is the last parameter, it must not be NULL, and the
+return value is left free to be the thing the call produces — an open file, a
+catalogue — so the API says the same thing everywhere instead of returning a
+status here and a pointer there.
+
+Three rules make that worth the extra argument, and they are the whole
+convention:
+
+- **An error is inherited.** A call entered with `*status` already set does
+  nothing and returns immediately. A sequence of calls therefore needs one
+  check at the end rather than one after each, which is the point of the style.
+- **The first error wins.** Nothing overwrites a status that is already set,
+  so the code that reaches the check is the one that says what actually went
+  wrong.
+- **Release still runs.** A `_close`, `_free` or equivalent ignores the
+  inherited error and cleans up anyway; it may set a status of its own only if
+  none is set yet.
+
+Functions that cannot fail — accessors, queries — take no status argument.
+
 **Allocators return pointers**, `NULL` on failure. Every `sif_*_alloc` has a
 matching `sif_*_free`, and **`_free` must accept `NULL`** and must be safe on a
 partially constructed object — allocators clean up after themselves by calling

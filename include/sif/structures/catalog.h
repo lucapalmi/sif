@@ -43,6 +43,21 @@ typedef struct {
   uint64_t n_voids;
   /** Entries the arena can hold before it must grow. */
   uint64_t capacity;
+
+  /**
+   * @brief What this catalogue is, as far as the rest of the library is
+   * concerned. Never zero on a live catalogue.
+   *
+   * Assigned here, at birth, and changed by every append, so it names *these*
+   * voids rather than this allocation. Read it with sif_catalog_id().
+   *
+   * It exists so that a measurement can record which catalogue it came from
+   * and an `.sdf` file can refuse anything measured from a different one. A
+   * checksum of the values would not do: catalogues are stored at whichever
+   * precision the writing build used and converted on read, so the same
+   * catalogue hashes differently on either side of a round trip.
+   */
+  uint64_t id;
 } sif_catalog_t;
 
 /**
@@ -78,6 +93,11 @@ void sif_catalog_free(sif_catalog_t* catalog);
  * which case it is left untouched and the void is NOT stored. SIF_ERR_INVALID
  * on a NULL catalogue.
  *
+ * @note Changes sif_catalog_t::id, since the catalogue is no longer the one
+ * anything measured from it was measured from. Appending to a catalogue that
+ * has already been written to an `.sdf` file is therefore not an error, but
+ * nothing measured afterwards can be appended to that file.
+ *
  * @warning Invalidates cx/cy/cz/radii whenever it grows.
  */
 int sif_catalog_append(
@@ -98,5 +118,18 @@ int sif_catalog_append(
  * @warning Invalidates cx/cy/cz/radii.
  */
 int sif_catalog_trim(sif_catalog_t* catalog);
+
+/**
+ * @brief What catalogue this is: see sif_catalog_t::id.
+ *
+ * Stable across a trim, which changes the allocation and not the voids, and
+ * across a write to an `.sdf` file, which records it. Changed by an append.
+ *
+ * @param catalog The catalogue.
+ * @return The identity, or 0 for a NULL catalogue -- which is also what a
+ * measurement that came from no catalogue at all records, so 0 never names
+ * anything.
+ */
+uint64_t sif_catalog_id(const sif_catalog_t* catalog);
 
 #endif /* SIF_STRUCTURES_CATALOG_H */

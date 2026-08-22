@@ -131,6 +131,9 @@ set(SOURCES
     src/io/profiles_io.c
     src/io/field_io.c
     src/io/grid_io.c
+    src/io/sdf.c
+    src/io/sdf_meta.c
+    src/io/sdf_products.c
 
   # math
     src/math/fft.c

@@ -42,6 +42,16 @@ typedef struct {
    * distinguishable from the values.
    */
   bool differential;
+  /**
+   * @brief Which catalogue these rows describe: the sif_catalog_t::id of the
+   * catalogue they were measured from, or 0 if they came from none.
+   *
+   * Row `i` is void `i` of that catalogue and of no other, and this is what
+   * says which. An `.sdf` file refuses a set whose identity is not the one it
+   * holds, so a set measured from one catalogue cannot be written beside
+   * another.
+   */
+  uint64_t source_id;
   /** n_bins + 1 bin edges, shared by every row. */
   sif_real* r_edges;
   /** n_voids * n_bins values, row-major. */
@@ -81,6 +91,16 @@ typedef struct {
   uint32_t n_bins;
   /** Outer edge of the profile, in units of each void's own radius. */
   sif_real ext;
+  /**
+   * @brief Which catalogue these rows describe: the sif_catalog_t::id of the
+   * catalogue they were measured from, or 0 if they came from none.
+   *
+   * Row `i` is void `i` of that catalogue and of no other, and this is what
+   * says which. An `.sdf` file refuses a set whose identity is not the one it
+   * holds, so a set measured from one catalogue cannot be written beside
+   * another.
+   */
+  uint64_t source_id;
   /** n_bins + 1 bin edges, shared by every row. */
   sif_real* r_edges;
   /** n_voids * n_bins values, row-major. */
