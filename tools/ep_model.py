@@ -17,7 +17,7 @@ The pipeline:
 
     radii, S, barrier, deriv_variance
       -> local description        (nu, gamma^2, y)          per radius
-      -> up-crossing rate f_up    (Musso & Sheth)           per radius
+      -> up-crossing rate f_up    (Verza+ 2024, eq. 3.15)   per radius
       -> baseline hazard Lambda   (log-linear in the bin)   per bin
       -> history features         (lookback, cumulative)    per bin
       -> network                  log correction            per bin

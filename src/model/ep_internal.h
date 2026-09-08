@@ -170,11 +170,13 @@ double sif__ep_upper_tail(double x);
 /**
  * @brief First-crossing multiplicity from the up-crossing rate alone.
  *
- * The Musso-Sheth approximation: the rate at which the walk crosses the
- * barrier upward faster than the barrier itself moves, treated as a hazard and
- * accumulated into a survival curve. Exact in the limit of a high barrier,
- * where a first crossing and any crossing are the same event; it runs a few
- * per cent low for a flat barrier and up to fifteen for a steep moving one.
+ * The Musso-Sheth approximation in the form of Verza et al. (2024) eq. (3.15),
+ * i.e. with the scale dependence of <(d delta / dS)^2> kept rather than fixed:
+ * the rate at which the walk crosses the barrier upward faster than the
+ * barrier itself moves, treated as a hazard and accumulated into a survival
+ * curve. Exact in the limit of a high barrier, where a first crossing and any
+ * crossing are the same event; it runs a few per cent low for a flat barrier
+ * and up to fifteen for a steep moving one.
  *
  * @return Newly allocated array of n - 1 values on the bin centres, released
  * with sif_free_aligned, or NULL on failure.

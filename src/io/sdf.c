@@ -501,6 +501,13 @@ static sif_sdf_status_t blocks_validate(sif_sdf_t* file) {
       return SIF_SDF_ERR_CORRUPT;
     }
 
+    /* Nothing the library assigned, so nothing it has an opinion about: a
+     * block in the private range belongs to whoever wrote it, and checking it
+     * against this file's catalogue would turn "sif skips what it does not
+     * know" into "sif refuses the file that carries it". */
+    if (header->type >= SIF_SDF_BLOCK_PRIVATE)
+      continue;
+
     /* A note belongs to the file rather than to the catalogue, and says so by
      * carrying no identity. Everything else must carry this one. */
     const uint64_t expected =
@@ -897,10 +904,8 @@ sif_catalog_t* sif_sdf_catalog(sif_sdf_t* file, sif_sdf_status_t* status) {
 
 /* --- open and create --- */
 
-sif_sdf_t* sif_sdf_open(
+sif_sdf_t* sif__sdf_open_raw(
   const char* filepath, sif_sdf_mode_t mode, sif_sdf_status_t* status) {
-  if (!sif__sdf_status_accepts(status, "open"))
-    return NULL;
 
   if (!filepath) {
     SIF_LOG_ERROR("sdf", "no path given to open");
@@ -953,14 +958,25 @@ sif_sdf_t* sif_sdf_open(
 
   writer_cache(file);
 
+  return file;
+}
+
+sif_sdf_t* sif_sdf_open(
+  const char* filepath, sif_sdf_mode_t mode, sif_sdf_status_t* status) {
+  if (!sif__sdf_status_accepts(status, "open"))
+    return NULL;
+
+  sif_sdf_t* file = sif__sdf_open_raw(filepath, mode, status);
+  if (!file)
+    return NULL;
+
   /* Walked once here, so that every later call knows where everything is
    * without a read, and so that a file which is not internally consistent is
    * refused now rather than halfway through a caller's analysis. */
-  reason = blocks_walk(file);
-  if (reason != SIF_SDF_OK)
-    return handle_fail(file, reason, status);
+  sif_sdf_status_t reason = blocks_walk(file);
+  if (reason == SIF_SDF_OK)
+    reason = blocks_validate(file);
 
-  reason = blocks_validate(file);
   if (reason != SIF_SDF_OK)
     return handle_fail(file, reason, status);
 

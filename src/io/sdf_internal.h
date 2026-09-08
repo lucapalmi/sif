@@ -51,10 +51,14 @@
 /**
  * @brief What sif_sdf_create() records in `writer`.
  *
- * TODO: the project version is only in CMakeLists.txt; wire it through as a
- * compile definition and build this string from it.
+ * The version comes from the build, which gets it from `project()`. The
+ * fallback is for a translation unit compiled outside the library's own build
+ * -- it says the build did not know rather than inventing a number.
  */
-#define SIF__SDF_WRITER "sif 0.1.0"
+#ifndef SIF_VERSION_STRING
+#  define SIF_VERSION_STRING "unknown"
+#endif
+#define SIF__SDF_WRITER "sif " SIF_VERSION_STRING
 
 /**
  * @brief The 64-byte header at the start of an `.sdf` file.
@@ -219,6 +223,19 @@ struct sif_sdf {
  * @return Non-zero when the call should go ahead.
  */
 int sif__sdf_status_accepts(const sif_sdf_status_t* status, const char* what);
+
+/**
+ * @brief Open a file and validate its header, without walking its blocks.
+ *
+ * What sif_sdf_open() is built on, and what the recovery pass needs: a file
+ * whose chain is damaged cannot be opened the ordinary way, and repairing it
+ * still starts from a valid header and a working stream.
+ *
+ * The handle comes back with an empty block table. Nothing that reads blocks
+ * may be called on it until someone has filled that in.
+ */
+SIF_NODISCARD sif_sdf_t* sif__sdf_open_raw(
+  const char* filepath, sif_sdf_mode_t mode, sif_sdf_status_t* status);
 
 /**
  * @brief Read @p bytes at @p offset, looping over short reads.
@@ -393,22 +410,35 @@ sif_sdf_status_t sif__sdf_meta_encode(
   const sif_sdf_meta_t* meta, void** out, uint32_t* out_bytes);
 
 /**
- * @brief Decode an encoded table into @p meta, on top of what is there.
+ * @brief Decode an encoded table into @p meta, which must be empty.
  *
- * Merging is decoding several tables into one in file order: a key decoded
- * later replaces one decoded earlier, which is exactly the rule the format
- * gives several metadata blocks.
+ * Empty because that is what makes the duplicate check exact: a key already in
+ * the table is a key this table declared twice, which is malformed. Merging
+ * several blocks is done by decoding each on its own and folding the results
+ * together, not by decoding them onto each other.
  */
 sif_sdf_status_t sif__sdf_meta_decode(
   sif_sdf_meta_t* meta, const void* table, uint32_t bytes, const char* path);
 
 /**
- * @brief Read one block's metadata into @p meta, folding it into @p crc.
+ * @brief Copy every key of @p src into @p dst, replacing what is there.
+ *
+ * The merge across metadata blocks: applied in file order, the last block to
+ * carry a key is the one whose value survives.
+ */
+void sif__sdf_meta_merge(sif_sdf_meta_t* dst, const sif_sdf_meta_t* src);
+
+/**
+ * @brief Read one block's metadata into a fresh table, folding the bytes into
+ * @p crc.
  *
  * The checksum covers the metadata and then the data, in that order, so a
  * reader takes the table first whether it needs the table or not.
+ *
+ * @param out Receives the table, owned by the caller and released with
+ * sif_sdf_meta_free(). Empty when the block carries no metadata.
  */
 sif_sdf_status_t sif__sdf_meta_read_block(sif_sdf_t* file,
-  const sif__sdf_entry_t* entry, sif_sdf_meta_t* meta, uint32_t* crc);
+  const sif__sdf_entry_t* entry, sif_sdf_meta_t** out, uint32_t* crc);
 
 #endif /* SIF__IO_SDF_INTERNAL_H */

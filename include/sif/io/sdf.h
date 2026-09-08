@@ -31,16 +31,16 @@
  *   that says what went wrong;
  * - sif_sdf_close() runs regardless, because a file still has to be closed.
  *
- * ```c
- * sif_sdf_status_t status = SIF_SDF_OK;
+ * .. code-block:: c
  *
- * sif_sdf_t* file = sif_sdf_create("run.sdf", 1000.0, 0, &status);
- * // ... write blocks, none of which runs if an earlier one failed ...
- * sif_sdf_close(file, &status);
+ *    sif_sdf_status_t status = SIF_SDF_OK;
  *
- * if (status != SIF_SDF_OK)
- *   fprintf(stderr, "run.sdf: %s\n", sif_sdf_strerror(status));
- * ```
+ *    sif_sdf_t* file = sif_sdf_create("run.sdf", 1000.0, cat, 0, &status);
+ *    // ... write blocks, none of which runs if an earlier one failed ...
+ *    sif_sdf_close(file, &status);
+ *
+ *    if (status != SIF_SDF_OK)
+ *      fprintf(stderr, "run.sdf: %s", sif_sdf_strerror(status));
  */
 
 #ifndef SIF_IO_SDF_H
@@ -111,7 +111,8 @@ typedef enum {
   /** The file ends in the middle of something it declared. */
   SIF_SDF_ERR_TRUNCATED = -106,
   /** Internally inconsistent: a length, a checksum or a value that cannot be
-   * what it claims to be. */
+   * what it claims to be.
+   */
   SIF_SDF_ERR_CORRUPT = -107,
   /** The operation is not allowed by the mode the handle was opened with. */
   SIF_SDF_ERR_MODE = -108,
@@ -150,9 +151,10 @@ typedef enum {
  * from the file's catalogue, and a file whose blocks are not all derived from
  * that catalogue is the thing this format exists to prevent.
  *
- * Values are the on-disk numbers and never change. Anything from 0x8000 up is
- * left permanently unassigned, for a caller that wants to put something of its
- * own in a file sif will skip over.
+ * Values are the on-disk numbers and never change. Anything from
+ * #SIF_SDF_BLOCK_PRIVATE up is left permanently unassigned, for a caller that
+ * wants to put something of its own in a file: sif skips such a block whole,
+ * neither reading it nor checking it against the file's catalogue.
  */
 typedef enum {
   /** Voids: centres and radii. Always the first block, exactly one. */
@@ -164,7 +166,12 @@ typedef enum {
   /** Stacked radial velocity profiles, one row per void. */
   SIF_SDF_BLOCK_VELOCITY_PROFILES = 4,
   /** A measured void size function. */
-  SIF_SDF_BLOCK_SIZE_FUNCTION = 5
+  SIF_SDF_BLOCK_SIZE_FUNCTION = 5,
+  /** First of the range sif never assigns. A block at or above this is
+   * skipped whole: sif does not read it, and does not check it against the
+   * file's catalogue either.
+   */
+  SIF_SDF_BLOCK_PRIVATE = 0x8000
 } sif_sdf_block_type_t;
 
 /**
@@ -240,7 +247,7 @@ SIF_NODISCARD sif_sdf_t* sif_sdf_open(
  * @param cat The catalogue the file is built around. Written as block 0 and
  * not retained: the handle keeps its identity and its void count, not the
  * catalogue itself.
- * @param flags OR of @ref sdf_create_flags, or 0.
+ * @param flags OR of the creation flags above, or 0.
  * @param status As sif_sdf_open(). #SIF_SDF_ERR_EXISTS when the path is taken
  * and #SIF_SDF_OVERWRITE was not given.
  * @return The handle, owned by the caller and released with sif_sdf_close().
@@ -408,12 +415,12 @@ SIF_NODISCARD sif_size_function_t* sif_sdf_size_function(
  * The table is a #sif_sdf_meta_t, and it is the same type going in and coming
  * out, so the natural thing to do is the thing that works:
  *
- * ```c
- * sif_sdf_meta_t* meta = sif_sdf_meta_read(file, &status);
- * sif_sdf_meta_put_str(meta, "validated", "2026-08-22");
- * sif_sdf_meta_write(file, meta, &status);
- * sif_sdf_meta_free(meta);
- * ```
+ * .. code-block:: c
+ *
+ *    sif_sdf_meta_t* meta = sif_sdf_meta_read(file, &status);
+ *    sif_sdf_meta_put_str(meta, "validated", "2026-08-22");
+ *    sif_sdf_meta_write(file, meta, &status);
+ *    sif_sdf_meta_free(meta);
  *
  * **On disk a file may hold several metadata blocks, and in the API it has one
  * table.** An append-only file cannot rewrite what it wrote, so correcting a
@@ -596,8 +603,8 @@ SIF_NODISCARD sif_sdf_meta_t* sif_sdf_meta_read(
  *
  * @param file File to append to, open for appending.
  * @param meta Table to write. An empty one writes nothing and is not an error.
- * @param status As sif_sdf_open(). #SIF_SDF_ERR_INVALID if a
- * @ref sdf_meta_put call on @p meta had failed.
+ * @param status As sif_sdf_open(). #SIF_SDF_ERR_INVALID if any
+ * sif_sdf_meta_put_i64() or sibling on @p meta had failed.
  */
 void sif_sdf_meta_write(
   sif_sdf_t* file, const sif_sdf_meta_t* meta, sif_sdf_status_t* status);
@@ -710,6 +717,47 @@ uint64_t sif_sdf_created(const sif_sdf_t* file);
  * NULL handle. Empty if the file records nothing.
  */
 const char* sif_sdf_writer(const sif_sdf_t* file);
+
+/**
+ * @brief How much of a file is not a whole, sound block.
+ *
+ * Reads every payload and verifies every checksum, which opening does not:
+ * opening asks whether a file can be used, and this asks how much of it is
+ * real. It costs a full pass over the file and it changes nothing.
+ *
+ * @param filepath Path to the file.
+ * @param status As sif_sdf_open(). #SIF_SDF_ERR_NO_CATALOG when not even the
+ * first block survives, which is a file with nothing to recover rather than a
+ * file with a damaged tail.
+ * @return Bytes at the end of the file that are not part of a sound block, or
+ * 0 for a file that is entirely sound.
+ */
+SIF_NODISCARD uint64_t sif_sdf_verify(
+  const char* filepath, sif_sdf_status_t* status);
+
+/**
+ * @brief Cut a damaged file back to the part of it that is sound.
+ *
+ * What finishes the sentence the append rule starts. A run that dies partway
+ * through an append leaves a block that is not whole, and a file ending in one
+ * does not open at all -- so without this, one interrupted write would put
+ * every good block in the file out of reach.
+ *
+ * The scan stops at the **first** block that does not hold, and everything
+ * from there on is dropped. Past a damaged block there is no way to know where
+ * the next one begins: the chain is held together by each block's own length.
+ * So a file damaged in the middle loses its tail as well, and that is honest
+ * -- hunting for the next block header would be guessing, and a guess that
+ * lands inside a payload is how a recovery tool invents data.
+ *
+ * @param filepath Path to the file, which must be writable.
+ * @param status As sif_sdf_verify().
+ * @return Bytes dropped, or 0 if there was nothing to drop.
+ *
+ * @warning This truncates the file. Run sif_sdf_verify() first if the caller
+ * wants to know what it would cost before paying it.
+ */
+uint64_t sif_sdf_repair(const char* filepath, sif_sdf_status_t* status);
 
 /**
  * @brief A message for a status code.

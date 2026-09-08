@@ -1,6 +1,11 @@
 # Sif void library
 
-W.I.P
+`sif` is a high performance library with several routines to model and measure cosmic void statistics in N-body simulations
+
+## AI policy
+
+All the functions and algorithms in `sif` have been developed and implemented manually. Subsequent rewrites made use of coding agents for refactoring and bug hunting.
+The code comments and the Doxygen API documentation are mostly written by AI agents; this file, the style guidelines and the site documentation are all hand-written.
 
 ## License
 

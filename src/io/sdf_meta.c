@@ -475,10 +475,20 @@ sif_sdf_status_t sif__sdf_meta_decode(
       memcpy(key, at + offset + ENTRY_HEAD_BYTES, key_bytes);
       key[key_bytes] = '\0';
 
+      /* One table, one entry per key. The table this decodes into starts
+       * empty, so a key already in it is one this block wrote twice -- and a
+       * block that says two things about the same key does not say which it
+       * means. Across blocks the later value wins, but that is the merge,
+       * which happens after each block has been read on its own. */
+      if (sif_sdf_meta_has(meta, key)) {
+        SIF_LOG_ERROR(
+          "sdf", "a metadata table in %s declares `%s` twice", path, key);
+        free(key);
+        return SIF_SDF_ERR_CORRUPT;
+      }
+
       /* Straight through the unchecked put: a `sif.` key in a block's table
-       * is the library's own, and this is how it comes back. Decoding onto a
-       * table that already holds the key replaces it, which is what makes
-       * merging in file order give the last block the win. */
+       * is the library's own, and this is how it comes back. */
       sif__sdf_meta_put(meta, key, (sif_sdf_meta_type_t)type,
         at + offset + ENTRY_HEAD_BYTES + key_bytes, value_bytes);
       free(key);
@@ -493,12 +503,28 @@ sif_sdf_status_t sif__sdf_meta_decode(
   return SIF_SDF_OK;
 }
 
+void sif__sdf_meta_merge(sif_sdf_meta_t* dst, const sif_sdf_meta_t* src) {
+  for (uint32_t i = 0; i < src->count; i++) {
+    const sif__sdf_kv_t* item = &src->items[i];
+    sif__sdf_meta_put(dst, item->key, (sif_sdf_meta_type_t)item->type,
+      item->value, item->bytes);
+  }
+}
+
 sif_sdf_status_t sif__sdf_meta_read_block(sif_sdf_t* file,
-  const sif__sdf_entry_t* entry, sif_sdf_meta_t* meta, uint32_t* crc) {
+  const sif__sdf_entry_t* entry, sif_sdf_meta_t** out, uint32_t* crc) {
+
+  *out = NULL;
+
+  sif_sdf_meta_t* meta = sif_sdf_meta_alloc();
+  if (!meta)
+    return SIF_SDF_ERR_ALLOC;
 
   const uint32_t bytes = entry->header.meta_bytes;
-  if (bytes == 0)
+  if (bytes == 0) {
+    *out = meta;
     return SIF_SDF_OK;
+  }
 
   /* A multiple of eight is a property of the encoding, so a table that is not
    * one was not written by this library and its entries cannot be walked. */
@@ -507,12 +533,14 @@ sif_sdf_status_t sif__sdf_meta_read_block(sif_sdf_t* file,
       "%s has a metadata table of %u bytes, which is not a whole number of "
       "entries",
       file->path, bytes);
+    sif_sdf_meta_free(meta);
     return SIF_SDF_ERR_CORRUPT;
   }
 
   void* table = malloc(bytes);
   if (!table) {
     SIF_LOG_ERROR("sdf", "failed to allocate %u bytes of metadata", bytes);
+    sif_sdf_meta_free(meta);
     return SIF_SDF_ERR_ALLOC;
   }
 
@@ -522,7 +550,14 @@ sif_sdf_status_t sif__sdf_meta_read_block(sif_sdf_t* file,
     status = sif__sdf_meta_decode(meta, table, bytes, file->path);
 
   free(table);
-  return status;
+
+  if (status != SIF_SDF_OK) {
+    sif_sdf_meta_free(meta);
+    return status;
+  }
+
+  *out = meta;
+  return SIF_SDF_OK;
 }
 
 /* --- a file's metadata --- */
@@ -551,8 +586,9 @@ sif_sdf_meta_t* sif_sdf_meta_read(sif_sdf_t* file, sif_sdf_status_t* status) {
       continue;
 
     uint32_t crc = SIF_CRC32_INIT;
+    sif_sdf_meta_t* block = NULL;
     sif_sdf_status_t reason =
-      sif__sdf_meta_read_block(file, &file->blocks[i], meta, &crc);
+      sif__sdf_meta_read_block(file, &file->blocks[i], &block, &crc);
 
     /* A metadata block has no data section, so the checksum over the table is
      * the whole of it. */
@@ -562,6 +598,17 @@ sif_sdf_meta_t* sif_sdf_meta_read(sif_sdf_t* file, sif_sdf_status_t* status) {
         file->path);
       reason = SIF_SDF_ERR_CORRUPT;
     }
+
+    if (reason == SIF_SDF_OK) {
+      /* Each block is read on its own -- which is what lets a table that
+       * declares a key twice be refused -- and only then folded in, where a
+       * repeated key is the correction it is meant to be. */
+      sif__sdf_meta_merge(meta, block);
+      if (meta->failed)
+        reason = SIF_SDF_ERR_ALLOC;
+    }
+
+    sif_sdf_meta_free(block);
 
     if (reason != SIF_SDF_OK) {
       sif_sdf_meta_free(meta);

@@ -6,6 +6,7 @@
 
 #define Py_MODULE_HEAD_UNIFIED
 #include "io/py_io.h"
+#include "io/py_sdf.h"
 
 static PyMethodDef io_methods[] = {
   {"write_field", (PyCFunction)pysif_write_field, METH_VARARGS | METH_KEYWORDS,
@@ -157,11 +158,39 @@ static PyMethodDef io_methods[] = {
     "    tuple: (Profiles, Catalog). The Profiles carries whichever blocks\n"
     "    the file holds; has_density and has_velocity say which."},
 
+  {"verify", (PyCFunction)pysif_sdf_verify, METH_VARARGS | METH_KEYWORDS,
+    "verify(filepath)\n"
+    "--\n\n"
+    "How much of an .sdf file is not a whole, sound block.\n\n"
+    "Reads every payload and checks every checksum, which opening does not.\n"
+    "Changes nothing.\n\n"
+    "Returns:\n"
+    "    int: Bytes at the end that are not part of a sound block, or 0 for\n"
+    "    a file that is entirely sound."},
+
+  {"repair", (PyCFunction)pysif_sdf_repair, METH_VARARGS | METH_KEYWORDS,
+    "repair(filepath)\n"
+    "--\n\n"
+    "Cut a damaged .sdf file back to the part of it that is sound.\n\n"
+    "What a run interrupted mid-append leaves behind does not open at all,\n"
+    "and this is the way back to everything underneath it. The scan stops\n"
+    "at the first block that does not hold, so a file damaged in the middle\n"
+    "loses its tail as well.\n\n"
+    "Returns:\n"
+    "    int: Bytes dropped, or 0 if there was nothing to drop.\n\n"
+    "Warning:\n"
+    "    This truncates the file. Call verify() first to find out what it\n"
+    "    would cost."},
+
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
   .m_name = "pysif.io",
-  .m_doc = "Reading and writing fields, grids, catalogues and profiles.\n\n"
+  .m_doc = "Reading and writing sif's on-disk formats.\n\n"
+           "SDF is the container for a run's products: a void catalogue and\n"
+           "the measurements made from it, in one file that can be added to\n"
+           "later. Everything in one refers to the same catalogue, and the\n"
+           "file refuses anything measured from another.\n\n"
            "The .xfield and .xgrid binary formats load without parsing or\n"
            "copying, at the cost of being portable only between machines\n"
            "that agree on endianness and on the precision sif was built\n"
@@ -170,4 +199,25 @@ static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
   .m_size = -1, .m_methods = io_methods};
 
 /* Submodule exporter called from the parent module initialization routing */
-PyObject* py_sif_init_io(void) { return PyModule_Create(&io_module); }
+PyObject* py_sif_init_io(void) {
+  PyObject* module = PyModule_Create(&io_module);
+  if (!module)
+    return NULL;
+
+  /* The one type this submodule owns. It lives here rather than beside the
+   * data structures because it is a file rather than a container: what it
+   * hands out are the types registered on the package root. */
+  if (PyType_Ready(&sifSDFType) < 0) {
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  Py_INCREF(&sifSDFType);
+  if (PyModule_AddObject(module, "SDF", (PyObject*)&sifSDFType) < 0) {
+    Py_DECREF(&sifSDFType);
+    Py_DECREF(module);
+    return NULL;
+  }
+
+  return module;
+}

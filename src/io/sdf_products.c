@@ -92,25 +92,6 @@ static sif_sdf_status_t need_f64(
   return SIF_SDF_OK;
 }
 
-/* Reads one block's metadata into a fresh table. */
-static sif_sdf_status_t block_meta_read(sif_sdf_t* file,
-  const sif__sdf_entry_t* entry, sif_sdf_meta_t** out, uint32_t* crc) {
-
-  sif_sdf_meta_t* meta = sif_sdf_meta_alloc();
-  if (!meta)
-    return SIF_SDF_ERR_ALLOC;
-
-  const sif_sdf_status_t status =
-    sif__sdf_meta_read_block(file, entry, meta, crc);
-  if (status != SIF_SDF_OK) {
-    sif_sdf_meta_free(meta);
-    return status;
-  }
-
-  *out = meta;
-  return SIF_SDF_OK;
-}
-
 /* The header every product block starts from: its type, its name, and the
  * catalogue it belongs to. */
 static sif_sdf_status_t product_header(sif_sdf_t* file,
@@ -232,7 +213,7 @@ sif_density_profiles_t* sif_sdf_density_profiles(
    * covers the table and then the data, in that order. */
   sif_sdf_meta_t* table = NULL;
   uint32_t crc = SIF_CRC32_INIT;
-  reason = block_meta_read(file, entry, &table, &crc);
+  reason = sif__sdf_meta_read_block(file, entry, &table, &crc);
   if (reason != SIF_SDF_OK) {
     *status = reason;
     return NULL;
@@ -388,7 +369,7 @@ sif_velocity_profiles_t* sif_sdf_velocity_profiles(
 
   sif_sdf_meta_t* table = NULL;
   uint32_t crc = SIF_CRC32_INIT;
-  reason = block_meta_read(file, entry, &table, &crc);
+  reason = sif__sdf_meta_read_block(file, entry, &table, &crc);
   if (reason != SIF_SDF_OK) {
     *status = reason;
     return NULL;
@@ -551,7 +532,7 @@ sif_size_function_t* sif_sdf_size_function(
 
   sif_sdf_meta_t* table = NULL;
   uint32_t crc = SIF_CRC32_INIT;
-  reason = block_meta_read(file, entry, &table, &crc);
+  reason = sif__sdf_meta_read_block(file, entry, &table, &crc);
   if (reason != SIF_SDF_OK) {
     *status = reason;
     return NULL;

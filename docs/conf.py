@@ -19,6 +19,9 @@ REPO = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(Path(__file__).parent / "_ext"))
 
+from clang.cindex import Config
+Config.set_library_path('/opt/homebrew/opt/llvm/lib')
+
 # --- Project ---------------------------------------------------------------
 
 project = "sif"

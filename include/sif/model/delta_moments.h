@@ -136,6 +136,15 @@ SIF_NODISCARD sif_real* sif_delta_sigma_slope_pk(const sif_real* k,
  * its own derivative: zero for uncorrelated steps, one for a walk whose slope
  * its value determines.
  *
+ * @note Needs a longer and a finer `k` table than the covariance does. With a
+ * top-hat the integrand behind this output falls only as P(k) sin^2(kR), where
+ * the one behind the diagonal carries a further 1 / (kR)^4, so a table that
+ * gives a converged sigma can still be getting this badly wrong in two
+ * separate ways: stopping too low in k, and sampling too coarsely to resolve
+ * the oscillation, which needs k dlnk R < pi / 4 and so tightens with radius.
+ * A warning is emitted for each when more than a tenth of the integral is
+ * affected. `high_k_fraction` covers neither -- it is a diagnostic for sigma.
+ *
  * @param opt SIF_DELTA_FILTER_TOP_HAT (default) or SIF_DELTA_FILTER_GAUSSIAN
  *
  * @return Newly allocated packed lower triangle of SIF_COV_SIZE(n_radii)

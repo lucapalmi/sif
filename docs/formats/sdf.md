@@ -300,8 +300,8 @@ file header and there is nothing else the container needs.
 | `radii` | `n_items` R | radii |
 
 Component-major, matching the order the four views sit in a catalogue's arena,
-so a trimmed catalogue whose capacity equals its size reads back with a single
-read into a single allocation.
+so a reader fills each of them with one sequential read rather than striding
+through interleaved values.
 
 ### `DENSITY_PROFILES`
 
@@ -405,15 +405,24 @@ data flows onward and whatever it produces looks like a result. So:
    `data_bytes` must equal the size implied by `n_items` and the block's
    metadata. A length that fails either check is rejected before anything is
    allocated from it.
-5. `crc32` must match the block's metadata and data.
+5. `crc32` must match the block's metadata and data. Checked when a block is
+   read, not when the file is opened -- opening reads only the headers, and
+   verifying every checksum up front would mean reading the whole file to
+   answer a question about one block.
 6. A profile block's `n_items` must equal the catalogue's.
 7. Every block's `catalog_id` must equal block 0's, except a `META` block's,
-   which is zero.
-8. A metadata table must consume exactly `meta_bytes`, and its keys must be
-   unique.
+   which is zero. Blocks in the private range are exempt: they belong to
+   whoever wrote them, and a reader that skips a block has no business
+   auditing it.
+8. A metadata table must consume exactly `meta_bytes`, and **its** keys must be
+   unique -- a table that declares one key twice does not say which value it
+   means. Two *blocks* carrying the same key is the correction mechanism and
+   not a duplicate; see `META`.
 9. A trailing block that is short, or whose checksum fails, is an error rather
    than a truncation to be tolerated silently. Recovering the good prefix is a
-   separate, explicit operation.
+   separate, explicit operation, and it stops at the first block that does not
+   hold: past a damaged block the chain gives no way to know where the next one
+   starts, and looking for one would be guessing.
 
 An unknown `type`, an unknown `type_version`, and an unknown metadata
 `value_type` are *not* errors: the first two are skipped by length, the third

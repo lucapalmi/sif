@@ -22,12 +22,17 @@ Four things are tested, and the last two need no Monte Carlo at all:
   3. the domain guard, deliberately provoked
   4. speed
 
+The `plot` stage draws the first of those across the barrier box, which is the
+part a pooled number cannot show.
+
 Usage:
   python tools/ep_validate.py --stage mc      # runs the fresh ensemble
   python tools/ep_validate.py --stage analyse # everything else
+  python tools/ep_validate.py --stage plot --out-dir <dir>
 """
 
 import argparse
+import os
 import time
 
 import numpy as np
@@ -38,6 +43,12 @@ from ep_trainset_design import (BARRIER_BOX, COSMO_BOX, MAX_DRAWS, NU_REACH,
                                 barrier_values, latin_hypercube,
                                 radii_for_curve)
 from ep_trainset_worker import SCAN
+
+# The data lives next to this script, and the script is run from wherever the
+# caller happens to be standing. Bare filenames as defaults would resolve
+# against the shell's cwd and fail from the repository root, which is the one
+# place anybody actually runs it from.
+HERE = os.path.dirname(os.path.abspath(__file__))
 
 VALID_SEED = 777_000        # deliberately unrelated to the training seed
 N_COSMO = 8
@@ -294,22 +305,195 @@ def stage_speed(mc_path, weights):
           "0.1 ms)")
 
 
+# The cross-validated accuracy quoted in the text, and the same number
+# ep_train_final.py stores in the weights file as acc__median: the median
+# relative error on the multiplicity over 143256 usable bins of the pure-SMT
+# curves, five-fold, held out by whole cosmology.
+#
+# Drawn as a reference line rather than recomputed here, and the reason is the
+# path count. That measurement is against the training runs at 1e9 paths, where
+# the counting noise on those bins has a median of 0.060% -- less than half the
+# 0.128% it reports, so the emulator is what is being measured. This stage runs
+# a fresh ensemble at 1e8, where the same noise is 0.185% and sits ABOVE the
+# quantity of interest. Twenty-four curves at 1e8 can bound the emulator and
+# show that the bound holds everywhere in the barrier box, which is what the
+# figure is for; they cannot re-measure the central value, and a line drawn
+# from them would be a line drawn from noise.
+CV_ACCURACY = 0.00128
+
+
+def curve_accuracy(mc_path, weights):
+    """Per-curve median accuracy and per-curve median Monte Carlo noise.
+
+    One number per curve rather than per bin, because the question the figure
+    answers is whether any corner of the barrier box is worse than the others,
+    and a per-bin cloud buries that under the nu dependence the other figure
+    already shows.
+
+    Both numbers are medians over the same bins, which is what makes them
+    comparable: the counting error varies by a factor of twenty within a single
+    curve, so its RMS is set by a handful of tail bins and would not describe
+    the noise the median accuracy is actually measured against.
+    """
+    emu = EPEmulator.load(weights)
+    d = np.load(mc_path)
+    n_paths = int(d["n_paths"])
+    tags = sorted({k.split("__")[0] for k in d.files if k.startswith("v")})
+
+    out = []
+    for tag in tags:
+        radii = d[f"{tag}__radii"].astype(float)
+        S = d[f"{tag}__S"]
+        barrier = d[f"{tag}__barrier"].astype(float)
+        dvar = d[f"{tag}__dvar"]
+        counts = d[f"{tag}__counts"].astype(float)
+
+        f_emu, info = emu.multiplicity(radii, S, barrier, dvar)
+        f_mc = counts[:-1] / (n_paths * np.diff(radii))
+        c = counts[:-1]
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            noise = np.where(c > 0, 1.0 / np.sqrt(np.maximum(c, 1)), np.inf)
+            resid = np.where((f_mc > 0) & (f_emu > 0),
+                             np.log(f_emu) - np.log(f_mc), np.nan)
+
+        # The same 5% cut stage_analyse uses: past it the reference carries no
+        # information about the emulator at all.
+        good = np.isfinite(resid) & (noise < 0.05)
+
+        out.append(dict(
+            tag=tag,
+            alpha=float(d[f"{tag}__alpha"]),
+            beta=float(d[f"{tag}__beta"]),
+            gamma=float(d[f"{tag}__gamma"]),
+            err=float(np.median(np.abs(np.expm1(resid[good])))),
+            noise=float(np.median(noise[good])),
+            outside=int(info["outside"]) > 0))
+
+    return out
+
+
+def stage_plot(mc_path, weights, out_dir, png):
+    """Accuracy against each barrier parameter, one point per curve.
+
+    Gold is the Monte Carlo and deep blue the emulator, as in the validation
+    figure, and the stem joins the two numbers belonging to the SAME curve --
+    without it the eye pairs points by height and reads a spread that is not
+    there.
+
+    For almost every curve the measured departure sits at or below the
+    reference's own counting noise, which is the honest reading of this test:
+    at 1e8 paths it bounds the emulator rather than resolving it, and the bound
+    it gives is consistent with the cross-validated accuracy drawn as the
+    dotted line.
+
+    Every font size is left to voidstyle. Setting them locally is what makes a
+    figure look foreign next to the others in the same chapter.
+
+    The alpha panel is the one with something to say. Three of the four curves
+    that stand clear of the noise are the three lowest barrier amplitudes in
+    the set, and the domain guard rejects one of those without having been told
+    about any of this. Against beta and gamma there is no trend to see, which
+    is the point of drawing all three.
+    """
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    try:
+        import voidstyle as vs
+        vs.use_style()
+        C_MC, C_EMU = vs.gold, vs.deep_blue
+    except ImportError:
+        C_MC, C_EMU = "#FFB84D", "#163F6E"
+
+    rows = curve_accuracy(mc_path, weights)
+    err = 100.0 * np.array([r["err"] for r in rows])
+    noise = 100.0 * np.array([r["noise"] for r in rows])
+    outside = np.array([r["outside"] for r in rows])
+
+    # Tall enough that the y label at the shared axes.labelsize fits along the
+    # axis rather than running off it, which is what forces the row to be this
+    # deep for three short panels.
+    fig, ax = plt.subplots(1, 3, figsize=(7.6, 4.4), sharey=True,
+                           gridspec_kw=dict(wspace=0.07))
+
+    panels = [(r"$\alpha$", "alpha", (-0.05, 2.62)),
+              (r"$\beta$", "beta", (-0.05, 1.58)),
+              (r"$\gamma$", "gamma", (0.42, 3.28))]
+
+    for a, (label, key, xlim) in zip(ax, panels):
+        x = np.array([r[key] for r in rows])
+
+        a.axhline(100.0 * CV_ACCURACY, color="0.35", lw=0.9, ls=":", zorder=2,
+                  label="cross-validated accuracy")
+        a.vlines(x, np.minimum(err, noise), np.maximum(err, noise),
+                 color="0.72", lw=0.9, zorder=3)
+        a.scatter(x, noise, s=27, facecolors="none", edgecolors=C_MC, lw=1.3,
+                  zorder=4, label="Monte Carlo counting noise")
+        a.scatter(x[~outside], err[~outside], s=23, color=C_EMU, lw=0,
+                  zorder=5, label="emulator")
+        # Kept in rather than dropped: the guard rejecting the curve is part of
+        # the result, and a gap where a bad point used to be would hide it.
+        if outside.any():
+            a.scatter(x[outside], err[outside], s=46, facecolors="none",
+                      edgecolors=C_EMU, lw=1.5, zorder=6,
+                      label="rejected by the domain guard")
+
+        a.set(xlabel=label, xlim=xlim, ylim=(0.10, 0.40))
+
+    ax[0].set_ylabel(r"median per-bin error  [%]")
+
+    # One legend for the row, above it: four entries will not fit inside a
+    # panel this size without landing on the points they describe.
+    handles, labels = ax[0].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=2, frameon=False,
+               bbox_to_anchor=(0.5, 0.90), handletextpad=0.5,
+               columnspacing=1.6)
+
+    os.makedirs(out_dir, exist_ok=True)
+    for ext in ["pdf"] + (["png"] if png else []):
+        path = os.path.join(out_dir, f"ep_domain_accuracy.{ext}")
+        fig.savefig(path, bbox_inches="tight")
+        print(f"wrote {path}")
+    plt.close(fig)
+
+    print(f"\n  {len(rows)} curves: median accuracy {np.median(err):.3f}%, "
+          f"worst {err.max():.3f}%")
+    print(f"  their Monte Carlo noise: median {np.median(noise):.3f}%, "
+          f"worst {noise.max():.3f}%")
+    over = err > 1.25 * noise
+    print(f"  departure exceeds the noise by >25% on {int(over.sum())} curves, "
+          f"at alpha = "
+          + ", ".join(f"{r['alpha']:.3f}" for r, o in zip(rows, over) if o))
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--stage", choices=["mc", "analyse", "all"],
+    ap.add_argument("--stage", choices=["mc", "analyse", "plot", "all"],
                     default="analyse")
-    ap.add_argument("--mc", default="ep_validation_mc.npz")
-    ap.add_argument("--weights", default="ep_emulator.npz")
+    ap.add_argument("--mc", default=os.path.join(HERE, "ep_validation_mc.npz"))
+    ap.add_argument("--weights", default=os.path.join(HERE, "ep_emulator.npz"))
+    ap.add_argument("--out-dir", default=".")
+    ap.add_argument("--png", action="store_true")
     args = ap.parse_args()
+    args.out_dir = os.path.expanduser(args.out_dir)
 
     if args.stage == "mc":
         stage_mc(args.mc)
+        return
+
+    if args.stage == "plot":
+        stage_plot(args.mc, args.weights, args.out_dir, args.png)
         return
 
     stage_analyse(args.mc, args.weights)
     stage_grid(args.mc, args.weights)
     stage_guard(args.mc, args.weights)
     stage_speed(args.mc, args.weights)
+
+    if args.stage == "all":
+        stage_plot(args.mc, args.weights, args.out_dir, args.png)
 
 
 if __name__ == "__main__":

@@ -850,13 +850,68 @@ static void test_guards(void) {
 
 #define N_K 4000
 
-static void power_law(sif_real* k, sif_real* pk, double slope) {
-  const double lo = log(1e-8), hi = log(1e3);
-  for (uint32_t i = 0; i < N_K; i++) {
-    const double lk = lo + (hi - lo) * i / (N_K - 1.0);
+/* k^slope sampled uniformly in log k over [klo, khi]. */
+static void power_law_range(
+  sif_real* k, sif_real* pk, uint32_t n, double klo, double khi, double slope) {
+
+  const double lo = log(klo), hi = log(khi);
+  for (uint32_t i = 0; i < n; i++) {
+    const double lk = lo + (hi - lo) * i / (n - 1.0);
     k[i] = (sif_real)exp(lk);
     pk[i] = (sif_real)pow(exp(lk), slope);
   }
+}
+
+static void power_law(sif_real* k, sif_real* pk, double slope) {
+  power_law_range(k, pk, N_K, 1e-8, 1e3, slope);
+}
+
+/* Worst relative departure of `a` from `b`, entry by entry. */
+static double worst_rel(const double* a, const double* b, uint32_t n) {
+
+  double worst = 0.0;
+  for (uint32_t i = 0; i < n; i++) {
+    const double rel = fabs(a[i] - b[i]) / b[i];
+    if (rel > worst)
+      worst = rel;
+  }
+  return worst;
+}
+
+/*
+ * <(d delta / dS)^2> and sigma at `radii`, from a k^-2 table of `nk` points
+ * running up to `khi`. Zero on failure, so the caller reports it once.
+ */
+static int deriv_from_table(uint32_t nk, double khi, const sif_real* radii,
+  uint32_t n, double* dvar, double* sig) {
+
+  sif_real* k = malloc(nk * sizeof(sif_real));
+  sif_real* pk = malloc(nk * sizeof(sif_real));
+  sif_real* s = malloc(n * sizeof(sif_real));
+
+  if (!k || !pk || !s) {
+    free(k);
+    free(pk);
+    free(s);
+    return 0;
+  }
+
+  power_law_range(k, pk, nk, 1e-8, khi, -2.0);
+
+  double* cov =
+    sif_delta_covariance_pk(k, pk, nk, radii, n, s, NULL, dvar, SIF_DEFAULT);
+  const int ok = (cov != NULL);
+
+  if (ok) {
+    for (uint32_t i = 0; i < n; i++)
+      sig[i] = (double)s[i];
+  }
+
+  sif_free_aligned(cov);
+  free(s);
+  free(pk);
+  free(k);
+  return ok;
 }
 
 /*
@@ -1084,9 +1139,11 @@ static void test_deriv_variance(void) {
        * <(d delta / dR)^2> weights the integrand by k^4, which pushes its
        * support to where the top-hat oscillates fastest, and past a point the
        * trapezoid is aliasing those oscillations rather than resolving them.
-       * The header already warns about this for the covariance itself. The
-       * bound here is set to catch a real defect while sitting above that
-       * floor.
+       * sif_delta_covariance_pk now reports that directly -- it warns when
+       * more than a tenth of this integral comes from samples too widely
+       * spaced to resolve the oscillation -- and the block at the end of this
+       * test pins the behaviour the warning exists for. The bound here is set
+       * to catch a real defect while sitting above that floor.
        */
       const double spread = (g_max - g_min) / g_max;
       CHECK(spread < 3e-3,
@@ -1186,6 +1243,108 @@ static void test_deriv_variance(void) {
     free(sc);
     free(rf);
     free(rc);
+  }
+
+  /*
+   * The other grid the answer must not depend on: the P(k) table itself.
+   *
+   * <(d delta / dR)^2> is far more exposed to it than the covariance is. For a
+   * top-hat, dW/dR goes as sin(kR) / k at large k, so its integrand is
+   * P(k) sin^2(kR) with nothing from the window damping it, where the one
+   * behind sigma^2 carries a further W(kR)^2 ~ 1 / (kR)^4. That leaves two
+   * distinct ways to get it wrong -- a table that stops too low in k, and one
+   * sampled too coarsely to resolve the oscillation -- and in both the
+   * quantity everyone checks, sigma, sails through untouched. Verza et al.
+   * (2024), appendix A, is why this matters here: Gamma_dd = S <(d delta /
+   * dS)^2> - 1/4 is the whole of the slope scatter in the up-crossing rate,
+   * so an error of a few per cent here is an error of a few per cent in the
+   * multiplicity function.
+   *
+   * sif_delta_covariance_pk warns about both. This suite runs at
+   * SIF_LOG_LEVEL_ERROR, so nothing is asserted about the warnings themselves;
+   * what is pinned here is the numerical behaviour they are calibrated
+   * against, which is the part that would break silently.
+   */
+  {
+    const uint32_t n = 24;
+    sif_real* radii = log_radii(n, 2.0, 30.0);
+
+    double* d_ref = malloc(n * sizeof(double));
+    double* d_own = malloc(n * sizeof(double));
+    double* d_short = malloc(n * sizeof(double));
+    double* d_coarse = malloc(n * sizeof(double));
+    double* s_ref = malloc(n * sizeof(double));
+    double* s_own = malloc(n * sizeof(double));
+    double* s_short = malloc(n * sizeof(double));
+    double* s_coarse = malloc(n * sizeof(double));
+
+    /* Two decades further out in k and four times finer than anything below. */
+    const int ok = deriv_from_table(16000, 1e5, radii, n, d_ref, s_ref) &&
+                   deriv_from_table(N_K, 1e3, radii, n, d_own, s_own) &&
+                   deriv_from_table(N_K, 1e1, radii, n, d_short, s_short) &&
+                   deriv_from_table(250, 1e3, radii, n, d_coarse, s_coarse);
+
+    CHECK(ok, "the covariance returned NULL for one of the k tables");
+
+    if (ok) {
+      /* First, that the table the rest of this file uses is itself adequate. */
+      const double own = worst_rel(d_own, d_ref, n);
+      CHECK(own < 3e-3,
+        "the derivative variance from the %d-point table of this test moved by "
+        "a relative %.3e against a table two decades longer and four times "
+        "finer; the tests above are being run on a k grid that no longer "
+        "resolves it",
+        N_K, own);
+
+      /*
+       * Truncation. Stopping at k = 10 rather than 1e3 costs about 8% on the
+       * derivative variance and 5e-5 on sigma -- three orders of magnitude
+       * apart, which is exactly why sigma's own high-k diagnostic cannot be
+       * relied on to cover this one.
+       */
+      const double d_t = worst_rel(d_short, d_ref, n);
+      const double s_t = worst_rel(s_short, s_ref, n);
+
+      CHECK(d_t > 2e-2 && d_t > 100.0 * s_t,
+        "cutting the k table at 10 moved the derivative variance by %.3e and "
+        "sigma by %.3e; the derivative variance is supposed to be the "
+        "sensitive "
+        "one, and if it no longer is, this integral is not being computed the "
+        "way the up-crossing rate needs",
+        d_t, s_t);
+
+      /*
+       * Aliasing. Same k range, 250 points instead of 4000: dlnk = 0.10, which
+       * leaves about a tenth of the integral on samples spaced more than a
+       * quarter period apart. Costs 2.5% on the derivative variance against
+       * 1.4e-5 on sigma. Note the failure does not look like truncation --
+       * refining the grid makes the value oscillate rather than approach a
+       * limit, because each sample reports a phase.
+       */
+      const double d_a = worst_rel(d_coarse, d_ref, n);
+      const double s_a = worst_rel(s_coarse, s_ref, n);
+
+      CHECK(d_a > 1e-2 && d_a > 100.0 * s_a,
+        "coarsening the k table to 250 points moved the derivative variance by "
+        "%.3e and sigma by %.3e; the sin(kR) oscillation is supposed to be "
+        "aliased at this spacing, and the warning that says so is calibrated "
+        "against it",
+        d_a, s_a);
+
+      printf("  k table: own %.2e, truncated %.2e (sigma %.1e), coarse %.2e "
+             "(sigma %.1e)\n",
+        own, d_t, s_t, d_a, s_a);
+    }
+
+    free(s_coarse);
+    free(s_short);
+    free(s_own);
+    free(s_ref);
+    free(d_coarse);
+    free(d_short);
+    free(d_own);
+    free(d_ref);
+    free(radii);
   }
 
   free(pk);
@@ -1354,8 +1513,11 @@ static void test_pipeline(void) {
  * baseline through the diagonal entry point instead -- so without this the
  * reference the whole emulator corrects would never be evaluated at all.
  *
- * Musso-Sheth is exact only for a high barrier, where a first crossing and any
- * crossing coincide. The tolerance below is therefore loose on purpose: what is
+ * The up-crossing rate is exact only for a high barrier, where a first
+ * crossing and any crossing coincide -- keeping the exact scale dependence of
+ * <(d delta / dS)^2>, as Verza et al. (2024) eq. (3.15) does and this baseline
+ * follows, tightens it but does not remove the approximation. The tolerance
+ * below is therefore loose on purpose: what is
  * being pinned is that the baseline is the right shape and the right order of
  * magnitude, not that it agrees to per cent.
  */

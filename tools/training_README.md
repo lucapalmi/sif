@@ -32,11 +32,11 @@ Carlo and a semi-analytic baseline, which is a smooth O(1) quantity.
 
 ## 2. What is actually emulated
 
-### 2.1 The baseline: Musso–Sheth up-crossing
+### 2.1 The baseline: the up-crossing rate of Verza et al. (2024), eq. (3.15)
 
-The baseline is the up-crossing rate of Musso & Sheth — the rate at which the
-walk crosses the barrier upward faster than the barrier itself moves. In the
-walk's own time variable S = σ²(R) (which *increases* as R falls):
+The baseline is the up-crossing rate — the rate at which the walk crosses the
+barrier upward faster than the barrier itself moves. In the walk's own time
+variable S = σ²(R) (which *increases* as R falls):
 
 ```
 f_up(S) = exp(−ν²/2) / √(2π S) · Σ_slope · E[(z − y)⁺]
@@ -47,7 +47,58 @@ normal. This is exact in the high-barrier limit, where a first crossing and any
 crossing are the same event, and runs a few per cent low for a flat barrier and
 up to ~15% for a steep moving one.
 
-### 2.2 The target: a hazard ratio, not a multiplicity ratio
+**This is not the textbook Musso–Sheth rate, and the difference matters.** It
+is the specialisation given by Verza et al. (2024) as their eq. (3.15), written
+here in a form that costs one transcendental instead of two. Their bracket
+
+```
+√(Γ_δδ / 2πS)·exp[−(S/2Γ_δδ)(B/2S − B′)²]
+  + ½(B/2S − B′)·{erf[√(S/2Γ_δδ)(B/2S − B′)] + 1}
+```
+
+becomes `Σ_slope·[φ(y) − y(1 − Φ(y))]` under `Σ_slope² = Γ_δδ/S` and
+`y = (B′ − μ)/Σ_slope` with `μ = B/2S` — the same expression, term for term.
+
+What separates it from Musso & Sheth is that `Γ_δδ = S·⟨(dδ/dS)²⟩ − 1/4` keeps
+its scale dependence instead of being frozen at MS's `Γ = 1/3`. `sif` supplies
+that term exactly: `sif_delta_covariance_pk` differentiates the window under
+the k-integral (their appendix A), and the emulator entry point *refuses to
+run* without it rather than falling back on a finite difference. Against the
+Monte Carlo, the paper measures the frozen-Γ form at 5–9% over its mass range
+and eq. (3.15) at 1.5–7%. It is also what lets a single network cover every
+spectrum: the shape of P(k) enters the baseline through `⟨(dδ/dS)²⟩`, so the
+correction left over is a smooth O(1) function of scale-free features.
+
+### 2.2 Why not the authors' better formula, eq. (3.14)
+
+Verza et al. also give eq. (3.14) — the integral over a second scale s < S,
+which tracks the Monte Carlo about 50% closer than eq. (3.15). It is not used
+as the baseline here, for three reasons:
+
+1. **It would undo the emulator's interface.** `P(s)` needs `C(S, s)` and
+   `C′ = ∂C/∂S` for every pair of scales, plus an `∫ds` per crossing scale
+   with a non-elementary inner integral `F(x, α, β)`. That reintroduces the
+   O(n²) covariance and the nested quadrature the emulator exists to avoid;
+   the current path needs only the diagonal and is linear in the radius count.
+2. **The result would not get more accurate.** The network learns
+   `ln(Λ_MC/Λ_base)`, so the product targets the Monte Carlo whichever
+   baseline sits underneath. §6 shows the fit is already at the Monte Carlo
+   noise floor (residual/noise 1.00–1.07 at ν > 3) and that ensembling changes
+   nothing. A better pedestal shrinks the correction range from [0.91, 1.68]
+   towards 1; it does not move the 0.13%.
+3. **The coherence argument runs the other way.** Ground truth here is the
+   Monte Carlo — eqs. (3.4)–(3.5), the exact numerical solution of the same
+   framework, implemented in `src/model/excursion_set.c`. Eq. (3.14) is itself
+   an approximation to that. Putting it under the network would mean
+   scaffolding an emulator of the exact answer on an approximation whose own
+   error the network then has to absorb.
+
+Eq. (3.14) is still worth having as an **independent analytic cross-check** in
+validation — a third curve beside the Monte Carlo and the emulator at moderate
+S, where the paper quotes ~1% — since it does not depend on the Monte Carlo
+being right. That is an offline diagnostic, not a runtime path.
+
+### 2.3 The target: a hazard ratio, not a multiplicity ratio
 
 The correction is applied to the **hazard**, not to the binned multiplicity.
 Per bin *i* the baseline integrated hazard is
@@ -217,6 +268,24 @@ barrier are dropped (32 of 1536). Those paths never enter any radius bin, and
 such curves were measured to be predicted badly — 0.77% typical, 11% at the
 tail, against 0.13% in-domain. The same threshold becomes the deployed domain
 guard.
+
+### 5.5 The k grid is part of the training data
+
+`ep_make_spectra.py` puts every cosmology on one shared grid, `K_MIN, K_MAX,
+N_K = 1e-4, 500.0, 2400` — Δln k = 0.0064. Those three numbers are not free.
+The baseline needs `⟨(dδ/dS)²⟩`, whose top-hat integrand is `P(k) sin²(kR)`
+with no window suppression at all, and it fails in two ways that σ never
+notices: a table stopping too low in k, and one too coarse to resolve the
+oscillation, which needs `k·Δln k·R < π/4` and therefore tightens with radius.
+`sif_delta_covariance_pk` warns about both above a tenth of the integral.
+
+Measured against a reference at Δln k = 0.00035 running to k = 10⁵, this grid
+is adequate across the trained radius range — worst departure 4.7×10⁻⁴ at
+R = 150 Mpc/h, 2.7×10⁻⁵ at R = 2, both comfortably under the emulator's own
+0.13%. Neither warning fires. **Lowering `N_K` or `K_MAX` would corrupt the
+training targets silently**, since the Monte Carlo and the baseline both read
+the same `deriv_variance` and would move together, leaving the learned ratio
+looking perfectly healthy.
 
 ---
 

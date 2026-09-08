@@ -1070,6 +1070,101 @@ static void test_metadata_rejections(void) {
   remove(SDF_PATH);
 }
 
+static void test_repair(void) {
+  printf("verify and repair\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(64);
+  if (!cat)
+    return;
+
+  sif_size_function_t* vsf =
+    sif_size_function_catalog(cat, (sif_real)BOX, 8, 0, 0, 0);
+  CHECK(vsf != NULL, "could not bin a size function");
+  if (!vsf) {
+    sif_catalog_free(cat);
+    return;
+  }
+
+  /* A sound file has nothing to recover, and saying so costs nothing. */
+  remove(SDF_PATH);
+  sif_sdf_t* file = sif_sdf_create(SDF_PATH, BOX, cat, 0, &status);
+  sif_sdf_append_size_function(file, vsf, "v", &status);
+  sif_sdf_close(file, &status);
+  CHECK(
+    status == SIF_SDF_OK, "setup write failed: %s", sif_sdf_strerror(status));
+
+  const long whole = file_bytes(SDF_PATH);
+  CHECK(sif_sdf_verify(SDF_PATH, &status) == 0 && status == SIF_SDF_OK,
+    "a sound file was reported damaged (%d)", (int)status);
+  CHECK(sif_sdf_repair(SDF_PATH, &status) == 0 && status == SIF_SDF_OK,
+    "a sound file was cut back");
+  CHECK(file_bytes(SDF_PATH) == whole, "a sound file changed size");
+
+  /* What a run that died mid-append leaves. The file does not open at all,
+   * which is the whole reason there has to be a way back. */
+  truncate_to(SDF_PATH, whole - 32);
+  CHECK(sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status) == NULL,
+    "a file with a torn tail opened");
+  status = SIF_SDF_OK;
+
+  const uint64_t damaged = sif_sdf_verify(SDF_PATH, &status);
+  CHECK(damaged > 0 && status == SIF_SDF_OK,
+    "verify did not see the torn tail (%llu, %d)", (unsigned long long)damaged,
+    (int)status);
+  CHECK(file_bytes(SDF_PATH) == whole - 32, "verify changed the file");
+
+  const uint64_t dropped = sif_sdf_repair(SDF_PATH, &status);
+  CHECK(dropped == damaged && status == SIF_SDF_OK,
+    "repair dropped %llu where verify said %llu", (unsigned long long)dropped,
+    (unsigned long long)damaged);
+
+  /* And what was underneath is readable again. */
+  file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+  CHECK(file != NULL, "the repaired file does not open: %s",
+    sif_sdf_strerror(status));
+  CHECK(sif_sdf_n_blocks(file) == 1, "the repaired file holds %u blocks",
+    sif_sdf_n_blocks(file));
+  sif_catalog_t* back = sif_sdf_catalog(file, &status);
+  CHECK(back != NULL && back->n_voids == 64,
+    "the catalogue did not survive the repair");
+  sif_catalog_free(back);
+  sif_sdf_close(file, &status);
+  CHECK(status == SIF_SDF_OK, "the repaired file ended with %s",
+    sif_sdf_strerror(status));
+
+  /* A damaged catalogue is not a damaged tail: there is nothing to keep, and
+   * cutting the file back to a bare header would turn a broken file into an
+   * empty one. */
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+  const long before = file_bytes(SDF_PATH);
+  unsigned char byte = 0;
+  FILE* f = fopen(SDF_PATH, "rb");
+  if (f) {
+    fseek(f, DATA_OFFSET, SEEK_SET);
+    if (fread(&byte, 1, 1, f) != 1)
+      byte = 0;
+    fclose(f);
+  }
+  byte ^= 0x01;
+  poke(SDF_PATH, DATA_OFFSET, &byte, 1);
+
+  CHECK(
+    sif_sdf_verify(SDF_PATH, &status) == 0 && status == SIF_SDF_ERR_NO_CATALOG,
+    "a damaged catalogue was reported as a damaged tail (%d)", (int)status);
+  status = SIF_SDF_OK;
+  CHECK(
+    sif_sdf_repair(SDF_PATH, &status) == 0 && status == SIF_SDF_ERR_NO_CATALOG,
+    "repair tried to salvage a file with no sound catalogue (%d)", (int)status);
+  status = SIF_SDF_OK;
+  CHECK(file_bytes(SDF_PATH) == before,
+    "a file with nothing to recover was truncated anyway");
+
+  sif_size_function_free(vsf);
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
 int main(void) {
   sif_init(SIF_CONFIG_QUIET);
 
@@ -1088,6 +1183,7 @@ int main(void) {
   test_metadata();
   test_metadata_merge();
   test_metadata_rejections();
+  test_repair();
 
   remove(SDF_PATH);
   remove(ALT_PATH);

@@ -8,8 +8,9 @@
 Pilot study for the EP multiplicity emulator.
 
 Question under test: is the ratio between the Monte Carlo first-crossing
-hazard and the Musso-Sheth up-crossing hazard a smooth, O(1) target that
-local features (nu, gamma^2, y) organize across spectra and barriers?
+hazard and the up-crossing hazard of Verza+ (2024) eq. (3.15) a smooth, O(1)
+target that local features (nu, gamma^2, y) organize across spectra and
+barriers?
 
 Runs ~27 first-crossing ensembles at modest n_paths (about 2 minutes on a
 laptop), extracts the per-bin hazard ratio with its Monte Carlo error, and

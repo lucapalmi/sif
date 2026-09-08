@@ -5,9 +5,26 @@
  */
 
 /*
- * The semi-analytic first crossing: Musso & Sheth's up-crossing rate for a
- * correlated walk against a moving barrier, and the local description of the
- * walk it is built from.
+ * The semi-analytic first crossing: the up-crossing rate for a correlated walk
+ * against a moving barrier, and the local description of the walk it is built
+ * from.
+ *
+ * This is Musso & Sheth's rate, but in the form of Verza et al. (2024),
+ * eq. (3.15): the Gamma_dd = S <(d delta / dS)^2> - 1/4 that sets the walk's
+ * slope scatter is evaluated exactly at every scale, rather than frozen at the
+ * Gamma = 1/3 that the original uses. That is not a detail. Against the Monte
+ * Carlo, the fixed-Gamma form runs 5-9 per cent out over the mass range that
+ * paper reports; carrying the scale dependence brings the same expression to
+ * 1.5-7 per cent. It is also the difference between a baseline that follows
+ * the shape of P(k) and one that does not, so it is what makes the emulator's
+ * correction on top of it a smooth O(1) function of the features.
+ *
+ * The remaining error is the price of the approximation the rate is derived
+ * from -- a purely local description of the walk near the crossing. Verza
+ * et al. eq. (3.14) closes most of what is left by carrying a second scale,
+ * but it needs the full covariance C(S, s) and a nested quadrature per bin,
+ * which is exactly the cost this file exists to avoid. The trained correction
+ * in ep_emu.c buys the same accuracy and more for a matrix multiply.
  *
  * Everything here is closed form and costs microseconds, against seconds for
  * the Monte Carlo in excursion_set.c.
@@ -242,6 +259,16 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
 
     f->y[i] = (dB - mu) / sigma_slope;
 
+    /*
+     * Verza et al. (2024) eq. (3.15), rearranged. Their bracket
+     *
+     *   sqrt(Gamma_dd / 2 pi S) exp[-(S / 2 Gamma_dd) (B/2S - B')^2]
+     *     + (1/2)(B/2S - B') {erf[sqrt(S / 2 Gamma_dd) (B/2S - B')] + 1}
+     *
+     * is Sigma_slope [phi(y) - y (1 - Phi(y))] once Sigma_slope^2 = Gamma_dd/S
+     * and y = (B' - mu) / Sigma_slope are substituted, which is the mean
+     * excess above. Same expression, one transcendental instead of two.
+     */
     const double nu = f->nu[i];
     f->f_up[i] = exp(-0.5 * nu * nu) / sqrt(2.0 * SIF_PI * S) * sigma_slope *
                  mean_excess(f->y[i]);

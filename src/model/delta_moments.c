@@ -28,6 +28,32 @@
  * the far end of the tabulated k range rather than by the spectrum. */
 #define HIGH_K_WARN_LEVEL 0.1
 
+/*
+ * The sin^2(kR) in the derivative-variance integrand has period pi / R in k,
+ * and a log-spaced table samples it at dk = k dlnk. Below this many samples
+ * per period the trapezoid is not integrating the oscillation, it is sampling
+ * its phase, and the contribution is counted as aliased. Four is the point
+ * where a trapezoid stops meaning anything at all rather than a comfortable
+ * margin -- what matters is the weight sitting past it, not the exact cut.
+ */
+#define ALIAS_MIN_SAMPLES 4.0
+
+/*
+ * Measured, not chosen for roundness. Over a CDM-like table refined from
+ * dlnk = 0.59 to 0.0045, against a reference at 0.0003, taken at R = 2, 10, 50
+ * and 150, the aliased fraction and the error in <(d delta / dR)^2> line up as
+ *
+ *     aliased      0-5%    5-10%   10-15%   15-25%   25-50%    > 50%
+ *     worst error  0.04%   0.28%    0.52%    1.24%    2.98%   46.58%
+ *
+ * A tenth is the last band that stays under a third of a per cent; past it the
+ * cost climbs quickly, and by half the integral it is several per cent. The
+ * sign wanders with the phase, which is why refining the grid makes the answer
+ * oscillate rather than approach a limit, and why this cannot be caught by
+ * comparing two grids at random.
+ */
+#define ALIAS_WARN_LEVEL 0.1
+
 static int validate_order(uint8_t order) {
   if (order > SIF_MAX_MOMENT_ORDER) {
     SIF_LOG_ERROR(TAG, "moment order %u exceeds the maximum of %d", order,
@@ -364,19 +390,31 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
    * dblock[i][m] holds amp_m k_m W'(k_m R_i), so that summing dblock against
    * block gives dS/dR and summing it against itself gives <(d delta / dR)^2>,
    * both over the same log-k trapezoid the covariance already uses.
+   *
+   * high_d is that second sum restricted to the top half of the k range, the
+   * same truncation diagnostic `high` carries for sigma^2 but kept separately
+   * because the two integrals converge at very different rates -- see the
+   * warning at the end of the routine. alias_d is the same sum restricted to
+   * the samples where the table is too coarse to resolve the oscillation it is
+   * integrating, which is the other way this integral goes wrong.
    */
   double* dblock = NULL;
   double* ds_dr = NULL;
   double* dd_dr2 = NULL;
+  double* high_d = NULL;
+  double* alias_d = NULL;
 
   if (deriv_variance) {
     dblock = sif_malloc_aligned((size_t)n_radii * COV_K_BLOCK * sizeof(double));
     ds_dr = calloc((size_t)n_radii, sizeof(double));
     dd_dr2 = calloc((size_t)n_radii, sizeof(double));
+    high_d = calloc((size_t)n_radii, sizeof(double));
+    alias_d = calloc((size_t)n_radii, sizeof(double));
   }
 
   if (!cov || !logk || !amp || !block || !high ||
-      (deriv_variance && (!dblock || !ds_dr || !dd_dr2))) {
+      (deriv_variance &&
+        (!dblock || !ds_dr || !dd_dr2 || !high_d || !alias_d))) {
     SIF_LOG_ERROR(TAG, "failed to allocate the covariance workspace");
     sif_free_aligned(cov);
     free(logk);
@@ -386,6 +424,8 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
     sif_free_aligned(dblock);
     free(ds_dr);
     free(dd_dr2);
+    free(high_d);
+    free(alias_d);
     return NULL;
   }
 
@@ -426,6 +466,7 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
 
       double* Bi = dblock + (size_t)i * COV_K_BLOCK;
       double sum_cross = 0.0, sum_sq = 0.0;
+      double sum_sq_high = 0.0, sum_sq_alias = 0.0;
 
       for (uint32_t m = 0; m < len; m++) {
         const double ki = (double)k[base + m];
@@ -434,10 +475,25 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
         /* d/dR of W^2 is 2 W W', so the cross term carries the factor two. */
         sum_cross += 2.0 * Ai[m] * Bi[m];
         sum_sq += Bi[m] * Bi[m];
+
+        if (ki > k_high)
+          sum_sq_high += Bi[m] * Bi[m];
+
+        /*
+         * dk = k dlnk here, against the pi / R period of the oscillation. The
+         * weight is recomputed rather than stored: it costs two subtractions
+         * next to the transcendental above, and the alternative is another
+         * n_points array live for the whole routine.
+         */
+        const double dk = ki * log_trapezoid_weight(logk, n_points, base + m);
+        if (dk * R * ALIAS_MIN_SAMPLES > SIF_PI)
+          sum_sq_alias += Bi[m] * Bi[m];
       }
 
       ds_dr[i] += sum_cross;
       dd_dr2[i] += sum_sq;
+      high_d[i] += sum_sq_high;
+      alias_d[i] += sum_sq_alias;
     }
 
     /* S += A A^T over this block of k. Rows are uneven because the triangle
@@ -481,6 +537,52 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
        */
       deriv_variance[i] =
         (ds_dr[i] != 0.0) ? dd_dr2[i] / (ds_dr[i] * ds_dr[i]) : 0.0;
+
+      /*
+       * This integral, not sigma^2, is the one a short P(k) table truncates
+       * first, so it gets its own diagnostic. For a top-hat, dW/dR goes as
+       * sin(kR) / k at large k, leaving the integrand as P(k) sin^2(kR) with
+       * no suppression from the window at all: per log k it falls two powers
+       * slower than the one sigma^2 accumulates, which carries an extra
+       * W(kR)^2 ~ 1 / (kR)^4. Verza et al. (2024), appendix A, is the
+       * reference; it is why this quantity is usually dodged with a Gaussian
+       * filter and a scale mapping instead of computed.
+       *
+       * The consequence of getting it wrong is not small. It is the whole of
+       * Gamma_dd = S <(d delta / dS)^2> - 1/4, hence of the slope scatter
+       * Sigma_slope the up-crossing rate in ep_upcrossing.c is built from, so
+       * a table that stops too early moves the multiplicity function while the
+       * sigma diagnostic below stays perfectly quiet.
+       */
+      if (dd_dr2[i] > 0.0 && high_d[i] / dd_dr2[i] > HIGH_K_WARN_LEVEL) {
+        SIF_LOG_WARNING(TAG,
+          "at R = %g, %.1f%% of <(d delta / dR)^2> comes from the top half of "
+          "the tabulated k range; the table is truncating the derivative "
+          "variance, which sets the up-crossing rate's slope scatter. Extend "
+          "P(k) to higher k -- this integral converges far more slowly than "
+          "the covariance itself",
+          (double)radii[i], 100.0 * high_d[i] / dd_dr2[i]);
+      }
+
+      /*
+       * Reaching high enough in k is only half of it: the grid also has to be
+       * fine enough to see what it is integrating. sin^2(kR) turns over every
+       * pi / R in k, so the requirement tightens with radius, and a table that
+       * is ample at R = 2 can be aliasing badly at R = 150 -- which is the end
+       * of the grid the emulator most depends on. The failure looks nothing
+       * like truncation: refining the grid makes the answer jump around rather
+       * than approach a limit, because each sample is reporting a phase.
+       */
+      if (dd_dr2[i] > 0.0 && alias_d[i] / dd_dr2[i] > ALIAS_WARN_LEVEL) {
+        SIF_LOG_WARNING(TAG,
+          "at R = %g, %.1f%% of <(d delta / dR)^2> comes from k samples too "
+          "widely spaced to resolve the sin(kR) oscillation (fewer than %g per "
+          "period); the derivative variance is being aliased rather than "
+          "integrated. Sample P(k) more finely in log k -- the requirement is "
+          "k dlnk R < pi / %g, so it is the largest radius that sets it",
+          (double)radii[i], 100.0 * alias_d[i] / dd_dr2[i], ALIAS_MIN_SAMPLES,
+          ALIAS_MIN_SAMPLES);
+      }
     }
 
     if (!(diag > 0.0)) {
@@ -503,6 +605,8 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
   sif_free_aligned(dblock);
   free(ds_dr);
   free(dd_dr2);
+  free(high_d);
+  free(alias_d);
 
   SIF_LOG_INFO(TAG, "covariance over %u radii evaluated from P(k)", n_radii);
 
@@ -511,4 +615,6 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
 
 #undef TAG
 #undef HIGH_K_WARN_LEVEL
+#undef ALIAS_MIN_SAMPLES
+#undef ALIAS_WARN_LEVEL
 #undef COV_K_BLOCK

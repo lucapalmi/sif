@@ -16,7 +16,9 @@
  * features, needs only the diagonal, and is linear -- about a million times
  * faster, at a fitted accuracy quoted with the emulator.
  *
- * The upcrossing form is the analytic limit both are measured against.
+ * The upcrossing form -- Verza et al. (2024) eq. (3.15), the Musso-Sheth rate
+ * with the exact scale-dependent <(d delta / dS)^2> -- is the analytic limit
+ * both are measured against.
  */
 
 #ifndef SIF_MODEL_EXCURSION_SET_H
@@ -180,10 +182,11 @@ typedef struct {
  * @brief The same multiplicity function as sif_ep_multiplicity_function,
  * emulated: no random walks, no paths, well under a millisecond.
  *
- * A semi-analytic up-crossing rate corrected by a small trained network. The
- * correction multiplies a hazard rather than the multiplicity itself, and the
- * result is rebuilt through the survival recursion, so it is non-negative and
- * integrates to at most one whatever the network predicts.
+ * The up-crossing rate of Verza et al. (2024) eq. (3.15) corrected by a small
+ * trained network. The correction multiplies a hazard rather than the
+ * multiplicity itself, and the result is rebuilt through the survival
+ * recursion, so it is non-negative and integrates to at most one whatever the
+ * network predicts.
  *
  * @note Takes `sigma`, not the packed covariance that
  * sif_ep_multiplicity_function needs. That is deliberate rather than an
