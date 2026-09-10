@@ -27,19 +27,22 @@ static int sifChainMesh_init(
   PyObject* field_obj = NULL;
   int drop_indices = 0;
   int consume_field = 0;
+  int canonical = 1;
 
-  static char* kwlist[] = {
-    "n_cells", "box_length", "field", "drop_indices", "consume_field", NULL};
+  static char* kwlist[] = {"n_cells", "box_length", "field", "drop_indices",
+    "consume_field", "canonical", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!|pp", kwlist, &n_cells,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "IdO!|ppp", kwlist, &n_cells,
         &box_length_in, &sifFieldType, &field_obj, &drop_indices,
-        &consume_field)) {
+        &consume_field, &canonical)) {
     return -1;
   }
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
 
-  const sif_option opt = drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT;
+  const sif_option opt =
+    (drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT) |
+    (canonical ? SIF_DEFAULT : SIF_MESH_NO_CANONICAL);
 
   /* The consuming form empties the field rather than copying it. That is safe
    * to expose directly because a sif.Field hands out no views into its arrays
@@ -198,7 +201,7 @@ PyTypeObject sifChainMeshType = {
   .tp_flags = Py_TPFLAGS_DEFAULT,
   .tp_doc =
     "ChainMesh(n_cells, box_length, field, drop_indices=False,\n"
-    "          consume_field=False)\n"
+    "          consume_field=False, canonical=True)\n"
     "--\n\n"
     "A uniform spatial bin over a periodic box, for neighbour queries.\n\n"
     "Particles are copied into cell order, so the members of a cell sit\n"
@@ -228,7 +231,14 @@ PyTypeObject sifChainMeshType = {
     "        original_indices then reads back as None.\n"
     "    consume_field: Build the mesh out of the field's own storage,\n"
     "        emptying it. The field is consumed whether or not the call\n"
-    "        succeeds, so do not pass a field you still need.",
+    "        succeeds, so do not pass a field you still need.\n"
+    "    canonical: Sort each cell by source index, so two identical runs\n"
+    "        give byte-identical meshes. On by default. Turning it off\n"
+    "        leaves cells in scatter order, which changes nothing about\n"
+    "        which particles a cell holds -- only the order they are\n"
+    "        summed in, and so the last bits of anything that walks them.\n"
+    "        A finder that counts tracers inside a sphere does not care;\n"
+    "        stacked profiles and nearest-neighbour distance ties do.",
   .tp_methods = sifChainMesh_methods,
   .tp_getset = sifChainMesh_getset,
   .tp_init = sifChainMesh_init,

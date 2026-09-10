@@ -9,7 +9,7 @@
 static PyMethodDef finders_methods[] = {
   {"exodus", (PyCFunction)py_sif_finder_exodus, METH_VARARGS | METH_KEYWORDS,
     "exodus(grid, mesh, radii, threshold, overlap_fraction=0.0, "
-    "consume_grid=False)\n"
+    "consume_grid=False, search_factor=1.5)\n"
     "--\n\n"
     "Find voids, growing each to the radius its tracers support.\n\n"
     "Uses the radius ladder to locate candidates, then walks the enclosed\n"
@@ -28,7 +28,15 @@ static PyMethodDef finders_methods[] = {
     "        negative, since voids are underdensities.\n"
     "    overlap_fraction: How much two voids may overlap, as a fraction of\n"
     "        the smaller one's radius. 0 forbids overlap entirely.\n"
-    "    consume_grid: Skip restoring the grid, saving one inverse FFT.\n\n"
+    "    consume_grid: Skip restoring the grid, saving one inverse FFT.\n"
+    "    search_factor: How far past a rung the rescaling looks for the\n"
+    "        crossing, as a multiple of the rung. Default 1.5. This is the\n"
+    "        finder's dominant cost and it goes as factor**3 - 1, so 1.5\n"
+    "        does about a third the work of 2.0. Lower is not free: a rung\n"
+    "        whose crossing lies past its reach defers to a larger rung, and\n"
+    "        where no larger rung saw that void the catalogue changes.\n"
+    "        Snapped to the nearest of 1.25, 1.5, 1.75, 2.0; pass 2.0 to\n"
+    "        reproduce catalogues made before this argument existed.\n\n"
     "Returns:\n"
     "    Catalog: The voids found."},
 

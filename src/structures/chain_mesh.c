@@ -16,8 +16,8 @@
 #include <stdlib.h>
 #include <string.h>
 
-static int chain_mesh_create(
-  sif_chain_mesh_t* mesh, const sif_field_t* field, bool consume);
+static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
+  bool consume, sif_option opt);
 
 static inline int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
 
@@ -177,7 +177,7 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
     }
   }
 
-  if (chain_mesh_create(mesh, field, false) != SIF_OK) {
+  if (chain_mesh_create(mesh, field, false, opt) != SIF_OK) {
     sif_chain_mesh_free(mesh);
     return NULL;
   }
@@ -223,7 +223,7 @@ sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
 
   mesh->weights = field->weights;
 
-  const int status = chain_mesh_create(mesh, field, true);
+  const int status = chain_mesh_create(mesh, field, true, opt);
 
   /*
    * Emptied on either outcome. By this point the storage belongs to the mesh
@@ -331,28 +331,171 @@ static inline void chain_mesh_swap(
  * a voxel.
  *
  * Sorting by the source index replaces that with an order determined by the
- * input alone. Insertion sort because it is the right algorithm for the shape
- * of the data: a chain mesh is sized for a handful of particles per cell, and
- * the slice is a concatenation of a few already-ascending runs, which insertion
- * sort walks in close to linear time. A pathologically coarse mesh -- every
- * particle in one cell -- makes it quadratic, but that mesh has already made
- * every query a linear scan, so it is not the case worth optimizing for.
+ * input alone.
+ *
+ * WHAT IS SORTED, AND WHY IT IS NOT THE PAYLOAD
+ * --------------------------------------------
+ * This used to insertion-sort the payload itself, swapping whole rows -- x, y,
+ * z, the velocities, the weight and the key -- once per inversion. That is
+ * linear on a cell whose slice is already nearly ordered, which is what a
+ * field still in its generation order gives: consecutive particles are close
+ * in space, so a cell draws from a contiguous stretch of the input and the
+ * slice arrives as a few ascending runs.
+ *
+ * It stops being nearly ordered the moment the field is not. In an evolved
+ * snapshot a particle's position no longer tracks its index, so a spatial cell
+ * draws from all over the input and the slice arrives scrambled; the inversion
+ * count goes from a handful to ~n^2/4, and each of those inversions moved four
+ * separate multi-GiB arrays. Measured on a 2048^3 z = 0 field at 64 tracers
+ * per cell, this function alone took 69 minutes, against 15 seconds for the
+ * same box and mesh at z = 99.
+ *
+ * So the sort runs over a compact array of (key, slot) records instead, and
+ * the permutation is applied to the payload once at the end: n moves per
+ * column rather than one move per inversion, over 16 contiguous bytes per
+ * record rather than four scattered arrays. The result is bit-identical --
+ * every key in a cell is a distinct particle index, so the ascending order is
+ * unique and no tie-breaking rule can differ.
+ *
+ * Cells at or below CHAIN_MESH_CANON_INSERTION_MAX still use insertion sort,
+ * now over the key array, because at the occupancy a chain mesh is sized for
+ * that is the whole population and qsort's per-comparison indirect call is
+ * pure overhead there.
  */
+#define CHAIN_MESH_CANON_INSERTION_MAX 32u
+
+typedef struct {
+  uint64_t key;  /* the particle's index in the source field */
+  uint64_t slot; /* where it currently sits, relative to the cell's start */
+} chain_mesh_canon_t;
+
+static int chain_mesh_canon_cmp(const void* a, const void* b) {
+  const uint64_t ka = ((const chain_mesh_canon_t*)a)->key;
+  const uint64_t kb = ((const chain_mesh_canon_t*)b)->key;
+  return (ka > kb) - (ka < kb);
+}
+
 static void chain_mesh_canonicalize(sif_chain_mesh_t* mesh) {
   const uint64_t n_c = mesh->total_cells;
 
-#pragma omp parallel for schedule(dynamic, 64)
-  for (uint64_t c = 0; c < n_c; c++) {
-    const uint64_t lo = mesh->cell_offsets[c];
-    const uint64_t hi = mesh->cell_offsets[c + 1];
+#pragma omp parallel
+  {
+    /* Grown to the largest cell this thread meets and reused for every cell
+     * after it, so the allocator is not in the inner loop. */
+    chain_mesh_canon_t* order = NULL;
+    sif_real* rtmp = NULL;
+    uint64_t* utmp = NULL;
+    uint64_t cap = 0;
 
-    for (uint64_t i = lo + 1; i < hi; i++) {
-      for (uint64_t j = i;
-        j > lo && mesh->original_indices[j] < mesh->original_indices[j - 1];
-        j--) {
-        chain_mesh_swap(mesh, j, j - 1);
+#pragma omp for schedule(dynamic, 64)
+    for (uint64_t c = 0; c < n_c; c++) {
+      const uint64_t lo = mesh->cell_offsets[c];
+      const uint64_t hi = mesh->cell_offsets[c + 1];
+      const uint64_t n = hi - lo;
+
+      if (n < 2)
+        continue;
+
+      /* Already ascending costs one scan to establish and skips everything
+       * below. This is the common case for a field whose order still tracks
+       * position -- initial conditions, or anything Morton sorted -- and it is
+       * why those meshes were never slow to begin with. */
+      uint64_t run = 1;
+      while (run < n && mesh->original_indices[lo + run - 1] <
+                          mesh->original_indices[lo + run])
+        run++;
+      if (run == n)
+        continue;
+
+      if (n > cap) {
+        const uint64_t want = n + (n >> 1) + 8;
+        chain_mesh_canon_t* n_order =
+          sif_malloc_aligned(want * sizeof *n_order);
+        sif_real* n_rtmp = sif_malloc_aligned(want * sizeof *n_rtmp);
+        uint64_t* n_utmp = sif_malloc_aligned(want * sizeof *n_utmp);
+
+        if (n_order && n_rtmp && n_utmp) {
+          sif_free_aligned(order);
+          sif_free_aligned(rtmp);
+          sif_free_aligned(utmp);
+          order = n_order;
+          rtmp = n_rtmp;
+          utmp = n_utmp;
+          cap = want;
+        } else {
+          sif_free_aligned(n_order);
+          sif_free_aligned(n_rtmp);
+          sif_free_aligned(n_utmp);
+          /* Fall back to the in-place sort, which needs no scratch at all. It
+           * is the slow path this function exists to avoid, but it is correct,
+           * and it keeps a mesh that cannot spare 24 bytes per tracer in one
+           * cell building rather than silently unsorted. */
+          for (uint64_t i = lo + 1; i < hi; i++) {
+            for (uint64_t j = i; j > lo && mesh->original_indices[j] <
+                                             mesh->original_indices[j - 1];
+              j--) {
+              chain_mesh_swap(mesh, j, j - 1);
+            }
+          }
+          continue;
+        }
       }
+
+      for (uint64_t i = 0; i < n; i++) {
+        order[i].key = mesh->original_indices[lo + i];
+        order[i].slot = i;
+      }
+
+      if (n <= CHAIN_MESH_CANON_INSERTION_MAX) {
+        for (uint64_t i = 1; i < n; i++) {
+          const chain_mesh_canon_t t = order[i];
+          uint64_t j = i;
+          while (j > 0 && order[j - 1].key > t.key) {
+            order[j] = order[j - 1];
+            j--;
+          }
+          order[j] = t;
+        }
+      } else {
+        qsort(order, (size_t)n, sizeof *order, chain_mesh_canon_cmp);
+      }
+
+/* Gather into scratch, then copy back: n reads and 2n writes per column,
+ * whatever the permutation looks like. */
+#define CHAIN_MESH_CANON_APPLY(arr)                                            \
+  do {                                                                         \
+    for (uint64_t i = 0; i < n; i++)                                           \
+      rtmp[i] = (arr)[lo + order[i].slot];                                     \
+    for (uint64_t i = 0; i < n; i++)                                           \
+      (arr)[lo + i] = rtmp[i];                                                 \
+  } while (0)
+
+      CHAIN_MESH_CANON_APPLY(mesh->x);
+      CHAIN_MESH_CANON_APPLY(mesh->y);
+      CHAIN_MESH_CANON_APPLY(mesh->z);
+
+      if (mesh->vx) {
+        CHAIN_MESH_CANON_APPLY(mesh->vx);
+        CHAIN_MESH_CANON_APPLY(mesh->vy);
+        CHAIN_MESH_CANON_APPLY(mesh->vz);
+      }
+
+      if (mesh->weights)
+        CHAIN_MESH_CANON_APPLY(mesh->weights);
+
+#undef CHAIN_MESH_CANON_APPLY
+
+      /* The key is its own sorted order, so it needs no gather -- but it does
+       * need writing back, and it is uint64 rather than sif_real. */
+      for (uint64_t i = 0; i < n; i++)
+        utmp[i] = order[i].key;
+      for (uint64_t i = 0; i < n; i++)
+        mesh->original_indices[lo + i] = utmp[i];
     }
+
+    sif_free_aligned(order);
+    sif_free_aligned(rtmp);
+    sif_free_aligned(utmp);
   }
 }
 
@@ -454,8 +597,8 @@ static void chain_mesh_sum_weights(sif_chain_mesh_t* mesh) {
   mesh->total_weight = total;
 }
 
-static int chain_mesh_create(
-  sif_chain_mesh_t* mesh, const sif_field_t* field, bool consume) {
+static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
+  bool consume, sif_option opt) {
 
   if (!mesh || !field)
     return SIF_ERR_INVALID;
@@ -594,7 +737,12 @@ static int chain_mesh_create(
   if (consume && chain_mesh_permute_payloads(mesh) != SIF_OK)
     return SIF_ERR_ALLOC;
 
-  chain_mesh_canonicalize(mesh);
+  if (opt & SIF_MESH_NO_CANONICAL)
+    SIF_LOG_TRACE("chain_mesh",
+      "canonical ordering skipped; cell contents are in scatter order and two "
+      "identical runs may order a cell differently");
+  else
+    chain_mesh_canonicalize(mesh);
 
   chain_mesh_sum_weights(mesh);
 

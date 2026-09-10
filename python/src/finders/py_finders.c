@@ -78,15 +78,16 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
 
   /* Optional keyword arguments with safe defaults */
   int consume_grid = 0;
+  double search_factor = 1.5;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
-    "overlap_fraction", "consume_grid", NULL};
+    "overlap_fraction", "consume_grid", "search_factor", NULL};
 
   /* The '|' character denotes that everything after it is optional.
    * 'p' safely converts a Python boolean to a C int (1 or 0). */
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
-        &threshold, &overlap_frac, &consume_grid)) {
+        &threshold, &overlap_frac, &consume_grid, &search_factor)) {
     return NULL;
   }
 
@@ -116,6 +117,35 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
 
   if (consume_grid)
     options |= SIF_FINDER_CONSUME_GRID;
+
+  /* The C side carries the reach as two bits of the option word rather than a
+   * float, so anything asked for here lands on the nearest of the four it can
+   * represent. Snapping rather than rejecting keeps the argument a physical
+   * quantity the caller can sweep: 1.4 and 1.6 both mean "about one and a
+   * half", and neither is worth an exception. The value actually used is
+   * reported back by the finder's own log line. */
+  {
+    static const double allowed[4] = {1.25, 1.5, 1.75, 2.0};
+    static const sif_option flag[4] = {SIF_FINDER_SEARCH_1_25,
+      SIF_FINDER_SEARCH_1_50, SIF_FINDER_SEARCH_1_75, SIF_FINDER_SEARCH_2_00};
+
+    if (!(search_factor > 1.0) || !(search_factor < 1e6)) {
+      PyErr_SetString(PyExc_ValueError,
+        "search_factor must be greater than 1 (it is a multiple of the rung "
+        "radius); it is snapped to the nearest of 1.25, 1.5, 1.75, 2.0");
+      Py_DECREF(radii_arr);
+      return NULL;
+    }
+
+    int best = 0;
+    for (int k = 1; k < 4; k++) {
+      const double d = search_factor - allowed[k];
+      const double b = search_factor - allowed[best];
+      if ((d < 0 ? -d : d) < (b < 0 ? -b : b))
+        best = k;
+    }
+    options |= flag[best];
+  }
 
   /* Execute the algorithm. The GIL is released: this runs for minutes to
    * hours across every core, and holding it would freeze the interpreter and

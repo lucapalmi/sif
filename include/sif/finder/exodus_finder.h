@@ -79,10 +79,17 @@ SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
  */
 #define SIF_FINDER_MESH_PARTICLES_PER_CELL 30.0
 
-/** @brief Cap on the suggested resolution. The mesh's cell_offsets array alone
- * is 8 * n_cells^3 bytes, which is already ~1 GiB here.
+/** @brief Cap on the suggested resolution.
+ *
+ * The mesh's cell_offsets array alone is 8 * n_cells^3 bytes: 8.6 GiB at this
+ * cap, against 1.1 GiB at the 512 it replaces. That sounds worse than it is,
+ * because the cap only binds above 30 * 1024^3 = 3.2e10 tracers -- a mesh
+ * whose payload is already several hundred GiB. What it fixes is the range
+ * just below: at 2048^3 tracers the rule asks for 659 cells and the old cap
+ * forced 512, which is 64 tracers per cell against the 30 this finder is
+ * fastest at, and it doubled the per-cell cost of the canonical sort.
  */
-#define SIF_FINDER_MESH_MAX_CELLS 512u
+#define SIF_FINDER_MESH_MAX_CELLS 1024u
 
 /**
  * @brief Suggested chain-mesh resolution for this finder.

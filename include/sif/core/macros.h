@@ -56,7 +56,7 @@ typedef uint32_t sif_option;
 
 /**
  * @defgroup opt_finder Finder options
- * @brief Bits 14-15. Bits 8-13 are free.
+ * @brief Bits 12-15. Bits 8-11 are free.
  * @{
  */
 /**
@@ -69,6 +69,48 @@ typedef uint32_t sif_option;
  * grid anyway.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
+
+/**
+ * @name Rescaling search radius
+ *
+ * How far past a rung the rescaling looks for the crossing, as a multiple of
+ * the rung: r_search = factor * radius.
+ *
+ * This is the finder's dominant cost and almost none of it is usually needed.
+ * The rescaling histograms every tracer in the shell [radius, r_search] --
+ * everything inside the rung is counted whole, cell by cell, and costs
+ * nothing -- so the work goes as factor^3 - 1. At 2.0 that is 7 r^3 to place a
+ * crossing that, on a 1.5% ladder, is measured at a mean of 1.03 r.
+ *
+ * What the reach actually has to be is set by the ladder, not by the void: a
+ * rung returns crossings in [radius, r_search], so consecutive rungs must
+ * overlap or sizes between them are reachable at no rung at all. Reaching to
+ * the previous, larger rung is exactly enough, and sif_finder_exodus() raises
+ * r_search to it when the factor here falls short -- so a sparse ladder stays
+ * correct whatever is chosen, and a fine one stops paying for reach it has
+ * already covered. A void is found at the largest rung at or below its
+ * crossing radius either way; a lower factor only stops the rungs below that
+ * one from re-deriving an answer their elder already returned.
+ *
+ * 1.5 is the default because it is comfortably above any ladder anyone runs
+ * (a 50% step) while costing 2.4 r^3 against 7. Raise it for a coarse ladder,
+ * or to 2.0 to reproduce older catalogs bit for bit.
+ * @{
+ */
+#define SIF_FINDER_SEARCH_1_50 (0u << 12) /**< Default. */
+#define SIF_FINDER_SEARCH_1_25 (1u << 12)
+#define SIF_FINDER_SEARCH_1_75 (2u << 12)
+#define SIF_FINDER_SEARCH_2_00 (3u << 12)
+#define SIF__FINDER_SEARCH_MASK (3u << 12)
+
+/** @brief The multiple of the rung a #SIF__FINDER_SEARCH_MASK selection asks
+ * for. Order follows the encoding, not the value: the default has to be the
+ * zero-valued member. */
+static inline float sif__finder_search_factor(uint32_t opt) {
+  static const float f[4] = {1.5f, 1.25f, 1.75f, 2.0f};
+  return f[(opt & SIF__FINDER_SEARCH_MASK) >> 12];
+}
+/** @} */
 
 /**
  * Skip deconvolution of the CIC assignment window.
@@ -91,7 +133,7 @@ typedef uint32_t sif_option;
 
 /**
  * @defgroup opt_mesh Chain mesh options
- * @brief Bit 16, deliberately outside the 8-14 range the per-entry-point
+ * @brief Bits 16-17, deliberately outside the 8-14 range the per-entry-point
  * families reuse: a mesh is built from inside several of those calls, and a
  * flag that collided with one of them would be read as the other's.
  * @{
@@ -108,7 +150,29 @@ typedef uint32_t sif_option;
  * can no longer name their answer and refuse.
  */
 #define SIF_MESH_DROP_INDICES (1u << 16)
-#define SIF__MESH_MASK        (1u << 16)
+
+/**
+ * Skip the canonical ordering pass, leaving each cell in whatever order the
+ * parallel scatter produced.
+ *
+ * The pass exists so that two identical runs give byte-identical meshes: the
+ * scatter claims slots with an atomic, so which chunk reaches a cell first is
+ * a race, and everything that walks a cell inherits it. Sorting each cell on
+ * the field index replaces that with an order fixed by the input alone.
+ *
+ * What that buys is reproducibility of the last bits, and nothing else -- the
+ * set of particles in a cell is identical either way, so any measurement that
+ * does not depend on summation order is unaffected. A finder that only counts
+ * tracers inside a sphere is in that class; stacked profiles and
+ * nearest-neighbour queries with exact distance ties are not.
+ *
+ * Worth setting only where the ordering genuinely does not matter, because the
+ * pass is no longer the bottleneck it once was: it sorts a compact key array
+ * and applies the permutation once, rather than swapping whole payload rows
+ * per inversion.
+ */
+#define SIF_MESH_NO_CANONICAL (1u << 17)
+#define SIF__MESH_MASK        (3u << 16)
 /** @} */
 
 /**

@@ -849,6 +849,62 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
     return -1.0f;
   }
 
+  /*
+   * The cheap refusal, before a single distance is binned.
+   *
+   * Most candidates at the small rungs do not have a crossing inside their
+   * search sphere at all: they sit deep in a void far larger than the rung, so
+   * the whole sphere is still underdense and the rung has to defer to a bigger
+   * one. That verdict needs one number, the count inside r_search -- and the
+   * count needs no distances for any cell the template has already placed
+   * wholly inside the core or wholly inside the annulus, because every
+   * particle in those is inside r_search by construction. Only the cells
+   * straddling the outer edge have to be measured, and those are a shell one
+   * cell thick: the pass is O(surface) where the histogram is O(volume).
+   *
+   * On a deep threshold's small rungs this is 88% of all rescalings, each of
+   * which currently bins its entire sphere and then discards the histogram on
+   * the test below.
+   *
+   * Nothing about the decision changes -- the same candidates are refused for
+   * the same reason, and the count is assembled from the same three cases the
+   * histogram loop uses, so it agrees with total_N exactly. Only the moment of
+   * refusal moves earlier. The test after the histogram is left in place as a
+   * backstop; it now only ever fires if these two disagree, which they cannot.
+   */
+  {
+    const sif_real expected_search =
+      vol_factor * r_search * r_search * r_search;
+    uint32_t n_within = 0;
+
+    for (uint32_t i = 0; i < tpl->count; i++) {
+      const uint8_t type = tpl->type[i];
+
+      uint64_t p_start, p_end;
+      sif_real ex, ey, ez;
+      if (!query_cell(&q, i, &p_start, &p_end, &ex, &ey, &ez))
+        continue;
+
+      if (type == CELL_FULLY_CORE || type == CELL_FULLY_SHELL) {
+        n_within += (uint32_t)(p_end - p_start);
+        continue;
+      }
+
+      for (uint64_t p = p_start; p < p_end; p++)
+        n_within += (dist2(mx[p], my[p], mz[p], ex, ey, ez) <= r_search2);
+    }
+
+    if (n_within == 0) {
+      *reason = RESCALE_EMPTY;
+      return -1.0f;
+    }
+
+    if (((sif_real)n_within / expected_search) - 1.0f <= threshold) {
+      *reason = RESCALE_BEYOND_SEARCH;
+      return -1.0f;
+    }
+  }
+
   const sif_real inv_bin_w = (sif_real)n_bins / span;
   const sif_real bin_w = span / (sif_real)n_bins;
 
@@ -1283,7 +1339,15 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     stats.n_candidates = ctx.candidates.count;
 
     const sif_real rmin = RMIN_FACTOR * radius;
-    sif_real r_search = radius + SIF_REAL_MAX(radius, 3.0f * grid->cell_length);
+
+    /* The reach past the rung, from SIF_FINDER_SEARCH_*. The three-cell floor
+     * is kept underneath it: at the small end of a ladder the factor can ask
+     * for less than the grid can resolve, and a shell thinner than a few cells
+     * bins nothing useful. At factor 2 this is the expression it replaces. */
+    const sif_real search_factor = (sif_real)sif__finder_search_factor(options);
+    sif_real r_search =
+      radius + SIF_REAL_MAX((search_factor - 1.0f) * radius,
+                3.0f * grid->cell_length);
 
     /*
      * Consecutive rungs of the radius ladder have to overlap in the void sizes
@@ -1302,10 +1366,14 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
      * which is r_prev again. Reaching only to the size leaves the band between
      * them at no rung at all.
      *
-     * With the default r_search = 2 * radius this binds only when the ladder
-     * steps by more than a factor of two, so it is a guard against a sparse
-     * radius list silently losing a size range, not a change to how a sensible
-     * run behaves. Erring wide costs time, erring narrow loses voids.
+     * This is what makes SIF_FINDER_SEARCH_* safe to lower: whatever factor is
+     * asked for, a rung still reaches its predecessor, so no size range can
+     * fall between two rungs. The factor only decides how far PAST that a rung
+     * keeps looking -- which is reach the larger rung has already covered, and
+     * which costs factor^3 - 1 to provide. It binds whenever the ladder steps
+     * by more than the factor: at 2.0 almost never, at 1.5 still almost never
+     * for any ladder finer than a 50% step. Erring wide costs time, erring
+     * narrow loses voids, and this line is why narrow cannot.
      */
     if (i > 0 && ctx.sorted_radii[i - 1] > r_search)
       r_search = ctx.sorted_radii[i - 1];
