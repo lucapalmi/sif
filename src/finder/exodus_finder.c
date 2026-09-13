@@ -562,7 +562,7 @@ static inline uint32_t bin_of(
 SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
   radial_scratch_t* scratch, uint32_t bin_lo, uint32_t bin_hi, sif_real lo,
   sif_real hi, sif_real r_core2, sif_real r_search2, sif_real inv_bin_w,
-  uint32_t n_bins, uint32_t current_N, sif_real K2, sif_real* out) {
+  uint32_t n_bins, uint64_t current_N, sif_real K2, sif_real* out) {
 
   const sif_real* mx = SIF_ASSUME_ALIGNED(q->mesh->x);
   const sif_real* my = SIF_ASSUME_ALIGNED(q->mesh->y);
@@ -622,7 +622,7 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
       continue;
     }
 
-    const uint32_t n_in = current_N - 1;
+    const uint64_t n_in = current_N - 1;
     const sif_real d2_cube = d2_test * d2_test * d2_test;
 
     const sif_real rn_in = (sif_real)n_in;
@@ -824,8 +824,12 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   const sif_real r_search2 = r_search * r_search;
   const sif_real r_core2 = rmin * rmin;
 
-  uint32_t n_core = 0;
-  uint32_t n_shell = 0;
+  /* 64-bit: at 2048^3 tracers a single search sphere in a small box holds
+   * more than UINT32_MAX. 2048^3 is 8,589,934,592, which is exactly 2^33 --
+   * two full wraps of a 32-bit counter -- so the overflow is not a distant
+   * corner, it is where these runs live. See the note on total_N below. */
+  uint64_t n_core = 0;
+  uint64_t n_shell = 0;
 
   /* Histogram geometry. Uniform in d^2, so no square roots are needed to bin;
    * the resulting bins are finer in radius further out, which is the half that
@@ -875,7 +879,7 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   {
     const sif_real expected_search =
       vol_factor * r_search * r_search * r_search;
-    uint32_t n_within = 0;
+    uint64_t n_within = 0;
 
     for (uint32_t i = 0; i < tpl->count; i++) {
       const uint8_t type = tpl->type[i];
@@ -886,7 +890,7 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
         continue;
 
       if (type == CELL_FULLY_CORE || type == CELL_FULLY_SHELL) {
-        n_within += (uint32_t)(p_end - p_start);
+        n_within += (p_end - p_start);
         continue;
       }
 
@@ -922,7 +926,7 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
     const uint64_t p_count = p_end - p_start;
 
     if (type == CELL_FULLY_CORE) {
-      n_core += (uint32_t)p_count;
+      n_core += p_count;
     } else if (type == CELL_FULLY_SHELL) {
       /* Every particle here is known to be in the annulus, so the only work is
        * the distance itself. Tiling keeps that part vectorized despite the
@@ -942,7 +946,7 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
           bins[bin_of(tile[t], r_core2, inv_bin_w, n_bins)]++;
       }
 
-      n_shell += (uint32_t)p_count;
+      n_shell += p_count;
     } else {
       for (uint64_t p = p_start; p < p_end; p++) {
         const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
@@ -957,7 +961,24 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
     }
   }
 
-  const uint32_t total_N = n_core + n_shell;
+  /*
+   * WHY THIS IS 64-BIT.
+   *
+   * The count is over the whole search sphere, and that sphere is not small
+   * next to the box in a dense run: at 2048^3 tracers in a 120.6 box, a
+   * sphere of r_search = 76.6 holds ~9.2e9 of them. A uint32 wraps at
+   * 4.29e9, and 9.2e9 wraps to ~6.3e8 -- an eightfold undercount, which the
+   * BEYOND_SEARCH test below reads as a contrast of -0.93 and refuses. Every
+   * candidate on the rung refuses, the rung reports no voids, and nothing
+   * about it looks like arithmetic: the log says 'underdense out to
+   * r_search', which is exactly what a genuinely large void looks like.
+   *
+   * The threshold is a density, so it scales: the wrap needs ~4.3e9 tracers
+   * inside one sphere, which needs a high number density, which means a
+   * small box. At 2048^3 it bites above r_search = 59.4 in a 120.6 box and
+   * above 115.5 in a 234.5 one; the larger boxes never come close.
+   */
+  const uint64_t total_N = n_core + n_shell;
   if (total_N == 0) {
     *reason = RESCALE_EMPTY;
     return -1.0f;
@@ -980,7 +1001,7 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   const sif_real K = (threshold + 1.0f) * vol_factor;
   const sif_real K2 = K * K;
 
-  uint32_t above = 0;   /* particles beyond the bin under examination */
+  uint64_t above = 0;   /* particles beyond the bin under examination */
   int32_t b_first = -1; /* outermost bin the walk actually had to open */
 
   for (int32_t b = (int32_t)n_bins - 1; b >= 0; b--) {
@@ -1024,7 +1045,7 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
     if (b_lo < 0)
       b_lo = 0;
 
-    uint32_t window_count = 0;
+    uint64_t window_count = 0;
     for (int32_t bb = b_lo; bb <= b; bb++)
       window_count += bins[bb];
 
