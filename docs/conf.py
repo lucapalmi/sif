@@ -13,6 +13,7 @@ comments in the headers.
 """
 
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -83,6 +84,31 @@ hawkmoth_clang = [
     f"-I{REPO / 'include'}",
     "-std=gnu99",
 ]
+
+# Which compiler hawkmoth asks for the system include paths.
+#
+# hawkmoth_autoconf defaults to ['stdinc'], so hawkmoth runs `<compiler> -E
+# -Wp,-v` and passes what it finds to libclang as `-nostdinc -isystem...`.
+# libclang itself ships no headers -- the `libclang` wheel is the bare library
+# -- so those paths are the only ones there are.
+#
+# The default compiler name is 'clang'. When it is not on PATH the helper still
+# emits the -nostdinc, with no -isystem after it: the search path ends up empty
+# and every header in include/sif fails on its first #include, none of the
+# errors mentioning a compiler. The CI image is Debian with gcc and no clang,
+# which is exactly that case, so the name is looked up rather than assumed.
+# clang comes first because libclang is what does the parsing.
+HAWKMOTH_COMPILERS = ["clang", "gcc", "cc"]
+
+hawkmoth_compiler = next((cc for cc in HAWKMOTH_COMPILERS if shutil.which(cc)), None)
+
+if hawkmoth_compiler is None:
+    raise RuntimeError(
+        "no C compiler found on PATH (tried: "
+        + ", ".join(HAWKMOTH_COMPILERS)
+        + "). Hawkmoth needs one to resolve <stdint.h> and friends; without it "
+        "every API page fails with a file-not-found that does not say so."
+    )
 
 # The headers are commented in Doxygen style, so every comment goes through the
 # javadoc transform on its way to reStructuredText.
