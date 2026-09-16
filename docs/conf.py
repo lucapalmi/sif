@@ -12,6 +12,7 @@ index as the prose. See docs/api/index.md for what that means when writing
 comments in the headers.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -19,8 +20,26 @@ REPO = Path(__file__).resolve().parent.parent
 
 sys.path.insert(0, str(Path(__file__).parent / "_ext"))
 
-from clang.cindex import Config
-Config.set_library_path('/opt/homebrew/opt/llvm/lib')
+# --- libclang --------------------------------------------------------------
+
+# Hawkmoth reaches libclang through the Python bindings, which find it on their
+# own: the pinned `libclang` wheel ships a copy, and that is what CI loads. The
+# override below is only for a local install that needs pointing elsewhere --
+# Homebrew LLVM on macOS, or whatever SIF_LIBCLANG_PATH names.
+#
+# It has to stay conditional. set_library_path() does not check the directory,
+# it just makes the bindings look there and nowhere else, so naming a path that
+# does not exist on the machine doing the build turns every autodoc into a
+# LibclangError -- which is how a hard-coded Homebrew path once broke the
+# Linux CI job while every local build stayed green.
+LIBCLANG_PATHS = [os.environ.get("SIF_LIBCLANG_PATH"), "/opt/homebrew/opt/llvm/lib"]
+
+for _path in filter(None, LIBCLANG_PATHS):
+    if Path(_path).is_dir():
+        from clang.cindex import Config
+
+        Config.set_library_path(_path)
+        break
 
 # --- Project ---------------------------------------------------------------
 

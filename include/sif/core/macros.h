@@ -103,9 +103,11 @@ typedef uint32_t sif_option;
 #define SIF_FINDER_SEARCH_2_00 (3u << 12)
 #define SIF__FINDER_SEARCH_MASK (3u << 12)
 
-/** @brief The multiple of the rung a #SIF__FINDER_SEARCH_MASK selection asks
+/**
+ * @brief The multiple of the rung a #SIF__FINDER_SEARCH_MASK selection asks
  * for. Order follows the encoding, not the value: the default has to be the
- * zero-valued member. */
+ * zero-valued member.
+ */
 static inline float sif__finder_search_factor(uint32_t opt) {
   static const float f[4] = {1.5f, 1.25f, 1.75f, 2.0f};
   return f[(opt & SIF__FINDER_SEARCH_MASK) >> 12];
