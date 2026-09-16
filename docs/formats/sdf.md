@@ -10,7 +10,8 @@ in `.xfield` and `.xgrid`, which exist to be read straight into memory at
 speed; `.sdf` exists to keep a catalogue and its derived measurements together,
 with enough metadata attached that a file still means something a year later.
 Everything below is what that requires and nothing more, with reserved room in
-both headers for whatever comes next.
+the file header, and a block type and a metadata key as the two ways to add
+anything else.
 
 ## Anatomy
 
@@ -81,10 +82,38 @@ padded to a multiple of 8 bytes, so a block's data section always begins on an
 8-byte boundary; a block as a whole is padded to a multiple of 64, so every
 block header lands on a cache line.
 
-**Checksums** are CRC32 (IEEE 802.3, the polynomial `sif_crc32()` uses),
-computed over a block's metadata table followed by its data section, in that
-order. The trailing block padding is not covered, since it is required to be
-zero and any value there is a defect the length arithmetic already exposes.
+**Checksums** are CRC32 (IEEE 802.3, the polynomial `sif_crc32()` uses), and
+there are two kinds, covering different things and checked at different times.
+
+A **payload** checksum covers a block's metadata table followed by its data
+section, in that order, and lives in the block header's `crc32`. It is verified
+when the block is read, because verifying it is reading it. The trailing block
+padding is not covered, since it is required to be zero and any value there is
+a defect the length arithmetic already exposes.
+
+A **header** checksum covers the 64 bytes of a header, taken with the field
+that holds it set to zero, and both headers carry one. It is verified when the
+file is opened -- the file header before anything in it is believed, and every
+block header as the chain is walked.
+
+The second exists because the first cannot do its job. A payload checksum says
+that what a block *holds* is what was written; it says nothing about what the
+block *claims to be*, and that claim is the 64 bytes in front of it: the type,
+the name, the lengths, the identity of the catalogue it belongs to. Left
+uncovered, a single flipped bit there is silent and the file still passes every
+check in it -- a `type` that lands in the private range makes a whole block
+disappear, since a reader skips that range without looking; a `name` that
+changes by one letter makes a lookup miss, or match the wrong block; a
+`box_length` in the file header changes the box every measurement in the file
+is expressed in. None of those is a corruption a reader could otherwise
+discover, and the one thing worse than a file that fails to open is one that
+opens and answers differently.
+
+Verifying it at open is the other half of the argument. A payload checksum is
+checked when something asks for the block, so a block nothing asks for is never
+checked at all -- which is exactly the case of a block that has been corrupted
+into invisibility. A header checksum costs 64 bytes of arithmetic per block on
+a file that is being walked anyway.
 
 ## File header
 
@@ -93,13 +122,14 @@ zero and any value there is a defect the length arithmetic already exposes.
 | off | size | type | name | |
 |---|---|---|---|---|
 | 0 | 4 | `char[4]` | `magic` | `"SIFD"` |
-| 4 | 4 | `uint32_t` | `version` | container version, currently 1 |
+| 4 | 4 | `uint32_t` | `version` | container version, currently 2 |
 | 8 | 4 | `uint32_t` | `byte_order` | `0x01020304` written natively |
 | 12 | 4 | `uint32_t` | `flags` | reserved, zero |
 | 16 | 8 | `double` | `box_length` | the one global every product needs |
 | 24 | 8 | `uint64_t` | `created` | seconds since the epoch |
 | 32 | 16 | `char[16]` | `writer` | library version that created the file |
-| 48 | 16 | `char[16]` | `padding` | reserved, zero |
+| 48 | 4 | `uint32_t` | `header_crc32` | over these 64 bytes, this field zero |
+| 52 | 12 | `char[12]` | `padding` | reserved, zero |
 
 ```c
 typedef struct {
@@ -110,7 +140,8 @@ typedef struct {
   double   box_length;
   uint64_t created;
   char     writer[16];
-  char     padding[16];
+  uint32_t header_crc32;
+  char     padding[12];
 } sif_sdf_header_t;
 ```
 
@@ -133,10 +164,10 @@ find it.
 |---|---|---|---|---|
 | 0 | 4 | `char[4]` | `magic` | `"SBLK"` |
 | 4 | 2 | `uint16_t` | `type` | see [Block types](#block-types) |
-| 6 | 2 | `uint16_t` | `type_version` | payload layout version for this type |
-| 8 | 2 | `uint16_t` | `real_dtype` | 1 = `float`, 2 = `double` |
-| 10 | 2 | `uint16_t` | `reserved0` | reserved, zero |
-| 12 | 4 | `uint32_t` | `flags` | reserved, zero |
+| 6 | 1 | `uint8_t` | `type_version` | payload layout version for this type |
+| 7 | 1 | `uint8_t` | `real_dtype` | 1 = `float`, 2 = `double` |
+| 8 | 4 | `uint32_t` | `header_crc32` | over these 64 bytes, this field zero |
+| 12 | 4 | `uint32_t` | `flags` | feature bits, zero in version 2 |
 | 16 | 4 | `uint32_t` | `meta_bytes` | metadata table size, multiple of 8 |
 | 20 | 4 | `uint32_t` | `crc32` | over metadata + data |
 | 24 | 8 | `uint64_t` | `data_bytes` | data section size |
@@ -148,9 +179,9 @@ find it.
 typedef struct {
   char     magic[4];
   uint16_t type;
-  uint16_t type_version;
-  uint16_t real_dtype;
-  uint16_t reserved0;
+  uint8_t  type_version;
+  uint8_t  real_dtype;
+  uint32_t header_crc32;
   uint32_t flags;
   uint32_t meta_bytes;
   uint32_t crc32;
@@ -161,7 +192,7 @@ typedef struct {
 } sif_sdf_block_header_t;
 ```
 
-Four of these fields carry more weight than their size suggests.
+Six of these fields carry more weight than their size suggests.
 
 `data_bytes` is what makes the format extensible without a version bump: a
 build that has never heard of `type == 12` still knows exactly how far to seek
@@ -198,6 +229,23 @@ its identity changes with it. That is a property of the library's catalogue
 type rather than of this format, but it is the reason the check is worth
 anything: appending profiles measured from an edited catalogue fails instead of
 quietly producing a file whose rows line up with nothing.
+
+`header_crc32` is what makes the rest of this table worth reading. Every other
+field here is a claim -- how long the block is, what it holds, what it is
+called, which catalogue it belongs to -- and each is acted on before anything
+inside the block is looked at. It is verified as the chain is walked, so a
+block whose header has been damaged is found when the file is opened rather
+than whenever something next happens to ask for it; see **Checksums**.
+
+`flags` is split in half, so that a later version has a way to say *you must
+understand this*. `data_bytes` makes an unknown type skippable and
+`type_version` makes an unknown payload layout skippable, which between them
+cover a block an old reader should step over -- but nothing covers a block it
+must not quietly step over. So the low 16 bits are the ones a reader has to
+understand: a bit set there that a reader does not know is a refusal when the
+block is asked for, reported the way an unknown `type_version` is. The high 16
+bits are for changes that can safely be ignored. Version 1 assigns neither, and
+every block sif writes carries zero.
 
 `name` distinguishes several blocks of the same type. Two size functions with
 different binnings, or profiles measured with two extents, are two blocks
@@ -370,7 +418,8 @@ in a `META` block instead.
 
 ### `META`
 
-`data_bytes` and `n_items` are zero; the block is its metadata table. This is
+`data_bytes` and `n_items` are zero in the current version; the block is its
+metadata table. This is
 where file-level notes go -- redshift, cosmology, the parameters of the run,
 whatever the caller wants to keep -- and because it is an ordinary block, more
 of it can be appended later like anything else. `name` is unused and zero.
@@ -385,7 +434,16 @@ notes to anything reading them.
 The rule has a consequence worth stating: a key cannot be **removed**, only
 overwritten. Writing a table that omits it leaves the earlier block, and the
 earlier block still says what it said. There is deliberately no way to express
-"unset" in version 1.
+"unset".
+
+A reader must not assume the data section stays empty. The checksum covers
+whatever the block holds, so a reader meeting a `META` block that carries a
+section folds those bytes into the checksum and steps over them, exactly as it
+steps over an entry whose type it does not know. The alternative is worse than
+losing the section: the notes are merged across every `META` block in the file,
+so a reader that failed on one would lose every note in the file rather than
+the one thing it could not read -- and the notes are the part of this format
+most meant to degrade rather than break.
 
 Nothing requires a file to carry metadata at all. It is a good habit and not an
 obligation, and a file with no `META` block reads as a file whose notes are
@@ -398,36 +456,61 @@ data flows onward and whatever it produces looks like a result. So:
 
 1. `magic` and `byte_order` in the file header, and `magic` in every block
    header, must match.
-2. `version` above what the build knows is a refusal, not a warning.
-3. Block 0 must be a `CATALOG`, and a file holds exactly one. Its
+2. `header_crc32` must match, in the file header and in every block header.
+   Checked when the file is opened -- the file header before any field of it
+   is used, every block header as the chain is walked -- and so before any
+   length taken out of a header is trusted. A header that does not stand
+   behind itself is not a header whose lengths can be followed.
+3. `version` other than the one the build knows is a refusal, not a warning:
+   above it because the file comes from a later sif, below it because a
+   container that old is a different layout with nothing standing behind its
+   headers.
+4. Block 0 must be a `CATALOG`, and a file holds exactly one. Its
    `catalog_id` must be non-zero.
-4. `meta_bytes + data_bytes` must not run past the end of the file, and
+5. `meta_bytes + data_bytes` must not run past the end of the file, and
    `data_bytes` must equal the size implied by `n_items` and the block's
    metadata. A length that fails either check is rejected before anything is
    allocated from it.
-5. `crc32` must match the block's metadata and data. Checked when a block is
+6. `crc32` must match the block's metadata and data. Checked when a block is
    read, not when the file is opened -- opening reads only the headers, and
-   verifying every checksum up front would mean reading the whole file to
-   answer a question about one block.
-6. A profile block's `n_items` must equal the catalogue's.
-7. Every block's `catalog_id` must equal block 0's, except a `META` block's,
+   verifying every *payload* up front would mean reading the whole file to
+   answer a question about one block. The headers are the other half of this
+   and are all checked at open; see rule 2.
+7. A profile block's `n_items` must equal the catalogue's.
+8. Every block's `catalog_id` must equal block 0's, except a `META` block's,
    which is zero. Blocks in the private range are exempt: they belong to
    whoever wrote them, and a reader that skips a block has no business
    auditing it.
-8. A metadata table must consume exactly `meta_bytes`, and **its** keys must be
-   unique -- a table that declares one key twice does not say which value it
-   means. Two *blocks* carrying the same key is the correction mechanism and
-   not a duplicate; see `META`.
-9. A trailing block that is short, or whose checksum fails, is an error rather
-   than a truncation to be tolerated silently. Recovering the good prefix is a
-   separate, explicit operation, and it stops at the first block that does not
-   hold: past a damaged block the chain gives no way to know where the next one
-   starts, and looking for one would be guessing.
 
-An unknown `type`, an unknown `type_version`, and an unknown metadata
-`value_type` are *not* errors: the first two are skipped by length, the third
-is skipped within its table. Only a request for a block that cannot be
-interpreted fails.
+   The rule costs something worth naming: `META` is the only kind of block
+   that may stand apart from the catalogue, so a later version of sif can add
+   a block type that *is* derived from the catalogue and have old readers step
+   over it, but not one that is not -- today's readers would refuse the whole
+   file. A version that wants such a thing either puts it in the private range
+   or bumps the container version.
+9. `meta_bytes` must be a multiple of 8. That is framing rather than content
+   -- entries are padded to 8, so a table that is not a multiple of 8 cannot
+   be a sequence of them and the data section behind it does not start where
+   the format says -- so it is checked when the chain is walked, with the
+   other lengths, rather than when some later call first wants a table.
+10. A metadata table must consume exactly `meta_bytes`, and **its** keys must
+    be unique -- a table that declares one key twice does not say which value
+    it means. Two *blocks* carrying the same key is the correction mechanism
+    and not a duplicate; see `META`.
+11. A trailing block that is short, or whose checksum fails -- either
+    checksum -- is an error rather than a truncation to be tolerated silently.
+    Recovering the good prefix is a separate, explicit operation, and it stops
+    at the first block that does not hold: past a damaged block the chain
+    gives no way to know where the next one starts, and looking for one would
+    be guessing.
+
+An unknown `type`, an unknown `type_version`, an unknown metadata `value_type`
+and a bit set in the ignorable half of `flags` are *not* errors: the first
+two are skipped by length, the third is skipped within its table, the fourth
+means nothing to a reader that does not know it. Only a request for a block
+that cannot be interpreted fails -- and when it does, it fails as a version and
+not as damage, because the two send a caller in different directions and only
+one of them leads anywhere.
 
 ## Appending
 
@@ -467,4 +550,17 @@ Not by omission -- these are the trades that keep it small.
 ## Version history
 
 **1** -- initial. Catalogue, density and velocity profiles, size function,
-metadata blocks.
+metadata blocks. Not read from version 2 on.
+
+**2** -- both headers carry a checksum of their own, verified when the file is
+opened. The file header gives up 4 of its 16 reserved bytes for it. The block
+header had none to give, and takes them from `type_version` and `real_dtype`,
+which are a byte each now and were never going to need two, and from the two
+reserved bytes that sat beside them. `flags` gains a meaning at the same time.
+
+The break is deliberate, and was taken while it was free: nothing had yet been
+written in version 1 that anyone had to keep. A version-1 file has nothing
+standing behind either header, so the alternative was to go on reading files
+whose 64-byte claims can be wrong with no way to tell -- which is the thing
+this version exists to stop. A build from version 2 on refuses one as a
+version rather than reading it on trust.

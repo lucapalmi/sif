@@ -27,6 +27,14 @@
  * the estimator would. */
 #include "measure/profiles_internal.h"
 
+/* The on-disk structs and the checksum, so the tests below can assemble a
+ * block by hand. Everything the format promises about files written by a
+ * *later* sif is a promise about bytes this build cannot produce, so the only
+ * way to exercise those rules is to write them directly. */
+#include "io/sdf_internal.h"
+#include "sif/utils/crc32.h"
+
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,6 +103,20 @@ static void poke(const char* path, long offset, const void* src, size_t n) {
   fclose(f);
 }
 
+/* Flips one bit, the way a bad disk or a tired stick of RAM does. */
+static void flip_bit(const char* path, long offset, int bit) {
+  FILE* f = fopen(path, "r+b");
+  if (!f)
+    return;
+  fseek(f, offset, SEEK_SET);
+  const int byte = fgetc(f);
+  if (byte != EOF) {
+    fseek(f, offset, SEEK_SET);
+    fputc(byte ^ (1 << bit), f);
+  }
+  fclose(f);
+}
+
 /* Cuts a file short, the way a write that ran out of disk would. */
 static void truncate_to(const char* path, long keep) {
   FILE* f = fopen(path, "rb");
@@ -125,6 +147,124 @@ static int write_good_file(const char* path, const sif_catalog_t* cat) {
   return status == SIF_SDF_OK;
 }
 
+/* --- blocks this build would never write --- */
+
+/*
+ * Appends a block assembled by hand.
+ *
+ * Fills in everything the format computes rather than chooses -- the magic,
+ * the two lengths, the checksum, the padding -- so a test states only the
+ * thing it is testing.
+ */
+static int append_forged(const char* path, sif_sdf_block_header_t header,
+  const void* meta, uint32_t meta_bytes, const void* data,
+  uint64_t data_bytes) {
+
+  memcpy(header.magic, SIF__SDF_BLOCK_MAGIC, 4);
+  header.meta_bytes = meta_bytes;
+  header.data_bytes = data_bytes;
+
+  uint32_t crc = SIF_CRC32_INIT;
+  if (meta_bytes)
+    crc = sif_crc32_update(crc, meta, meta_bytes);
+  if (data_bytes)
+    crc = sif_crc32_update(crc, data, (size_t)data_bytes);
+  header.crc32 = sif_crc32_final(crc);
+
+  /* Last, once the rest of the header is final: a forged block has to stand
+   * behind its own header the way a real one does, or it is testing the
+   * header checksum rather than whatever it meant to test. */
+  header.header_crc32 = sif__sdf_block_checksum(&header);
+
+  FILE* f = fopen(path, "ab");
+  if (!f)
+    return 0;
+
+  fwrite(&header, 1, SIF__SDF_BLOCK_BYTES, f);
+  if (meta_bytes)
+    fwrite(meta, 1, meta_bytes, f);
+  if (data_bytes)
+    fwrite(data, 1, (size_t)data_bytes, f);
+
+  const size_t payload = meta_bytes + (size_t)data_bytes;
+  const size_t pad = (SIF__SDF_BLOCK_ALIGN - payload % SIF__SDF_BLOCK_ALIGN) %
+                     SIF__SDF_BLOCK_ALIGN;
+  if (pad) {
+    static const char zeros[SIF__SDF_BLOCK_ALIGN] = {0};
+    fwrite(zeros, 1, pad, f);
+  }
+
+  fclose(f);
+  return 1;
+}
+
+/* One metadata entry as it goes on the wire, padded to eight. Returns what it
+ * wrote, so a caller can lay several down in a row. */
+static uint32_t forge_entry(char* out, const char* key, uint8_t type,
+  const void* value, uint32_t value_bytes) {
+
+  const uint16_t key_bytes = (uint16_t)strlen(key);
+  const uint32_t total = (8u + key_bytes + value_bytes + 7u) & ~7u;
+
+  memset(out, 0, total);
+  memcpy(out, &key_bytes, sizeof(key_bytes));
+  out[2] = (char)type;
+  memcpy(out + 4, &value_bytes, sizeof(value_bytes));
+  memcpy(out + 8, key, key_bytes);
+  if (value_bytes)
+    memcpy(out + 8 + key_bytes, value, value_bytes);
+
+  return total;
+}
+
+/* A block header carrying what every forged block needs, at this build's own
+ * precision unless the caller says otherwise. */
+static sif_sdf_block_header_t forged_header(
+  uint16_t type, uint64_t n_items, uint64_t catalog_id) {
+
+  sif_sdf_block_header_t header;
+  memset(&header, 0, sizeof(sif_sdf_block_header_t));
+  header.type = type;
+  header.type_version = (uint8_t)SIF__SDF_TYPE_VERSION;
+  header.real_dtype =
+    (uint8_t)((sizeof(sif_real) == 8) ? SIF_SDF_F64 : SIF_SDF_F32);
+  header.n_items = n_items;
+  header.catalog_id = catalog_id;
+  return header;
+}
+
+/* The identity of the catalogue a file was built around, read off block 0 --
+ * which is what a forged block has to repeat to belong to the file. */
+static uint64_t catalog_id_of(const char* path) {
+  uint64_t id = 0;
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return 0;
+  fseek(f, BLOCK_OFFSET + CATALOG_ID_OFFSET, SEEK_SET);
+  if (fread(&id, 1, sizeof(id), f) != sizeof(id))
+    id = 0;
+  fclose(f);
+  return id;
+}
+
+/* A bare file header, for a test that then forges block 0 itself. */
+static int write_forged_file_header(const char* path) {
+  sif_sdf_header_t header;
+  memset(&header, 0, sizeof(sif_sdf_header_t));
+  memcpy(header.magic, SIF_SDF_MAGIC, 4);
+  header.version = SIF_SDF_VERSION;
+  header.byte_order = SIF_SDF_BYTE_ORDER;
+  header.box_length = BOX;
+  header.header_crc32 = sif__sdf_header_checksum(&header);
+
+  FILE* f = fopen(path, "wb");
+  if (!f)
+    return 0;
+  const size_t wrote = fwrite(&header, 1, SIF__SDF_HEADER_BYTES, f);
+  fclose(f);
+  return wrote == SIF__SDF_HEADER_BYTES;
+}
+
 static void test_header_layout(void) {
   printf("header layout\n");
 
@@ -133,6 +273,42 @@ static void test_header_layout(void) {
   sif_sdf_status_t status = SIF_SDF_OK;
   sif_catalog_t* cat = make_catalog(4);
   CHECK(write_good_file(SDF_PATH, cat), "could not write a file to measure");
+
+  /* Every offset the format document states, pinned. The sizes alone are
+   * already checked at compile time; these are what catch a field being
+   * reordered or widened, which would move every one after it. */
+  CHECK(sizeof(sif_sdf_header_t) == 64, "the file header is %zu bytes",
+    sizeof(sif_sdf_header_t));
+  CHECK(sizeof(sif_sdf_block_header_t) == 64, "a block header is %zu bytes",
+    sizeof(sif_sdf_block_header_t));
+
+  CHECK(offsetof(sif_sdf_header_t, version) == 4, "file header: version");
+  CHECK(offsetof(sif_sdf_header_t, byte_order) == 8, "file header: byte_order");
+  CHECK(offsetof(sif_sdf_header_t, flags) == 12, "file header: flags");
+  CHECK(offsetof(sif_sdf_header_t, box_length) == 16, "file header: box_length");
+  CHECK(offsetof(sif_sdf_header_t, created) == 24, "file header: created");
+  CHECK(offsetof(sif_sdf_header_t, writer) == 32, "file header: writer");
+  CHECK(offsetof(sif_sdf_header_t, header_crc32) == 48,
+    "file header: header_crc32");
+
+  CHECK(offsetof(sif_sdf_block_header_t, type) == 4, "block header: type");
+  CHECK(offsetof(sif_sdf_block_header_t, type_version) == 6,
+    "block header: type_version");
+  CHECK(offsetof(sif_sdf_block_header_t, real_dtype) == 7,
+    "block header: real_dtype");
+  CHECK(offsetof(sif_sdf_block_header_t, header_crc32) == 8,
+    "block header: header_crc32");
+  CHECK(offsetof(sif_sdf_block_header_t, flags) == 12, "block header: flags");
+  CHECK(offsetof(sif_sdf_block_header_t, meta_bytes) == 16,
+    "block header: meta_bytes");
+  CHECK(offsetof(sif_sdf_block_header_t, crc32) == 20, "block header: crc32");
+  CHECK(offsetof(sif_sdf_block_header_t, data_bytes) == 24,
+    "block header: data_bytes");
+  CHECK(offsetof(sif_sdf_block_header_t, n_items) == 32,
+    "block header: n_items");
+  CHECK(offsetof(sif_sdf_block_header_t, catalog_id) == CATALOG_ID_OFFSET,
+    "block header: catalog_id");
+  CHECK(offsetof(sif_sdf_block_header_t, name) == 48, "block header: name");
 
   const long payload = (long)(4 * 4 * sizeof(sif_real));
   const long expected = 64 + 64 + ((payload + 63) / 64) * 64;
@@ -1165,6 +1341,643 @@ static void test_repair(void) {
   remove(SDF_PATH);
 }
 
+/*
+ * The rules that only matter years from now: what an old build does with a
+ * file a newer one wrote. Nothing here can be produced by this build, which
+ * is exactly why it is worth a test -- the first real one of these files will
+ * turn up long after anyone remembers what was promised.
+ */
+static void test_forward_compatibility(void) {
+  printf("blocks a later sif might add\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(32);
+  if (!cat)
+    return;
+
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+  const uint64_t id = catalog_id_of(SDF_PATH);
+  CHECK(id != 0, "the catalogue block carries no identity");
+
+  const char payload[48] = {1};
+
+  /* A type sif has not assigned, carrying this file's catalogue. Stepped over
+   * by length: `data_bytes` is what lets a build that has never heard of a
+   * type know how far past it to seek. */
+  sif_sdf_block_header_t unknown = forged_header(12, 7, id);
+  memcpy(unknown.name, "future", 6);
+  CHECK(append_forged(SDF_PATH, unknown, NULL, 0, payload, sizeof payload),
+    "could not forge a block of an unknown type");
+
+  /* The private range, deliberately naming a catalogue that is not this
+   * file's. sif skips such a block whole and does not audit it, which is the
+   * difference between "sif ignores what it did not write" and "sif refuses
+   * the file that carries it". */
+  sif_sdf_block_header_t private_block =
+    forged_header((uint16_t)SIF_SDF_BLOCK_PRIVATE, 3, 0xDEADBEEFu);
+  CHECK(append_forged(SDF_PATH, private_block, NULL, 0, payload, 16),
+    "could not forge a private block");
+
+  sif_sdf_t* file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+  CHECK(file != NULL && status == SIF_SDF_OK,
+    "a file holding blocks from a later sif did not open: %s",
+    sif_sdf_strerror(status));
+  if (!file) {
+    sif_catalog_free(cat);
+    return;
+  }
+
+  CHECK(sif_sdf_n_blocks(file) == 3, "%u blocks, expected 3",
+    (unsigned)sif_sdf_n_blocks(file));
+
+  sif_sdf_block_info_t info;
+  sif_sdf_info(file, 1, &info);
+  CHECK(info.type == 12 && info.n_items == 7 &&
+          strcmp(info.name, "future") == 0,
+    "the unknown block reads as type %u, %llu items, named `%s`",
+    (unsigned)info.type, (unsigned long long)info.n_items, info.name);
+
+  /* The point of stepping over them rather than refusing the file: what this
+   * build does understand is still there. */
+  sif_catalog_t* back = sif_sdf_catalog(file, &status);
+  CHECK(back != NULL && status == SIF_SDF_OK,
+    "the catalogue could not be read past an unknown block: %s",
+    sif_sdf_strerror(status));
+  if (back) {
+    CHECK(back->n_voids == 32, "read %llu voids, expected 32",
+      (unsigned long long)back->n_voids);
+    sif_catalog_free(back);
+  }
+
+  sif_sdf_close(file, NULL);
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * A block this build cannot interpret has to say so as a version, not as
+ * damage.
+ *
+ * The distinction is the whole value of the check. "Corrupt" sends a caller
+ * looking for a bad disk and reaching for the recovery tool; "written by a
+ * newer sif" sends them to an upgrade, which is the thing that will actually
+ * work.
+ */
+static void test_uninterpretable_blocks(void) {
+  printf("blocks this build cannot interpret\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(16);
+  if (!cat)
+    return;
+
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+  const uint64_t id = catalog_id_of(SDF_PATH);
+  const char payload[64] = {2};
+
+  /* A known type laid out to a payload version from the future. Its metadata
+   * is written to a scheme this build does not have, so a reader that parsed
+   * the table first would miss the first shape key it looked for and call the
+   * file corrupt -- which is what this build used to do. */
+  sif_sdf_block_header_t future =
+    forged_header((uint16_t)SIF_SDF_BLOCK_SIZE_FUNCTION, 4, id);
+  future.type_version = (uint8_t)(SIF__SDF_TYPE_VERSION + 1);
+  memcpy(future.name, "ahead", 5);
+  CHECK(append_forged(SDF_PATH, future, NULL, 0, payload, sizeof payload),
+    "could not forge a block from a later layout");
+
+  /* A block asking for a feature bit in the half that may not be ignored. */
+  sif_sdf_block_header_t flagged =
+    forged_header((uint16_t)SIF_SDF_BLOCK_SIZE_FUNCTION, 4, id);
+  flagged.flags = 1u;
+  memcpy(flagged.name, "critical", 8);
+  CHECK(append_forged(SDF_PATH, flagged, NULL, 0, payload, sizeof payload),
+    "could not forge a block with a critical flag");
+
+  /* And one in the half that may: this must not be refused for its flags,
+   * whatever else is wrong with it. */
+  sif_sdf_block_header_t ignorable =
+    forged_header((uint16_t)SIF_SDF_BLOCK_SIZE_FUNCTION, 4, id);
+  ignorable.flags = 0x10000u;
+  memcpy(ignorable.name, "ignorable", 9);
+  CHECK(append_forged(SDF_PATH, ignorable, NULL, 0, payload, sizeof payload),
+    "could not forge a block with an ignorable flag");
+
+  /* None of the three stops the file being opened: a block is only refused
+   * when something asks for it. */
+  sif_sdf_t* file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+  CHECK(file != NULL && status == SIF_SDF_OK,
+    "a file holding a block from a later sif did not open: %s",
+    sif_sdf_strerror(status));
+  if (!file) {
+    sif_catalog_free(cat);
+    return;
+  }
+
+  status = SIF_SDF_OK;
+  CHECK(sif_sdf_size_function(file, "ahead", &status) == NULL &&
+          status == SIF_SDF_ERR_VERSION,
+    "a later payload version reported %d (%s), expected the version error",
+    (int)status, sif_sdf_strerror(status));
+
+  status = SIF_SDF_OK;
+  CHECK(sif_sdf_size_function(file, "critical", &status) == NULL &&
+          status == SIF_SDF_ERR_VERSION,
+    "an unknown critical flag reported %d (%s), expected the version error",
+    (int)status, sif_sdf_strerror(status));
+
+  status = SIF_SDF_OK;
+  CHECK(sif_sdf_size_function(file, "ignorable", &status) == NULL &&
+          status != SIF_SDF_ERR_VERSION,
+    "a flag in the ignorable half was treated as a version this build "
+    "does not know");
+
+  sif_sdf_close(file, NULL);
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * The same question for a metadata table, where the answer matters more:
+ * notes are the one thing in the format meant to degrade gracefully, and an
+ * all-or-nothing failure costs a caller every note in the file rather than
+ * the one it could not read.
+ */
+static void test_metadata_forward_compatibility(void) {
+  printf("metadata a later sif might write\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(16);
+  if (!cat)
+    return;
+
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+
+  /* An entry of a type that does not exist, between two that do. The length
+   * is in bytes rather than in elements precisely so this is steppable
+   * without knowing the type -- and the test of that is the entry *after* it
+   * still arriving. */
+  char table[256];
+  uint32_t n = 0;
+  const double redshift = 0.5;
+  const int64_t tracers = 42;
+  const char blob[24] = {(char)0xAA};
+
+  n += forge_entry(table + n, "redshift", SIF_SDF_META_F64, &redshift,
+    (uint32_t)sizeof redshift);
+  n += forge_entry(table + n, "exotic", 9, blob, (uint32_t)sizeof blob);
+  n += forge_entry(
+    table + n, "n_tracers", SIF_SDF_META_I64, &tracers, (uint32_t)sizeof tracers);
+
+  sif_sdf_block_header_t notes =
+    forged_header((uint16_t)SIF_SDF_BLOCK_META, 0, 0);
+  CHECK(append_forged(SDF_PATH, notes, table, n, NULL, 0),
+    "could not forge a metadata block");
+
+  /* A metadata block carrying a data section, which version 1 never writes.
+   * Its checksum covers that section, so a reader that skips the section
+   * still has to fold it in to arrive at the same number. Getting this wrong
+   * does not lose this block -- it loses every note in the file, the valid
+   * one above included. */
+  sif_sdf_block_header_t fat =
+    forged_header((uint16_t)SIF_SDF_BLOCK_META, 0, 0);
+  const int64_t later = 7;
+  const uint32_t fat_bytes =
+    forge_entry(table + n, "appended_later", SIF_SDF_META_I64, &later,
+      (uint32_t)sizeof later);
+  const char section[32] = {3};
+  CHECK(append_forged(SDF_PATH, fat, table + n, fat_bytes, section,
+          sizeof section),
+    "could not forge a metadata block with a data section");
+
+  sif_sdf_t* file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+  CHECK(file != NULL && status == SIF_SDF_OK, "the file did not open: %s",
+    sif_sdf_strerror(status));
+  if (!file) {
+    sif_catalog_free(cat);
+    return;
+  }
+
+  sif_sdf_meta_t* meta = sif_sdf_meta_read(file, &status);
+  CHECK(meta != NULL && status == SIF_SDF_OK,
+    "metadata from a later sif could not be read: %s",
+    sif_sdf_strerror(status));
+
+  if (meta) {
+    double back_f = 0.0;
+    int64_t back_i = 0;
+    CHECK(sif_sdf_meta_get_f64(meta, "redshift", &back_f) == SIF_SDF_OK &&
+            back_f == redshift,
+      "the entry before an unknown one did not survive");
+    CHECK(sif_sdf_meta_get_i64(meta, "n_tracers", &back_i) == SIF_SDF_OK &&
+            back_i == tracers,
+      "the entry after an unknown one did not survive");
+    CHECK(sif_sdf_meta_get_i64(meta, "appended_later", &back_i) == SIF_SDF_OK &&
+            back_i == later,
+      "a metadata block carrying a data section lost its table");
+    CHECK(!sif_sdf_meta_has(meta, "exotic"),
+      "an entry of an unknown type came back as a value");
+    sif_sdf_meta_free(meta);
+  }
+
+  sif_sdf_close(file, NULL);
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * A catalogue stored at the other precision.
+ *
+ * The format's one concession to interoperability, and the thing sif cannot
+ * test against itself: the library is built single-precision, so a file at
+ * the other width has to be assembled by hand. Written the other way round
+ * on a double build, so this covers the conversion whichever way sif is
+ * configured.
+ */
+static void test_other_precision(void) {
+  printf("a catalogue at the other precision\n");
+
+  const sif_sdf_dtype_t other =
+    (sizeof(sif_real) == 8) ? SIF_SDF_F32 : SIF_SDF_F64;
+
+  /* Exactly representable at either width, so a mismatch here is the
+   * conversion going wrong and not rounding doing its job. */
+  static const double centres[3] = {10.5, 20.25, 30.125};
+  static const double radii[3] = {1.25, 2.5, 5.0};
+
+  char payload[4 * 3 * sizeof(double)];
+  size_t at = 0;
+  for (int view = 0; view < 4; view++) {
+    const double* src = (view == 3) ? radii : centres;
+    for (int i = 0; i < 3; i++) {
+      if (other == SIF_SDF_F64) {
+        const double wide = src[i];
+        memcpy(payload + at, &wide, sizeof wide);
+        at += sizeof wide;
+      } else {
+        const float narrow = (float)src[i];
+        memcpy(payload + at, &narrow, sizeof narrow);
+        at += sizeof narrow;
+      }
+    }
+  }
+
+  remove(SDF_PATH);
+  CHECK(write_forged_file_header(SDF_PATH), "could not forge a file header");
+
+  sif_sdf_block_header_t header =
+    forged_header((uint16_t)SIF_SDF_BLOCK_CATALOG, 3, 0x5DF00Du);
+  header.real_dtype = (uint8_t)other;
+  CHECK(append_forged(SDF_PATH, header, NULL, 0, payload, at),
+    "could not forge a catalogue at the other precision");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_sdf_t* file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+  CHECK(file != NULL && status == SIF_SDF_OK,
+    "a file at the other precision did not open: %s",
+    sif_sdf_strerror(status));
+  if (!file)
+    return;
+
+  /* The checksum is taken over the bytes as they sit in the file rather than
+   * over the converted values, or a build of the other width would compute a
+   * different one for an intact file and reject it. */
+  sif_catalog_t* cat = sif_sdf_catalog(file, &status);
+  CHECK(cat != NULL && status == SIF_SDF_OK,
+    "a catalogue at the other precision could not be read: %s",
+    sif_sdf_strerror(status));
+
+  if (cat) {
+    CHECK(cat->n_voids == 3, "read %llu voids, expected 3",
+      (unsigned long long)cat->n_voids);
+    for (int i = 0; i < 3; i++) {
+      CHECK((double)cat->cx[i] == centres[i],
+        "void %d came back at cx %.17g, expected %.17g", i, (double)cat->cx[i],
+        centres[i]);
+      CHECK((double)cat->radii[i] == radii[i],
+        "void %d came back at r %.17g, expected %.17g", i,
+        (double)cat->radii[i], radii[i]);
+    }
+    sif_catalog_free(cat);
+  }
+
+  sif_sdf_close(file, NULL);
+  remove(SDF_PATH);
+}
+
+/*
+ * The framing rules, which are checked at open rather than at whichever call
+ * first wants the thing they describe.
+ */
+static void test_framing_rejections(void) {
+  printf("framing rejections\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(16);
+  if (!cat)
+    return;
+
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+
+  /* Where the metadata block is about to land, so its header can be found
+   * again afterwards. */
+  const long notes_at = file_bytes(SDF_PATH);
+
+  char table[64];
+  const int64_t value = 1;
+  const uint32_t bytes =
+    forge_entry(table, "note", SIF_SDF_META_I64, &value, (uint32_t)sizeof value);
+
+  sif_sdf_block_header_t notes =
+    forged_header((uint16_t)SIF_SDF_BLOCK_META, 0, 0);
+  CHECK(append_forged(SDF_PATH, notes, table, bytes, NULL, 0),
+    "could not forge a metadata block");
+
+  /* Entries are padded to eight, so a table whose length is not a multiple of
+   * eight cannot be a sequence of them -- and the data section behind it does
+   * not begin where the format says. A framing fault, so it is refused when
+   * the chain is walked and not when someone asks for a table. */
+  const uint32_t ragged = bytes + 1;
+  poke(SDF_PATH, notes_at + 16, &ragged, sizeof ragged);
+
+  CHECK(sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status) == NULL &&
+          status == SIF_SDF_ERR_CORRUPT,
+    "a metadata table of a ragged length opened (%d)", (int)status);
+  status = SIF_SDF_OK;
+
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * What recovery does with a file that has nothing to recover.
+ *
+ * Reporting a file sound is a promise that it opens. A prefix that does not
+ * begin with a catalogue will not open however much is cut off the end of it,
+ * so saying so is the difference between a recovery that helps and one that
+ * reports success and hands back the same unopenable file.
+ */
+static void test_recovery_needs_a_catalogue(void) {
+  printf("recovering a file with no catalogue\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(16);
+  if (!cat)
+    return;
+
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+  const long whole = file_bytes(SDF_PATH);
+
+  /* Block 0 still checksums -- the checksum covers the payload, and this
+   * changes the header -- so the scan finds a sound block that is not a
+   * catalogue. */
+  const uint16_t not_a_catalogue = (uint16_t)SIF_SDF_BLOCK_META;
+  poke(SDF_PATH, BLOCK_OFFSET + 4, &not_a_catalogue, sizeof not_a_catalogue);
+
+  CHECK(sif_sdf_verify(SDF_PATH, &status) == 0 &&
+          status == SIF_SDF_ERR_NO_CATALOG,
+    "verify called a file with no catalogue recoverable (%d)", (int)status);
+  status = SIF_SDF_OK;
+
+  CHECK(sif_sdf_repair(SDF_PATH, &status) == 0 &&
+          status == SIF_SDF_ERR_NO_CATALOG,
+    "repair claimed to recover a file with no catalogue (%d)", (int)status);
+  status = SIF_SDF_OK;
+
+  CHECK(file_bytes(SDF_PATH) == whole,
+    "a file with nothing to recover was truncated anyway");
+
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * Values too large to put on the wire.
+ *
+ * The guards are on the arithmetic rather than on the memory: a value long
+ * enough to wrap the length of the entry carrying it would size a buffer too
+ * short and then fill it past the end. Neither case here allocates anything
+ * like what it names -- both are refused on the number alone.
+ */
+static void test_metadata_limits(void) {
+  printf("metadata too large for the wire\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(8);
+  if (!cat)
+    return;
+
+  remove(SDF_PATH);
+  sif_sdf_t* file = sif_sdf_create(SDF_PATH, BOX, cat, 0, &status);
+  CHECK(file != NULL, "setup create failed: %s", sif_sdf_strerror(status));
+  if (!file) {
+    sif_catalog_free(cat);
+    return;
+  }
+
+  /* An array whose byte length would not fit the field that counts it. The
+   * count is refused before the array is touched, so the pointer below is
+   * never read. */
+  sif_sdf_meta_t* huge = sif_sdf_meta_alloc();
+  const int64_t one = 1;
+  sif_sdf_meta_put_i64v(huge, "too_long", &one, UINT32_MAX);
+  sif_sdf_meta_write(file, huge, &status);
+  CHECK(status == SIF_SDF_ERR_INVALID,
+    "an array too long for the wire was not refused (%d)", (int)status);
+  status = SIF_SDF_OK;
+  sif_sdf_meta_free(huge);
+
+  /* A key is length-prefixed with a uint16, so one that does not fit would be
+   * written at its full length and described at a truncated one -- a table
+   * nothing could decode. */
+  char* long_key = malloc(70000);
+  if (long_key) {
+    memset(long_key, 'k', 69999);
+    long_key[69999] = '\0';
+
+    sif_sdf_meta_t* keyed = sif_sdf_meta_alloc();
+    sif_sdf_meta_put_i64(keyed, long_key, 1);
+    sif_sdf_meta_write(file, keyed, &status);
+    CHECK(status == SIF_SDF_ERR_INVALID,
+      "a key too long for the wire was not refused (%d)", (int)status);
+    status = SIF_SDF_OK;
+    sif_sdf_meta_free(keyed);
+    free(long_key);
+  }
+
+  sif_sdf_close(file, &status);
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * One bit, flipped in a header.
+ *
+ * These are the corruptions the format could not see. A block's payload
+ * checksum covers what the block *holds*; until the headers carried checksums
+ * of their own, nothing covered what a block *says it is*, and each of the
+ * flips below changed an answer while every checksum in the file still
+ * matched -- the box a run was measured in, whether a block exists at all,
+ * which block a name refers to. A reader that accepts a damaged file is worse
+ * than one that fails, because the numbers flow onward and whatever they
+ * produce looks like a result.
+ */
+static void test_header_corruption(void) {
+  printf("one bit flipped in a header\n");
+
+  static const struct {
+    const char* what;
+    long offset;
+    int bit;
+  } flips[] = {
+    /* The box every product in the file is expressed in. Silently became
+     * 1000.00390625, and every measurement read afterwards was scaled to a
+     * box the run was never in. */
+    {"the box length", 20, 3},
+    /* Into the private range, where sif skips a block whole: a profile set
+     * would simply cease to exist, and the call for it would report that the
+     * file never held one. */
+    {"a block's type", BLOCK_OFFSET + 5, 7},
+    /* `linear` and `linbar` are two different binnings. */
+    {"a block's name", BLOCK_OFFSET + 48, 0},
+    /* How many voids the file says it holds. */
+    {"a block's item count", BLOCK_OFFSET + 32, 1},
+    /* The identity that ties every block in the file to the catalogue. */
+    {"the catalogue identity", BLOCK_OFFSET + CATALOG_ID_OFFSET, 5},
+    /* Reserved space, which carries nothing today -- and is covered anyway,
+     * so that it is still covered on the day it carries something. */
+    {"the reserved space", 56, 2},
+  };
+
+  sif_catalog_t* cat = make_catalog(16);
+  if (!cat)
+    return;
+
+  for (size_t i = 0; i < sizeof flips / sizeof flips[0]; i++) {
+    sif_sdf_status_t status = SIF_SDF_OK;
+
+    CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+    flip_bit(SDF_PATH, flips[i].offset, flips[i].bit);
+
+    sif_sdf_t* file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+    CHECK(file == NULL && status == SIF_SDF_ERR_CORRUPT,
+      "%s was flipped by one bit and the file still opened (%d)",
+      flips[i].what, (int)status);
+
+    sif_sdf_close(file, NULL);
+    remove(SDF_PATH);
+  }
+
+  sif_catalog_free(cat);
+}
+
+/*
+ * A header that fails its own checksum ends the sound part of the file.
+ *
+ * The lengths in a block header are what say where the next block starts, so
+ * a header that does not stand behind itself is not something to read past --
+ * following it would be the guessing this scan exists not to do.
+ */
+static void test_recovery_from_a_bad_header(void) {
+  printf("recovering past a damaged block header\n");
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  sif_catalog_t* cat = make_catalog(64);
+  if (!cat)
+    return;
+
+  sif_size_function_t* vsf =
+    sif_size_function_catalog(cat, (sif_real)BOX, 8, 0, 0, 0);
+  if (!vsf) {
+    sif_catalog_free(cat);
+    return;
+  }
+
+  /* Written in two steps, so the catalogue is on disk and measurable before
+   * the second block goes on the end of it: a size taken while the stream is
+   * still open is a size of whatever has reached the disk so far. */
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+  const long catalogue_ends = file_bytes(SDF_PATH);
+
+  sif_sdf_t* file = sif_sdf_open(SDF_PATH, SIF_SDF_APPEND, &status);
+  sif_sdf_append_size_function(file, vsf, "v", &status);
+  sif_sdf_close(file, &status);
+  CHECK(status == SIF_SDF_OK, "setup append failed: %s",
+    sif_sdf_strerror(status));
+
+  const long whole = file_bytes(SDF_PATH);
+
+  /* One bit in the second block's header. Its payload is untouched and still
+   * checksums, so nothing but the header check can see this. */
+  flip_bit(SDF_PATH, catalogue_ends + 32, 1);
+
+  CHECK(sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status) == NULL &&
+          status == SIF_SDF_ERR_CORRUPT,
+    "a file with a damaged block header opened (%d)", (int)status);
+  status = SIF_SDF_OK;
+
+  const uint64_t damaged = sif_sdf_verify(SDF_PATH, &status);
+  CHECK(damaged == (uint64_t)(whole - catalogue_ends) && status == SIF_SDF_OK,
+    "verify reported %llu damaged bytes, expected %ld",
+    (unsigned long long)damaged, whole - catalogue_ends);
+
+  const uint64_t dropped = sif_sdf_repair(SDF_PATH, &status);
+  CHECK(dropped == damaged && status == SIF_SDF_OK,
+    "repair dropped %llu where verify said %llu", (unsigned long long)dropped,
+    (unsigned long long)damaged);
+
+  /* And what is left is a file, not a prefix of one: the catalogue survives
+   * the block that was lost. */
+  file = sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status);
+  CHECK(file != NULL && status == SIF_SDF_OK,
+    "the recovered file did not open: %s", sif_sdf_strerror(status));
+  if (file) {
+    CHECK(sif_sdf_n_blocks(file) == 1, "%u blocks left, expected 1",
+      (unsigned)sif_sdf_n_blocks(file));
+    sif_catalog_t* back = sif_sdf_catalog(file, &status);
+    CHECK(back != NULL && status == SIF_SDF_OK,
+      "the catalogue did not survive: %s", sif_sdf_strerror(status));
+    sif_catalog_free(back);
+    sif_sdf_close(file, NULL);
+  }
+
+  sif_size_function_free(vsf);
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
+/*
+ * A container from before the headers were checksummed.
+ *
+ * Refused rather than read on trust: version 1 laid its block headers out
+ * differently, so reading one would mean believing 64 bytes that nothing ever
+ * covered, at the offsets of a layout it does not use.
+ */
+static void test_older_container(void) {
+  printf("a container older than this build\n");
+
+  sif_catalog_t* cat = make_catalog(4);
+  if (!cat)
+    return;
+
+  CHECK(write_good_file(SDF_PATH, cat), "setup write failed");
+
+  /* Nothing else about the file changes: the point is that the version alone
+   * is enough to turn it away, and that it is turned away as a version rather
+   * than as damage. */
+  const uint32_t older = SIF_SDF_VERSION - 1;
+  poke(SDF_PATH, 4, &older, sizeof older);
+
+  sif_sdf_status_t status = SIF_SDF_OK;
+  CHECK(sif_sdf_open(SDF_PATH, SIF_SDF_READ, &status) == NULL &&
+          status == SIF_SDF_ERR_VERSION,
+    "a version %u container was not refused as a version (%d)",
+    (unsigned)older, (int)status);
+
+  sif_catalog_free(cat);
+  remove(SDF_PATH);
+}
+
 int main(void) {
   sif_init(SIF_CONFIG_QUIET);
 
@@ -1183,7 +1996,17 @@ int main(void) {
   test_metadata();
   test_metadata_merge();
   test_metadata_rejections();
+  test_metadata_limits();
   test_repair();
+  test_recovery_needs_a_catalogue();
+  test_framing_rejections();
+  test_forward_compatibility();
+  test_uninterpretable_blocks();
+  test_metadata_forward_compatibility();
+  test_other_precision();
+  test_header_corruption();
+  test_recovery_from_a_bad_header();
+  test_older_container();
 
   remove(SDF_PATH);
   remove(ALT_PATH);

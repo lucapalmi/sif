@@ -56,8 +56,13 @@
 /** @brief Magic number at the start of every `.sdf` file. */
 #define SIF_SDF_MAGIC "SIFD"
 
-/** @brief Version of the container layout this build reads and writes. */
-#define SIF_SDF_VERSION 1
+/** @brief Version of the container layout this build reads and writes.
+ *
+ * 2 since the headers carry checksums of their own. Version 1 is not read:
+ * its block headers are laid out differently and nothing stands behind
+ * either header, so a version-1 file is refused rather than read on trust.
+ */
+#define SIF_SDF_VERSION 2
 
 /**
  * @brief Byte-order sentinel, written natively and compared as an integer.

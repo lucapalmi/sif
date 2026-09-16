@@ -170,6 +170,28 @@ static sif_sdf_status_t handle_attach(sif_sdf_t* file, FILE* stream) {
   return SIF_SDF_OK;
 }
 
+/* --- header checksums --- */
+
+/*
+ * A header's checksum over itself, taken with the field that holds it zeroed.
+ *
+ * Over the whole 64 bytes rather than up to the field, so the reserved space
+ * is covered too: those bytes are required to be zero today, and a checksum
+ * that skipped them would be a checksum that stops covering them the moment a
+ * later version gives them a meaning.
+ */
+uint32_t sif__sdf_header_checksum(const sif_sdf_header_t* header) {
+  sif_sdf_header_t bare = *header;
+  bare.header_crc32 = 0;
+  return sif_crc32(&bare, sizeof(sif_sdf_header_t));
+}
+
+uint32_t sif__sdf_block_checksum(const sif_sdf_block_header_t* header) {
+  sif_sdf_block_header_t bare = *header;
+  bare.header_crc32 = 0;
+  return sif_crc32(&bare, sizeof(sif_sdf_block_header_t));
+}
+
 /* --- file header --- */
 
 /*
@@ -201,6 +223,27 @@ static sif_sdf_status_t header_validate(
       "%s is version %u, but this build reads up to version %u", filepath,
       header->version, (unsigned)SIF_SDF_VERSION);
     return SIF_SDF_ERR_VERSION;
+  }
+
+  /* An older container is refused rather than read on trust. Version 1 laid
+   * its block headers out differently and had nothing standing behind either
+   * header, so reading one would mean trusting 64 bytes that no checksum ever
+   * covered -- which is the thing version 2 exists to stop doing. */
+  if (header->version < SIF_SDF_VERSION) {
+    SIF_LOG_ERROR("sdf",
+      "%s is version %u, which this build no longer reads: its headers carry "
+      "no checksum of their own",
+      filepath, header->version);
+    return SIF_SDF_ERR_VERSION;
+  }
+
+  /* Before box_length is looked at, and before any length in the file is
+   * trusted: this is what says the rest of these 64 bytes are the bytes that
+   * were written. */
+  if (sif__sdf_header_checksum(header) != header->header_crc32) {
+    SIF_LOG_ERROR("sdf", "the header of %s does not match its checksum",
+      filepath);
+    return SIF_SDF_ERR_CORRUPT;
   }
 
   /* Negated rather than written as <= 0, so a NaN fails it too: every
@@ -270,6 +313,38 @@ sif_sdf_status_t sif__sdf_read_raw(
   *crc = sif_crc32_update(*crc, dest, bytes);
   return SIF_SDF_OK;
 }
+
+/*
+ * Folds a stretch of the file into a running checksum without keeping it.
+ *
+ * A block's checksum covers everything in it, so a reader that skips part of
+ * a block -- a section it was not built to understand -- still has to see
+ * those bytes to arrive at the same number. Small chunks on the stack: this
+ * is for a section that is skipped, not for streaming a whole payload, which
+ * is what the recovery scan does with a buffer of its own.
+ */
+#define CRC_CHUNK 4096
+
+sif_sdf_status_t sif__sdf_crc_range(
+  sif_sdf_t* file, uint64_t offset, uint64_t bytes, uint32_t* crc) {
+  char buffer[CRC_CHUNK];
+
+  while (bytes > 0) {
+    const size_t take = (bytes < CRC_CHUNK) ? (size_t)bytes : CRC_CHUNK;
+
+    const sif_sdf_status_t status =
+      sif__sdf_read_raw(file, offset, buffer, take, crc);
+    if (status != SIF_SDF_OK)
+      return status;
+
+    offset += take;
+    bytes -= take;
+  }
+
+  return SIF_SDF_OK;
+}
+
+#undef CRC_CHUNK
 
 /* Writes at wherever the stream is, which is where the last write left it. */
 sif_sdf_status_t sif__sdf_write_now(
@@ -425,6 +500,32 @@ static sif_sdf_status_t blocks_walk(sif_sdf_t* file) {
       return SIF_SDF_ERR_CORRUPT;
     }
 
+    /* Every block, at open, before a single length out of it is used. The
+     * payload checksum cannot do this job: it is verified when a block is
+     * read, and a block whose type has been corrupted into the private range
+     * is never read at all -- it is skipped, silently, and the measurement it
+     * holds is simply gone. */
+    if (sif__sdf_block_checksum(&entry.header) != entry.header.header_crc32) {
+      SIF_LOG_ERROR("sdf",
+        "the block header at %llu in %s does not match its checksum",
+        (unsigned long long)pos, file->path);
+      return SIF_SDF_ERR_CORRUPT;
+    }
+
+    /* Part of the framing rather than of the metadata: entries are padded to
+     * eight, so a table that is not a multiple of eight cannot be a sequence
+     * of them, and the data section behind it does not start where the format
+     * says it does. Checked here, with the other lengths, so that a file whose
+     * framing is wrong is refused at open rather than at whichever later call
+     * first happens to want a table. */
+    if (entry.header.meta_bytes % 8u != 0) {
+      SIF_LOG_ERROR("sdf",
+        "the block at %llu in %s has a metadata table of %u bytes, which is "
+        "not a whole number of entries",
+        (unsigned long long)pos, file->path, entry.header.meta_bytes);
+      return SIF_SDF_ERR_CORRUPT;
+    }
+
     /* Written as two comparisons against what is left rather than as one sum,
      * because the sum is exactly what an unchecked file could overflow. */
     const uint64_t room = left - SIF__SDF_BLOCK_BYTES;
@@ -577,7 +678,7 @@ sif_sdf_status_t sif__sdf_block_write(sif_sdf_t* file,
   const sif__sdf_span_t* spans, uint32_t n_spans) {
 
   memcpy(header->magic, SIF__SDF_BLOCK_MAGIC, 4);
-  header->type_version = SIF__SDF_TYPE_VERSION;
+  header->type_version = (uint8_t)SIF__SDF_TYPE_VERSION;
   header->meta_bytes = meta_bytes;
 
   header->data_bytes = 0;
@@ -592,6 +693,10 @@ sif_sdf_status_t sif__sdf_block_write(sif_sdf_t* file,
   for (uint32_t i = 0; i < n_spans; i++)
     crc = sif_crc32_update(crc, spans[i].data, (size_t)spans[i].bytes);
   header->crc32 = sif_crc32_final(crc);
+
+  /* Last, once every other field is final -- including crc32 just above, which
+   * this then covers in turn. */
+  header->header_crc32 = sif__sdf_block_checksum(header);
 
   const sif__sdf_entry_t entry = {file->end_offset, *header};
   const uint64_t total = sif__sdf_block_bytes(&entry);
@@ -754,8 +859,8 @@ sif_sdf_status_t sif__sdf_append_gate(sif_sdf_t* file,
   return SIF_SDF_OK;
 }
 
-sif_sdf_status_t sif__sdf_read_gate(const sif_sdf_t* file,
-  const sif__sdf_entry_t* entry, uint64_t expected_bytes) {
+sif_sdf_status_t sif__sdf_layout_gate(
+  const sif_sdf_t* file, const sif__sdf_entry_t* entry) {
 
   const sif_sdf_dtype_t dtype = (sif_sdf_dtype_t)entry->header.real_dtype;
   if (dtype != SIF_SDF_F32 && dtype != SIF_SDF_F64) {
@@ -766,11 +871,35 @@ sif_sdf_status_t sif__sdf_read_gate(const sif_sdf_t* file,
 
   if (entry->header.type_version > SIF__SDF_TYPE_VERSION) {
     SIF_LOG_ERROR("sdf",
-      "a block in %s is laid out in a way version %u of this build does not "
-      "know",
-      file->path, (unsigned)SIF__SDF_TYPE_VERSION);
+      "a block in %s is laid out to payload version %u, and this build knows "
+      "up to %u -- the file was written by a newer sif",
+      file->path, (unsigned)entry->header.type_version,
+      (unsigned)SIF__SDF_TYPE_VERSION);
     return SIF_SDF_ERR_VERSION;
   }
+
+  /* A bit in the half that may not be ignored, which this build does not
+   * know, means the block is using something this build would silently read
+   * past. Reported as the version it is rather than as damage. */
+  const uint32_t critical =
+    entry->header.flags & SIF__SDF_FLAGS_CRITICAL & ~SIF__SDF_FLAGS_KNOWN;
+  if (critical != 0) {
+    SIF_LOG_ERROR("sdf",
+      "a block in %s asks for feature bits 0x%04x that this build does not "
+      "know -- the file was written by a newer sif",
+      file->path, (unsigned)critical);
+    return SIF_SDF_ERR_VERSION;
+  }
+
+  return SIF_SDF_OK;
+}
+
+sif_sdf_status_t sif__sdf_read_gate(const sif_sdf_t* file,
+  const sif__sdf_entry_t* entry, uint64_t expected_bytes) {
+
+  const sif_sdf_status_t layout = sif__sdf_layout_gate(file, entry);
+  if (layout != SIF_SDF_OK)
+    return layout;
 
   /* The length the block's own shape implies, against the length it declares.
    * Everything read afterwards is sized from that shape, so the two agreeing
@@ -807,7 +936,7 @@ static sif_sdf_status_t catalog_write(
   sif_sdf_block_header_t header;
   memset(&header, 0, sizeof(sif_sdf_block_header_t));
   header.type = (uint16_t)SIF_SDF_BLOCK_CATALOG;
-  header.real_dtype = (uint16_t)sif__sdf_native_dtype();
+  header.real_dtype = (uint8_t)sif__sdf_native_dtype();
   header.n_items = n_voids;
   header.catalog_id = sif_catalog_id(cat);
 
@@ -1071,6 +1200,8 @@ sif_sdf_t* sif_sdf_create(const char* filepath, double box_length,
   memcpy(file->header.writer, SIF__SDF_WRITER,
     (writer_bytes < SIF__SDF_WRITER_BYTES) ? writer_bytes
                                            : SIF__SDF_WRITER_BYTES);
+
+  file->header.header_crc32 = sif__sdf_header_checksum(&file->header);
 
   if (fwrite(&file->header, SIF__SDF_HEADER_BYTES, 1, file->stream) != 1) {
     SIF_LOG_ERROR("sdf", "failed to write the header of %s", filepath);

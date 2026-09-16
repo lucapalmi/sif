@@ -100,7 +100,7 @@ static sif_sdf_status_t product_header(sif_sdf_t* file,
 
   memset(out, 0, sizeof(sif_sdf_block_header_t));
   out->type = (uint16_t)type;
-  out->real_dtype = (uint16_t)sif__sdf_native_dtype();
+  out->real_dtype = (uint8_t)sif__sdf_native_dtype();
   out->n_items = n_items;
   out->catalog_id = file->catalog_id;
 
@@ -131,7 +131,12 @@ static sif_sdf_status_t product_find(sif_sdf_t* file, sif_sdf_block_type_t type,
   }
 
   *out = &file->blocks[index];
-  return SIF_SDF_OK;
+
+  /* Before the caller reads a single field of it. A block this build cannot
+   * interpret has to be reported as that here, because everything the reader
+   * does next -- parse the table, demand the shape keys -- assumes a layout
+   * it may not have, and would report the first thing it misses as damage. */
+  return sif__sdf_layout_gate(file, *out);
 }
 
 /* --- density profiles --- */

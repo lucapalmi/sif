@@ -41,6 +41,25 @@
 /** @brief Payload layout version this build writes for every block type. */
 #define SIF__SDF_TYPE_VERSION 1
 
+/**
+ * @brief The half of a block's `flags` a reader has to understand.
+ *
+ * `data_bytes` makes an unknown *type* skippable and `type_version` makes an
+ * unknown *layout* skippable, which leaves nothing to say "this block uses
+ * something you must know about". The field is split so there is: a bit set
+ * in the low half is one a reader cannot ignore, and a block carrying one
+ * this build has never heard of is refused when it is asked for, the same way
+ * an unknown `type_version` is. The high half is for bits that can be ignored
+ * safely.
+ *
+ * Version 1 assigns none of either, so every block sif writes has `flags`
+ * zero and every file in existence passes.
+ */
+#define SIF__SDF_FLAGS_CRITICAL 0x0000FFFFu
+
+/** @brief Critical flag bits this build knows. None, so far. */
+#define SIF__SDF_FLAGS_KNOWN 0x00000000u
+
 /** @brief Length of the `writer` field, which is padded rather than
  * terminated. */
 #define SIF__SDF_WRITER_BYTES 16
@@ -83,8 +102,10 @@ typedef struct {
   uint64_t created;
   /** Library version that created the file, zero-padded, not terminated. */
   char writer[SIF__SDF_WRITER_BYTES];
+  /** CRC32 of this header, taken with this field zero. */
+  uint32_t header_crc32;
   /** Reserved, to hold the header at 64 bytes. */
-  char padding[16];
+  char padding[12];
 } sif_sdf_header_t;
 
 /* The header is written and read as 64 raw bytes, so a compiler that inserted
@@ -106,12 +127,22 @@ typedef struct {
   /** What the block holds, as a #sif_sdf_block_type_t. */
   uint16_t type;
   /** Payload layout version for this type. */
-  uint16_t type_version;
+  uint8_t type_version;
   /** Width of the payload's reals, as a #sif_sdf_dtype_t. */
-  uint16_t real_dtype;
-  /** Reserved, zero. */
-  uint16_t reserved0;
-  /** Reserved, zero. */
+  uint8_t real_dtype;
+  /** CRC32 of this header, taken with this field zero.
+   *
+   * Separate from #crc32, and checked at a different time, because they
+   * answer different questions. #crc32 covers what the block holds and is
+   * verified when the block is read; this covers what the block *says it
+   * is* -- its type, its name, its lengths, the catalogue it belongs to --
+   * and is verified for every block when the file is opened. Without it those
+   * 64 bytes are the only part of a file nothing stands behind, and a flipped
+   * bit in them is silent: a type that lands in the private range makes a
+   * block disappear, and a name that changes by one letter makes a lookup
+   * miss, with every checksum in the file still matching. */
+  uint32_t header_crc32;
+  /** Feature bits; see #SIF__SDF_FLAGS_CRITICAL. */
   uint32_t flags;
   /** Metadata table size, a multiple of 8. */
   uint32_t meta_bytes;
@@ -328,13 +359,51 @@ sif_sdf_status_t sif__sdf_append_gate(sif_sdf_t* file,
   sif_sdf_block_type_t type, const char* name, uint64_t source_id);
 
 /**
- * @brief Everything that must hold before a block is read: it exists, and its
- * payload is the length its shape implies.
+ * @brief Whether this build can interpret a block at all: its reals are a
+ * width that exists, its payload is laid out to a version this build knows,
+ * and it asks for no feature this build has never heard of.
+ *
+ * Checked before a block's metadata is touched, and that order is the whole
+ * point of having it separate from sif__sdf_read_gate(). A block from a newer
+ * sif has its shape keys laid out to a scheme this build does not have, so
+ * parsing the table first turns "written by a newer sif" into a missing key
+ * and a corrupt file -- which sends a caller looking for damage that is not
+ * there, and at a recovery tool rather than at an upgrade.
+ */
+sif_sdf_status_t sif__sdf_layout_gate(
+  const sif_sdf_t* file, const sif__sdf_entry_t* entry);
+
+/**
+ * @brief Everything that must hold before a block is read: it exists, it can
+ * be interpreted, and its payload is the length its shape implies.
  *
  * @param expected_bytes What the caller works out from the block's shape.
  */
 sif_sdf_status_t sif__sdf_read_gate(const sif_sdf_t* file,
   const sif__sdf_entry_t* entry, uint64_t expected_bytes);
+
+/**
+ * @brief The checksum a file header carries over itself.
+ *
+ * Taken over all 64 bytes with the field that holds it zeroed, so the number
+ * covers the reserved space as well -- a bit that flips there today is caught
+ * today, rather than the first time a later version gives those bytes a
+ * meaning.
+ */
+uint32_t sif__sdf_header_checksum(const sif_sdf_header_t* header);
+
+/** @brief The same, for a block header. */
+uint32_t sif__sdf_block_checksum(const sif_sdf_block_header_t* header);
+
+/**
+ * @brief Fold a stretch of the file into @p crc without keeping it.
+ *
+ * For a section that has to be checksummed and not read: a block's checksum
+ * covers everything in it, so a reader that skips part of a block still has
+ * to see those bytes to arrive at the same number.
+ */
+sif_sdf_status_t sif__sdf_crc_range(
+  sif_sdf_t* file, uint64_t offset, uint64_t bytes, uint32_t* crc);
 
 /** @brief Width on disk of a block's reals. */
 static inline uint64_t sif__sdf_dtype_bytes(sif_sdf_dtype_t dtype) {

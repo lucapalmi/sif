@@ -101,6 +101,14 @@ static sif_sdf_status_t scan(sif_sdf_t* file, uint64_t file_size,
     if (memcmp(entry.header.magic, SIF__SDF_BLOCK_MAGIC, 4) != 0)
       break;
 
+    /* A header that does not stand behind itself ends the sound part of the
+     * file, exactly as a bad payload does. Its lengths are what would say
+     * where the next block starts, and lengths from a header that failed its
+     * own checksum are not lengths -- following them is the guessing this
+     * scan refuses to do. */
+    if (sif__sdf_block_checksum(&entry.header) != entry.header.header_crc32)
+      break;
+
     const uint64_t room = left - SIF__SDF_BLOCK_BYTES;
     if (entry.header.meta_bytes > room ||
         entry.header.data_bytes > room - entry.header.meta_bytes)
@@ -113,6 +121,23 @@ static sif_sdf_status_t scan(sif_sdf_t* file, uint64_t file_size,
     if (block_verify(file, &entry, buffer) != SIF_SDF_OK)
       break;
 
+    /* What the first block is, rather than merely that it survived. A file
+     * is a catalogue and the things measured from it, so a prefix that does
+     * not begin with one is not a shorter file -- it is a file that will not
+     * open however much of it is cut away, and saying so here is the
+     * difference between a recovery that helps and one that reports success
+     * and leaves the caller with the same unopenable file. */
+    if (*out_blocks == 0 &&
+        (entry.header.type != SIF_SDF_BLOCK_CATALOG ||
+          entry.header.catalog_id == 0)) {
+      SIF_LOG_ERROR("sdf",
+        "%s does not begin with a sound catalogue block, so there is nothing "
+        "to recover",
+        file->path);
+      free(buffer);
+      return SIF_SDF_ERR_NO_CATALOG;
+    }
+
     pos += total;
     *out_good_end = pos;
     (*out_blocks)++;
@@ -124,7 +149,8 @@ static sif_sdf_status_t scan(sif_sdf_t* file, uint64_t file_size,
    * anything, and cutting it back to a bare header would turn a damaged file
    * into an empty one. */
   if (*out_blocks == 0) {
-    SIF_LOG_ERROR("sdf", "%s has no sound catalogue block", file->path);
+    SIF_LOG_ERROR("sdf", "no block of %s survives, not even its catalogue",
+      file->path);
     return SIF_SDF_ERR_NO_CATALOG;
   }
 

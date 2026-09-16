@@ -47,8 +47,14 @@
 /* First allocation. A run's worth of notes fits in this without growing. */
 #define FIRST_CAPACITY 8
 
-static uint32_t align_up(uint32_t value) {
-  return (value + (ENTRY_ALIGN - 1)) & ~(uint32_t)(ENTRY_ALIGN - 1);
+/* Rounds an entry up to the padding the format puts between entries.
+ *
+ * In 64 bits, which is the point: an entry's length is a 32-bit head plus a
+ * 16-bit key plus a value that may be as long as a uint32 can count, so the
+ * sum is exactly the thing that overflows if it is added up in the width of
+ * its parts. */
+static uint64_t align_up(uint64_t value) {
+  return (value + (ENTRY_ALIGN - 1)) & ~(uint64_t)(ENTRY_ALIGN - 1);
 }
 
 /* --- the table --- */
@@ -103,7 +109,27 @@ void sif__sdf_meta_put(sif_sdf_meta_t* meta, const char* key,
   }
 
   /* A string is kept terminated so it can be handed straight out, and the
-   * terminator sits past the length the wire records. */
+   * terminator sits past the length the wire records -- which is why a value
+   * of exactly UINT32_MAX bytes cannot be stored: the length with the
+   * terminator on it would wrap to nothing and the copy would run off the
+   * end of a single byte. Checked here, at the one door both the public puts
+   * and the decoder come through. */
+  if (type == SIF_SDF_META_STR && bytes == UINT32_MAX) {
+    SIF_LOG_ERROR("sdf", "the text under `%s` is too long to store", key);
+    meta->failed = 1;
+    return;
+  }
+
+  /* A key is length-prefixed with a uint16 on the wire. One that does not fit
+   * would be written at its full length and described at a truncated one,
+   * which encodes a table nothing can decode. */
+  if (strlen(key) > UINT16_MAX) {
+    SIF_LOG_ERROR("sdf", "a metadata key of %zu bytes is too long to store",
+      strlen(key));
+    meta->failed = 1;
+    return;
+  }
+
   const uint32_t stored = (type == SIF_SDF_META_STR) ? bytes + 1 : bytes;
 
   void* copy = malloc(stored ? stored : 1);
@@ -374,8 +400,11 @@ sif_sdf_status_t sif__sdf_meta_encode(
 
   uint64_t total = 0;
   for (uint32_t i = 0; i < meta->count; i++) {
-    total += align_up(ENTRY_HEAD_BYTES + (uint32_t)strlen(meta->items[i].key) +
-                      meta->items[i].bytes);
+    /* An entry whose size wrapped would be a buffer allocated too short and a
+     * value memcpy'd past the end of it. Measured wide, so the check below is
+     * reachable rather than something a wrapped sum slips under. */
+    total += align_up((uint64_t)ENTRY_HEAD_BYTES +
+                      strlen(meta->items[i].key) + meta->items[i].bytes);
   }
 
   /* meta_bytes is a 32-bit field, and a table this large is a caller doing
@@ -405,7 +434,10 @@ sif_sdf_status_t sif__sdf_meta_encode(
     memcpy(
       bytes + offset + ENTRY_HEAD_BYTES + key_bytes, item->value, item->bytes);
 
-    offset += align_up(ENTRY_HEAD_BYTES + key_bytes + item->bytes);
+    /* Measured the way the sizing pass above measured it, so the two cannot
+     * disagree about where the next entry starts. */
+    offset += (uint32_t)align_up(
+      (uint64_t)ENTRY_HEAD_BYTES + key_bytes + item->bytes);
   }
 
   *out = bytes;
@@ -590,8 +622,16 @@ sif_sdf_meta_t* sif_sdf_meta_read(sif_sdf_t* file, sif_sdf_status_t* status) {
     sif_sdf_status_t reason =
       sif__sdf_meta_read_block(file, &file->blocks[i], &block, &crc);
 
-    /* A metadata block has no data section, so the checksum over the table is
-     * the whole of it. */
+    /* A version-1 metadata block has no data section, and this build reads
+     * none. The checksum covers whatever is there regardless, so one that
+     * carries a section is folded in and stepped over rather than failing:
+     * the alternative is that a single block from a newer sif takes down
+     * every note in the file, including the ones already read, and metadata
+     * is the one thing here that is meant to degrade gracefully. */
+    if (reason == SIF_SDF_OK && file->blocks[i].header.data_bytes > 0)
+      reason = sif__sdf_crc_range(file, sif__sdf_data_offset(&file->blocks[i]),
+        file->blocks[i].header.data_bytes, &crc);
+
     if (reason == SIF_SDF_OK &&
         sif_crc32_final(crc) != file->blocks[i].header.crc32) {
       SIF_LOG_ERROR("sdf", "a metadata block in %s does not match its checksum",
@@ -664,7 +704,7 @@ void sif_sdf_meta_write(
   sif_sdf_block_header_t header;
   memset(&header, 0, sizeof(sif_sdf_block_header_t));
   header.type = (uint16_t)SIF_SDF_BLOCK_META;
-  header.real_dtype = (uint16_t)sif__sdf_native_dtype();
+  header.real_dtype = (uint8_t)sif__sdf_native_dtype();
   /* No rows, no data, and no catalogue: a note belongs to the file rather
    * than to the voids in it. */
   header.n_items = 0;
