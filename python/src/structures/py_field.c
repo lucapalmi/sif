@@ -36,134 +36,129 @@ static int sifField_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
   return 0;
 }
 
+/*
+ * One per-particle column: a contiguous 1D sif_real array of length `n`, or,
+ * for an optional column passed as None or not at all, NULL. `n` < 0 takes
+ * the length from this array instead, which is how the first column sets it
+ * for the rest.
+ *
+ * @return 0 with *out set (a new reference, or NULL), -1 with an exception.
+ */
+static int column_from_numpy(
+  PyObject* obj, const char* name, npy_intp n, PyArrayObject** out) {
+
+  *out = NULL;
+  if (!obj || obj == Py_None)
+    return 0;
+
+  PyArrayObject* arr = (PyArrayObject*)PyArray_FROM_OTF(
+    obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+  if (!arr) {
+    PyErr_Format(PyExc_TypeError, "%s must be convertible to a %s array", name,
+      sizeof(sif_real) == 8 ? "float64" : "float32");
+    return -1;
+  }
+
+  if (PyArray_NDIM(arr) != 1 || (n >= 0 && PyArray_SHAPE(arr)[0] != n)) {
+    PyErr_Format(PyExc_ValueError,
+      "%s must be a 1D array with one entry per particle", name);
+    Py_DECREF(arr);
+    return -1;
+  }
+
+  *out = arr;
+  return 0;
+}
+
 static PyObject* sifField_from_numpy(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
 
   PyObject *xs_obj, *ys_obj, *zs_obj;
   PyObject *vxs_obj = NULL, *vys_obj = NULL, *vzs_obj = NULL;
-  static char* kwlist[] = {"x", "y", "z", "vx", "vy", "vz", NULL};
+  PyObject* ws_obj = NULL;
+  static char* kwlist[] = {"x", "y", "z", "vx", "vy", "vz", "weights", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|OOO", kwlist, &xs_obj,
-        &ys_obj, &zs_obj, &vxs_obj, &vys_obj, &vzs_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|OOOO", kwlist, &xs_obj,
+        &ys_obj, &zs_obj, &vxs_obj, &vys_obj, &vzs_obj, &ws_obj)) {
     return NULL;
   }
 
-  /* Safely cast Python objects to contiguous NumPy arrays matching sif_real */
-  PyArrayObject* xs_arr = (PyArrayObject*)PyArray_FROM_OTF(
-    xs_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
-  PyArrayObject* ys_arr = (PyArrayObject*)PyArray_FROM_OTF(
-    ys_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
-  PyArrayObject* zs_arr = (PyArrayObject*)PyArray_FROM_OTF(
-    zs_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
-
-  if (!xs_arr || !ys_arr || !zs_arr) {
-    Py_XDECREF(xs_arr);
-    Py_XDECREF(ys_arr);
-    Py_XDECREF(zs_arr);
-    PyErr_Format(PyExc_TypeError,
-      "x, y, and z must be 1D contiguous %s NumPy arrays",
-      sizeof(sif_real) == 8 ? "float64" : "float32");
-    return NULL;
-  }
-
-  npy_intp n_particles = PyArray_SHAPE(xs_arr)[0];
-  if (PyArray_NDIM(xs_arr) != 1 || PyArray_NDIM(ys_arr) != 1 ||
-      PyArray_NDIM(zs_arr) != 1 || PyArray_SHAPE(ys_arr)[0] != n_particles ||
-      PyArray_SHAPE(zs_arr)[0] != n_particles) {
-    Py_DECREF(xs_arr);
-    Py_DECREF(ys_arr);
-    Py_DECREF(zs_arr);
-    PyErr_SetString(PyExc_ValueError,
-      "x, y, and z must be 1D arrays of the exact same length");
-    return NULL;
-  }
-
-  /* Handle Optional Velocities */
-  PyArrayObject *vxs_arr = NULL, *vys_arr = NULL, *vzs_arr = NULL;
-  int has_velocities = (vxs_obj && vys_obj && vzs_obj);
-
-  if (!has_velocities && (vxs_obj || vys_obj || vzs_obj)) {
-    Py_DECREF(xs_arr);
-    Py_DECREF(ys_arr);
-    Py_DECREF(zs_arr);
+  /* None and absent mean the same thing for every optional column. */
+  const int n_vel = (vxs_obj && vxs_obj != Py_None) +
+                    (vys_obj && vys_obj != Py_None) +
+                    (vzs_obj && vzs_obj != Py_None);
+  if (n_vel != 0 && n_vel != 3) {
     PyErr_SetString(PyExc_ValueError,
       "If providing velocities, vx, vy, and vz must all be provided");
     return NULL;
   }
 
-  if (has_velocities) {
-    vxs_arr = (PyArrayObject*)PyArray_FROM_OTF(
-      vxs_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
-    vys_arr = (PyArrayObject*)PyArray_FROM_OTF(
-      vys_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
-    vzs_arr = (PyArrayObject*)PyArray_FROM_OTF(
-      vzs_obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
-
-    if (!vxs_arr || !vys_arr || !vzs_arr) {
-      Py_XDECREF(xs_arr);
-      Py_XDECREF(ys_arr);
-      Py_XDECREF(zs_arr);
-      Py_XDECREF(vxs_arr);
-      Py_XDECREF(vys_arr);
-      Py_XDECREF(vzs_arr);
-      PyErr_SetString(
-        PyExc_TypeError, "vx, vy, and vz must be 1D contiguous NumPy arrays");
-      return NULL;
-    }
-
-    if (PyArray_NDIM(vxs_arr) != 1 || PyArray_NDIM(vys_arr) != 1 ||
-        PyArray_NDIM(vzs_arr) != 1 ||
-        PyArray_SHAPE(vxs_arr)[0] != n_particles ||
-        PyArray_SHAPE(vys_arr)[0] != n_particles ||
-        PyArray_SHAPE(vzs_arr)[0] != n_particles) {
-      Py_DECREF(xs_arr);
-      Py_DECREF(ys_arr);
-      Py_DECREF(zs_arr);
-      Py_DECREF(vxs_arr);
-      Py_DECREF(vys_arr);
-      Py_DECREF(vzs_arr);
-      PyErr_SetString(PyExc_ValueError,
-        "Velocity arrays must exactly match the length of the position arrays");
-      return NULL;
-    }
-  }
-
-  self->field->n_particles = (uint64_t)n_particles;
-
-  const sif_real* x_data = (const sif_real*)PyArray_DATA(xs_arr);
-  const sif_real* y_data = (const sif_real*)PyArray_DATA(ys_arr);
-  const sif_real* z_data = (const sif_real*)PyArray_DATA(zs_arr);
-
-  int status = sif_field_assign_positions(self->field, x_data, y_data, z_data);
-
-  if (status == SIF_OK && has_velocities) {
-    const sif_real* vx_data = (const sif_real*)PyArray_DATA(vxs_arr);
-    const sif_real* vy_data = (const sif_real*)PyArray_DATA(vys_arr);
-    const sif_real* vz_data = (const sif_real*)PyArray_DATA(vzs_arr);
-    status =
-      sif_field_assign_velocities(self->field, vx_data, vy_data, vz_data);
-  }
-
-  if (has_velocities) {
-    Py_DECREF(vxs_arr);
-    Py_DECREF(vys_arr);
-    Py_DECREF(vzs_arr);
-  }
-
-  Py_DECREF(xs_arr);
-  Py_DECREF(ys_arr);
-  Py_DECREF(zs_arr);
-
-  /* The copy is what makes the field independent of the caller's arrays, so a
-   * failure here has to surface rather than leave a half-populated field. */
-  if (status != SIF_OK) {
-    PyErr_SetString(
-      PyExc_MemoryError, "failed to copy particles into the field");
+  if (xs_obj == Py_None || ys_obj == Py_None || zs_obj == Py_None) {
+    PyErr_SetString(PyExc_ValueError, "x, y and z are required");
     return NULL;
   }
 
+  /* Every column is held here until the field is built; x sets the length the
+   * others are checked against. */
+  enum { X, Y, Z, VX, VY, VZ, W, N_COLS };
+  PyArrayObject* cols[N_COLS] = {NULL};
+  sif_field_t* fresh = NULL;
+  int status = SIF_OK;
+
+  if (column_from_numpy(xs_obj, "x", -1, &cols[X]) < 0)
+    goto fail;
+
+  const npy_intp n = PyArray_SHAPE(cols[X])[0];
+
+  if (column_from_numpy(ys_obj, "y", n, &cols[Y]) < 0 ||
+      column_from_numpy(zs_obj, "z", n, &cols[Z]) < 0 ||
+      column_from_numpy(vxs_obj, "vx", n, &cols[VX]) < 0 ||
+      column_from_numpy(vys_obj, "vy", n, &cols[VY]) < 0 ||
+      column_from_numpy(vzs_obj, "vz", n, &cols[VZ]) < 0 ||
+      column_from_numpy(ws_obj, "weights", n, &cols[W]) < 0)
+    goto fail;
+
+  /*
+   * Built as a new field and swapped in only once it is complete, rather than
+   * assigned into the existing one. Assigning in place would leave behind any
+   * column this call does not supply -- velocities or weights from a previous
+   * from_numpy, sized for a different particle count and describing different
+   * particles -- and a failure half-way would leave a field that is neither.
+   */
+  fresh = sif_field_alloc((uint64_t)n);
+  if (!fresh) {
+    PyErr_SetString(PyExc_MemoryError, "failed to allocate the field");
+    goto fail;
+  }
+
+#define COL(c) ((const sif_real*)PyArray_DATA(cols[c]))
+  status = sif_field_assign_positions(fresh, COL(X), COL(Y), COL(Z));
+  if (status == SIF_OK && cols[VX])
+    status = sif_field_assign_velocities(fresh, COL(VX), COL(VY), COL(VZ));
+  if (status == SIF_OK && cols[W])
+    status = sif_field_assign_weights(fresh, COL(W));
+#undef COL
+
+  if (status != SIF_OK) {
+    PyErr_SetString(
+      PyExc_MemoryError, "failed to copy particles into the field");
+    goto fail;
+  }
+
+  for (int c = 0; c < N_COLS; c++)
+    Py_XDECREF(cols[c]);
+
+  sif_field_free(self->field);
+  self->field = fresh;
+
   Py_RETURN_NONE;
+
+fail:
+  for (int c = 0; c < N_COLS; c++)
+    Py_XDECREF(cols[c]);
+  sif_field_free(fresh);
+  return NULL;
 }
 
 static PyObject* sifField_wrap(
@@ -216,23 +211,48 @@ static PyObject* sifField_get_n_particles(PyObject* self_obj, void* closure) {
   return PyLong_FromUnsignedLongLong(self->field->n_particles);
 }
 
+static PyObject* sifField_get_has_weights(PyObject* self_obj, void* closure) {
+  sifFieldObject* self = (sifFieldObject*)self_obj;
+  return PyBool_FromLong(self->field->weights != NULL);
+}
+
+static PyObject* sifField_get_has_velocities(
+  PyObject* self_obj, void* closure) {
+  sifFieldObject* self = (sifFieldObject*)self_obj;
+  return PyBool_FromLong(self->field->vx != NULL);
+}
+
 static PyGetSetDef sifField_getset[] = {
   {"n_particles", sifField_get_n_particles, NULL,
     "int: Number of particles the field holds.", NULL},
+  {"has_weights", sifField_get_has_weights, NULL,
+    "bool: Whether the field carries per-particle weights. Everything built\n"
+    "from a weighted field -- grids, meshes, the finders, the profiles --\n"
+    "uses them.",
+    NULL},
+  {"has_velocities", sifField_get_has_velocities, NULL,
+    "bool: Whether the field carries velocities.", NULL},
   {NULL}};
 
 /* --- Method Definition Array --- */
 static PyMethodDef sifField_methods[] = {
   {"from_numpy", (PyCFunction)sifField_from_numpy, METH_VARARGS | METH_KEYWORDS,
-    "from_numpy(x, y, z, vx=None, vy=None, vz=None)\n"
+    "from_numpy(x, y, z, vx=None, vy=None, vz=None, weights=None)\n"
     "--\n\n"
-    "Copy positions, and optionally velocities, out of NumPy arrays.\n\n"
+    "Copy positions, and optionally velocities and weights, out of NumPy\n"
+    "arrays.\n\n"
     "All arrays must have the same length and dtype pysif.real; anything\n"
     "else is converted, which costs a copy of the whole field. Velocities\n"
     "are optional but must be given together.\n\n"
+    "Replaces whatever the field held before, including any velocities or\n"
+    "weights this call does not supply.\n\n"
     "Args:\n"
     "    x, y, z: Position components, one entry per particle.\n"
-    "    vx, vy, vz: Velocity components, or None to store no velocities.\n\n"
+    "    vx, vy, vz: Velocity components, or None to store no velocities.\n"
+    "    weights: Per-particle weight (a mass, a luminosity, a selection\n"
+    "        weight), or None for an unweighted field, where every particle\n"
+    "        counts as 1. The exodus finder requires them to be finite and\n"
+    "        non-negative.\n\n"
     "Raises:\n"
     "    ValueError: If the arrays disagree in length.\n"
     "    MemoryError: If the field's buffers could not be allocated."},

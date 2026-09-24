@@ -26,10 +26,12 @@
  *
  * The condition is on the *enclosed* density, so the quantity of interest is
  * n(<d) / (rho_mean * V(d)) - 1 <= threshold, evaluated at every particle
- * distance d in turn. Written out, that asks for the k-th nearest distance for
- * every k, which is a full sort of everything inside the search sphere: at
- * r_search = 200 in a 2250 box, ten million distances sorted per candidate, and
- * there are millions of candidates.
+ * distance d in turn. On a weighted mesh n(<d) is the weight enclosed and
+ * rho_mean the mean weight density, and nothing below changes but the sums;
+ * see find_exact_radius_impl(). Written out, that asks for the k-th nearest
+ * distance for every k, which is a full sort of everything inside the search
+ * sphere: at r_search = 200 in a 2250 box, ten million distances sorted per
+ * candidate, and there are millions of candidates.
  *
  * Three observations collapse that cost.
  *
@@ -95,8 +97,16 @@
 
 #include "utils.h"
 
+/* A distance collected by the refinement on a weighted mesh, with the weight
+ * that has to leave the enclosed total when the walk passes it. */
+typedef struct {
+  sif_real d2;
+  sif_real w;
+} refine_pair_t;
+
 SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
 SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
+SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
 
 #define TAG "exodus_finder"
 
@@ -240,10 +250,18 @@ SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
  */
 #define MISMATCH_RATIO 2.0f
 
+/*
+ * A weighted mesh swaps both buffers for their weighted twins: the histogram
+ * holds weight per bin instead of tracers per bin, and the refinement keeps
+ * each distance's weight beside it. Only the pair a run needs is allocated, so
+ * an unweighted run holds exactly what it always has.
+ */
 typedef struct {
-  uint32_t* bins;
-  sif_real* refine;
-  uint32_t refine_count;
+  uint32_t* bins;        /* unweighted: tracers per bin */
+  double* wbins;         /* weighted: weight per bin */
+  sif_real* refine;      /* unweighted: squared distances */
+  refine_pair_t* pairs;  /* weighted: squared distances and their weights */
+  uint32_t refine_count; /* entries in whichever of the two is in use */
   uint32_t refine_capacity;
 
   /* How far down the bins the walk had to reach before the answer turned up,
@@ -254,51 +272,80 @@ typedef struct {
   uint64_t span_count;
 } radial_scratch_t;
 
-static int refine_reserve(radial_scratch_t* s, uint32_t needed) {
-  if (needed <= s->refine_capacity)
-    return SIF_OK;
+/*
+ * Grows a refinement buffer of `elem_size` entries to hold at least `needed`,
+ * keeping the first `count`. Returns the new buffer, or NULL with the old one
+ * left intact.
+ *
+ * The buffer is filled incrementally, one mesh cell at a time, so a grow can
+ * land in the middle of a bin's collection and whatever has been gathered so
+ * far has to survive it. (It must: dropping it silently loses particles and
+ * the walk then returns a radius that is too small. It only stays hidden
+ * while a single bin fits in the initial capacity.)
+ */
+static void* refine_grow(void* old, uint32_t* capacity, uint32_t count,
+  uint32_t needed, size_t elem_size) {
 
-  uint32_t new_capacity =
-    s->refine_capacity ? s->refine_capacity : REFINE_INITIAL_CAPACITY;
+  uint32_t new_capacity = *capacity ? *capacity : REFINE_INITIAL_CAPACITY;
   while (new_capacity < needed) {
     if (new_capacity > UINT32_MAX / 2)
-      return SIF_ERR_ALLOC;
+      return NULL;
     new_capacity *= 2;
   }
 
-  /* The buffer is filled incrementally, one mesh cell at a time, so a grow can
-   * land in the middle of a bin's collection and whatever has been gathered so
-   * far has to survive it. (It must: dropping it silently loses particles and
-   * the walk then returns a radius that is too small. It only stays hidden
-   * while a single bin fits in the initial capacity.) */
-  sif_real* grown = sif_malloc_aligned((size_t)new_capacity * sizeof(sif_real));
+  void* grown = sif_malloc_aligned((size_t)new_capacity * elem_size);
+  if (!grown)
+    return NULL;
+
+  if (count > 0)
+    memcpy(grown, old, (size_t)count * elem_size);
+
+  sif_free_aligned(old);
+  *capacity = new_capacity;
+
+  return grown;
+}
+
+static SIF_ALWAYS_INLINE int refine_reserve(
+  radial_scratch_t* s, uint32_t needed, const int weighted) {
+
+  if (needed <= s->refine_capacity)
+    return SIF_OK;
+
+  void* old = weighted ? (void*)s->pairs : (void*)s->refine;
+  void* grown = refine_grow(old, &s->refine_capacity, s->refine_count, needed,
+    weighted ? sizeof(refine_pair_t) : sizeof(sif_real));
   if (!grown)
     return SIF_ERR_ALLOC;
 
-  if (s->refine_count > 0)
-    memcpy(grown, s->refine, (size_t)s->refine_count * sizeof(sif_real));
-
-  sif_free_aligned(s->refine);
-  s->refine = grown;
-  s->refine_capacity = new_capacity;
+  if (weighted)
+    s->pairs = grown;
+  else
+    s->refine = grown;
 
   return SIF_OK;
 }
 
 static void scratch_free(radial_scratch_t* s) {
   sif_free_aligned(s->bins);
+  sif_free_aligned(s->wbins);
   sif_free_aligned(s->refine);
+  sif_free_aligned(s->pairs);
   memset(s, 0, sizeof(*s));
 }
 
-static int scratch_init(radial_scratch_t* s) {
+static int scratch_init(radial_scratch_t* s, int weighted) {
   memset(s, 0, sizeof(*s));
 
-  s->bins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(uint32_t));
-  if (!s->bins)
+  if (weighted)
+    s->wbins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(double));
+  else
+    s->bins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(uint32_t));
+
+  if (!s->bins && !s->wbins)
     return SIF_ERR_ALLOC;
 
-  return refine_reserve(s, REFINE_INITIAL_CAPACITY);
+  return refine_reserve(s, REFINE_INITIAL_CAPACITY, weighted);
 }
 
 /* --- Mesh traversal template --- */
@@ -463,12 +510,13 @@ typedef struct {
  * Resolves template entry `i` to its particle range, and to the periodic image
  * of the query center that range has to be measured against. Shifting the
  * center instead of the particles keeps the wrap at one addition per axis.
+ * `flat` is the cell's index in the mesh, for anything kept per cell.
  *
  * @return 0 if the cell is empty
  */
 static inline int query_cell(const mesh_query_t* q, uint32_t i,
-  uint64_t* p_start, uint64_t* p_end, sif_real* ex, sif_real* ey,
-  sif_real* ez) {
+  uint64_t* p_start, uint64_t* p_end, uint64_t* flat_out, sif_real* ex,
+  sif_real* ey, sif_real* ez) {
 
   const int32_t N = q->n_cells;
   const sif_real box_L = q->box_length;
@@ -507,6 +555,7 @@ static inline int query_cell(const mesh_query_t* q, uint32_t i,
 
   *p_start = q->mesh->cell_offsets[flat];
   *p_end = q->mesh->cell_offsets[flat + 1];
+  *flat_out = flat;
   *ex = cx_eff;
   *ey = cy_eff;
   *ez = cz_eff;
@@ -549,6 +598,8 @@ static inline uint32_t bin_of(
  * reach into them, sorts the squared distances that land there and walks them
  * outside-in. `current_N` is the number of particles at or below the top of
  * bin `bin_hi`, so the walk sees exactly the counts a full sorted scan would.
+ * On a weighted mesh `current_W` is the same thing in weight, and is the one
+ * that is read; the other is ignored.
  *
  * Widening the range from one bin to several does not change the answer. The
  * walk over the union in descending order is the same sequence of tests as
@@ -559,14 +610,16 @@ static inline uint32_t bin_of(
  * @return BIN_FOUND with *out set, BIN_EXHAUSTED if the range holds no
  * acceptable radius, or SIF_ERR_ALLOC if the refinement buffer could not grow
  */
-SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
+static SIF_ALWAYS_INLINE int resolve_bin(const mesh_query_t* q,
   radial_scratch_t* scratch, uint32_t bin_lo, uint32_t bin_hi, sif_real lo,
   sif_real hi, sif_real r_core2, sif_real r_search2, sif_real inv_bin_w,
-  uint32_t n_bins, uint64_t current_N, sif_real K2, sif_real* out) {
+  uint32_t n_bins, uint64_t current_N, double current_W, sif_real K2,
+  sif_real* out, const int weighted) {
 
   const sif_real* mx = SIF_ASSUME_ALIGNED(q->mesh->x);
   const sif_real* my = SIF_ASSUME_ALIGNED(q->mesh->y);
   const sif_real* mz = SIF_ASSUME_ALIGNED(q->mesh->z);
+  const sif_real* mw = weighted ? SIF_ASSUME_ALIGNED(q->mesh->weights) : NULL;
   const mesh_template_t* tpl = q->tpl;
 
   scratch->refine_count = 0;
@@ -578,13 +631,14 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
     if (type == CELL_FULLY_CORE || tpl->max_d2[i] < lo || tpl->min_d2[i] > hi)
       continue;
 
-    uint64_t p_start, p_end;
+    uint64_t p_start, p_end, flat;
     sif_real ex, ey, ez;
-    if (!query_cell(q, i, &p_start, &p_end, &ex, &ey, &ez))
+    if (!query_cell(q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
       continue;
 
     if (refine_reserve(scratch,
-          scratch->refine_count + (uint32_t)(p_end - p_start)) != SIF_OK)
+          scratch->refine_count + (uint32_t)(p_end - p_start),
+          weighted) != SIF_OK)
       return SIF_ERR_ALLOC;
 
     for (uint64_t p = p_start; p < p_end; p++) {
@@ -598,12 +652,19 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
       if (bi < bin_lo || bi > bin_hi)
         continue;
 
-      scratch->refine[scratch->refine_count++] = d2;
+      if (weighted)
+        scratch->pairs[scratch->refine_count++] = (refine_pair_t){d2, mw[p]};
+      else
+        scratch->refine[scratch->refine_count++] = d2;
     }
   }
 
-  if (scratch->refine_count > 1)
-    sort_real_asc(scratch->refine, scratch->refine_count);
+  if (scratch->refine_count > 1) {
+    if (weighted)
+      sort_pairs_asc(scratch->pairs, scratch->refine_count);
+    else
+      sort_real_asc(scratch->refine, scratch->refine_count);
+  }
 
   /*
    * Outside-in over the exact distances, which is where the answer finally
@@ -611,7 +672,37 @@ SIF_HOT_LOOP static int resolve_bin(const mesh_query_t* q,
    * at each step the particle under test is the outermost one left and
    * current_N - 1 is what a sphere through it encloses -- the particle sitting
    * on the surface does not count as inside.
+   *
+   * Weighted, it is the same walk with the particle's weight in place of the
+   * 1. The answer is still a particle distance: between two neighbouring
+   * particles the enclosed weight is constant and the volume grows, so the
+   * outermost radius that passes is always one where a particle sits. That
+   * needs the weights to be non-negative, which the driver checks.
    */
+  if (weighted) {
+    for (int32_t k = (int32_t)scratch->refine_count - 1; k >= 0; k--) {
+      const sif_real d2_test = scratch->pairs[k].d2;
+      const double w_test = (double)scratch->pairs[k].w;
+
+      if (d2_test == 0.0f) {
+        current_W -= w_test;
+        continue;
+      }
+
+      const sif_real w_in = (sif_real)(current_W - w_test);
+      const sif_real d2_cube = d2_test * d2_test * d2_test;
+
+      if (w_in * w_in <= K2 * d2_cube) {
+        *out = SIF_REAL_SQRT(d2_test);
+        return BIN_FOUND;
+      }
+
+      current_W -= w_test;
+    }
+
+    return BIN_EXHAUSTED;
+  }
+
   for (int32_t k = (int32_t)scratch->refine_count - 1; k >= 0; k--) {
     const sif_real d2_test = scratch->refine[k];
 
@@ -790,20 +881,31 @@ static void rescale_report_log(const rescale_report_t* rep) {
  *
  *   3. Exact resolution of the surviving bin and its window, in resolve_bin().
  *
+ * On a weighted mesh every count becomes a sum of weights and the density is
+ * the enclosed weight over the mean weight density, `mass_factor` in place of
+ * `vol_factor`. Nothing else about the three stages changes; see
+ * find_exact_radius_weighted(). `vol_factor` stays a count either way, since
+ * the one thing it still sizes -- the histogram, from the tracers expected per
+ * bin -- is about how many tracers there are, not what they weigh.
+ *
  * @param[out] reason RESCALE_OK, or which of the three stages gave up.
  *
  * @return the rescaled radius, or -1 if no acceptable radius exists
  */
-SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
-  sif_real cx, sif_real cy, sif_real cz, sif_real r_search, sif_real threshold,
-  sif_real vol_factor, radial_scratch_t* scratch, sif_real rmin,
-  const mesh_template_t* tpl, uint32_t window, uint8_t* reason) {
+static SIF_ALWAYS_INLINE sif_real find_exact_radius_impl(
+  const sif_chain_mesh_t* mesh, sif_real cx, sif_real cy, sif_real cz,
+  sif_real r_search, sif_real threshold, sif_real vol_factor,
+  sif_real mass_factor, radial_scratch_t* scratch, sif_real rmin,
+  const mesh_template_t* tpl, uint32_t window, uint8_t* reason,
+  const int weighted) {
 
   *reason = RESCALE_OK;
 
   const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
   const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
   const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
+  const sif_real* mw = weighted ? SIF_ASSUME_ALIGNED(mesh->weights) : NULL;
+  const sif_real* cw = weighted ? mesh->cell_weights : NULL;
 
   const sif_real inv_l = 1.0f / mesh->cell_length;
   const int32_t N = (int32_t)mesh->n_cells;
@@ -830,6 +932,11 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
    * corner, it is where these runs live. See the note on total_N below. */
   uint64_t n_core = 0;
   uint64_t n_shell = 0;
+
+  /* The weighted counterparts, in double for the reason total_N is 64-bit: a
+   * float sum over billions of tracers stops moving long before the end. */
+  double w_core = 0.0;
+  double w_shell = 0.0;
 
   /* Histogram geometry. Uniform in d^2, so no square roots are needed to bin;
    * the resulting bins are finer in radius further out, which is the half that
@@ -875,35 +982,54 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
    * histogram loop uses, so it agrees with total_N exactly. Only the moment of
    * refusal moves earlier. The test after the histogram is left in place as a
    * backstop; it now only ever fires if these two disagree, which they cannot.
+   *
+   * Weighted, a whole cell's weight comes from sif_chain_mesh_t::cell_weights,
+   * which is what keeps this O(surface). That sum and the histogram's are
+   * taken in different orders, so the two can differ in the last bit and the
+   * backstop may, rarely, be the one that decides.
    */
   {
     const sif_real expected_search =
-      vol_factor * r_search * r_search * r_search;
+      mass_factor * r_search * r_search * r_search;
     uint64_t n_within = 0;
+    double w_within = 0.0;
 
     for (uint32_t i = 0; i < tpl->count; i++) {
       const uint8_t type = tpl->type[i];
 
-      uint64_t p_start, p_end;
+      uint64_t p_start, p_end, flat;
       sif_real ex, ey, ez;
-      if (!query_cell(&q, i, &p_start, &p_end, &ex, &ey, &ez))
+      if (!query_cell(&q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
         continue;
 
       if (type == CELL_FULLY_CORE || type == CELL_FULLY_SHELL) {
-        n_within += (p_end - p_start);
+        if (weighted)
+          w_within += (double)cw[flat];
+        else
+          n_within += (p_end - p_start);
         continue;
       }
 
-      for (uint64_t p = p_start; p < p_end; p++)
-        n_within += (dist2(mx[p], my[p], mz[p], ex, ey, ez) <= r_search2);
+      if (weighted) {
+        for (uint64_t p = p_start; p < p_end; p++) {
+          if (dist2(mx[p], my[p], mz[p], ex, ey, ez) <= r_search2)
+            w_within += (double)mw[p];
+        }
+      } else {
+        for (uint64_t p = p_start; p < p_end; p++)
+          n_within += (dist2(mx[p], my[p], mz[p], ex, ey, ez) <= r_search2);
+      }
     }
 
-    if (n_within == 0) {
+    /* On a weighted mesh "empty" means nothing inside carries any weight. */
+    if (weighted ? !(w_within > 0.0) : n_within == 0) {
       *reason = RESCALE_EMPTY;
       return -1.0f;
     }
 
-    if (((sif_real)n_within / expected_search) - 1.0f <= threshold) {
+    const sif_real within =
+      weighted ? (sif_real)w_within : (sif_real)n_within;
+    if ((within / expected_search) - 1.0f <= threshold) {
       *reason = RESCALE_BEYOND_SEARCH;
       return -1.0f;
     }
@@ -913,20 +1039,27 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   const sif_real bin_w = span / (sif_real)n_bins;
 
   uint32_t* bins = scratch->bins;
-  memset(bins, 0, (size_t)n_bins * sizeof(uint32_t));
+  double* wbins = scratch->wbins;
+  if (weighted)
+    memset(wbins, 0, (size_t)n_bins * sizeof(double));
+  else
+    memset(bins, 0, (size_t)n_bins * sizeof(uint32_t));
 
   for (uint32_t i = 0; i < tpl->count; i++) {
     const uint8_t type = tpl->type[i];
 
-    uint64_t p_start, p_end;
+    uint64_t p_start, p_end, flat;
     sif_real ex, ey, ez;
-    if (!query_cell(&q, i, &p_start, &p_end, &ex, &ey, &ez))
+    if (!query_cell(&q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
       continue;
 
     const uint64_t p_count = p_end - p_start;
 
     if (type == CELL_FULLY_CORE) {
-      n_core += p_count;
+      if (weighted)
+        w_core += (double)cw[flat];
+      else
+        n_core += p_count;
     } else if (type == CELL_FULLY_SHELL) {
       /* Every particle here is known to be in the annulus, so the only work is
        * the distance itself. Tiling keeps that part vectorized despite the
@@ -942,11 +1075,35 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
           tile[t] = dist2(mx[base + t], my[base + t], mz[base + t], ex, ey, ez);
         }
 
-        for (uint32_t t = 0; t < m; t++)
-          bins[bin_of(tile[t], r_core2, inv_bin_w, n_bins)]++;
+        if (weighted) {
+          /* Summed per tracer rather than taken from the cell table, so the
+           * total the walk subtracts from is made of exactly the weights the
+           * bins and the refinement hold. */
+          for (uint32_t t = 0; t < m; t++) {
+            const double w = (double)mw[base + t];
+            wbins[bin_of(tile[t], r_core2, inv_bin_w, n_bins)] += w;
+            w_shell += w;
+          }
+        } else {
+          for (uint32_t t = 0; t < m; t++)
+            bins[bin_of(tile[t], r_core2, inv_bin_w, n_bins)]++;
+        }
       }
 
-      n_shell += p_count;
+      if (!weighted)
+        n_shell += p_count;
+    } else if (weighted) {
+      for (uint64_t p = p_start; p < p_end; p++) {
+        const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
+        const double w = (double)mw[p];
+
+        if (d2 <= r_core2) {
+          w_core += w;
+        } else if (d2 <= r_search2) {
+          wbins[bin_of(d2, r_core2, inv_bin_w, n_bins)] += w;
+          w_shell += w;
+        }
+      }
     } else {
       for (uint64_t p = p_start; p < p_end; p++) {
         const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
@@ -979,7 +1136,8 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
    * above 115.5 in a 234.5 one; the larger boxes never come close.
    */
   const uint64_t total_N = n_core + n_shell;
-  if (total_N == 0) {
+  const double total_W = w_core + w_shell;
+  if (weighted ? !(total_W > 0.0) : total_N == 0) {
     *reason = RESCALE_EMPTY;
     return -1.0f;
   }
@@ -987,26 +1145,35 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
   /* The mirror of the walk below: if the whole search sphere is still
    * underdense, the crossing lies outside it and this rung cannot say where. A
    * larger rung will. */
-  const sif_real expected_search = vol_factor * r_search * r_search * r_search;
-  if (((sif_real)total_N / expected_search) - 1.0f <= threshold) {
+  const sif_real expected_search = mass_factor * r_search * r_search * r_search;
+  const sif_real total = weighted ? (sif_real)total_W : (sif_real)total_N;
+  if ((total / expected_search) - 1.0f <= threshold) {
     *reason = RESCALE_BEYOND_SEARCH;
     return -1.0f;
   }
 
   /* Walk inwards bin by bin. Comparisons are done on squared distances so no
    * square root is needed until the answer is found:
-   *   n_in / (vol_factor * d^3) - 1 <= threshold
-   *   <=> n_in^2 <= ((threshold + 1) * vol_factor)^2 * (d^2)^3
+   *   n_in / (mass_factor * d^3) - 1 <= threshold
+   *   <=> n_in^2 <= ((threshold + 1) * mass_factor)^2 * (d^2)^3
+   * with n_in the enclosed weight on a weighted mesh.
    */
-  const sif_real K = (threshold + 1.0f) * vol_factor;
+  const sif_real K = (threshold + 1.0f) * mass_factor;
   const sif_real K2 = K * K;
 
   uint64_t above = 0;   /* particles beyond the bin under examination */
+  double above_w = 0.0; /* their weight, on a weighted mesh */
   int32_t b_first = -1; /* outermost bin the walk actually had to open */
 
   for (int32_t b = (int32_t)n_bins - 1; b >= 0; b--) {
-    const uint32_t count = bins[b];
-    if (count == 0)
+    const uint32_t count = weighted ? 0u : bins[b];
+    const double count_w = weighted ? wbins[b] : 0.0;
+
+    /* A bin holding only weightless tracers is skipped like an empty one. None
+     * of them can be the answer: the next tracer out encloses the same weight
+     * at a larger radius, so it passes whenever they would, and the walk has
+     * already seen it. */
+    if (weighted ? !(count_w > 0.0) : count == 0)
       continue;
 
     sif_real hi = r_core2 + (sif_real)(b + 1) * bin_w;
@@ -1029,10 +1196,18 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
      * If that best case is still too dense, every real particle in the bin is
      * worse -- each is closer in, or has more inside it, or both -- so the bin
      * cannot contain the crossing and not one of its distances is computed.
+     *
+     * Weighted, "more inside" is "at least as much weight inside", which holds
+     * only while no weight is negative. That is why the driver refuses them.
      */
-    const sif_real n_in_min = (sif_real)(total_N - above - count);
+    const sif_real n_in_min = weighted
+                                ? (sif_real)(total_W - above_w - count_w)
+                                : (sif_real)(total_N - above - count);
     if (n_in_min * n_in_min > K2 * hi * hi * hi) {
-      above += count;
+      if (weighted)
+        above_w += count_w;
+      else
+        above += count;
       continue;
     }
 
@@ -1046,15 +1221,20 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
       b_lo = 0;
 
     uint64_t window_count = 0;
-    for (int32_t bb = b_lo; bb <= b; bb++)
-      window_count += bins[bb];
+    double window_w = 0.0;
+    for (int32_t bb = b_lo; bb <= b; bb++) {
+      if (weighted)
+        window_w += wbins[bb];
+      else
+        window_count += bins[bb];
+    }
 
     const sif_real win_lo = r_core2 + (sif_real)b_lo * bin_w;
 
     sif_real radius = -1.0f;
-    const int status =
-      resolve_bin(&q, scratch, (uint32_t)b_lo, (uint32_t)b, win_lo, hi, r_core2,
-        r_search2, inv_bin_w, n_bins, total_N - above, K2, &radius);
+    const int status = resolve_bin(&q, scratch, (uint32_t)b_lo, (uint32_t)b,
+      win_lo, hi, r_core2, r_search2, inv_bin_w, n_bins, total_N - above,
+      total_W - above_w, K2, &radius, weighted);
 
     if (status == BIN_FOUND) {
       /* Report how far the walk had to reach, so the next batch can size the
@@ -1075,12 +1255,40 @@ SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
       return -1.0f;
     }
 
-    above += window_count;
+    if (weighted)
+      above_w += window_w;
+    else
+      above += window_count;
     b = b_lo; /* the loop's decrement then steps past the window */
   }
 
   *reason = RESCALE_BELOW_RUNG;
   return -1.0f;
+}
+
+/*
+ * The two specializations of find_exact_radius_impl(). The flag is a literal
+ * in each, so every branch on it folds away and the unweighted rescaling
+ * compiles to the same code it did before weights existed: integer bins, no
+ * weight loads, no double accumulators.
+ */
+SIF_HOT_LOOP static sif_real find_exact_radius(const sif_chain_mesh_t* mesh,
+  sif_real cx, sif_real cy, sif_real cz, sif_real r_search, sif_real threshold,
+  sif_real vol_factor, radial_scratch_t* scratch, sif_real rmin,
+  const mesh_template_t* tpl, uint32_t window, uint8_t* reason) {
+
+  return find_exact_radius_impl(mesh, cx, cy, cz, r_search, threshold,
+    vol_factor, vol_factor, scratch, rmin, tpl, window, reason, 0);
+}
+
+SIF_HOT_LOOP static sif_real find_exact_radius_weighted(
+  const sif_chain_mesh_t* mesh, sif_real cx, sif_real cy, sif_real cz,
+  sif_real r_search, sif_real threshold, sif_real vol_factor,
+  sif_real mass_factor, radial_scratch_t* scratch, sif_real rmin,
+  const mesh_template_t* tpl, uint32_t window, uint8_t* reason) {
+
+  return find_exact_radius_impl(mesh, cx, cy, cz, r_search, threshold,
+    vol_factor, mass_factor, scratch, rmin, tpl, window, reason, 1);
 }
 
 /* --- Speculative batch evaluation --- */
@@ -1213,7 +1421,7 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
 
   for (int t = 0; t < ctx->n_threads; t++) {
-    if (scratch_init(&ctx->scratch[t]) != SIF_OK) {
+    if (scratch_init(&ctx->scratch[t], mesh->weights != NULL) != SIF_OK) {
       SIF_LOG_ERROR(TAG, "failed to allocate the per-thread radial scratch");
       return SIF_ERR_ALLOC;
     }
@@ -1280,6 +1488,75 @@ static int accept_void(exodus_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
   return SIF_OK;
 }
 
+/* What check_weights() makes of one weight. */
+#define WEIGHT_OK       0
+#define WEIGHT_NEGATIVE 1
+#define WEIGHT_NONFINITE 2
+
+/*
+ * Classified by its bits rather than with isfinite() and a comparison: the
+ * release build is compiled with -ffast-math, which entitles the compiler to
+ * assume no NaN or infinity exists and fold exactly those tests away. A bit
+ * pattern cannot be reasoned about that way. Negative zero is a zero, and
+ * passes.
+ */
+static inline int classify_weight(sif_real w) {
+  if (sizeof(sif_real) == sizeof(uint32_t)) {
+    uint32_t b;
+    memcpy(&b, &w, sizeof(b));
+    if (((b >> 23) & 0xFFu) == 0xFFu)
+      return WEIGHT_NONFINITE;
+    return ((b >> 31) && (b << 1)) ? WEIGHT_NEGATIVE : WEIGHT_OK;
+  }
+
+  uint64_t b;
+  memcpy(&b, &w, sizeof(b));
+  if (((b >> 52) & 0x7FFu) == 0x7FFu)
+    return WEIGHT_NONFINITE;
+  return ((b >> 63) && (b << 1)) ? WEIGHT_NEGATIVE : WEIGHT_OK;
+}
+
+/*
+ * Whether a weighted mesh is one the rescaling can use.
+ *
+ * The bin-skipping walk rests on the enclosed weight never shrinking as the
+ * radius grows, which a negative weight breaks: the skip test would then throw
+ * away shells that do hold the crossing, with nothing to show that it had. A
+ * NaN or an infinity poisons every sum it enters. Both are refused up front,
+ * counted, rather than left to produce a catalog that looks normal.
+ */
+static int check_weights(const sif_chain_mesh_t* mesh) {
+  if (!mesh->cell_weights) {
+    SIF_LOG_ERROR(TAG, "the mesh carries weights but no per-cell weight table");
+    return SIF_ERR_INVALID;
+  }
+
+  uint64_t n_negative = 0;
+  uint64_t n_nonfinite = 0;
+
+#pragma omp parallel for schedule(static) reduction(+ : n_negative, n_nonfinite)
+  for (uint64_t p = 0; p < mesh->n_particles; p++) {
+    const int kind = classify_weight(mesh->weights[p]);
+    n_nonfinite += (kind == WEIGHT_NONFINITE);
+    n_negative += (kind == WEIGHT_NEGATIVE);
+  }
+
+  if (n_negative > 0 || n_nonfinite > 0) {
+    SIF_LOG_ERROR(TAG,
+      "the mesh weights must be finite and non-negative: %" PRIu64
+      " negative, %" PRIu64 " not finite, of %" PRIu64,
+      n_negative, n_nonfinite, mesh->n_particles);
+    return SIF_ERR_INVALID;
+  }
+
+  if (!(mesh->total_weight > 0.0)) {
+    SIF_LOG_ERROR(TAG, "the mesh weights sum to zero; there is no mean density");
+    return SIF_ERR_INVALID;
+  }
+
+  return SIF_OK;
+}
+
 /* --- Driver --- */
 
 sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
@@ -1314,6 +1591,10 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     return NULL;
   }
 
+  const int weighted = (mesh->weights != NULL);
+  if (weighted && check_weights(mesh) != SIF_OK)
+    return NULL;
+
   exodus_ctx_t ctx;
   if (ctx_init(&ctx, grid, mesh, radii, n_radii, options) != SIF_OK) {
     ctx_release(&ctx, grid);
@@ -1325,6 +1606,21 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     grid->box_length * grid->box_length * grid->box_length;
   const sif_real mean_density = (sif_real)mesh->n_particles / box_volume;
   const sif_real vol_factor = (4.0f / 3.0f) * SIF_PI * mean_density;
+
+  /* What the density condition is measured against. On a weighted mesh that
+   * is the mean weight density, and the tracer count above is kept only for
+   * sizing the histogram. Rounded and divided exactly as the count is, so that
+   * a mesh whose weights are all 1 reproduces the unweighted run bit for
+   * bit. */
+  const sif_real mass_factor =
+    weighted ? (4.0f / 3.0f) * SIF_PI *
+                 ((sif_real)mesh->total_weight / box_volume)
+             : vol_factor;
+
+  if (weighted)
+    SIF_LOG_TRACE(TAG,
+      "weighted mesh: total weight %.6g over %" PRIu64 " tracers",
+      mesh->total_weight, mesh->n_particles);
 
   sif_timer_t timer;
   int failed = 0;
@@ -1487,8 +1783,13 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
         uint8_t reason = RESCALE_OK;
         const sif_real r_scaled =
-          find_exact_radius(ctx.mesh, cx, cy, cz, r_search, threshold,
-            vol_factor, &ctx.scratch[tid], rmin, &tpl, resolve_window, &reason);
+          weighted
+            ? find_exact_radius_weighted(ctx.mesh, cx, cy, cz, r_search,
+                threshold, vol_factor, mass_factor, &ctx.scratch[tid], rmin,
+                &tpl, resolve_window, &reason)
+            : find_exact_radius(ctx.mesh, cx, cy, cz, r_search, threshold,
+                vol_factor, &ctx.scratch[tid], rmin, &tpl, resolve_window,
+                &reason);
 
         if (r_scaled < 0.0f) {
           res->rescale_reason = reason;

@@ -228,13 +228,14 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
   int compute_velocity = 0;
   int use_pbc = 1;
   int differential = 0;
+  int weighted_velocity = 0;
 
   static char* kwlist[] = {"catalog", "mesh", "n_bins", "ext",
-    "compute_velocity", "use_pbc", "differential", NULL};
+    "compute_velocity", "use_pbc", "differential", "weighted_velocity", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!I|dppp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!I|dpppp", kwlist,
         &sifCatalogType, &cat_obj, &sifChainMeshType, &mesh_obj, &n_bins, &ext,
-        &compute_velocity, &use_pbc, &differential)) {
+        &compute_velocity, &use_pbc, &differential, &weighted_velocity)) {
     return NULL;
   }
 
@@ -252,7 +253,9 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
 
   const uint32_t options =
     (use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN) |
-    (differential ? SIF_PROFILES_DIFFERENTIAL : SIF_PROFILES_CUMULATIVE);
+    (differential ? SIF_PROFILES_DIFFERENTIAL : SIF_PROFILES_CUMULATIVE) |
+    (weighted_velocity ? SIF_PROFILES_VELOCITY_WEIGHTED
+                       : SIF_PROFILES_VELOCITY_NUMBER);
 
   sif_density_profiles_t* dens_out = NULL;
   sif_velocity_profiles_t* vel_out = NULL;

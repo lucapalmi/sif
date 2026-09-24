@@ -267,6 +267,7 @@ void sif_chain_mesh_free(sif_chain_mesh_t* mesh) {
   sif_free_aligned(
     mesh->_velocity_block); /* sif_free_aligned handles NULL safely */
   sif_free_aligned(mesh->weights);
+  sif_free_aligned(mesh->cell_weights);
   sif_free_aligned(mesh->original_indices);
   sif_free_aligned(mesh->cell_offsets);
 
@@ -568,12 +569,6 @@ static int chain_mesh_permute_payloads(sif_chain_mesh_t* mesh) {
 }
 
 /*
- * @param consume Whether the mesh's payload columns are the field's own. When
- * they are, PASS 3 cannot scatter into them -- it would overwrite particles it
- * has not read yet -- so it records the permutation only and
- * chain_mesh_permute_payloads() moves the data afterwards.
- */
-/*
  * Total weight the mesh holds, summed once here so that everything downstream
  * that needs a mean density -- which is every measurement normalized to the
  * box -- gets it for free rather than walking the weights again per call.
@@ -582,21 +577,49 @@ static int chain_mesh_permute_payloads(sif_chain_mesh_t* mesh) {
  * running sum over a few billion tracers stops moving long before it reaches
  * the end, and a total that divides a whole measurement would carry that error
  * into an amplitude that looks physical.
+ *
+ * A weighted mesh also gets sif_chain_mesh_t::cell_weights here, from the same
+ * pass. Must run after the canonical ordering only in the sense that it reads
+ * the final cell ranges; a cell's sum does not depend on its order beyond the
+ * last bit.
  */
-static void chain_mesh_sum_weights(sif_chain_mesh_t* mesh) {
+static int chain_mesh_sum_weights(sif_chain_mesh_t* mesh) {
   if (!mesh->weights) {
     mesh->total_weight = (double)mesh->n_particles;
-    return;
+    return SIF_OK;
   }
 
+  mesh->cell_weights =
+    sif_malloc_aligned(mesh->total_cells * sizeof(sif_real));
+  if (!mesh->cell_weights) {
+    SIF_LOG_ERROR("chain_mesh", "failed to allocate the per-cell weight table");
+    return SIF_ERR_ALLOC;
+  }
+
+  /* One pass does both: the cells partition the tracers, so the cell sums add
+   * up to the total. Summed per cell rather than per tracer so each thread
+   * writes its own cells and the table needs no reduction. */
   double total = 0.0;
 #pragma omp parallel for schedule(static) reduction(+ : total)
-  for (uint64_t p = 0; p < mesh->n_particles; p++)
-    total += (double)mesh->weights[p];
+  for (uint64_t c = 0; c < mesh->total_cells; c++) {
+    double cell = 0.0;
+    for (uint64_t p = mesh->cell_offsets[c]; p < mesh->cell_offsets[c + 1]; p++)
+      cell += (double)mesh->weights[p];
+
+    mesh->cell_weights[c] = (sif_real)cell;
+    total += cell;
+  }
 
   mesh->total_weight = total;
+  return SIF_OK;
 }
 
+/*
+ * @param consume Whether the mesh's payload columns are the field's own. When
+ * they are, PASS 3 cannot scatter into them -- it would overwrite particles it
+ * has not read yet -- so it records the permutation only and
+ * chain_mesh_permute_payloads() moves the data afterwards.
+ */
 static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
   bool consume, sif_option opt) {
 
@@ -744,7 +767,8 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
   else
     chain_mesh_canonicalize(mesh);
 
-  chain_mesh_sum_weights(mesh);
+  if (chain_mesh_sum_weights(mesh) != SIF_OK)
+    return SIF_ERR_ALLOC;
 
   SIF_LOG_TRACE("chain_mesh", "RLE atomic mesh construction complete");
 

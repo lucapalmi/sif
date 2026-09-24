@@ -236,6 +236,139 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
   printf("  ok\n");
 }
 
+/* --- weights --- */
+
+/*
+ * One full exodus pipeline -- grid, mesh, finder -- on the given columns, with
+ * the weights assigned when `w` is non-NULL. Both halves of the finder read
+ * the weights (the grid through the CIC deposit, the rescaling through the
+ * mesh), so this is what a caller with a weighted field actually runs.
+ */
+static sif_catalog_t* exodus_on(
+  const sif_real* x, const sif_real* y, const sif_real* z, const sif_real* w) {
+
+  sif_field_t* f = sif_field_alloc(N_P);
+  sif_field_assign_positions(f, x, y, z);
+  if (w)
+    sif_field_assign_weights(f, w);
+
+  sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
+  sif_grid_assign_cic(g, f);
+  sif_grid_to_density_contrast(g);
+
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+  sif_field_free(f);
+
+  sif_catalog_t* cat =
+    mesh ? sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f, 0) : NULL;
+
+  sif_chain_mesh_free(mesh);
+  sif_grid_free(g);
+  return cat;
+}
+
+/* Bit for bit: same voids, same order, same centres and radii. */
+static void check_same_catalog(
+  const char* label, const sif_catalog_t* got, const sif_catalog_t* ref) {
+
+  CHECK(got && ref, "%s: a run returned NULL", label);
+  if (!got || !ref)
+    return;
+
+  CHECK(got->n_voids == ref->n_voids, "%s: %llu voids, reference has %llu",
+    label, (unsigned long long)got->n_voids, (unsigned long long)ref->n_voids);
+  if (got->n_voids != ref->n_voids)
+    return;
+
+  for (uint64_t i = 0; i < got->n_voids; i++) {
+    CHECK(got->cx[i] == ref->cx[i] && got->cy[i] == ref->cy[i] &&
+            got->cz[i] == ref->cz[i] && got->radii[i] == ref->radii[i],
+      "%s: void %llu is (%g, %g, %g; r=%.6f), reference (%g, %g, %g; "
+      "r=%.6f)",
+      label, (unsigned long long)i, (double)got->cx[i], (double)got->cy[i],
+      (double)got->cz[i], (double)got->radii[i], (double)ref->cx[i],
+      (double)ref->cy[i], (double)ref->cz[i], (double)ref->radii[i]);
+  }
+}
+
+static void run_weighted_cases(void) {
+  printf("weights\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  sif_real* w = malloc(N_P * sizeof(sif_real));
+
+#if !SIF_TEST_INSTRUMENTED
+  /*
+   * A uniform weight has to change nothing. The density is normalized to the
+   * mean weight, so a constant factor cancels -- and with a power of two it
+   * cancels exactly, in every sum and every comparison, so the catalogue has
+   * to come back bit for bit. A weight of 1 checks the weighted path against
+   * the unweighted one; a weight of 4 checks that nothing in either half of
+   * the finder forgot to normalize.
+   */
+  make_field(x, y, z);
+  sif_catalog_t* ref = exodus_on(x, y, z, NULL);
+
+  for (uint64_t i = 0; i < N_P; i++)
+    w[i] = 1.0f;
+  sif_catalog_t* ones = exodus_on(x, y, z, w);
+  check_same_catalog("weights = 1", ones, ref);
+
+  for (uint64_t i = 0; i < N_P; i++)
+    w[i] = 4.0f;
+  sif_catalog_t* fours = exodus_on(x, y, z, w);
+  check_same_catalog("weights = 4", fours, ref);
+
+  sif_catalog_free(ref);
+  sif_catalog_free(ones);
+  sif_catalog_free(fours);
+#endif
+
+  /*
+   * Voids that exist only in the weights. The tracers are spread uniformly,
+   * holes included, and the ones inside a hole weigh nothing -- so counted,
+   * the box is featureless, and weighted it holds the same four voids the
+   * position-only field does. Only a finder that reads the weights on both
+   * sides can recover them with the right radii: a weightless tracer is also
+   * what exercises the bins the walk skips for carrying no weight.
+   */
+  rng_state = 0x243F6A8885A308D3ULL;
+  for (uint64_t i = 0; i < N_P; i++) {
+    const double px = next_uniform() * BOX;
+    const double py = next_uniform() * BOX;
+    const double pz = next_uniform() * BOX;
+    x[i] = (sif_real)px;
+    y[i] = (sif_real)py;
+    z[i] = (sif_real)pz;
+    w[i] = inside_a_hole(px, py, pz) ? 0.0f : 1.0f;
+  }
+
+  sif_catalog_t* cat = exodus_on(x, y, z, w);
+  check_catalog("weight-only voids", cat, 0.9f, 1.5f);
+  sif_catalog_free(cat);
+
+  /* The walk can only rule shells out while the enclosed weight grows with
+   * the radius, so anything that breaks that is refused rather than run. */
+  w[N_P / 2] = -1.0f;
+  cat = exodus_on(x, y, z, w);
+  CHECK(cat == NULL, "a negative weight should be refused");
+  sif_catalog_free(cat);
+
+  w[N_P / 2] = 0.0f / 0.0f; /* NaN */
+  cat = exodus_on(x, y, z, w);
+  CHECK(cat == NULL, "a NaN weight should be refused");
+  sif_catalog_free(cat);
+
+  free(x);
+  free(y);
+  free(z);
+  free(w);
+  printf("  ok\n");
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -251,6 +384,8 @@ int main(void) {
   run_case("overlap 0.2", 0, 0.2f);
   run_case("consume_grid", SIF_FINDER_CONSUME_GRID, 0.0f);
 #endif
+
+  run_weighted_cases();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

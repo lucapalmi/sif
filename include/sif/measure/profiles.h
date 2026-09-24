@@ -142,7 +142,8 @@ static inline const sif_real* sif_velocity_profiles_get(
  * within its outer edge, which is what the spherical-evolution mapping expects
  * -- and #SIF_PROFILES_DIFFERENTIAL makes each bin the contrast of its own
  * shell instead. Velocities are the mean radial velocity of a shell either
- * way.
+ * way: over the tracers by default, or over their weights with
+ * #SIF_PROFILES_VELOCITY_WEIGHTED.
  *
  * Which edge a bin's value belongs at follows from that, and differs between
  * the two: see sif_density_profiles_bin_radius(), which is what anything
@@ -166,8 +167,11 @@ static inline const sif_real* sif_velocity_profiles_get(
  * @param ext Outer edge of the profile, in units of each void's radius.
  * Anything not positive selects #SIF_PROFILES_DEFAULT_EXT.
  * @param n_bins Radial bins per profile. Must be non-zero.
- * @param opt Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN and
- * SIF_PROFILES_CUMULATIVE / SIF_PROFILES_DIFFERENTIAL.
+ * @param opt Honours SIF_PBC_PERIODIC / SIF_PBC_OPEN,
+ * SIF_PROFILES_CUMULATIVE / SIF_PROFILES_DIFFERENTIAL and
+ * SIF_PROFILES_VELOCITY_NUMBER / SIF_PROFILES_VELOCITY_WEIGHTED. Densities are
+ * weighted whenever the mesh carries weights; there is no flag for that, since
+ * a density that ignored them would not be the field's.
  * @param out_dens Address of a density set pointer, or NULL to skip. If it
  * points at NULL a set is allocated; otherwise the existing one is filled.
  * @param out_vel Address of a velocity set pointer, or NULL to skip. Same

@@ -39,10 +39,22 @@
  * this call -- which matters, because the finder's own peak sits right on top
  * of whatever the caller is still holding.
  *
- * The finder reads only the mesh positions. Velocities and weights ride along
- * if the field carries them, which at these particle counts is a substantial
- * allocation for nothing -- so hand this a field stripped of both when the
- * mesh is being built for the finder alone.
+ * The finder reads the mesh positions and, when the mesh carries them, its
+ * weights: a void's radius is then where the enclosed *weight* first reaches
+ * (1 + threshold) times the mean weight density, the same criterion the grid
+ * applies when it is built by sif_grid_assign_cic() from the same weighted
+ * field. A mesh without weights is the unweighted finder, unchanged. A mesh
+ * of a tessellation's samples has all of its density in the weights, so it
+ * has to be run weighted to mean anything.
+ *
+ * Weights must be finite and non-negative; the call fails otherwise. The
+ * enclosed weight has to grow with the radius for the search to be able to
+ * rule whole shells out, and a negative weight would break that silently.
+ *
+ * Velocities are never read, and at these particle counts they are a
+ * substantial allocation for nothing -- so hand this a field stripped of them
+ * (and of weights, if the run is meant to be unweighted) when the mesh is
+ * being built for the finder alone.
  *
  * @param grid Density contrast field, as produced by
  * sif_grid_to_density_contrast(). Smoothed in place and restored at the end,
@@ -65,7 +77,8 @@
  * filled some other way.
  *
  * @return Newly allocated catalogue, released with sif_catalog_free(), or
- * NULL on invalid input or failure.
+ * NULL on invalid input -- a negative or non-finite weight included -- or
+ * failure.
  */
 SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,

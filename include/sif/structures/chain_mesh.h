@@ -70,6 +70,22 @@ typedef struct {
    */
   double total_weight;
   /**
+   * Sum of #weights over each cell, #total_cells entries in cell order, or
+   * NULL when the mesh carries no weights -- an unweighted mesh has its counts
+   * in #cell_offsets already and pays nothing for this.
+   *
+   * What a weighted count of whole cells costs without it is a pass over every
+   * tracer they hold, where the unweighted count is two offsets subtracted. A
+   * sphere query touches mostly whole cells and reads tracers only in the ones
+   * its surface cuts, so without this table weighting it would turn an
+   * O(surface) query into an O(volume) one.
+   *
+   * Each cell is summed in double and stored as sif_real: a cell holds tens of
+   * tracers, which a float sum represents well, and anything summing many
+   * cells should accumulate them in double again.
+   */
+  sif_real* cell_weights;
+  /**
    * Index of each particle in the source field: the only way to relate a
    * query result back to the field it came from, since the mesh reorders
    * particles.

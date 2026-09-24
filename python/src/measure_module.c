@@ -51,12 +51,13 @@ static PyMethodDef measure_methods[] = {
 
   {"profiles", (PyCFunction)py_sif_profiles, METH_VARARGS | METH_KEYWORDS,
     "profiles(catalog, mesh, n_bins, ext=5.0, compute_velocity=False, "
-    "use_pbc=True, differential=False)\n"
+    "use_pbc=True, differential=False, weighted_velocity=False)\n"
     "--\n\n"
     "Stack radial density and velocity profiles around voids.\n\n"
     "Radii are scaled by each void's own radius, so profiles of\n"
     "different-sized voids stack directly. Densities are normalized to the\n"
-    "box mean, so a profile approaches 1 far from the centre.\n\n"
+    "box mean, so a profile approaches 1 far from the centre. On a mesh\n"
+    "whose field carried weights the densities are weighted ones.\n\n"
     "Args:\n"
     "    catalog: Voids to profile.\n"
     "    mesh: ChainMesh of the tracers, which also supplies the box length\n"
@@ -72,7 +73,12 @@ static PyMethodDef measure_methods[] = {
     "    differential: Make each density bin the contrast of its own shell\n"
     "        rather than of everything enclosed within its outer edge. The\n"
     "        one worth measuring from a Tessellation, since a shell is all\n"
-    "        boundary. Velocity bins are shell means either way.\n\n"
+    "        boundary. Velocity bins are shell means either way.\n"
+    "    weighted_velocity: Average each shell's radial velocity over the\n"
+    "        tracer weights, sum(w v) / sum(w), rather than over the tracers.\n"
+    "        Only differs on a weighted mesh. Off by default because of what\n"
+    "        it means on a Tessellation mesh: the plain mean over samples is\n"
+    "        the volume-weighted velocity, the weighted one is not.\n\n"
     "Returns:\n"
     "    Profiles: The stacked profiles."},
 

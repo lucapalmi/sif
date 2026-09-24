@@ -165,7 +165,8 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * What that buys is reproducibility of the last bits, and nothing else -- the
  * set of particles in a cell is identical either way, so any measurement that
  * does not depend on summation order is unaffected. A finder that only counts
- * tracers inside a sphere is in that class; stacked profiles and
+ * tracers inside a sphere is in that class; stacked profiles, anything that
+ * sums weights (the exodus finder included, on a weighted mesh) and
  * nearest-neighbour queries with exact distance ties are not.
  *
  * Worth setting only where the ordering genuinely does not matter, because the
@@ -194,6 +195,26 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 #define SIF_PROFILES_CUMULATIVE   (0u << 8)
 #define SIF_PROFILES_DIFFERENTIAL (1u << 8)
 #define SIF__PROFILES_BIN_MASK    (1u << 8)
+/** @} */
+
+/**
+ * @defgroup opt_profiles_vel Radial velocity averaging
+ * @brief What a shell's mean radial velocity is averaged over.
+ *
+ * NUMBER is the plain mean over the tracers in the shell. WEIGHTED is the mean
+ * over their weights, sum(w v) / sum(w), which for a mass-weighted field is the
+ * momentum of the shell over its mass. On a mesh without weights the two are
+ * the same thing.
+ *
+ * NUMBER is the default because of what it means on a tessellation's samples:
+ * every sample stands for the same volume, so counting them gives the
+ * volume-weighted velocity, which is what the samples are for. WEIGHTED on the
+ * same mesh gives the tracer-weighted one instead.
+ * @{
+ */
+#define SIF_PROFILES_VELOCITY_NUMBER   (0u << 9)
+#define SIF_PROFILES_VELOCITY_WEIGHTED (1u << 9)
+#define SIF__PROFILES_VELOCITY_MASK    (1u << 9)
 /** @} */
 
 /**
@@ -427,6 +448,9 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 #  define SIF_PURE_FUNCTION __attribute__((pure))
 /** @brief Hint that a function sits on a hot path. */
 #  define SIF_HOT_LOOP __attribute__((hot))
+/** @brief Inline even where the compiler would rather not: for a body that
+ * takes a compile-time flag and has to be specialized on it at every call. */
+#  define SIF_ALWAYS_INLINE inline __attribute__((always_inline))
 /** @brief Align an object on a cache line. */
 #  define SIF_ALIGN_T __attribute__((aligned(SIF_CACHE_LINE)))
 
@@ -435,6 +459,7 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 #  define SIF_NODISCARD
 #  define SIF_PURE_FUNCTION
 #  define SIF_HOT_LOOP
+#  define SIF_ALWAYS_INLINE inline
 #  define SIF_ALIGN_T
 
 #endif

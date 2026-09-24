@@ -392,6 +392,74 @@ static void test_chain_mesh(void) {
   sif_chain_mesh_free(kept);
   sif_chain_mesh_free(dropped);
 
+  /*
+   * The per-cell weight table. An unweighted mesh must not pay for one, and a
+   * weighted one -- built either way -- has to hold exactly the sum of each
+   * cell's own weights, with the cells adding up to the total. The weights are
+   * multiples of a quarter so every sum here is exact and the comparison can
+   * be too.
+   */
+  {
+    sif_real* w = malloc(n_p * sizeof(sif_real));
+    double w_total = 0.0;
+    for (uint64_t i = 0; i < n_p; i++) {
+      w[i] = 1.0f + 0.25f * (sif_real)(i % 7);
+      w_total += (double)w[i];
+    }
+
+    sif_chain_mesh_t* plain = sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT);
+    CHECK(plain && plain->cell_weights == NULL,
+      "an unweighted mesh should carry no per-cell weight table");
+    CHECK(plain && plain->total_weight == (double)n_p,
+      "an unweighted mesh should report its tracer count as its weight");
+    sif_chain_mesh_free(plain);
+
+    sif_field_t* wf = sif_field_alloc(n_p);
+    sif_field_assign_positions(wf, x, y, z);
+    sif_field_assign_weights(wf, w);
+
+    sif_field_t* wf_victim = sif_field_alloc(n_p);
+    sif_field_assign_positions(wf_victim, x, y, z);
+    sif_field_assign_weights(wf_victim, w);
+
+    sif_chain_mesh_t* built[2] = {
+      sif_chain_mesh_alloc(8, box, wf, SIF_DEFAULT),
+      sif_chain_mesh_alloc_consume(8, box, wf_victim, SIF_DEFAULT)};
+    const char* how[2] = {"copying", "consuming"};
+
+    for (int m = 0; m < 2; m++) {
+      const sif_chain_mesh_t* wm = built[m];
+      CHECK(wm && wm->cell_weights != NULL,
+        "the %s constructor built no per-cell weight table", how[m]);
+      if (!wm || !wm->cell_weights)
+        continue;
+
+      int bad = 0;
+      double cells = 0.0;
+      for (uint64_t c = 0; c < wm->total_cells; c++) {
+        double sum = 0.0;
+        for (uint64_t p = wm->cell_offsets[c]; p < wm->cell_offsets[c + 1]; p++)
+          sum += (double)wm->weights[p];
+        if ((double)wm->cell_weights[c] != sum)
+          bad++;
+        cells += (double)wm->cell_weights[c];
+      }
+
+      CHECK(bad == 0, "%s constructor: %d cells hold the wrong weight", how[m],
+        bad);
+      CHECK(cells == w_total && wm->total_weight == w_total,
+        "%s constructor: cells sum to %.2f, total_weight is %.2f, expected "
+        "%.2f",
+        how[m], cells, wm->total_weight, w_total);
+    }
+
+    sif_chain_mesh_free(built[0]);
+    sif_chain_mesh_free(built[1]);
+    sif_field_free(wf);
+    sif_field_free(wf_victim);
+    free(w);
+  }
+
   /* Out-of-range coordinates are rejected, not silently folded. The field owns
    * its positions, so the corruption has to go into its copy: writing to the
    * caller's x[] would not reach the mesh. */

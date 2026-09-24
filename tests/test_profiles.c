@@ -306,6 +306,104 @@ int main(void) {
     }
   }
 
+  /* The weighting flag on a mesh with no weights has nothing to weight by,
+   * so it has to be the plain mean, bit for bit. */
+  sif_velocity_profiles_t* vel_flag = NULL;
+  if (sif_profiles(cat, mesh_v, ext, N_BINS,
+        SIF_PBC_PERIODIC | SIF_PROFILES_VELOCITY_WEIGHTED, NULL,
+        &vel_flag) != SIF_OK) {
+    printf("FAIL: could not stack velocity profiles with the weighting flag\n");
+    return 1;
+  }
+
+  for (uint32_t b = 0; b < N_BINS; b++) {
+    if (sif_velocity_profiles_get(vel_flag, 0)[b] !=
+        sif_velocity_profiles_get(vel, 0)[b]) {
+      printf("  unweighted mesh, weighting flag, bin %2u: differs from the "
+             "plain mean  MISMATCH\n",
+        b);
+      failures++;
+    }
+  }
+
+  /* Weighted velocities. Every tracer is doubled in place: one copy of
+   * weight 3 moving outward, one of weight 1 moving inward. The plain mean of
+   * every shell is then 0 and the weighted one (3 - 1) / (3 + 1) = 0.5, and a
+   * shell cannot tell the two apart any other way. */
+  const uint64_t n_pairs = N_P / 2;
+  sif_real* px = malloc(2 * n_pairs * sizeof(sif_real));
+  sif_real* py = malloc(2 * n_pairs * sizeof(sif_real));
+  sif_real* pz = malloc(2 * n_pairs * sizeof(sif_real));
+  sif_real* pvx = malloc(2 * n_pairs * sizeof(sif_real));
+  sif_real* pvy = malloc(2 * n_pairs * sizeof(sif_real));
+  sif_real* pvz = malloc(2 * n_pairs * sizeof(sif_real));
+  sif_real* pw = malloc(2 * n_pairs * sizeof(sif_real));
+
+  for (uint64_t i = 0; i < n_pairs; i++) {
+    for (int k = 0; k < 2; k++) {
+      const uint64_t j = 2 * i + (uint64_t)k;
+      const sif_real sign = k ? -1.0f : 1.0f;
+      px[j] = x[i];
+      py[j] = y[i];
+      pz[j] = z[i];
+      pvx[j] = sign * vel_x[i];
+      pvy[j] = sign * vel_y[i];
+      pvz[j] = sign * vel_z[i];
+      pw[j] = k ? 1.0f : 3.0f;
+    }
+  }
+
+  sif_field_t* fp = sif_field_alloc(2 * n_pairs);
+  sif_field_assign_positions(fp, px, py, pz);
+  sif_field_assign_velocities(fp, pvx, pvy, pvz);
+  sif_field_assign_weights(fp, pw);
+
+  sif_chain_mesh_t* mesh_p =
+    sif_chain_mesh_alloc(n_cells, BOX, fp, SIF_MESH_DROP_INDICES);
+  sif_velocity_profiles_t* vel_n = NULL;
+  sif_velocity_profiles_t* vel_w = NULL;
+
+  if (!mesh_p ||
+      sif_profiles(cat, mesh_p, ext, N_BINS, SIF_PBC_PERIODIC, NULL, &vel_n) !=
+        SIF_OK ||
+      sif_profiles(cat, mesh_p, ext, N_BINS,
+        SIF_PBC_PERIODIC | SIF_PROFILES_VELOCITY_WEIGHTED, NULL,
+        &vel_w) != SIF_OK) {
+    printf("FAIL: could not stack weighted velocity profiles\n");
+    return 1;
+  }
+
+  for (uint32_t b = 0; b < N_BINS; b++) {
+    const double got_n = (double)sif_velocity_profiles_get(vel_n, 0)[b];
+    const double got_w = (double)sif_velocity_profiles_get(vel_w, 0)[b];
+
+    if (fabs(got_n) > 1e-5) {
+      printf("  paired velocity bin %2u: plain mean %+.7f, expected 0  "
+             "MISMATCH\n",
+        b, got_n);
+      failures++;
+    }
+    if (fabs(got_w - 0.5) > 1e-5) {
+      printf("  paired velocity bin %2u: weighted mean %+.7f, expected +0.5  "
+             "MISMATCH\n",
+        b, got_w);
+      failures++;
+    }
+  }
+
+  sif_velocity_profiles_free(vel_flag);
+  sif_velocity_profiles_free(vel_n);
+  sif_velocity_profiles_free(vel_w);
+  sif_chain_mesh_free(mesh_p);
+  sif_field_free(fp);
+  free(px);
+  free(py);
+  free(pz);
+  free(pvx);
+  free(pvy);
+  free(pvz);
+  free(pw);
+
   printf("\n%s (%d mismatched bin%s)\n", failures ? "FAILED" : "PASSED",
     failures, failures == 1 ? "" : "s");
 

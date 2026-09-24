@@ -237,8 +237,9 @@ PyTypeObject sifChainMeshType = {
     "        leaves cells in scatter order, which changes nothing about\n"
     "        which particles a cell holds -- only the order they are\n"
     "        summed in, and so the last bits of anything that walks them.\n"
-    "        A finder that counts tracers inside a sphere does not care;\n"
-    "        stacked profiles and nearest-neighbour distance ties do.",
+    "        The unweighted exodus finder only counts tracers and does not\n"
+    "        care; stacked profiles, anything that sums weights (exodus on a\n"
+    "        weighted mesh included) and nearest-neighbour distance ties do.",
   .tp_methods = sifChainMesh_methods,
   .tp_getset = sifChainMesh_getset,
   .tp_init = sifChainMesh_init,

@@ -183,7 +183,7 @@ static inline void bin_cell_run(const bin_ctx_t* ctx, uint64_t p_start,
   uint64_t p_end, sif_real cx, sif_real cy, sif_real cz, sif_real r_max_sq,
   sif_real inv_bin, sif_real* local_mass, sif_real* local_vrad,
   uint64_t* local_count, const int do_wrap, const int want_dens,
-  const int want_vel, const int have_w) {
+  const int want_vel, const int have_w, const int vel_w) {
 
   const sif_real* mx = ctx->x;
   const sif_real* my = ctx->y;
@@ -219,15 +219,23 @@ static inline void bin_cell_run(const bin_ctx_t* ctx, uint64_t p_start,
       const uint32_t bin = (uint32_t)(r * inv_bin);
 
       if (bin < n_bins) {
-        if (want_dens)
+        /* A weighted velocity divides by the shell's weight, which is exactly
+         * what the density accumulates, so it shares the accumulator. */
+        if (want_dens || vel_w)
           local_mass[bin] += have_w ? ctx->w[p] : (sif_real)1.0;
 
         if (want_vel) {
           const sif_real inv_r =
             (r > (sif_real)0.0) ? (sif_real)1.0 / r : (sif_real)0.0;
-          local_vrad[bin] +=
+          const sif_real v_r =
             (ctx->vx[p] * dx + ctx->vy[p] * dy + ctx->vz[p] * dz) * inv_r;
-          local_count[bin]++;
+
+          if (vel_w) {
+            local_vrad[bin] += ctx->w[p] * v_r;
+          } else {
+            local_vrad[bin] += v_r;
+            local_count[bin]++;
+          }
         }
       }
     }
@@ -419,6 +427,12 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
 
   const int have_weights = (mesh->weights != NULL);
 
+  /* Without weights the weighted mean is the plain one, so the flag only
+   * selects a different kernel when there is something to weight by. */
+  const int vel_weighted = compute_vel && have_weights &&
+                           ((opt & SIF__PROFILES_VELOCITY_MASK) ==
+                             SIF_PROFILES_VELOCITY_WEIGHTED);
+
   const bin_ctx_t ctx = {.x = SIF_ASSUME_ALIGNED(mesh->x),
     .y = SIF_ASSUME_ALIGNED(mesh->y),
     .z = SIF_ASSUME_ALIGNED(mesh->z),
@@ -464,25 +478,30 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
 
 /* The flags are literals in each expansion, so the compiler builds one
  * specialized loop per combination rather than testing them per tracer. */
-#define SIF_BIN_CELL(wrap, dens, vel, wgt)                                     \
+#define SIF_BIN_CELL(wrap, dens, vel, wgt, vel_w)                              \
   bin_cell_run(&ctx, p_start, p_end, wrap ? cx : ecx, wrap ? cy : ecy,         \
     wrap ? cz : ecz, r_max_sq, inv_bin, local_mass, local_vrad, local_count,   \
-    wrap, dens, vel, wgt)
+    wrap, dens, vel, wgt, vel_w)
 
 #define SIF_BIN_DISPATCH(wrap)                                                 \
   do {                                                                         \
     if (compute_dens && compute_vel) {                                         \
-      if (have_weights)                                                        \
-        SIF_BIN_CELL(wrap, 1, 1, 1);                                           \
+      if (vel_weighted)                                                        \
+        SIF_BIN_CELL(wrap, 1, 1, 1, 1);                                        \
+      else if (have_weights)                                                   \
+        SIF_BIN_CELL(wrap, 1, 1, 1, 0);                                        \
       else                                                                     \
-        SIF_BIN_CELL(wrap, 1, 1, 0);                                           \
+        SIF_BIN_CELL(wrap, 1, 1, 0, 0);                                        \
     } else if (compute_dens) {                                                 \
       if (have_weights)                                                        \
-        SIF_BIN_CELL(wrap, 1, 0, 1);                                           \
+        SIF_BIN_CELL(wrap, 1, 0, 1, 0);                                        \
       else                                                                     \
-        SIF_BIN_CELL(wrap, 1, 0, 0);                                           \
+        SIF_BIN_CELL(wrap, 1, 0, 0, 0);                                        \
     } else {                                                                   \
-      SIF_BIN_CELL(wrap, 0, 1, 0);                                             \
+      if (vel_weighted)                                                        \
+        SIF_BIN_CELL(wrap, 0, 1, 1, 1);                                        \
+      else                                                                     \
+        SIF_BIN_CELL(wrap, 0, 1, 0, 0);                                        \
     }                                                                          \
   } while (0)
 
@@ -511,7 +530,7 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
     sif_real* local_vrad = scratch_vrad + (size_t)tid * row_real;
     uint64_t* local_count = scratch_count + (size_t)tid * row_count;
 
-    if (compute_dens)
+    if (compute_dens || vel_weighted)
       memset(local_mass, 0, n_bins * sizeof(sif_real));
     if (compute_vel) {
       memset(local_vrad, 0, n_bins * sizeof(sif_real));
@@ -609,7 +628,11 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
           (raw_rho / mean_dens) - (sif_real)1.0;
       }
 
-      if (compute_vel) {
+      if (compute_vel && vel_weighted) {
+        (*out_vel)->v_rad[global_idx] = (local_mass[j] > (sif_real)0.0)
+                                          ? local_vrad[j] / local_mass[j]
+                                          : (sif_real)0.0;
+      } else if (compute_vel) {
         (*out_vel)->v_rad[global_idx] =
           (local_count[j] > 0) ? local_vrad[j] / (sif_real)local_count[j]
                                : (sif_real)0.0;
