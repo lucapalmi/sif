@@ -27,4 +27,12 @@ build-dir = "build/{wheel_tag}"
 
 cmake.build-type = "Release"
 
+[tool.scikit-build.cmake.define]
+# Stated rather than inherited, so that what a pysif build does about HDF5 is
+# written down here. AUTO takes HDF5 when the machine has a serial one; a
+# wheel built for distribution should say ON (and bundle the library), so
+# that it cannot silently ship without it. Override with
+#   pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
+SIF_HDF5_SUPPORT = "AUTO"
+
 wheel.packages = ["pysif"]

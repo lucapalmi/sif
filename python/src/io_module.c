@@ -160,6 +160,144 @@ static PyMethodDef io_methods[] = {
     "    tuple: (Profiles, Catalog). The Profiles carries whichever blocks\n"
     "    the file holds; has_density and has_velocity say which."},
 
+  {"write_catalog_hdf5", (PyCFunction)pysif_write_catalog_hdf5,
+    METH_VARARGS | METH_KEYWORDS,
+    "write_catalog_hdf5(filepath, catalog)\n"
+    "--\n\n"
+    "Write a catalogue into /catalog of an HDF5 file.\n\n"
+    "The file can hold any subset of catalog, density_profiles,\n"
+    "velocity_profiles and size_function, each in its own group; this\n"
+    "replaces only its own and creates the file if it is missing. It reads\n"
+    "back with h5py without pysif. An existing file sif did not write is\n"
+    "never overwritten.\n\n"
+    "In a pysif built without HDF5 the data is saved as plain text in\n"
+    "<filepath>.<product>.txt instead, with a RuntimeWarning saying so.\n\n"
+    "Args:\n"
+    "    filepath: The file.\n"
+    "    catalog: Catalogue to write, with its footprint if it has one.\n\n"
+    "Raises:\n"
+    "    OSError: If the file could not be written, or is not sif's."},
+
+  {"read_catalog_hdf5", (PyCFunction)pysif_read_catalog_hdf5,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_catalog_hdf5(filepath)\n"
+    "--\n\n"
+    "Read /catalog of an HDF5 file, footprint included when present.\n\n"
+    "Returns:\n"
+    "    Catalog: The catalogue.\n\n"
+    "Raises:\n"
+    "    OSError: If the file or the group is missing or malformed.\n"
+    "    RuntimeError: If pysif was built without HDF5."},
+
+  {"write_profiles_hdf5", (PyCFunction)pysif_write_profiles_hdf5,
+    METH_VARARGS | METH_KEYWORDS,
+    "write_profiles_hdf5(filepath, profiles)\n"
+    "--\n\n"
+    "Write stacked profiles into /density_profiles and /velocity_profiles.\n\n"
+    "Only the sets the Profiles holds are written; one it does not hold\n"
+    "stays in the file as it was. A row count that disagrees with the\n"
+    "catalogue in the file is warned about in the log, not refused.\n\n"
+    "The file can hold any subset of catalog, density_profiles,\n"
+    "velocity_profiles and size_function, each in its own group; this\n"
+    "replaces only its own and creates the file if it is missing. It reads\n"
+    "back with h5py without pysif. An existing file sif did not write is\n"
+    "never overwritten.\n\n"
+    "In a pysif built without HDF5 the data is saved as plain text in\n"
+    "<filepath>.<product>.txt instead, with a RuntimeWarning saying so.\n\n"
+    "Args:\n"
+    "    filepath: The file.\n"
+    "    profiles: Profiles to write."},
+
+  {"read_profiles_hdf5", (PyCFunction)pysif_read_profiles_hdf5,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_profiles_hdf5(filepath)\n"
+    "--\n\n"
+    "Read whichever profile sets an HDF5 file holds.\n\n"
+    "Returns:\n"
+    "    Profiles: has_density and has_velocity say which came back.\n\n"
+    "Raises:\n"
+    "    ValueError: If the file holds no profiles.\n"
+    "    OSError: If the file is missing or malformed.\n"
+    "    RuntimeError: If pysif was built without HDF5."},
+
+  {"write_size_function_hdf5", (PyCFunction)pysif_write_size_function_hdf5,
+    METH_VARARGS | METH_KEYWORDS,
+    "write_size_function_hdf5(filepath, size_function)\n"
+    "--\n\n"
+    "Write a size function, measured or modelled, into /size_function.\n\n"
+    "The binning goes in as the attribute 'binning' ('ln' or 'linear'),\n"
+    "since it decides whether vsf is per unit ln R or per unit R.\n\n"
+    "The file can hold any subset of catalog, density_profiles,\n"
+    "velocity_profiles and size_function, each in its own group; this\n"
+    "replaces only its own and creates the file if it is missing. It reads\n"
+    "back with h5py without pysif. An existing file sif did not write is\n"
+    "never overwritten.\n\n"
+    "In a pysif built without HDF5 the data is saved as plain text in\n"
+    "<filepath>.<product>.txt instead, with a RuntimeWarning saying so.\n\n"
+    "Args:\n"
+    "    filepath: The file.\n"
+    "    size_function: SizeFunction to write."},
+
+  {"read_size_function_hdf5", (PyCFunction)pysif_read_size_function_hdf5,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_size_function_hdf5(filepath)\n"
+    "--\n\n"
+    "Read /size_function of an HDF5 file.\n\n"
+    "Returns:\n"
+    "    SizeFunction: The size function.\n\n"
+    "Raises:\n"
+    "    OSError: If the file or the group is missing or malformed.\n"
+    "    RuntimeError: If pysif was built without HDF5."},
+
+  {"set_hdf5_attr", (PyCFunction)pysif_set_hdf5_attr,
+    METH_VARARGS | METH_KEYWORDS,
+    "set_hdf5_attr(filepath, key, value, group=None)\n"
+    "--\n\n"
+    "Attach a named value to an HDF5 file, or to one of its products.\n\n"
+    "The file's own header -- how the catalogue was made, which simulation,\n"
+    "which snapshot -- the way FITS keywords are. On the root (group None)\n"
+    "an entry describes the file and survives every rewrite; on a product\n"
+    "('catalog', 'size_function', ...) it describes that product and goes\n"
+    "when the product is rewritten.\n\n"
+    "sif's own attributes (n_voids, n_bins, ... and every root name\n"
+    "beginning 'sif_') cannot be set. Without HDF5 the entry is appended to\n"
+    "<filepath>.attributes.txt instead, with a RuntimeWarning.\n\n"
+    "Args:\n"
+    "    filepath: The file; for the root it is created if missing.\n"
+    "    key: The entry's name.\n"
+    "    value: An int (or bool), float or str.\n"
+    "    group: None for the file itself, or a product that is already\n"
+    "        in it.\n\n"
+    "Raises:\n"
+    "    ValueError: For a missing product or a name sif keeps.\n"
+    "    TypeError: For a value that is not int, float or str."},
+
+  {"get_hdf5_attr", (PyCFunction)pysif_get_hdf5_attr,
+    METH_VARARGS | METH_KEYWORDS,
+    "get_hdf5_attr(filepath, key, group=None)\n"
+    "--\n\n"
+    "Read one named value from an HDF5 file or one of its products.\n\n"
+    "Returns:\n"
+    "    int, float or str.\n\n"
+    "Raises:\n"
+    "    OSError: If the file, the group or the entry is missing.\n"
+    "    TypeError: If the entry is an array or something else these\n"
+    "        functions do not read.\n"
+    "    RuntimeError: If pysif was built without HDF5."},
+
+  {"get_hdf5_attrs", (PyCFunction)pysif_get_hdf5_attrs,
+    METH_VARARGS | METH_KEYWORDS,
+    "get_hdf5_attrs(filepath, group=None)\n"
+    "--\n\n"
+    "Every named value of an HDF5 file, or of one of its products.\n\n"
+    "sif's own entries are included. One of a kind these functions do not\n"
+    "read (an array another tool put there) is listed as None.\n\n"
+    "Returns:\n"
+    "    dict: name -> int, float, str or None.\n\n"
+    "Raises:\n"
+    "    OSError: If the file or the group is missing.\n"
+    "    RuntimeError: If pysif was built without HDF5."},
+
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
@@ -169,7 +307,9 @@ static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
            "copying, at the cost of being portable only between machines\n"
            "that agree on endianness and on the precision sif was built\n"
            "with; both record a checksum and refuse a file that fails it.\n"
-           "ASCII is the portable path, and far slower.",
+           "ASCII is the portable path, and far slower.\n\n"
+           "The *_hdf5 functions keep a catalogue and what was measured from\n"
+           "it in one HDF5 file, readable with h5py without pysif.",
   .m_size = -1, .m_methods = io_methods};
 
 /* Submodule exporter called from the parent module initialization routing */

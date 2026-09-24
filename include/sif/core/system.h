@@ -17,6 +17,7 @@
 #define SIF_CORE_SYSTEM_H
 
 #include <stdbool.h>
+#include <stddef.h> /* NULL, in the SIF_CONFIG_* presets */
 #include <stdint.h>
 
 #include "sif/core/macros.h"

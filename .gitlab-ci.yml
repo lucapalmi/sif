@@ -4,7 +4,54 @@
 # This file is part of sif. See COPYING for the full license text.
 
 stages:
+  - test
   - docs
+
+# Build the library and run the test suite, once for each HDF5 mode.
+#
+# Both modes run because each compiles code the other never sees: src/io/
+# hdf5.c against src/io/hdf5_off.c, and the tests' #ifdef SIF_HAVE_HDF5
+# halves. A change that only builds in one of them is exactly what a single
+# job would let through.
+#
+# HDF5 is installed in both. With ON it is required; with OFF it has to be
+# ignored even though it is there -- which the OFF job checks by looking for
+# any HDF5 symbol the library references, since "OFF" is a promise that a
+# project embedding sif never links HDF5 at all.
+#
+# GCC's libgomp and Debian's FFTW (built against the same runtime) make the
+# default SIF_FFTW_THREADING=omp safe here; see the note in CMakeLists.txt.
+.build-and-test:
+  stage: test
+  image: debian:trixie
+  variables:
+    DEBIAN_FRONTEND: noninteractive
+  before_script:
+    - apt-get update
+    - apt-get install -y --no-install-recommends
+        build-essential cmake libfftw3-dev libhdf5-dev binutils
+  script:
+    - cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        -DSIF_HDF5_SUPPORT=${SIF_HDF5_SUPPORT}
+    - cmake --build build -j "$(nproc)"
+    - ctest --test-dir build --output-on-failure
+    # In script rather than after_script, whose failures GitLab ignores.
+    - if [ "$SIF_HDF5_SUPPORT" = "OFF" ] && nm -u build/libsif.a | grep -q ' H5'; then
+        echo "libsif.a references HDF5 in an OFF build"; exit 1;
+      fi
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+test:hdf5-on:
+  extends: .build-and-test
+  variables:
+    SIF_HDF5_SUPPORT: "ON"
+
+test:hdf5-off:
+  extends: .build-and-test
+  variables:
+    SIF_HDF5_SUPPORT: "OFF"
 
 # The documentation site, published to GitLab Pages.
 #

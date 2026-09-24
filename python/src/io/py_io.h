@@ -27,4 +27,21 @@ PyObject* pysif_write_profiles_ascii(
 PyObject* pysif_read_profiles_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
 
+/* The HDF5 catalogue file (py_hdf5.c) */
+PyObject* pysif_write_catalog_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_catalog_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_profiles_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_profiles_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_size_function_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_size_function_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_get_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds);
+
 #endif /* SIF_PY_IO_PY_IO_H */

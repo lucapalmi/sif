@@ -528,6 +528,12 @@ static inline uint32_t sif__ctz_u32(uint32_t x) {
 #define SIF_ERR_RANGE   (-3)
 /** A file could not be opened, read, written, or failed validation. */
 #define SIF_ERR_IO (-4)
+/**
+ * This build cannot do it: the feature was left out at configure time (an
+ * HDF5 read in a build without HDF5, for one). The log says which option to
+ * rebuild with.
+ */
+#define SIF_ERR_UNSUPPORTED (-5)
 /** @} */
 
 /* ------------------------------------------------------------------ */

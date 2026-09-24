@@ -33,6 +33,7 @@ set(SIF_TESTS
   test_ep_emu       # the emulator against its Python reference, and invariants
   test_finders      # end-to-end: both finders on a synthetic field
   test_survey       # end-to-end: the survey finder on a synthetic footprint
+  test_hdf5         # the HDF5 catalogue file, or its text fallback
 )
 
 foreach(test_name IN LISTS SIF_TESTS)
@@ -50,6 +51,20 @@ foreach(test_name IN LISTS SIF_TESTS)
 
   if(OpenMP_C_FOUND)
     target_link_libraries(${test_name} PRIVATE OpenMP::OpenMP_C)
+  endif()
+
+  # What sif itself was built with, so a test can expect the HDF5 entry
+  # points to work or to refuse. The library's own definition is private.
+  if(SIF_WITH_HDF5)
+    target_compile_definitions(${test_name} PRIVATE SIF_HAVE_HDF5)
+  endif()
+
+  # test_hdf5 also makes files sif would not -- someone else's HDF5, a newer
+  # layout -- to check they are refused, and that takes HDF5 itself.
+  if(SIF_WITH_HDF5 AND test_name STREQUAL "test_hdf5")
+    target_include_directories(${test_name} PRIVATE
+      ${HDF5_C_INCLUDE_DIRS} ${HDF5_INCLUDE_DIRS})
+    target_link_libraries(${test_name} PRIVATE ${HDF5_C_LIBRARIES})
   endif()
 
   add_test(NAME ${test_name} COMMAND ${test_name})

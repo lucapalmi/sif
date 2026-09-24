@@ -20,7 +20,21 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 # Set compile flags
+#
+# -ffast-math, less one of the promises it makes: -ffinite-math-only tells the
+# compiler no value is ever NaN or infinite, which entitles it to delete every
+# check that asks. sif validates its inputs with exactly those checks --
+# `!(x >= 0 && x < box)` rejects a NaN coordinate because the comparison is
+# false for it -- and GCC does delete them: a NaN coordinate then passes the
+# chain mesh's validation and becomes a cell index. Keeping NaN semantics costs
+# nothing measurable in the hot loops, which never meet one.
+#
+# A compile option rather than part of the flags below, which also reach the
+# link line, where a compiler-only flag draws an "unused argument" warning per
+# executable. Compile options follow CMAKE_C_FLAGS_RELEASE on the command line,
+# so it lands after -ffast-math and takes the one promise back.
 set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -ffast-math")
+add_compile_options($<$<CONFIG:Release>:-fno-finite-math-only>)
 set(CMAKE_C_FLAGS_DEBUG "-g -O2 -Wall -Wextra -fno-omit-frame-pointer")
 
 option(SIF_VECTORIZATION_REPORT "Enable compiler vectorization reports" OFF)
@@ -90,6 +104,82 @@ find_path(FFTW3_INCLUDE NAMES fftw3.h HINTS ${FFTW_HINTS} PATH_SUFFIXES include 
 
 message(STATUS "FFTW threading backend: ${SIF_FFTW_THREADING}")
 
+# HDF5
+#
+# Optional: the HDF5 readers and writers are an interchange format on top of
+# the native .xfield and the ASCII paths, not something the library needs.
+#
+#   ON   - required; configuring fails without a usable HDF5.
+#   OFF  - never looked for. Nothing in sif references HDF5, so a project that
+#          embeds sif and has no use for it sets this and never sees it:
+#            set(SIF_HDF5_SUPPORT OFF CACHE STRING "" FORCE)
+#            add_subdirectory(sif)
+#   AUTO - used when found, skipped otherwise. Convenient, and exactly as
+#          dependent on the machine as it sounds: a cluster build where the
+#          HDF5 module was not loaded comes out without it. The status line
+#          below says which, and sif_init() logs it again at run time.
+#
+# Only a serial HDF5 is accepted. A parallel build needs MPI headers and the
+# MPI compiler wrappers everywhere HDF5's own headers are seen, and sif is not
+# an MPI code. Asked for it with ON, that is an error; under AUTO it is
+# skipped as if absent.
+set(SIF_HDF5_SUPPORT "AUTO" CACHE STRING "HDF5 I/O support (ON|OFF|AUTO)")
+set_property(CACHE SIF_HDF5_SUPPORT PROPERTY STRINGS ON OFF AUTO)
+
+string(TOUPPER "${SIF_HDF5_SUPPORT}" _sif_hdf5_mode)
+if(NOT _sif_hdf5_mode MATCHES "^(ON|OFF|AUTO)$")
+  message(FATAL_ERROR
+    "SIF_HDF5_SUPPORT must be ON, OFF or AUTO, not '${SIF_HDF5_SUPPORT}'")
+endif()
+
+set(SIF_WITH_HDF5 OFF)
+set(_sif_hdf5_why "disabled (SIF_HDF5_SUPPORT=OFF)")
+
+if(NOT _sif_hdf5_mode STREQUAL "OFF")
+  if(_sif_hdf5_mode STREQUAL "ON")
+    find_package(HDF5 REQUIRED COMPONENTS C)
+  else()
+    find_package(HDF5 QUIET COMPONENTS C)
+  endif()
+
+  if(HDF5_FOUND)
+    # Asked of HDF5's own configuration header rather than of the variables
+    # find_package() leaves behind: which of those exist depends on whether
+    # HDF5 was found through its CMake package or through the h5cc wrapper,
+    # and on the CMake version. H5_HAVE_PARALLEL is the one answer every
+    # HDF5 install gives the same way.
+    include(CheckSymbolExists)
+    set(CMAKE_REQUIRED_INCLUDES ${HDF5_C_INCLUDE_DIRS} ${HDF5_INCLUDE_DIRS})
+    set(CMAKE_REQUIRED_QUIET ON)
+    check_symbol_exists(H5_HAVE_PARALLEL "H5pubconf.h" SIF_HDF5_IS_PARALLEL)
+    unset(CMAKE_REQUIRED_INCLUDES)
+    unset(CMAKE_REQUIRED_QUIET)
+
+    if(SIF_HDF5_IS_PARALLEL)
+      if(_sif_hdf5_mode STREQUAL "ON")
+        message(FATAL_ERROR
+          "the HDF5 found (${HDF5_VERSION}) is a parallel (MPI) build, which "
+          "sif does not support. Point CMake at a serial HDF5 "
+          "(-DHDF5_ROOT=...), or set SIF_HDF5_SUPPORT=OFF")
+      endif()
+      set(_sif_hdf5_why
+        "skipped: the HDF5 found (${HDF5_VERSION}) is a parallel build")
+    else()
+      set(SIF_WITH_HDF5 ON)
+      set(_sif_hdf5_why "HDF5 ${HDF5_VERSION}")
+    endif()
+  else()
+    set(_sif_hdf5_why
+      "not found (SIF_HDF5_SUPPORT=AUTO; set it to ON to require HDF5)")
+  endif()
+endif()
+
+message(STATUS "HDF5 I/O: ${_sif_hdf5_why}")
+
+# Readable from a project that adds sif as a subdirectory -- the Python
+# extension, which words its warnings by whether HDF5 is there.
+set(SIF_WITH_HDF5 ${SIF_WITH_HDF5} CACHE INTERNAL "sif was built with HDF5")
+
 # Source files
 set(SOURCES
   # data structures
@@ -125,7 +215,7 @@ set(SOURCES
     src/model/ep_upcrossing.c
     src/model/ep_emu.c
 
-  # io
+  # io -- the HDF5 half is added below, one file or the other
     src/io/core_io.c
     src/io/catalog_io.c
     src/io/profiles_io.c
@@ -164,8 +254,22 @@ set_source_files_properties(vendor/predicates/predicates.c
 )
 
 
+# The HDF5 entry points always exist; which file implements them decides
+# whether they do the work or report that this build cannot.
+if(SIF_WITH_HDF5)
+  list(APPEND SOURCES src/io/hdf5.c)
+else()
+  list(APPEND SOURCES src/io/hdf5_off.c)
+endif()
+list(APPEND SOURCES src/io/hdf5_common.c)
+
 # Create library
 add_library(sif STATIC ${SOURCES})
+
+# The project version, for the library to stamp into the files it writes.
+# PRIVATE: it is the build's own idea of itself, not something a caller
+# compiles against.
+target_compile_definitions(sif PRIVATE SIF_VERSION_STRING="${PROJECT_VERSION}")
 
 # Internal assertions. PUBLIC because the guarded macros live in headers that
 # callers (and the tests) include, so both sides must agree.
@@ -183,6 +287,17 @@ target_include_directories(sif
     src
     vendor
 )
+
+# HDF5 is private to the sources that use it: no public sif header includes
+# hdf5.h, so nothing compiled against sif needs HDF5's headers, and a build
+# without it has no trace of it at all.
+if(SIF_WITH_HDF5)
+  target_include_directories(sif PRIVATE
+    ${HDF5_C_INCLUDE_DIRS} ${HDF5_INCLUDE_DIRS})
+  target_compile_definitions(sif PRIVATE
+    SIF_HAVE_HDF5 ${HDF5_C_DEFINITIONS} ${HDF5_DEFINITIONS})
+  target_link_libraries(sif PRIVATE ${HDF5_C_LIBRARIES})
+endif()
 
 # Linking
 target_link_libraries(sif PRIVATE
@@ -238,9 +353,20 @@ install(EXPORT sifTargets
     DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/sif
 )
 
+# A static library carries its private dependencies into whatever links it,
+# and HDF5 can arrive as an imported target rather than a path -- so a sif
+# built with HDF5 has to find it again on the consumer's side. Built without,
+# the consumer never hears of it.
+if(SIF_WITH_HDF5)
+  set(_sif_config_hdf5 "find_dependency(HDF5 COMPONENTS C)\n")
+else()
+  set(_sif_config_hdf5 "")
+endif()
+
 file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/sifConfig.cmake
 "include(CMakeFindDependencyMacro)\n"
 "find_dependency(OpenMP)\n"
+"${_sif_config_hdf5}"
 "include(\"\${CMAKE_CURRENT_LIST_DIR}/sifTargets.cmake\")\n"
 )
 

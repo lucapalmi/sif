@@ -572,7 +572,11 @@ static void test_wrap_periodic(void) {
     f->y[9] == 0.0f, "y on the edge should fold to 0, got %g", (double)f->y[9]);
 
   /* The clamp case: whatever it lands on, it must be inside the box. */
-  CHECK(z[11] + BOX == BOX, "test premise: -1e-6 + BOX should round to BOX");
+  /* Through volatiles: under -ffast-math the compiler may otherwise rewrite
+   * `a + b == b` as `a == 0`, which is not the rounding being asked about. */
+  volatile sif_real premise_z = z[11];
+  volatile sif_real premise_sum = premise_z + BOX;
+  CHECK(premise_sum == BOX, "test premise: -1e-6 + BOX should round to BOX");
   CHECK(f->z[11] >= 0.0f && f->z[11] < BOX,
     "a tiny negative must land inside the box, got %g", (double)f->z[11]);
 

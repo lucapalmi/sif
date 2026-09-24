@@ -39,6 +39,7 @@ set(PYTHON_SOURCES
 
     # IO Submodule
     ${CMAKE_SOURCE_DIR}/src/io/py_io.c
+    ${CMAKE_SOURCE_DIR}/src/io/py_hdf5.c
 
     # Structures Submodule
     ${CMAKE_SOURCE_DIR}/src/structures/py_catalog.c
@@ -79,6 +80,12 @@ target_include_directories(pysif
 # Because the 'sif' target privately/publicly links OpenMP and FFTW in the parent
 # CMake, those dependencies automatically transit up to 'pysif' here!
 target_link_libraries(pysif PRIVATE sif)
+
+# The bindings word their warnings and errors by whether sif has HDF5; the
+# library's own definition is private, so it is repeated here.
+if(SIF_WITH_HDF5)
+  target_compile_definitions(pysif PRIVATE SIF_HAVE_HDF5)
+endif()
 
 # 7. Handle the macOS + Conda dynamic linking problem
 if (APPLE AND DEFINED ENV{CONDA_PREFIX})
