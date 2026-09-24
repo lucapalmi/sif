@@ -39,7 +39,6 @@ sif_density_profiles_t* sif__density_profiles_alloc(
   profs->n_bins = n_bins;
   profs->ext = ext;
   profs->differential = differential;
-  profs->source_id = 0;
 
   profs->r_edges = sif_malloc_aligned((n_bins + 1) * sizeof(sif_real));
   profs->profiles = sif_calloc_aligned(n_voids * n_bins, sizeof(sif_real));
@@ -61,7 +60,6 @@ sif_velocity_profiles_t* sif__velocity_profiles_alloc(
   profs->n_voids = n_voids;
   profs->n_bins = n_bins;
   profs->ext = ext;
-  profs->source_id = 0;
 
   profs->r_edges = sif_malloc_aligned((n_bins + 1) * sizeof(sif_real));
   profs->v_rad = sif_calloc_aligned(n_voids * n_bins, sizeof(sif_real));
@@ -626,15 +624,6 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   sif_free_aligned(scratch_vrad);
   sif_free_aligned(scratch_count);
   sif_free_aligned(bin_vols);
-
-  /* Stamped here rather than at the allocation, so that only a set that was
-   * actually filled claims to have come from this catalogue -- and so that a
-   * set the caller passed back to be refilled carries the catalogue it holds
-   * now, not the one it held last time. */
-  if (compute_dens)
-    (*out_dens)->source_id = sif_catalog_id(cat);
-  if (compute_vel)
-    (*out_vel)->source_id = sif_catalog_id(cat);
 
   SIF_LOG_INFO("profiles", "profile computation completed");
   return SIF_OK;

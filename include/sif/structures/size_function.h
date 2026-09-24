@@ -54,17 +54,6 @@ typedef struct {
   sif_real* vsf;
   /** Poisson error on #vsf, from #counts. Zero for a model. */
   sif_real* err;
-
-  /**
-   * @brief Which catalogue this was binned from: that catalogue's
-   * sif_catalog_t::id, or 0 when it came from none.
-   *
-   * Zero for a model, which is evaluated from parameters and counted nothing,
-   * and zero for a stitched size function, which came from several catalogues
-   * and so belongs to no single one. An `.sdf` file stores only the ones that
-   * name a catalogue it holds.
-   */
-  uint64_t source_id;
 } sif_size_function_t;
 
 /**

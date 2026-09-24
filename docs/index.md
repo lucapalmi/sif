@@ -12,7 +12,6 @@ sd_hide_title: true
 
 guide/index
 algorithms/index
-formats/index
 api/index
 ```
 

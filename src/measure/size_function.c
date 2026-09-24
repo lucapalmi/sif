@@ -129,7 +129,6 @@ sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
     return NULL;
 
   vsf->options = options;
-  vsf->source_id = sif_catalog_id(cat);
   vsf->r_min = true_r_min;
   vsf->r_max = true_r_max;
 

@@ -39,7 +39,6 @@ set(PYTHON_SOURCES
 
     # IO Submodule
     ${CMAKE_SOURCE_DIR}/src/io/py_io.c
-    ${CMAKE_SOURCE_DIR}/src/io/py_sdf.c
 
     # Structures Submodule
     ${CMAKE_SOURCE_DIR}/src/structures/py_catalog.c

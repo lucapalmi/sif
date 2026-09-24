@@ -131,10 +131,6 @@ set(SOURCES
     src/io/profiles_io.c
     src/io/field_io.c
     src/io/grid_io.c
-    src/io/sdf.c
-    src/io/sdf_meta.c
-    src/io/sdf_products.c
-    src/io/sdf_repair.c
 
   # math
     src/math/fft.c
@@ -170,11 +166,6 @@ set_source_files_properties(vendor/predicates/predicates.c
 
 # Create library
 add_library(sif STATIC ${SOURCES})
-
-# The project version, for the library to stamp into the files it writes.
-# PRIVATE: it is the build's own idea of itself, not something a caller
-# compiles against.
-target_compile_definitions(sif PRIVATE SIF_VERSION_STRING="${PROJECT_VERSION}")
 
 # Internal assertions. PUBLIC because the guarded macros live in headers that
 # callers (and the tests) include, so both sides must agree.
