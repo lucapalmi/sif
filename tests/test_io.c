@@ -238,11 +238,76 @@ static void test_catalog_roundtrip(void) {
         exact = 0;
     }
     CHECK(exact, "text round trip lost precision");
+    CHECK(back->footprint == NULL,
+      "a catalogue written without a footprint should read back without one");
     sif_catalog_free(back);
   }
 
   CHECK(sif_catalog_write_ascii(NULL, CAT_PATH) == SIF_ERR_INVALID,
     "a NULL catalogue should be SIF_ERR_INVALID");
+
+  /* With a footprint: two more columns, back bit for bit. */
+  CHECK(sif_catalog_reserve_footprint(cat) == SIF_OK, "reserve failed");
+  cat->footprint[0] = (sif_real)0.123456789;
+  cat->footprint_shell[0] = (sif_real)1.0;
+  cat->footprint[1] = (sif_real)0.0;
+  cat->footprint_shell[1] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
+
+  CHECK(sif_catalog_write_ascii(cat, CAT_PATH) == SIF_OK,
+    "write with footprint failed");
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back && back->footprint && back->footprint_shell,
+    "the footprint columns did not come back");
+  if (back && back->footprint) {
+    int exact = back->n_voids == cat->n_voids;
+    for (uint64_t i = 0; i < cat->n_voids && i < back->n_voids; i++) {
+      exact &= cat->cx[i] == back->cx[i] && cat->radii[i] == back->radii[i] &&
+               cat->footprint[i] == back->footprint[i] &&
+               cat->footprint_shell[i] == back->footprint_shell[i];
+    }
+    CHECK(exact, "the footprint round trip lost precision");
+  }
+  sif_catalog_free(back);
+
+  /* Rows that disagree about their columns are a malformed file, not a
+   * catalogue with a hole in it. Blank lines, as the old reader allowed, are
+   * still fine. */
+  FILE* f = fopen(CAT_PATH, "w");
+  if (f) {
+    fputs("2\n1 2 3 4 0.5 0.25\n\n5 6 7 8\n", f);
+    fclose(f);
+  }
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back == NULL, "rows of four and six columns should be refused");
+  sif_catalog_free(back);
+
+  f = fopen(CAT_PATH, "w");
+  if (f) {
+    fputs("2\n\n1 2 3 4\n  \n5 6 7 8\n", f);
+    fclose(f);
+  }
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back && back->n_voids == 2 && back->footprint == NULL &&
+          back->radii[1] == (sif_real)8,
+    "a four-column file with blank lines should read as before");
+  sif_catalog_free(back);
+
+  f = fopen(CAT_PATH, "w");
+  if (f) {
+    fputs("3\n1 2 3 4\n5 6 7 8\n", f);
+    fclose(f);
+  }
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back == NULL, "a file shorter than its count should be refused");
+  sif_catalog_free(back);
+
+  sif_catalog_t* empty = sif_catalog_alloc(1);
+  CHECK(sif_catalog_write_ascii(empty, CAT_PATH) == SIF_OK,
+    "writing an empty catalogue failed");
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back && back->n_voids == 0, "an empty catalogue did not read back");
+  sif_catalog_free(back);
+  sif_catalog_free(empty);
 
   sif_catalog_free(cat);
 }
@@ -570,7 +635,10 @@ static void test_ascii_field_rejections(void) {
 }
 
 int main(void) {
-  sif_init(SIF_CONFIG_QUIET);
+  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
 
   test_header_layout();
   test_field_roundtrip();

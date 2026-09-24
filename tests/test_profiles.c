@@ -44,7 +44,10 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  sif_init(&cfg);
+  if (sif_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
 
   sif_real* x = malloc(N_P * sizeof(sif_real));
   sif_real* y = malloc(N_P * sizeof(sif_real));

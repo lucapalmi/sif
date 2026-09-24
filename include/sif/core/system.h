@@ -62,18 +62,20 @@ typedef struct {
  * @brief Initialize the library.
  *
  * Brings up the logger, the thread ceiling, the settings table and the FFTW
- * plan cache. Calling it a second time logs a warning and does nothing.
+ * plan cache. Calling it a second time logs a warning, keeps the first
+ * configuration, and returns SIF_OK.
  *
  * @param config Configuration to apply, or NULL for the defaults. It is read
  * once and copied, so neither the struct nor the sub-structs it points at need
  * to outlive the call, and the library never frees them.
+ * @return SIF_OK, or SIF_ERR_ALLOC if the library state or FFTW could not be
+ * brought up -- in which case nothing is left initialized, and the call may
+ * be retried.
  *
- * @note Terminates the process if the system state cannot be allocated, on the
- * grounds that a caller has no useful way to continue from that. Every other
- * failure is reported and survived: a run that cannot bring up FFTW, or cannot
- * create its cache directories, still does everything that does not need them.
+ * @note Failing to create the cache or wisdom directories is only a warning:
+ * the run still does everything that does not need them.
  */
-void sif_init(sif_config_t* config);
+SIF_NODISCARD int sif_init(sif_config_t* config);
 
 /**
  * @brief Shut the library down, releasing everything sif_init() acquired.
@@ -88,7 +90,8 @@ void sif_finalize(void);
  * @brief Ready-made sif_config_t pointers for the common cases.
  *
  * @code
- * sif_init(SIF_CONFIG_STANDARD);
+ * if (sif_init(SIF_CONFIG_STANDARD) != SIF_OK)
+ *   return 1;
  * @endcode
  *
  * @warning These expand to compound literals, whose lifetime ends with the

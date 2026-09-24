@@ -74,6 +74,17 @@
  * sequentially and re-tests each acceptance against the catalogue as it now
  * stands. Commit order is unchanged by the batching, so the catalogue does not
  * depend on the batch size or the thread count; see BATCH_MAX.
+ *
+ *
+ * Surveys
+ * -------
+ *
+ * sif_finder_exodus_survey() runs this same driver with the box mean replaced
+ * by a random catalogue: the candidates are scanned on the smoothed data over
+ * the smoothed randoms, and each radius is grown against the random weight a
+ * sphere encloses instead of against its volume. See "Survey rescaling" below
+ * for the kernel, and survey_check_margin() for why nothing else had to learn
+ * that the survey is not periodic.
  */
 
 #include "sif/finder/exodus_finder.h"
@@ -259,6 +270,7 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
 typedef struct {
   uint32_t* bins;        /* unweighted: tracers per bin */
   double* wbins;         /* weighted: weight per bin */
+  double* rbins;         /* survey: random weight per bin, beside wbins */
   sif_real* refine;      /* unweighted: squared distances */
   refine_pair_t* pairs;  /* weighted: squared distances and their weights */
   uint32_t refine_count; /* entries in whichever of the two is in use */
@@ -329,15 +341,19 @@ static SIF_ALWAYS_INLINE int refine_reserve(
 static void scratch_free(radial_scratch_t* s) {
   sif_free_aligned(s->bins);
   sif_free_aligned(s->wbins);
+  sif_free_aligned(s->rbins);
   sif_free_aligned(s->refine);
   sif_free_aligned(s->pairs);
   memset(s, 0, sizeof(*s));
 }
 
-static int scratch_init(radial_scratch_t* s, int weighted) {
+/* A survey run is always weighted in form -- data and randoms are summed in
+ * double whether or not either mesh carries weights -- and adds the random
+ * histogram. */
+static int scratch_init(radial_scratch_t* s, int weighted, int survey) {
   memset(s, 0, sizeof(*s));
 
-  if (weighted)
+  if (weighted || survey)
     s->wbins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(double));
   else
     s->bins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(uint32_t));
@@ -345,7 +361,13 @@ static int scratch_init(radial_scratch_t* s, int weighted) {
   if (!s->bins && !s->wbins)
     return SIF_ERR_ALLOC;
 
-  return refine_reserve(s, REFINE_INITIAL_CAPACITY, weighted);
+  if (survey) {
+    s->rbins = sif_malloc_aligned((size_t)MAX_RADIAL_BINS * sizeof(double));
+    if (!s->rbins)
+      return SIF_ERR_ALLOC;
+  }
+
+  return refine_reserve(s, REFINE_INITIAL_CAPACITY, weighted || survey);
 }
 
 /* --- Mesh traversal template --- */
@@ -747,6 +769,7 @@ typedef enum {
   RESCALE_BELOW_RUNG,    /* the crossing lies below the rung itself */
   RESCALE_DEGENERATE,    /* r_search <= rmin, so there is no annulus */
   RESCALE_ALLOC,         /* the refinement buffer could not grow */
+  RESCALE_NO_RANDOMS,    /* survey: no randoms inside r_search at all */
   RESCALE_N_REASONS
 } rescale_reason_t;
 
@@ -757,6 +780,7 @@ static const char* const RESCALE_REASON_LABEL[RESCALE_N_REASONS] = {
   "smaller than the rung",
   "degenerate search range",
   "refinement alloc failed",
+  "outside the footprint",
 };
 
 /*
@@ -1291,6 +1315,416 @@ SIF_HOT_LOOP static sif_real find_exact_radius_weighted(
     vol_factor, mass_factor, scratch, rmin, tpl, window, reason, 1);
 }
 
+/* --- Survey rescaling --- */
+
+/*
+ * The survey form of the same condition. There is no box mean to measure a
+ * sphere against: the expected content of a sphere is what the randoms put in
+ * it, scaled by alpha = W_data / W_random, which carries the footprint, its
+ * holes and the radial selection all at once. So the test at a radius d is
+ *
+ *   D(<d) / (alpha * R(<d)) - 1 <= threshold  <=>  D(<d) <= K * R(<d),
+ *   K = (1 + threshold) * alpha,
+ *
+ * with D and R the data and random weight enclosed. Both are plain sums, and
+ * a mesh without weights sums ones, so the kernels below read every tracer
+ * through survey_w() and every whole cell through survey_cell_w() and do not
+ * care which kind of mesh they were given.
+ *
+ * The answer is still a data distance. Between two neighbouring data tracers D
+ * is constant and R can only grow with the radius, so the test only gets
+ * easier outwards and the outermost radius that passes is always where a data
+ * tracer sits -- with that tracer, as in the box, not counted as inside.
+ *
+ * The randoms are binned on the same histogram as the data but never resolved
+ * tracer by tracer: they only have to say how much is expected inside a radius,
+ * which is a smooth quantity, so within a bin R is interpolated linearly in d^2
+ * from the bin's own total. That keeps the exact pass -- the sort -- to the
+ * data alone. The error it makes is confined to one bin, far thinner than any
+ * scale the randoms resolve, and it cannot break the skip test: the
+ * interpolated R never exceeds what the bin's upper edge encloses, which is
+ * what that test assumes.
+ *
+ * A sphere with no randoms in it has no expected content and so no density;
+ * it passes nothing, whatever the data say.
+ */
+
+/* Weight of tracer p, or 1 on a mesh without weights. */
+static inline double survey_w(const sif_real* w, uint64_t p) {
+  return w ? (double)w[p] : 1.0;
+}
+
+/* Weight of a whole cell, from the mesh's table or its tracer count. */
+static inline double survey_cell_w(
+  const sif_real* cw, uint64_t flat, uint64_t p_start, uint64_t p_end) {
+  return cw ? (double)cw[flat] : (double)(p_end - p_start);
+}
+
+/*
+ * Weight inside r_search, and the tracer count with it. The same three cases
+ * as the box's early refusal: whole cells from the table, only the cells the
+ * outer edge cuts read tracer by tracer.
+ */
+static void survey_sphere_total(const mesh_query_t* q, sif_real r_search2,
+  double* w_within, uint64_t* n_within) {
+
+  const sif_chain_mesh_t* mesh = q->mesh;
+  const mesh_template_t* tpl = q->tpl;
+  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
+  const sif_real* mw = mesh->weights;
+  const sif_real* cw = mesh->cell_weights;
+
+  double w = 0.0;
+  uint64_t n = 0;
+
+  for (uint32_t i = 0; i < tpl->count; i++) {
+    const uint8_t type = tpl->type[i];
+
+    uint64_t p_start, p_end, flat;
+    sif_real ex, ey, ez;
+    if (!query_cell(q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
+      continue;
+
+    if (type == CELL_FULLY_CORE || type == CELL_FULLY_SHELL) {
+      w += survey_cell_w(cw, flat, p_start, p_end);
+      n += p_end - p_start;
+      continue;
+    }
+
+    for (uint64_t p = p_start; p < p_end; p++) {
+      if (dist2(mx[p], my[p], mz[p], ex, ey, ez) <= r_search2) {
+        w += survey_w(mw, p);
+        n++;
+      }
+    }
+  }
+
+  *w_within = w;
+  *n_within = n;
+}
+
+/*
+ * One mesh's histogram of the annulus, in weight, and its weight in the core
+ * and in the annulus. The data and the randoms each go through this once, on
+ * the same bins.
+ */
+static void survey_histogram(const mesh_query_t* q, double* wbins,
+  uint32_t n_bins, sif_real r_core2, sif_real r_search2, sif_real inv_bin_w,
+  double* w_core_out, double* w_shell_out) {
+
+  const sif_chain_mesh_t* mesh = q->mesh;
+  const mesh_template_t* tpl = q->tpl;
+  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
+  const sif_real* mw = mesh->weights;
+  const sif_real* cw = mesh->cell_weights;
+
+  double w_core = 0.0;
+  double w_shell = 0.0;
+
+  memset(wbins, 0, (size_t)n_bins * sizeof(double));
+
+  for (uint32_t i = 0; i < tpl->count; i++) {
+    const uint8_t type = tpl->type[i];
+
+    uint64_t p_start, p_end, flat;
+    sif_real ex, ey, ez;
+    if (!query_cell(q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
+      continue;
+
+    if (type == CELL_FULLY_CORE) {
+      w_core += survey_cell_w(cw, flat, p_start, p_end);
+    } else if (type == CELL_FULLY_SHELL) {
+      sif_real tile[DIST_TILE];
+
+      for (uint64_t base = p_start; base < p_end; base += DIST_TILE) {
+        const uint32_t m = (uint32_t)((p_end - base < (uint64_t)DIST_TILE)
+                                        ? (p_end - base)
+                                        : (uint64_t)DIST_TILE);
+#pragma omp simd
+        for (uint32_t t = 0; t < m; t++) {
+          tile[t] = dist2(mx[base + t], my[base + t], mz[base + t], ex, ey, ez);
+        }
+
+        for (uint32_t t = 0; t < m; t++) {
+          const double w = survey_w(mw, base + t);
+          wbins[bin_of(tile[t], r_core2, inv_bin_w, n_bins)] += w;
+          w_shell += w;
+        }
+      }
+    } else {
+      for (uint64_t p = p_start; p < p_end; p++) {
+        const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
+        const double w = survey_w(mw, p);
+
+        if (d2 <= r_core2) {
+          w_core += w;
+        } else if (d2 <= r_search2) {
+          wbins[bin_of(d2, r_core2, inv_bin_w, n_bins)] += w;
+          w_shell += w;
+        }
+      }
+    }
+  }
+
+  *w_core_out = w_core;
+  *w_shell_out = w_shell;
+}
+
+/*
+ * The exact pass over bins [bin_lo, bin_hi]: every data tracer that lands in
+ * them, sorted and walked outside-in, against the random weight interpolated
+ * at its own distance. `d_top` and `r_top` are the data and random weight at
+ * or below the top of bin_hi.
+ *
+ * @return BIN_FOUND with *out set, BIN_EXHAUSTED, or SIF_ERR_ALLOC.
+ */
+static int survey_resolve(const mesh_query_t* dq, radial_scratch_t* scratch,
+  uint32_t bin_lo, uint32_t bin_hi, sif_real lo, sif_real hi, sif_real r_core2,
+  sif_real r_search2, sif_real inv_bin_w, sif_real bin_w, uint32_t n_bins,
+  double d_top, double r_top, const double* rbins, sif_real K, sif_real* out) {
+
+  const sif_chain_mesh_t* mesh = dq->mesh;
+  const mesh_template_t* tpl = dq->tpl;
+  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
+  const sif_real* mw = mesh->weights;
+
+  scratch->refine_count = 0;
+
+  for (uint32_t i = 0; i < tpl->count; i++) {
+    const uint8_t type = tpl->type[i];
+
+    if (type == CELL_FULLY_CORE || tpl->max_d2[i] < lo || tpl->min_d2[i] > hi)
+      continue;
+
+    uint64_t p_start, p_end, flat;
+    sif_real ex, ey, ez;
+    if (!query_cell(dq, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
+      continue;
+
+    if (refine_reserve(scratch,
+          scratch->refine_count + (uint32_t)(p_end - p_start), 1) != SIF_OK)
+      return SIF_ERR_ALLOC;
+
+    for (uint64_t p = p_start; p < p_end; p++) {
+      const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
+
+      if (type != CELL_FULLY_SHELL && !(d2 > r_core2 && d2 <= r_search2))
+        continue;
+
+      const uint32_t bi = bin_of(d2, r_core2, inv_bin_w, n_bins);
+      if (bi < bin_lo || bi > bin_hi)
+        continue;
+
+      scratch->pairs[scratch->refine_count++] =
+        (refine_pair_t){d2, (sif_real)survey_w(mw, p)};
+    }
+  }
+
+  if (scratch->refine_count > 1)
+    sort_pairs_asc(scratch->pairs, scratch->refine_count);
+
+  /* The random weight below the lower edge of the bin under the walk. The walk
+   * only ever moves inwards, so this only ever steps down a bin at a time. */
+  uint32_t cur_bin = bin_hi;
+  double r_below = r_top - rbins[bin_hi];
+  double d_current = d_top;
+
+  for (int32_t k = (int32_t)scratch->refine_count - 1; k >= 0; k--) {
+    const sif_real d2_test = scratch->pairs[k].d2;
+    const double w_test = (double)scratch->pairs[k].w;
+
+    if (d2_test == 0.0f) {
+      d_current -= w_test;
+      continue;
+    }
+
+    const uint32_t bi = bin_of(d2_test, r_core2, inv_bin_w, n_bins);
+    while (cur_bin > bi) {
+      cur_bin--;
+      r_below -= rbins[cur_bin];
+    }
+
+    sif_real frac =
+      (d2_test - (r_core2 + (sif_real)cur_bin * bin_w)) * inv_bin_w;
+    frac = frac < 0.0f ? 0.0f : (frac > 1.0f ? 1.0f : frac);
+
+    const sif_real r_in = (sif_real)(r_below + rbins[cur_bin] * (double)frac);
+    const sif_real d_in = (sif_real)(d_current - w_test);
+
+    if (r_in > 0.0f && d_in <= K * r_in) {
+      *out = SIF_REAL_SQRT(d2_test);
+      return BIN_FOUND;
+    }
+
+    d_current -= w_test;
+  }
+
+  return BIN_EXHAUSTED;
+}
+
+/*
+ * The survey rescaling: the largest data distance at which D(<d) <= K R(<d).
+ * The same three stages as find_exact_radius_impl(), run on two meshes.
+ *
+ * `dq` and `rq` share the centre and the annulus but not the template, since
+ * the two meshes are free to use different cells.
+ */
+SIF_HOT_LOOP static sif_real find_exact_radius_survey(const mesh_query_t* dq,
+  const mesh_query_t* rq, sif_real r_search, sif_real K,
+  radial_scratch_t* scratch, sif_real rmin, uint32_t window, uint8_t* reason) {
+
+  *reason = RESCALE_OK;
+
+  const sif_real r_search2 = r_search * r_search;
+  const sif_real r_core2 = rmin * rmin;
+  const sif_real span = r_search2 - r_core2;
+
+  if (!(span > 0.0f)) {
+    *reason = RESCALE_DEGENERATE;
+    return -1.0f;
+  }
+
+  /* The cheap refusal, as in the box: the whole search sphere first, O(surface)
+   * on both meshes, before anything is binned. */
+  double d_within, r_within;
+  uint64_t n_d_within, n_r_within;
+  survey_sphere_total(dq, r_search2, &d_within, &n_d_within);
+  survey_sphere_total(rq, r_search2, &r_within, &n_r_within);
+
+  if (!(r_within > 0.0)) {
+    *reason = RESCALE_NO_RANDOMS;
+    return -1.0f;
+  }
+
+  if ((sif_real)d_within <= K * (sif_real)r_within) {
+    *reason = RESCALE_BEYOND_SEARCH;
+    return -1.0f;
+  }
+
+  /* Sized by the data, which is what the exact pass sorts; the randoms only
+   * have to fill whatever bins that gives them. */
+  uint32_t n_bins = MAX_RADIAL_BINS;
+  {
+    const sif_real core_fraction =
+      (rmin * rmin * rmin) / (r_search * r_search * r_search);
+    const sif_real want =
+      (sif_real)n_d_within * (1.0f - core_fraction) / PARTICLES_PER_BIN;
+
+    if (!(want >= (sif_real)MIN_RADIAL_BINS))
+      n_bins = MIN_RADIAL_BINS;
+    else if (want < (sif_real)MAX_RADIAL_BINS)
+      n_bins = (uint32_t)want;
+  }
+
+  const sif_real inv_bin_w = (sif_real)n_bins / span;
+  const sif_real bin_w = span / (sif_real)n_bins;
+
+  double* dbins = scratch->wbins;
+  double* rbins = scratch->rbins;
+
+  double d_core, d_shell, r_core, r_shell;
+  survey_histogram(
+    dq, dbins, n_bins, r_core2, r_search2, inv_bin_w, &d_core, &d_shell);
+  survey_histogram(
+    rq, rbins, n_bins, r_core2, r_search2, inv_bin_w, &r_core, &r_shell);
+
+  const double d_total = d_core + d_shell;
+  const double r_total = r_core + r_shell;
+
+  /* Backstops, as in the box: the totals were assembled in a different order
+   * from the ones above and can differ from them in the last bit. */
+  if (!(r_total > 0.0)) {
+    *reason = RESCALE_NO_RANDOMS;
+    return -1.0f;
+  }
+  if ((sif_real)d_total <= K * (sif_real)r_total) {
+    *reason = RESCALE_BEYOND_SEARCH;
+    return -1.0f;
+  }
+
+  double d_above = 0.0; /* data weight beyond the bin under examination */
+  double r_above = 0.0; /* random weight beyond it */
+  int32_t b_first = -1;
+
+  for (int32_t b = (int32_t)n_bins - 1; b >= 0; b--) {
+    const double bd = dbins[b];
+    const double br = rbins[b];
+
+    /* No data weight, no candidate radius -- but its randoms are still
+     * beyond everything further in. */
+    if (!(bd > 0.0)) {
+      r_above += br;
+      continue;
+    }
+
+    sif_real hi = r_core2 + (sif_real)(b + 1) * bin_w;
+    if (b == (int32_t)n_bins - 1)
+      hi = r_search2 * (1.0f + 1e-6f);
+
+    /* The skip test: the least data a tracer in this bin could have inside it
+     * against the most randoms it could have -- everything up to the bin's
+     * upper edge. If even that fails, the whole bin does. */
+    const sif_real d_in_min = (sif_real)(d_total - d_above - bd);
+    const sif_real r_in_max = (sif_real)(r_total - r_above);
+
+    if (!(r_in_max > 0.0f) || d_in_min > K * r_in_max) {
+      d_above += bd;
+      r_above += br;
+      continue;
+    }
+
+    if (b_first < 0)
+      b_first = b;
+
+    int32_t b_lo = b - (int32_t)(window - 1);
+    if (b_lo < 0)
+      b_lo = 0;
+
+    double window_d = 0.0, window_r = 0.0;
+    for (int32_t bb = b_lo; bb <= b; bb++) {
+      window_d += dbins[bb];
+      window_r += rbins[bb];
+    }
+
+    const sif_real win_lo = r_core2 + (sif_real)b_lo * bin_w;
+
+    sif_real radius = -1.0f;
+    const int status = survey_resolve(dq, scratch, (uint32_t)b_lo, (uint32_t)b,
+      win_lo, hi, r_core2, r_search2, inv_bin_w, bin_w, n_bins,
+      d_total - d_above, r_total - r_above, rbins, K, &radius);
+
+    if (status == BIN_FOUND) {
+      const int32_t b_found =
+        (int32_t)bin_of(radius * radius, r_core2, inv_bin_w, n_bins);
+      int32_t bins_reached = b_first - b_found + 1;
+      if (bins_reached < 1)
+        bins_reached = 1;
+
+      scratch->span_sum += (uint64_t)bins_reached;
+      scratch->span_count++;
+
+      return radius;
+    }
+    if (status != BIN_EXHAUSTED) {
+      *reason = RESCALE_ALLOC;
+      return -1.0f;
+    }
+
+    d_above += window_d;
+    r_above += window_r;
+    b = b_lo;
+  }
+
+  *reason = RESCALE_BELOW_RUNG;
+  return -1.0f;
+}
+
 /* --- Speculative batch evaluation --- */
 
 typedef struct {
@@ -1334,6 +1768,17 @@ typedef struct {
    * lets a genuine overlap through. Overestimating only widens the box.
    */
   sif_real max_accepted_r;
+
+  /*
+   * What a survey run adds, all NULL for a box. The random grid is smoothed
+   * alongside the data one in a workspace of its own, and `occupied` marks the
+   * grid cells holding at least one random: the footprint, at grid
+   * resolution.
+   */
+  sif_grid_t* random_grid;
+  const sif_chain_mesh_t* random_mesh; /* borrowed, never freed */
+  sif_fft_workspace_t* random_ws;
+  sif_bitmask_t* occupied;
 } exodus_ctx_t;
 
 static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
@@ -1347,6 +1792,17 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
     sif__fft_workspace_free(ctx->fft_ws);
     ctx->fft_ws = NULL;
   }
+
+  if (ctx->random_ws) {
+    sif_real* recovered = sif__fft_workspace_take_real_buffer(ctx->random_ws);
+    if (recovered)
+      ctx->random_grid->values = recovered;
+    sif__fft_workspace_free(ctx->random_ws);
+    ctx->random_ws = NULL;
+  }
+
+  sif_bitmask_free(ctx->occupied);
+  ctx->occupied = NULL;
 
   if (ctx->scratch) {
     for (int t = 0; t < ctx->n_threads; t++)
@@ -1374,13 +1830,95 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   ctx->cat = NULL;
 }
 
+/*
+ * Marks every grid cell that holds at least one random. Each random lands in
+ * exactly one cell -- no assignment window -- since the question is whether
+ * that piece of space was observed, not how much was expected there.
+ *
+ * "Cell" here is the one around a grid node, the node nearest the random:
+ * that is how a candidate's centre is placed (on node i, at i * cell_length),
+ * so a candidate is inside exactly when its own node is.
+ */
+static inline uint32_t survey_node(sif_real p, sif_real inv_l, uint32_t n) {
+  const uint32_t i = (uint32_t)(p * inv_l + 0.5f);
+  return i < n ? i : n - 1;
+}
+
+static int survey_build_occupancy(exodus_ctx_t* ctx, const sif_grid_t* grid) {
+  const sif_chain_mesh_t* rm = ctx->random_mesh;
+
+  ctx->occupied = sif_bitmask_alloc(grid->total_cells);
+  if (!ctx->occupied)
+    return SIF_ERR_ALLOC;
+
+  const uint32_t n = grid->n_cells;
+  const sif_real inv_l = 1.0f / grid->cell_length;
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t p = 0; p < rm->n_particles; p++) {
+    const uint32_t ix = survey_node(rm->x[p], inv_l, n);
+    const uint32_t iy = survey_node(rm->y[p], inv_l, n);
+    const uint32_t iz = survey_node(rm->z[p], inv_l, n);
+
+    sif_bitmask_set_atomic(ctx->occupied, sif__flat_index(n, ix, iy, iz));
+  }
+
+  return SIF_OK;
+}
+
+/* The grid half of ctx_init() for one grid: transform, correct the window,
+ * release the real-space values, and get ready to smooth. */
+static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
+  sif_real min_radius, sif_option opt) {
+
+  sif_system_state_t* state = sif__system_state();
+  if (!state) {
+    *ws_out = NULL;
+    return SIF_ERR_INVALID;
+  }
+  sif_fft_workspace_t* ws =
+    sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
+  *ws_out = ws;
+  if (!ws) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the FFT workspace");
+    return SIF_ERR_ALLOC;
+  }
+
+  /* Must succeed before the field is released: on failure the caller's grid
+   * has to come back untouched. */
+  if (sif__fft_grid_forward(ws, grid) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "the forward FFT failed");
+    return SIF_ERR_ALLOC;
+  }
+
+  /* Before the first filter and after the transform, which is the only window
+   * in which the assignment window is separable from the smoothing one. */
+  if (sif__finder_deconvolve_cic(TAG, ws, grid, min_radius, opt) != SIF_OK)
+    return SIF_ERR_INVALID;
+
+  sif_free_aligned(grid->values);
+  grid->values = NULL;
+
+  if (sif__fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
+    return SIF_ERR_ALLOC;
+  }
+
+  return SIF_OK;
+}
+
+/* random_grid and random_mesh are NULL for a box run. */
 static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
-  sif_option opt) {
+  sif_option opt, sif_grid_t* random_grid,
+  const sif_chain_mesh_t* random_mesh) {
 
   memset(ctx, 0, sizeof(*ctx));
 
   ctx->mesh = mesh;
+  ctx->random_grid = random_grid;
+  ctx->random_mesh = random_mesh;
+  const int survey = (random_mesh != NULL);
 
   ctx->n_threads = sif__system_max_threads();
   if (ctx->n_threads < 1)
@@ -1421,42 +1959,163 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
 
   for (int t = 0; t < ctx->n_threads; t++) {
-    if (scratch_init(&ctx->scratch[t], mesh->weights != NULL) != SIF_OK) {
+    if (scratch_init(&ctx->scratch[t], mesh->weights != NULL, survey) !=
+        SIF_OK) {
       SIF_LOG_ERROR(TAG, "failed to allocate the per-thread radial scratch");
       return SIF_ERR_ALLOC;
     }
   }
 
-  sif_system_state_t* state = sif__system_state();
-  ctx->fft_ws = sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
-  if (!ctx->fft_ws) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the FFT workspace");
+  /* The occupancy reads the random mesh only, so it goes first: nothing a
+   * failure here leaves behind has touched either grid. */
+  if (survey && survey_build_occupancy(ctx, grid) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the footprint mask");
     return SIF_ERR_ALLOC;
   }
 
-  /* Must succeed before the field is released: on failure the caller's grid
-   * has to come back untouched. */
-  if (sif__fft_grid_forward(ctx->fft_ws, grid) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "the forward FFT failed");
-    return SIF_ERR_ALLOC;
+  /* The radii are sorted descending, so the last is the smallest. */
+  const sif_real min_radius = ctx->sorted_radii[n_radii - 1];
+
+  int status = ctx_init_grid(&ctx->fft_ws, grid, min_radius, opt);
+  if (status != SIF_OK || !survey)
+    return status;
+
+  status = ctx_init_grid(&ctx->random_ws, random_grid, min_radius, opt);
+
+  /* The data grid is already inside its workspace by now. Transform it back,
+   * so that ctx_release() hands the caller the grid they gave rather than an
+   * uninitialized buffer. */
+  if (status != SIF_OK &&
+      sif__fft_apply_filter(ctx->fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK)
+    grid->values = sif__fft_grid_backward(ctx->fft_ws);
+
+  return status;
+}
+
+/*
+ * What an unobserved cell reads as on the scanned field: far above any
+ * threshold, so it is never a candidate. Finite, since the build is
+ * -ffast-math and an infinity is not something it has to respect.
+ */
+#define SURVEY_OUTSIDE ((sif_real)1e30)
+
+/*
+ * The field the survey finder scans, written over the smoothed data grid:
+ * the smoothed data against the smoothed randoms, delta = rho_d / (alpha rho_r)
+ * - 1. Smoothing the two separately and dividing afterwards is what keeps the
+ * edges honest -- a sphere that straddles the footprint is measured against
+ * the randoms that fall in it, not against the box mean, so unobserved space
+ * reads as missing rather than as average.
+ */
+static void survey_contrast(sif_real* data, const sif_real* randoms,
+  const sif_bitmask_t* occupied, sif_real alpha, uint64_t n_cells_total) {
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t c = 0; c < n_cells_total; c++) {
+    const sif_real expected = alpha * randoms[c];
+    data[c] = (sif_bitmask_get(occupied, c) && expected > 0.0f)
+                ? data[c] / expected - 1.0f
+                : SURVEY_OUTSIDE;
+  }
+}
+
+/*
+ * How much of a void was observed: the fraction of its sphere, and of the
+ * shell out to twice its radius, that falls in occupied cells.
+ *
+ * Measured on a lattice of points through the cube around the void rather
+ * than cell by cell, so a void a few cells across still gets a fraction finer
+ * than whole cells. The spacing is half a cell for small voids and a
+ * sixteenth of the diameter for large ones, which caps the work at about 32k
+ * points a void whatever its size. A point outside the box is outside the
+ * footprint.
+ */
+static void survey_void_footprint(const sif_bitmask_t* occupied,
+  const sif_grid_t* grid, sif_real cx, sif_real cy, sif_real cz, sif_real r,
+  sif_real* inside, sif_real* shell) {
+
+  const uint32_t n = grid->n_cells;
+  const sif_real l = grid->cell_length;
+  const sif_real inv_l = 1.0f / l;
+  const sif_real box = grid->box_length;
+
+  sif_real h = 0.125f * r;
+  if (h < 0.5f * l)
+    h = 0.5f * l;
+
+  const int32_t half = (int32_t)(2.0f * r / h) + 1;
+  const sif_real r2 = r * r;
+  const sif_real r2_out = 4.0f * r2;
+
+  uint64_t n_in = 0, occ_in = 0, n_sh = 0, occ_sh = 0;
+
+  for (int32_t a = -half; a < half; a++) {
+    const sif_real dx = ((sif_real)a + 0.5f) * h;
+    for (int32_t b = -half; b < half; b++) {
+      const sif_real dy = ((sif_real)b + 0.5f) * h;
+      for (int32_t c = -half; c < half; c++) {
+        const sif_real dz = ((sif_real)c + 0.5f) * h;
+        const sif_real d2 = dx * dx + dy * dy + dz * dz;
+        if (d2 > r2_out)
+          continue;
+
+        const sif_real px = cx + dx, py = cy + dy, pz = cz + dz;
+        int occ = 0;
+        if (px >= 0.0f && px < box && py >= 0.0f && py < box && pz >= 0.0f &&
+            pz < box) {
+          occ = sif_bitmask_get(
+            occupied, sif__flat_index(n, survey_node(px, inv_l, n),
+                        survey_node(py, inv_l, n), survey_node(pz, inv_l, n)));
+        }
+
+        if (d2 <= r2) {
+          n_in++;
+          occ_in += (uint64_t)occ;
+        } else {
+          n_sh++;
+          occ_sh += (uint64_t)occ;
+        }
+      }
+    }
   }
 
-  /* Before the first filter and after the transform, which is the only window
-   * in which the assignment window is separable from the smoothing one. The
-   * radii are sorted descending, so the last is the smallest. */
-  if (sif__finder_deconvolve_cic(
-        TAG, ctx->fft_ws, grid, ctx->sorted_radii[n_radii - 1], opt) != SIF_OK)
-    return SIF_ERR_INVALID;
+  *inside = n_in ? (sif_real)((double)occ_in / (double)n_in) : 0.0f;
+  *shell = n_sh ? (sif_real)((double)occ_sh / (double)n_sh) : 0.0f;
+}
 
-  sif_free_aligned(grid->values);
-  grid->values = NULL;
+/* Every void's footprint, once the catalogue is final. */
+static int survey_footprint(
+  sif_catalog_t* cat, const sif_bitmask_t* occupied, const sif_grid_t* grid) {
 
-  if (sif__fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
+  if (sif_catalog_reserve_footprint(cat) != SIF_OK)
     return SIF_ERR_ALLOC;
+
+#pragma omp parallel for schedule(dynamic, 16)
+  for (uint64_t i = 0; i < cat->n_voids; i++) {
+    survey_void_footprint(occupied, grid, cat->cx[i], cat->cy[i], cat->cz[i],
+      cat->radii[i], &cat->footprint[i], &cat->footprint_shell[i]);
   }
 
   return SIF_OK;
+}
+
+/* The query a survey rescaling runs on one mesh. */
+static inline mesh_query_t survey_query(const sif_chain_mesh_t* mesh,
+  const mesh_template_t* tpl, sif_real cx, sif_real cy, sif_real cz) {
+
+  const sif_real inv_l = 1.0f / mesh->cell_length;
+  return (mesh_query_t){
+    .mesh = mesh,
+    .tpl = tpl,
+    .cx = cx,
+    .cy = cy,
+    .cz = cz,
+    .center_ix = (int32_t)(cx * inv_l),
+    .center_iy = (int32_t)(cy * inv_l),
+    .center_iz = (int32_t)(cz * inv_l),
+    .n_cells = (int32_t)mesh->n_cells,
+    .box_length = mesh->box_length,
+  };
 }
 
 static int accept_void(exodus_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
@@ -1559,6 +2218,11 @@ static int check_weights(const sif_chain_mesh_t* mesh) {
 
 /* --- Driver --- */
 
+static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_real overlap_fraction, sif_option options, sif_grid_t* random_grid,
+  const sif_chain_mesh_t* random_mesh);
+
 sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options) {
@@ -1591,12 +2255,290 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     return NULL;
   }
 
-  const int weighted = (mesh->weights != NULL);
-  if (weighted && check_weights(mesh) != SIF_OK)
+  if (mesh->weights && check_weights(mesh) != SIF_OK)
     return NULL;
 
+  return exodus_run(grid, mesh, radii, n_radii, threshold, overlap_fraction,
+    options, NULL, NULL);
+}
+
+/*
+ * The largest search radius a run can reach: the first rung's, since the
+ * ladder only descends and the gap guard never reaches past the previous rung.
+ * Same expression as in the loop.
+ */
+static sif_real max_search_radius(const sif_real* radii, uint32_t n_radii,
+  sif_real cell_length, sif_option options) {
+
+  sif_real r_max = radii[0];
+  for (uint32_t i = 1; i < n_radii; i++)
+    if (radii[i] > r_max)
+      r_max = radii[i];
+
+  const sif_real search_factor = (sif_real)sif__finder_search_factor(options);
+  return r_max +
+         SIF_REAL_MAX((search_factor - 1.0f) * r_max, 3.0f * cell_length);
+}
+
+/* The bounding box of a mesh's tracers. */
+static void mesh_extent(
+  const sif_chain_mesh_t* mesh, sif_real lo[3], sif_real hi[3]) {
+
+  sif_real x0 = mesh->box_length, y0 = x0, z0 = x0;
+  sif_real x1 = 0.0f, y1 = 0.0f, z1 = 0.0f;
+
+#pragma omp parallel for schedule(static) reduction(min : x0, y0, z0)          \
+  reduction(max : x1, y1, z1)
+  for (uint64_t p = 0; p < mesh->n_particles; p++) {
+    x0 = SIF_REAL_MIN(x0, mesh->x[p]);
+    y0 = SIF_REAL_MIN(y0, mesh->y[p]);
+    z0 = SIF_REAL_MIN(z0, mesh->z[p]);
+    x1 = SIF_REAL_MAX(x1, mesh->x[p]);
+    y1 = SIF_REAL_MAX(y1, mesh->y[p]);
+    z1 = SIF_REAL_MAX(z1, mesh->z[p]);
+  }
+
+  lo[0] = x0, lo[1] = y0, lo[2] = z0;
+  hi[0] = x1, hi[1] = y1, hi[2] = z1;
+}
+
+/*
+ * The one geometric promise a survey run needs from its caller: every tracer
+ * at least `margin` from every face of the box.
+ *
+ * Everything downstream of the grid is periodic -- the FFT, the mesh walk, the
+ * overlap tests -- and the survey finder uses it all unchanged, because with
+ * this margin in place the periodicity never shows. Checked rather than
+ * assumed, since a survey too close to the edge produces voids measured
+ * against its own far side with nothing to say so. What the margin has to
+ * cover, with m the padding on each side:
+ *
+ *   - Two voids never meet through the wrap. Their spheres are at most
+ *     r_search across and their centres at least m from the faces, so the
+ *     wrapped separation is at least 2m: m >= r_search.
+ *   - A sphere walk that reaches past a face finds only empty padding. The
+ *     walk overshoots r_search by up to a mesh cell, so it can reach
+ *     r_search + cell - m past the face, into the far side's padding of m:
+ *     m >= (r_search + cell) / 2. The FFT's top-hat, never wider than the
+ *     largest rung, is covered by either.
+ *   - A candidate sits on the grid node nearest to observed space, up to half
+ *     a grid cell further out than the randoms themselves: plus a grid cell.
+ */
+static int survey_check_margin(
+  const sif_chain_mesh_t* mesh, const char* what, sif_real margin) {
+
+  sif_real lo[3], hi[3];
+  mesh_extent(mesh, lo, hi);
+
+  const sif_real box = mesh->box_length;
+  for (int k = 0; k < 3; k++) {
+    if (lo[k] < margin || hi[k] > box - margin) {
+      SIF_LOG_ERROR(TAG,
+        "the %s reach within %g of the box faces on axis %d ([%g, %g] in a box "
+        "of %g), but a survey needs %g of empty padding on every side, about "
+        "the largest search sphere. Embed the survey in a larger box",
+        what, (double)SIF_REAL_MIN(lo[k], box - hi[k]), k, (double)lo[k],
+        (double)hi[k], (double)box, (double)margin);
+      return SIF_ERR_RANGE;
+    }
+  }
+
+  return SIF_OK;
+}
+
+sif_catalog_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
+  sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
+  const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option options) {
+
+  if (!data_grid || !data_grid->values || !random_grid ||
+      !random_grid->values || !data_mesh || !random_mesh || !radii ||
+      n_radii == 0) {
+    SIF_LOG_ERROR(TAG, "invalid grids, meshes or radii");
+    return NULL;
+  }
+
+  /* The contrast is formed here, against the randoms, so a grid that has
+   * already been turned into one against the box mean is the wrong input. */
+  if (data_grid->content == SIF_GRID_DENSITY_CONTRAST ||
+      random_grid->content == SIF_GRID_DENSITY_CONTRAST) {
+    SIF_LOG_ERROR(TAG,
+      "a survey takes the data and random grids as densities, straight from "
+      "sif_grid_assign_cic(); do not convert them to a density contrast");
+    return NULL;
+  }
+
+  if (data_grid->n_cells != random_grid->n_cells ||
+      data_grid->box_length != random_grid->box_length) {
+    SIF_LOG_ERROR(TAG,
+      "the data and random grids must match: %u cells over %g against %u "
+      "over %g",
+      data_grid->n_cells, (double)data_grid->box_length, random_grid->n_cells,
+      (double)random_grid->box_length);
+    return NULL;
+  }
+
+  if (!data_mesh->x || data_mesh->n_particles == 0 || !random_mesh->x ||
+      random_mesh->n_particles == 0) {
+    SIF_LOG_ERROR(TAG, "the data and random meshes must both hold tracers");
+    return NULL;
+  }
+
+  if (data_mesh->box_length != data_grid->box_length ||
+      random_mesh->box_length != data_grid->box_length) {
+    SIF_LOG_ERROR(TAG,
+      "the meshes span boxes of %g (data) and %g (randoms) but the grids span "
+      "%g",
+      (double)data_mesh->box_length, (double)random_mesh->box_length,
+      (double)data_grid->box_length);
+    return NULL;
+  }
+
+  if ((data_mesh->weights && check_weights(data_mesh) != SIF_OK) ||
+      (random_mesh->weights && check_weights(random_mesh) != SIF_OK))
+    return NULL;
+
+  if (!(data_mesh->total_weight > 0.0) || !(random_mesh->total_weight > 0.0)) {
+    SIF_LOG_ERROR(TAG, "the data and the randoms must both carry weight");
+    return NULL;
+  }
+
+  const sif_real r_search =
+    max_search_radius(radii, n_radii, data_grid->cell_length, options);
+  const sif_real mesh_cell =
+    SIF_REAL_MAX(data_mesh->cell_length, random_mesh->cell_length);
+  const sif_real margin =
+    SIF_REAL_MAX(r_search, 0.5f * (r_search + mesh_cell)) +
+    data_grid->cell_length;
+
+  if (survey_check_margin(random_mesh, "randoms", margin) != SIF_OK ||
+      survey_check_margin(data_mesh, "data", margin) != SIF_OK)
+    return NULL;
+
+  return exodus_run(data_grid, data_mesh, radii, n_radii, threshold,
+    overlap_fraction, options, random_grid, random_mesh);
+}
+
+/*
+ * Slack on the padding sif_finder_exodus_survey_box() hands out, so that the
+ * rounding of every coordinate on its way into the box cannot put a tracer a
+ * hair inside the margin the finder then insists on.
+ */
+#define SURVEY_BOX_SLACK 1.01f
+
+int sif_finder_exodus_survey_box(const sif_field_t* randoms,
+  const sif_real* radii, uint32_t n_radii, uint32_t n_cells, sif_option opt,
+  sif_real offset[3], sif_real* box_length) {
+
+  if (!randoms || !randoms->x || !randoms->y || !randoms->z ||
+      randoms->n_particles == 0 || !radii || n_radii == 0 || !offset ||
+      !box_length) {
+    SIF_LOG_ERROR(TAG, "invalid randoms, radii or outputs for the survey box");
+    return SIF_ERR_INVALID;
+  }
+
+  /* Below this the grid cell is too large a share of the box for any padding
+   * to settle: every cell added to the box widens the margin it needs by more
+   * than the cell. */
+  if (n_cells < 16) {
+    SIF_LOG_ERROR(
+      TAG, "a survey box needs at least 16 grid cells, not %u", n_cells);
+    return SIF_ERR_INVALID;
+  }
+
+  sif_real lo[3] = {randoms->x[0], randoms->y[0], randoms->z[0]};
+  sif_real hi[3] = {lo[0], lo[1], lo[2]};
+  sif_real x0 = lo[0], y0 = lo[1], z0 = lo[2], x1 = hi[0], y1 = hi[1],
+           z1 = hi[2];
+
+#pragma omp parallel for schedule(static) reduction(min : x0, y0, z0)          \
+  reduction(max : x1, y1, z1)
+  for (uint64_t p = 0; p < randoms->n_particles; p++) {
+    x0 = SIF_REAL_MIN(x0, randoms->x[p]);
+    y0 = SIF_REAL_MIN(y0, randoms->y[p]);
+    z0 = SIF_REAL_MIN(z0, randoms->z[p]);
+    x1 = SIF_REAL_MAX(x1, randoms->x[p]);
+    y1 = SIF_REAL_MAX(y1, randoms->y[p]);
+    z1 = SIF_REAL_MAX(z1, randoms->z[p]);
+  }
+
+  lo[0] = x0, lo[1] = y0, lo[2] = z0;
+  hi[0] = x1, hi[1] = y1, hi[2] = z1;
+
+  sif_real extent = 0.0f;
+  for (int k = 0; k < 3; k++)
+    extent = SIF_REAL_MAX(extent, hi[k] - lo[k]);
+
+  if (!(extent >= 0.0f)) {
+    SIF_LOG_ERROR(TAG, "the randoms hold a coordinate that is not a number");
+    return SIF_ERR_INVALID;
+  }
+
+  sif_real r_max = radii[0];
+  for (uint32_t i = 1; i < n_radii; i++)
+    r_max = SIF_REAL_MAX(r_max, radii[i]);
+
+  /*
+   * The box has to leave, on every side, the margin survey_check_margin()
+   * asks for:
+   *
+   *   margin = r_search + cell,
+   *   r_search = r_max + max((f - 1) r_max, 3 cell),  cell = L / n,
+   *
+   * and the cell is set by the box being solved for. Written out, L = extent +
+   * 2 s margin(L) is the larger of two straight lines in L, one for each
+   * branch of the max, both with slope below 1 -- so it has exactly one
+   * solution, the larger of the two lines' own, and no iteration is needed.
+   *
+   * This assumes mesh cells no larger than the search sphere, which a mesh
+   * sized for either finder always is; the finder checks again with the
+   * meshes it is actually given.
+   */
+  const sif_real f = (sif_real)sif__finder_search_factor(opt);
+  const sif_real s = SURVEY_BOX_SLACK;
+  const sif_real n = (sif_real)n_cells;
+
+  const sif_real L_factor =
+    (extent + 2.0f * s * f * r_max) / (1.0f - 2.0f * s / n);
+  const sif_real L_cells = (extent + 2.0f * s * r_max) / (1.0f - 8.0f * s / n);
+  const sif_real L = SIF_REAL_MAX(L_factor, L_cells);
+
+  /* Centred: the axis that set the box gets exactly the margin, the others
+   * more. */
+  for (int k = 0; k < 3; k++)
+    offset[k] = 0.5f * L - 0.5f * (lo[k] + hi[k]);
+
+  *box_length = L;
+
+  SIF_LOG_INFO(TAG,
+    "survey box: %g across (extent %g, margin %g per side), offset (%g, %g, "
+    "%g)",
+    (double)L, (double)extent, 0.5 * (double)(L - extent), (double)offset[0],
+    (double)offset[1], (double)offset[2]);
+
+  return SIF_OK;
+}
+
+/*
+ * The run both finders share. Everything that decides which candidates become
+ * voids -- the rung ladder, the speculative batches, the overlap re-checks --
+ * is one piece of code, so the survey finder cannot drift from the box one in
+ * anything but the three places it has to differ: the field the candidates
+ * are scanned on, the rescaling, and the footprint it reports at the end.
+ * random_grid and random_mesh are NULL for a box run, and the box run then
+ * takes exactly the path it always has.
+ */
+static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_real overlap_fraction, sif_option options, sif_grid_t* random_grid,
+  const sif_chain_mesh_t* random_mesh) {
+
+  const int weighted = (mesh->weights != NULL);
+  const int survey = (random_mesh != NULL);
+
   exodus_ctx_t ctx;
-  if (ctx_init(&ctx, grid, mesh, radii, n_radii, options) != SIF_OK) {
+  if (ctx_init(&ctx, grid, mesh, radii, n_radii, options, random_grid,
+        random_mesh) != SIF_OK) {
     ctx_release(&ctx, grid);
     return NULL;
   }
@@ -1621,6 +2563,19 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     SIF_LOG_TRACE(TAG,
       "weighted mesh: total weight %.6g over %" PRIu64 " tracers",
       mesh->total_weight, mesh->n_particles);
+
+  /* The survey's normalization: how much data weight each unit of random
+   * weight stands for, and the threshold folded into it. */
+  const sif_real survey_alpha =
+    survey ? (sif_real)(mesh->total_weight / random_mesh->total_weight) : 0.0f;
+  const sif_real survey_K = (1.0f + threshold) * survey_alpha;
+
+  if (survey)
+    SIF_LOG_TRACE(TAG,
+      "survey: %" PRIu64 " randoms of total weight %.6g, alpha = %.6g, %" PRIu64
+      " of %" PRIu64 " grid cells observed",
+      random_mesh->n_particles, random_mesh->total_weight, (double)survey_alpha,
+      sif_bitmask_count_set(ctx.occupied), grid->total_cells);
 
   sif_timer_t timer;
   int failed = 0;
@@ -1647,6 +2602,17 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       break;
     }
     grid->values = sif__fft_grid_backward(ctx.fft_ws);
+
+    if (survey) {
+      if (sif__fft_apply_filter(ctx.random_ws, SIF__FILTER_TOP_HAT, radius,
+            grid->box_length) != SIF_OK) {
+        failed = 1;
+        break;
+      }
+      random_grid->values = sif__fft_grid_backward(ctx.random_ws);
+      survey_contrast(grid->values, random_grid->values, ctx.occupied,
+        survey_alpha, grid->total_cells);
+    }
 
     if (sif__finder_scan_candidates(
           grid, ctx.mask, threshold, &ctx.candidates) != SIF_OK) {
@@ -1700,6 +2666,19 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           r_search) != SIF_OK) {
       SIF_LOG_ERROR(
         TAG, "could not build the mesh template for r = %g", (double)radius);
+      failed = 1;
+      break;
+    }
+
+    /* The random mesh is free to use cells of its own, so it gets its own
+     * template. Zeroed for a box run, where template_free() makes it a
+     * no-op. */
+    mesh_template_t rtpl = {0};
+    if (survey && template_build(&rtpl, random_mesh->n_cells,
+                    random_mesh->cell_length, rmin, r_search) != SIF_OK) {
+      SIF_LOG_ERROR(TAG, "could not build the random mesh template for r = %g",
+        (double)radius);
+      template_free(&tpl);
       failed = 1;
       break;
     }
@@ -1782,14 +2761,22 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         }
 
         uint8_t reason = RESCALE_OK;
-        const sif_real r_scaled =
-          weighted
-            ? find_exact_radius_weighted(ctx.mesh, cx, cy, cz, r_search,
-                threshold, vol_factor, mass_factor, &ctx.scratch[tid], rmin,
-                &tpl, resolve_window, &reason)
-            : find_exact_radius(ctx.mesh, cx, cy, cz, r_search, threshold,
-                vol_factor, &ctx.scratch[tid], rmin, &tpl, resolve_window,
-                &reason);
+        sif_real r_scaled;
+
+        if (survey) {
+          const mesh_query_t dq = survey_query(ctx.mesh, &tpl, cx, cy, cz);
+          const mesh_query_t rq = survey_query(random_mesh, &rtpl, cx, cy, cz);
+          r_scaled = find_exact_radius_survey(&dq, &rq, r_search, survey_K,
+            &ctx.scratch[tid], rmin, resolve_window, &reason);
+        } else if (weighted) {
+          r_scaled = find_exact_radius_weighted(ctx.mesh, cx, cy, cz, r_search,
+            threshold, vol_factor, mass_factor, &ctx.scratch[tid], rmin, &tpl,
+            resolve_window, &reason);
+        } else {
+          r_scaled = find_exact_radius(ctx.mesh, cx, cy, cz, r_search,
+            threshold, vol_factor, &ctx.scratch[tid], rmin, &tpl,
+            resolve_window, &reason);
+        }
 
         if (r_scaled < 0.0f) {
           res->rescale_reason = reason;
@@ -1918,6 +2905,7 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     }
 
     template_free(&tpl);
+    template_free(&rtpl);
 
     sif_timer_stop(&timer);
 
@@ -1944,6 +2932,11 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       grid->values = sif__fft_grid_backward(ctx.fft_ws);
       SIF_LOG_INFO(TAG, "recovered original density grid");
     }
+    if (survey && sif__fft_apply_filter(
+                    ctx.random_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
+      random_grid->values = sif__fft_grid_backward(ctx.random_ws);
+      SIF_LOG_INFO(TAG, "recovered original random grid");
+    }
   }
 
   if (total_mismatched > 0 && ctx.cat->n_voids > 0) {
@@ -1958,6 +2951,12 @@ sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   }
 
   sif_catalog_trim(ctx.cat);
+
+  if (survey && survey_footprint(ctx.cat, ctx.occupied, grid) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the footprint columns");
+    ctx_release(&ctx, grid);
+    return NULL;
+  }
 
   sif_catalog_t* result = ctx.cat;
   ctx.cat = NULL; /* ownership passes to the caller */

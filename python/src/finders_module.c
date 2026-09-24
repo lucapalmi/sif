@@ -45,6 +45,72 @@ static PyMethodDef finders_methods[] = {
     "Returns:\n"
     "    Catalog: The voids found."},
 
+  {"exodus_survey", (PyCFunction)py_sif_finder_exodus_survey,
+    METH_VARARGS | METH_KEYWORDS,
+    "exodus_survey(data_grid, random_grid, data_mesh, random_mesh, radii, "
+    "threshold, overlap_fraction=0.0, consume_grid=False, search_factor=1.5)\n"
+    "--\n\n"
+    "Find voids in a survey: any geometry, described by a random catalogue.\n\n"
+    "The same finder as exodus(), with the box mean replaced by the randoms.\n"
+    "A sphere's expected content is the random weight inside it times\n"
+    "alpha = W_data / W_random, so its contrast is D(<r) / (alpha R(<r)) - 1:\n"
+    "the footprint, its holes and the radial selection all come in through\n"
+    "the randoms. They may follow the survey's n(z), and both sets may carry\n"
+    "weights.\n\n"
+    "Where the randoms are is the footprint: a grid cell holding at least\n"
+    "one random is observed, any other is not. Voids are only centred in\n"
+    "observed cells, and every void found is kept, with the fraction of its\n"
+    "sphere and of the shell out to twice its radius that was observed --\n"
+    "Catalog.footprint and Catalog.footprint_shell.\n\n"
+    "Coordinates are comoving Cartesian, converted beforehand (astropy does\n"
+    "it). Nothing wraps around, so the survey needs empty padding inside the\n"
+    "box, about the largest search sphere on every side: survey_box() works\n"
+    "out the box and the offset, Field.translate() moves data and randoms\n"
+    "in, and Catalog.translate(-offset) moves the voids back out.\n\n"
+    "Args:\n"
+    "    data_grid: Grid of the data after assign_cic(). A density, NOT a\n"
+    "        density contrast. Smoothed in place and restored afterwards\n"
+    "        unless consume_grid is set.\n"
+    "    random_grid: Grid of the randoms, same cells and box. Restored the\n"
+    "        same way.\n"
+    "    data_mesh: ChainMesh of the data over the same box.\n"
+    "    random_mesh: ChainMesh of the randoms over the same box; its cells\n"
+    "        need not match the data mesh's.\n"
+    "    radii: Smoothing radii to try.\n"
+    "    threshold: Density contrast a void is grown to, against the\n"
+    "        randoms.\n"
+    "    overlap_fraction: As in exodus().\n"
+    "    consume_grid: Skip restoring both grids.\n"
+    "    search_factor: As in exodus(). Pass the same one to survey_box().\n\n"
+    "Returns:\n"
+    "    Catalog: The voids found, with their footprint.\n\n"
+    "Raises:\n"
+    "    RuntimeError: If the finder refused its inputs -- most often a\n"
+    "        survey too close to the box faces, which the log explains."},
+
+  {"survey_box", (PyCFunction)py_sif_finder_survey_box,
+    METH_VARARGS | METH_KEYWORDS,
+    "survey_box(randoms, radii, n_cells, search_factor=1.5)\n"
+    "--\n\n"
+    "The box a survey has to be searched in, and the offset that moves it\n"
+    "there.\n\n"
+    "exodus_survey() needs empty padding around the survey, and how much\n"
+    "depends on the radii, the search factor and the grid cell -- which\n"
+    "depends on the box. This works it out from the randoms: a cubic box,\n"
+    "just large enough, with the survey centred in it.\n\n"
+    "    offset, box = pysif.finders.survey_box(randoms, radii, n_cells)\n"
+    "    data.translate(offset); randoms.translate(offset)\n"
+    "    # Grid(n_cells, box), ChainMesh(..., box, ...), exodus_survey(...)\n"
+    "    catalog.translate(-offset)\n\n"
+    "Args:\n"
+    "    randoms: Field of the randoms, in your own Cartesian frame.\n"
+    "    radii: The radii exodus_survey() will be run with.\n"
+    "    n_cells: Cells per side of the grids you will build; at least 16.\n"
+    "    search_factor: The one exodus_survey() will be run with.\n\n"
+    "Returns:\n"
+    "    tuple: (offset, box_length). offset is a length-3 array to add to\n"
+    "    every position, data and randoms alike."},
+
   {"spherical", (PyCFunction)py_sif_finder_spherical,
     METH_VARARGS | METH_KEYWORDS,
     "spherical(grid, radii, threshold, overlap_fraction=0.0, "
@@ -88,11 +154,15 @@ static PyMethodDef finders_methods[] = {
 static struct PyModuleDef finders_module = {PyModuleDef_HEAD_INIT,
   .m_name = "pysif.finders",
   .m_doc = "Void finders.\n\n"
-           "Both take a density-contrast grid and return a Catalog. They\n"
-           "differ in where the radii come from: spherical() can only report\n"
-           "radii from the ladder you pass in, while exodus() grows each\n"
-           "void to the radius its tracers actually support, and so also\n"
-           "needs the particles as a ChainMesh.",
+           "spherical() and exodus() take a density-contrast grid of a\n"
+           "periodic box and return a Catalog. They differ in where the radii\n"
+           "come from: spherical() can only report radii from the ladder you\n"
+           "pass in, while exodus() grows each void to the radius its tracers\n"
+           "actually support, and so also needs the particles as a\n"
+           "ChainMesh.\n\n"
+           "exodus_survey() is exodus() for a survey, whose geometry comes\n"
+           "from a random catalogue; survey_box() sizes the box to run it\n"
+           "in.",
   .m_size = -1, .m_methods = finders_methods};
 
 PyObject* py_sif_init_finders(void) { return PyModule_Create(&finders_module); }

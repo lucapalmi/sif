@@ -241,6 +241,9 @@ SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc_tessellation_consume(
  * tessellation.
  * @param tess Tessellation to deposit. Its samples must still be present, so
  * not one whose samples sif_chain_mesh_alloc_tessellation_consume() has taken.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, consumed samples, or a
+ * grid over a different box; otherwise whatever sif_grid_assign_cic() returns.
+ * The grid is left untouched on any failure.
  *
  * @note Costs what depositing the samples costs, which is the sampling rate
  * times what depositing the tracers would. See the note on sif_tessellation_t
@@ -250,7 +253,7 @@ SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc_tessellation_consume(
  * the samples rather than the tracers -- so a different seed or sampling rate
  * is a different key.
  */
-void sif_grid_assign_cic_tessellation(
+SIF_NODISCARD int sif_grid_assign_cic_tessellation(
   sif_grid_t* grid, const sif_tessellation_t* tess);
 
 #endif /* SIF_STRUCTURES_TESSELLATION_H */

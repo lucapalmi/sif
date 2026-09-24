@@ -114,6 +114,12 @@ void sif_grid_free(sif_grid_t* grid);
  *
  * @param grid Destination grid, overwritten.
  * @param field Particle field to deposit. Read only.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument or a field with no
+ * particles (one a consuming mesh has emptied, say); SIF_ERR_RANGE when any
+ * particle lies outside the box, with the count in the log; SIF_ERR_ALLOC.
+ * On any failure the grid is left exactly as it was -- it is not zeroed, and
+ * its sif_grid_t::content does not change -- so check the status rather than
+ * the cells.
  *
  * @note **This function can read and write the filesystem.** When the
  * `grid_cache_enabled` setting is on it looks for a previously computed grid
@@ -127,7 +133,8 @@ void sif_grid_free(sif_grid_t* grid);
  * receive the first's grid. It is meant for reuse within a run over known data,
  * not as a general-purpose content-addressed cache.
  */
-void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field);
+SIF_NODISCARD int sif_grid_assign_cic(
+  sif_grid_t* grid, const sif_field_t* field);
 
 /**
  * @brief Convert cell weights in place to the density contrast.
@@ -140,9 +147,13 @@ void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field);
  * summing millions of cells in single precision loses the small contributions
  * to rounding, and the mean is a divisor for every cell that follows.
  *
- * @param grid Grid to convert, modified in place. Logs and returns without
- * touching the data if the mean density is not positive.
+ * @param grid Grid to convert, modified in place.
+ * @return SIF_OK; SIF_ERR_INVALID for a missing or empty grid, or one that
+ * already holds a density contrast (converting again would divide by a mean
+ * of about zero); SIF_ERR_RANGE when the mean density is not positive -- a
+ * grid nothing was deposited on, most often, or one holding a NaN. On any
+ * failure the cells and sif_grid_t::content are left exactly as they were.
  */
-void sif_grid_to_density_contrast(sif_grid_t* grid);
+SIF_NODISCARD int sif_grid_to_density_contrast(sif_grid_t* grid);
 
 #endif /* SIF_STRUCTURES_GRID_H */

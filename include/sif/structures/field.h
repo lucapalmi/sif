@@ -248,6 +248,24 @@ int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
   uint64_t* n_boundary, uint64_t* n_wrapped);
 
 /**
+ * @brief Shift every position by @p offset.
+ *
+ * What moves a survey into the box sif_finder_exodus_survey_box() chose for
+ * it: data and randoms both, by the same offset. The catalogue found there is
+ * moved back with sif_catalog_translate() and the negated offset.
+ *
+ * @param field The field, modified in place.
+ * @param offset Added to x, y and z respectively.
+ * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field.
+ *
+ * @note Invalidates the bounds and the Morton order, whose quantization the
+ * rounding of every coordinate can disturb. Keeps the permutation of a
+ * previous sort, which still describes the arrays, so velocities and weights
+ * assigned afterwards still land on their own particles.
+ */
+int sif_field_translate(sif_field_t* field, const sif_real offset[3]);
+
+/**
  * @brief Recompute the bounding box and centre, unconditionally.
  *
  * Prefer sif_field_require_bounds() unless you specifically need to force a

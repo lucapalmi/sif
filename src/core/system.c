@@ -87,20 +87,24 @@ static bool ensure_dir(const char* path) {
  * and the logger tell whether the library is up. */
 static sif_system_state_t* system_state = NULL;
 
-void sif_init(sif_config_t* config) {
+int sif_init(sif_config_t* config) {
+  /* Idempotent rather than an error: the library is up, which is what the
+   * caller asked for. The configuration of the first call stays in force. */
   if (system_state) {
     SIF_LOG_WARNING("system", "sif library already initialized");
-    return;
+    return SIF_OK;
   }
 
   /* calloc, not malloc: every field is then readable before the step that
-   * owns it has run, which matters on the failure paths below where we log
-   * and keep going. */
+   * owns it has run, which matters on the failure paths below. A library does
+   * not get to end its caller's process -- least of all a Python
+   * interpreter's -- so running out of memory here is a status like any
+   * other. */
   system_state = calloc(1, sizeof(sif_system_state_t));
   if (!system_state) {
     SIF_LOG_ERROR("system", "failed to allocate sif system state (%zu bytes)",
       sizeof(sif_system_state_t));
-    exit(EXIT_FAILURE);
+    return SIF_ERR_ALLOC;
   }
 
   /* Resolve the logger first: everything below here logs, and until the state
@@ -164,16 +168,23 @@ void sif_init(sif_config_t* config) {
   if (wisdom_dir)
     ensure_dir(wisdom_dir);
 
+  /* Without FFTW there are no finders, no smoothing and no delta statistics,
+   * so a library that came up anyway would only fail later, somewhere less
+   * obvious. It fails here instead, and leaves nothing behind: the caller gets
+   * a status and a library that is simply not initialized. */
   system_state->fft_mgr = sif__fft_manager_init(skip_tuning, wisdom_dir);
-  if (system_state->fft_mgr) {
-    /* FFTW's thread count is global and read at plan time, so setting it once
-     * here fixes it for every plan the library makes afterwards. It must come
-     * after the manager, which is what initializes FFTW's threading. */
-    real_fftw_plan_with_nthreads(sif__system_max_threads());
-  } else {
-    SIF_LOG_ERROR(
-      "system", "failed to initialize FFTW; transforms will not be available");
+  if (!system_state->fft_mgr) {
+    SIF_LOG_ERROR("system", "failed to initialize FFTW");
+    sif__settings_finalize();
+    free(system_state);
+    system_state = NULL;
+    return SIF_ERR_ALLOC;
   }
+
+  /* FFTW's thread count is global and read at plan time, so setting it once
+   * here fixes it for every plan the library makes afterwards. It must come
+   * after the manager, which is what initializes FFTW's threading. */
+  real_fftw_plan_with_nthreads(sif__system_max_threads());
 
   /* Shewchuk's exact predicates derive their error bounds from the running
    * machine's floating-point behaviour, once, before any predicate is
@@ -186,6 +197,7 @@ void sif_init(sif_config_t* config) {
     system_state->max_threads);
 
   SIF_LOG_FLUSH();
+  return SIF_OK;
 }
 
 void sif_finalize(void) {
@@ -216,10 +228,8 @@ void sif_finalize(void) {
 /* --- accessors --- */
 
 sif_system_state_t* sif__system_state(void) {
-  if (!system_state) {
-    SIF_LOG_ERROR("system", "system not initialized. aborting");
-    exit(EXIT_FAILURE);
-  }
+  if (!system_state)
+    SIF_LOG_ERROR("system", "the library is not initialized; call sif_init()");
 
   return system_state;
 }

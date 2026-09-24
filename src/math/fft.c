@@ -42,7 +42,14 @@ sif_fft_manager_t* sif__fft_manager_init(
     SIF_LOG_WARNING("fft_manager", "failed to copy the wisdom directory path");
   }
 
-  real_fftw_init_threads();
+  /* Zero is FFTW's failure, and planning with threads after it is not
+   * something FFTW promises to survive. */
+  if (!real_fftw_init_threads()) {
+    SIF_LOG_ERROR("fft_manager", "FFTW could not initialize its threads");
+    free(mgr->wisdom_dir);
+    free(mgr);
+    return NULL;
+  }
 
   return mgr;
 }

@@ -42,7 +42,14 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
     .omp_config = &omp_cfg,
     .log_level = (uint8_t)log_level};
 
-  sif_init(&config);
+  /* Where the C library used to end the process, and now reports instead:
+   * the interpreter survives a failed init and can say why. */
+  if (sif_init(&config) != SIF_OK) {
+    PyErr_SetString(PyExc_MemoryError,
+      "sif could not initialize: the library state or FFTW could not be "
+      "allocated");
+    return NULL;
+  }
 
   Py_RETURN_NONE;
 }

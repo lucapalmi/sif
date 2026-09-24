@@ -165,8 +165,8 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     sif_field_t* f = sif_field_alloc(N_P);
     sif_field_assign_positions(f, x, y, z);
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
-    sif_grid_assign_cic(g, f);
-    sif_grid_to_density_contrast(g);
+    CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
+    CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
 
     /* Snapshot the input so the grid-restoration contract can be checked:
      * the finder smooths in place, so a correct run has to put the original
@@ -207,8 +207,8 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     sif_field_t* f = sif_field_alloc(N_P);
     sif_field_assign_positions(f, x, y, z);
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
-    sif_grid_assign_cic(g, f);
-    sif_grid_to_density_contrast(g);
+    CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
+    CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
 
     /* The finder borrows the mesh, so the field it was built from is dead
      * weight from here on and is released before the run. The index map is
@@ -244,21 +244,30 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
  * the weights (the grid through the CIC deposit, the rescaling through the
  * mesh), so this is what a caller with a weighted field actually runs.
  */
-static sif_catalog_t* exodus_on(
+static sif_field_t* weighted_field(
   const sif_real* x, const sif_real* y, const sif_real* z, const sif_real* w) {
-
   sif_field_t* f = sif_field_alloc(N_P);
   sif_field_assign_positions(f, x, y, z);
   if (w)
     sif_field_assign_weights(f, w);
+  return f;
+}
 
+/* The grid from one set of weights and the mesh from another, so that the
+ * finder's own refusal can be tested with a grid that is fine. */
+static sif_catalog_t* exodus_on_split(const sif_real* x, const sif_real* y,
+  const sif_real* z, const sif_real* grid_w, const sif_real* mesh_w) {
+
+  sif_field_t* fg = weighted_field(x, y, z, grid_w);
   sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
-  sif_grid_assign_cic(g, f);
-  sif_grid_to_density_contrast(g);
+  CHECK(sif_grid_assign_cic(g, fg) == SIF_OK, "CIC assignment failed");
+  CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
+  sif_field_free(fg);
 
+  sif_field_t* fm = weighted_field(x, y, z, mesh_w);
   sif_chain_mesh_t* mesh =
-    sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
-  sif_field_free(f);
+    sif_chain_mesh_alloc(MESH_CELLS, BOX, fm, SIF_MESH_DROP_INDICES);
+  sif_field_free(fm);
 
   sif_catalog_t* cat =
     mesh ? sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f, 0) : NULL;
@@ -266,6 +275,11 @@ static sif_catalog_t* exodus_on(
   sif_chain_mesh_free(mesh);
   sif_grid_free(g);
   return cat;
+}
+
+static sif_catalog_t* exodus_on(
+  const sif_real* x, const sif_real* y, const sif_real* z, const sif_real* w) {
+  return exodus_on_split(x, y, z, w, w);
 }
 
 /* Bit for bit: same voids, same order, same centres and radii. */
@@ -357,10 +371,26 @@ static void run_weighted_cases(void) {
   CHECK(cat == NULL, "a negative weight should be refused");
   sif_catalog_free(cat);
 
+  /* A NaN is refused twice over. The grid cannot be normalized, since its
+   * mean is NaN -- and the finder, handed a grid built from clean weights,
+   * still refuses the mesh that carries it. */
+  sif_real* clean = malloc(N_P * sizeof(sif_real));
+  memcpy(clean, w, N_P * sizeof(sif_real));
+  clean[N_P / 2] = 1.0f;
   w[N_P / 2] = 0.0f / 0.0f; /* NaN */
-  cat = exodus_on(x, y, z, w);
+
+  sif_field_t* fnan = weighted_field(x, y, z, w);
+  sif_grid_t* gnan = sif_grid_alloc(N_GRID, BOX);
+  CHECK(sif_grid_assign_cic(gnan, fnan) == SIF_OK, "CIC assignment failed");
+  CHECK(sif_grid_to_density_contrast(gnan) == SIF_ERR_RANGE,
+    "a grid holding a NaN should not normalize");
+  sif_grid_free(gnan);
+  sif_field_free(fnan);
+
+  cat = exodus_on_split(x, y, z, clean, w);
   CHECK(cat == NULL, "a NaN weight should be refused");
   sif_catalog_free(cat);
+  free(clean);
 
   free(x);
   free(y);
@@ -374,7 +404,10 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  sif_init(&cfg);
+  if (sif_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
 
   run_case("defaults", 0, 0.0f);
 

@@ -89,7 +89,10 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  sif_init(&cfg);
+  if (sif_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
 
   const uint64_t n_tracers = (uint64_t)SIDE * SIDE * SIDE;
   const double box_volume = (double)BOX * BOX * BOX;
@@ -361,8 +364,9 @@ int main(void) {
   sif_grid_t* g_tess = sif_grid_alloc(16, BOX);
 
   if (g_tracers && g_tess) {
-    sif_grid_assign_cic(g_tracers, f);
-    sif_grid_assign_cic_tessellation(g_tess, tess);
+    CHECK(sif_grid_assign_cic(g_tracers, f) == SIF_OK, "CIC assignment failed");
+    CHECK(sif_grid_assign_cic_tessellation(g_tess, tess) == SIF_OK,
+      "CIC assignment failed");
 
     CHECK(g_tess->content == SIF_GRID_DENSITY,
       "the deposited grid does not report holding a density");
@@ -412,11 +416,15 @@ int main(void) {
       sif_grid_t* g_vtfe = sif_grid_alloc(grid_side, BOX);
 
       if (stess && g_count && g_vtfe) {
-        sif_grid_assign_cic(g_count, sparse);
-        sif_grid_to_density_contrast(g_count);
+        CHECK(sif_grid_assign_cic(g_count, sparse) == SIF_OK,
+          "CIC assignment failed");
+        CHECK(sif_grid_to_density_contrast(g_count) == SIF_OK,
+          "density contrast failed");
 
-        sif_grid_assign_cic_tessellation(g_vtfe, stess);
-        sif_grid_to_density_contrast(g_vtfe);
+        CHECK(sif_grid_assign_cic_tessellation(g_vtfe, stess) == SIF_OK,
+          "CIC assignment failed");
+        CHECK(sif_grid_to_density_contrast(g_vtfe) == SIF_OK,
+          "density contrast failed");
 
         uint64_t empty_count = 0, empty_vtfe = 0;
         double sq_count = 0.0, sq_vtfe = 0.0;
@@ -467,7 +475,8 @@ int main(void) {
    * density on the wrong scale. */
   sif_grid_t* wrong_box = sif_grid_alloc(8, BOX * 2.0f);
   if (wrong_box) {
-    sif_grid_assign_cic_tessellation(wrong_box, tess);
+    CHECK(sif_grid_assign_cic_tessellation(wrong_box, tess) == SIF_ERR_INVALID,
+      "a grid spanning a different box should be SIF_ERR_INVALID");
     CHECK(wrong_box->content == SIF_GRID_EMPTY,
       "a grid spanning a different box should have been refused");
     sif_grid_free(wrong_box);
@@ -492,7 +501,9 @@ int main(void) {
   /* Nor can a consumed tessellation be deposited. */
   sif_grid_t* after_consume = sif_grid_alloc(8, BOX);
   if (after_consume) {
-    sif_grid_assign_cic_tessellation(after_consume, tess);
+    CHECK(
+      sif_grid_assign_cic_tessellation(after_consume, tess) == SIF_ERR_INVALID,
+      "consumed samples should be SIF_ERR_INVALID");
     CHECK(after_consume->content == SIF_GRID_EMPTY,
       "consumed samples should not deposit onto a grid");
     sif_grid_free(after_consume);

@@ -504,7 +504,11 @@ static uint64_t grid_cic_tile_size(void) {
   return (uint64_t)v;
 }
 
-static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
+/*
+ * @return SIF_OK, or SIF_ERR_ALLOC with the grid untouched: nothing is written
+ * to it until the slabs are merged at the very end.
+ */
+static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   const sif_real* ys, const sif_real* zs, const sif_real* weights,
   uint64_t n_particles) {
 
@@ -517,7 +521,7 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
   if (!slabs) {
     SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
-    return;
+    return SIF_ERR_ALLOC;
   }
 
   uint64_t tile_n = grid_cic_tile_size();
@@ -536,7 +540,7 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
     free(counts);
     free(sorted_indices);
     grid_slabs_free(slabs, n_slabs);
-    return;
+    return SIF_ERR_ALLOC;
   }
 
   const uint32_t base_width = N / n_slabs;
@@ -566,6 +570,7 @@ static void grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   grid_slabs_free(slabs, n_slabs);
 
   SIF_LOG_TRACE("grid", "cic assignment completed");
+  return SIF_OK;
 }
 
 /*
@@ -733,16 +738,25 @@ static grid_key_t grid_cache_key(
   return key;
 }
 
-void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
+int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
   if (!grid || !field || !grid->values) {
     SIF_LOG_ERROR("grid_cic", "invalid grid or field");
-    return;
+    return SIF_ERR_INVALID;
   }
 
-  if (grid_validate_positions(field->x, field->y, field->z, field->n_particles,
-        grid->box_length) != SIF_OK) {
-    return;
+  /* An empty field would deposit nothing and come back a grid of zeros, which
+   * no later step can tell from a real one until a mean of zero divides
+   * something. A field emptied by sif_chain_mesh_alloc_consume() is the usual
+   * way to get here. */
+  if (field->n_particles == 0 || !field->x || !field->y || !field->z) {
+    SIF_LOG_ERROR("grid_cic", "the field holds no particles to deposit");
+    return SIF_ERR_INVALID;
   }
+
+  const int valid = grid_validate_positions(
+    field->x, field->y, field->z, field->n_particles, grid->box_length);
+  if (valid != SIF_OK)
+    return valid;
 
   const int use_cache = grid_cache_enabled();
 
@@ -773,22 +787,24 @@ void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
       const uint64_t expect[2] = {key.a, key.b};
       if (sif__grid_read_into_keyed(final_path, grid, expect) == SIF_OK) {
         SIF_LOG_INFO("grid_cic", "loaded cached .xgrid from %s", final_path);
-        return;
+        return SIF_OK;
       }
 
       SIF_LOG_TRACE("grid_cic", "grid is not cached. starting assignment");
     }
   }
 
-  grid_compute_cic(
+  const int status = grid_compute_cic(
     grid, field->x, field->y, field->z, field->weights, field->n_particles);
+  if (status != SIF_OK)
+    return status;
   grid->content = SIF_GRID_DENSITY;
 
   /* final_path stays empty when the cache is off, or on when the directory
    * could not be resolved -- both mean there is nothing to write. */
   if (!use_cache || final_path[0] == '\0') {
     SIF_LOG_FLUSH();
-    return;
+    return SIF_OK;
   }
 
   /* Through a temporary and a rename: a job array runs many ranks against one
@@ -811,13 +827,16 @@ void sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
     remove(tmp_path);
   }
 
+  /* A cache that could not be written is not the caller's problem: the grid
+   * they asked for is in their hands either way. */
   SIF_LOG_FLUSH();
+  return SIF_OK;
 }
 
-void sif_grid_to_density_contrast(sif_grid_t* grid) {
+int sif_grid_to_density_contrast(sif_grid_t* grid) {
   if (!grid || !grid->values || grid->total_cells == 0) {
     SIF_LOG_ERROR("grid", "invalid or empty grid");
-    return;
+    return SIF_ERR_INVALID;
   }
 
   /* Converting an already-converted grid computes (delta + 1) / mean - 1 over
@@ -827,7 +846,7 @@ void sif_grid_to_density_contrast(sif_grid_t* grid) {
    * only the caller knows what is in it. */
   if (grid->content == SIF_GRID_DENSITY_CONTRAST) {
     SIF_LOG_ERROR("grid", "this grid already holds a density contrast");
-    return;
+    return SIF_ERR_INVALID;
   }
 
   const uint64_t total_cells = grid->total_cells;
@@ -843,7 +862,7 @@ void sif_grid_to_density_contrast(sif_grid_t* grid) {
   if (!(rho_mean > 0.0)) {
     SIF_LOG_ERROR("grid",
       "mean density is %g, cannot normalize to an overdensity field", rho_mean);
-    return;
+    return SIF_ERR_RANGE;
   }
 
   const sif_real rho_mean_inv = (sif_real)(1.0 / rho_mean);
@@ -856,6 +875,7 @@ void sif_grid_to_density_contrast(sif_grid_t* grid) {
   }
 
   grid->content = SIF_GRID_DENSITY_CONTRAST;
+  return SIF_OK;
 }
 
 #undef MIN

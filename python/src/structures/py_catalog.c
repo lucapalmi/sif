@@ -78,6 +78,37 @@ static PyObject* sifCatalog_get_radii(PyObject* self_obj, void* closure) {
   return array;
 }
 
+/*
+ * A footprint column, zero-copy like radii, or None for a catalogue that has
+ * none. Safe as a view: nothing reachable from Python grows a catalogue, so
+ * the buffer cannot move under it.
+ */
+static PyObject* catalog_optional_column(PyObject* self_obj, sif_real* col) {
+  sifCatalogObject* self = (sifCatalogObject*)self_obj;
+  if (!col)
+    Py_RETURN_NONE;
+
+  npy_intp dims[1] = {self->catalog->n_voids};
+  PyObject* array = PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, col);
+  if (!array)
+    return NULL;
+
+  Py_INCREF(self_obj);
+  PyArray_SetBaseObject((PyArrayObject*)array, self_obj);
+  return array;
+}
+
+static PyObject* sifCatalog_get_footprint(PyObject* self_obj, void* closure) {
+  return catalog_optional_column(
+    self_obj, ((sifCatalogObject*)self_obj)->catalog->footprint);
+}
+
+static PyObject* sifCatalog_get_footprint_shell(
+  PyObject* self_obj, void* closure) {
+  return catalog_optional_column(
+    self_obj, ((sifCatalogObject*)self_obj)->catalog->footprint_shell);
+}
+
 static PyObject* sifCatalog_get_n_voids(PyObject* self_obj, void* closure) {
   sifCatalogObject* self = (sifCatalogObject*)self_obj;
   return PyLong_FromUnsignedLongLong(self->catalog->n_voids);
@@ -89,11 +120,43 @@ static PyGetSetDef sifCatalog_getset[] = {
   {"radii", sifCatalog_get_radii, NULL, "1D NumPy array of void radii", NULL},
   {"n_voids", sifCatalog_get_n_voids, NULL,
     "The number of voids in the catalog", NULL},
+  {"footprint", sifCatalog_get_footprint, NULL,
+    "1D NumPy array: the fraction of each void's sphere inside the survey\n"
+    "footprint, or None for a catalogue with no footprint (a periodic box).\n"
+    "-1 marks a void nobody measured it for.",
+    NULL},
+  {"footprint_shell", sifCatalog_get_footprint_shell, NULL,
+    "1D NumPy array: the same fraction over the shell between one and two\n"
+    "radii, or None with footprint.",
+    NULL},
   {NULL}};
 
 /* --- Methods --- */
 
-static PyMethodDef sifCatalog_methods[] = {{NULL, NULL, 0, NULL}};
+static PyObject* sifCatalog_translate(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  double ox, oy, oz;
+  static char* kwlist[] = {"offset", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "(ddd)", kwlist, &ox, &oy, &oz))
+    return NULL;
+
+  const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
+  sif_catalog_translate(((sifCatalogObject*)self_obj)->catalog, offset);
+  Py_RETURN_NONE;
+}
+
+static PyMethodDef sifCatalog_methods[] = {
+  {"translate", (PyCFunction)sifCatalog_translate, METH_VARARGS | METH_KEYWORDS,
+    "translate(offset)\n"
+    "--\n\n"
+    "Shift every void centre by offset, in place.\n\n"
+    "The way back out of the box a survey was searched in: pass the negated\n"
+    "offset survey_box() returned, and the centres return to your own frame.\n"
+    "Radii and footprints are unchanged.\n\n"
+    "Args:\n"
+    "    offset: Three numbers, added to x, y and z."},
+  {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */
 
@@ -108,7 +171,9 @@ PyTypeObject sifCatalogType = {
             "--\n\n"
             "A list of voids: centre and radius, one entry each.\n\n"
             "What a finder produces and what pysif.measure consumes. Read one\n"
-            "back with pysif.io.read_catalog_ascii().\n\n"
+            "back with pysif.io.read_catalog_ascii(). A catalogue from\n"
+            "finders.exodus_survey() also carries footprint and\n"
+            "footprint_shell.\n\n"
             "Args:\n"
             "    capacity: Voids to make room for up front; it grows as\n"
             "        needed.",

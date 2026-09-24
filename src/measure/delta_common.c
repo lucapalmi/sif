@@ -83,6 +83,8 @@ sif_fft_workspace_t* sif__delta_prepare_spectrum(
   }
 
   sif_system_state_t* state = sif__system_state();
+  if (!state)
+    return NULL;
 
   sif_fft_workspace_t* ws =
     sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);

@@ -32,6 +32,7 @@ set(SIF_TESTS
   test_ep           # correlated walks, Cholesky, first-crossing multiplicity
   test_ep_emu       # the emulator against its Python reference, and invariants
   test_finders      # end-to-end: both finders on a synthetic field
+  test_survey       # end-to-end: the survey finder on a synthetic footprint
 )
 
 foreach(test_name IN LISTS SIF_TESTS)

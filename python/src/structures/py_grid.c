@@ -44,6 +44,32 @@ static int sifGrid_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
 
 /* --- Pythonic Methods --- */
 
+/*
+ * A CIC deposit's status as an exception, or 0 for success. The C side names
+ * the reason in its log; this is what makes it reach a Python caller at all.
+ */
+static int raise_for_cic_status(int status) {
+  switch (status) {
+  case SIF_OK:
+    return 0;
+  case SIF_ERR_RANGE:
+    PyErr_SetString(PyExc_ValueError,
+      "some particles lie outside [0, box_length) and cannot be deposited: "
+      "fold a periodic snapshot with Field.wrap(), or move a survey into its "
+      "box with Field.translate() (see pysif.finders.survey_box())");
+    return -1;
+  case SIF_ERR_ALLOC:
+    PyErr_SetString(
+      PyExc_MemoryError, "out of memory depositing the field onto the grid");
+    return -1;
+  default:
+    PyErr_SetString(PyExc_ValueError,
+      "nothing to deposit: the field holds no particles (a ChainMesh built "
+      "with consume_field=True empties it)");
+    return -1;
+  }
+}
+
 static PyObject* sifGrid_assign_cic(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   sifGridObject* self = (sifGridObject*)self_obj;
@@ -58,7 +84,14 @@ static PyObject* sifGrid_assign_cic(
 
   sifFieldObject* py_field = (sifFieldObject*)field_obj;
 
-  sif_grid_assign_cic(self->grid, py_field->field);
+  /* A full pass over the field and a scatter over the grid: worth the GIL at
+   * the particle counts this is for, as for the tessellation deposit. */
+  int status;
+  Py_BEGIN_ALLOW_THREADS status =
+    sif_grid_assign_cic(self->grid, py_field->field);
+  Py_END_ALLOW_THREADS
+
+    if (raise_for_cic_status(status) < 0) return NULL;
 
   Py_RETURN_NONE;
 }
@@ -98,20 +131,23 @@ static PyObject* sifGrid_assign_cic_tessellation(
     return NULL;
   }
 
-  Py_BEGIN_ALLOW_THREADS sif_grid_assign_cic_tessellation(
-    self->grid, py_tess->tess);
+  int status;
+  Py_BEGIN_ALLOW_THREADS status =
+    sif_grid_assign_cic_tessellation(self->grid, py_tess->tess);
   Py_END_ALLOW_THREADS
 
-    Py_RETURN_NONE;
+    if (raise_for_cic_status(status) < 0) return NULL;
+
+  Py_RETURN_NONE;
 }
 
 static PyObject* sifGrid_to_density_contrast(
   PyObject* self_obj, PyObject* args) {
   sifGridObject* self = (sifGridObject*)self_obj;
 
-  /* The C entry point returns void and refuses a second conversion by
-   * logging, which a Python caller cannot see. Check here so the refusal
-   * arrives as an exception instead of as a silent no-op. */
+  /* Checked here as well as in C so the message can say which of the two
+   * refusals it was: the status alone does not separate a second conversion
+   * from a grid with nothing in it. */
   if (self->grid->content == SIF_GRID_DENSITY_CONTRAST) {
     PyErr_SetString(PyExc_ValueError,
       "this grid already holds a density contrast; converting again would "
@@ -119,7 +155,12 @@ static PyObject* sifGrid_to_density_contrast(
     return NULL;
   }
 
-  sif_grid_to_density_contrast(self->grid);
+  if (sif_grid_to_density_contrast(self->grid) != SIF_OK) {
+    PyErr_SetString(PyExc_ValueError,
+      "the grid's mean density is not positive, so there is nothing to "
+      "normalize by: deposit a field onto it with assign_cic() first");
+    return NULL;
+  }
 
   Py_RETURN_NONE;
 }
@@ -133,9 +174,14 @@ static PyMethodDef sifGrid_methods[] = {
     "used when the field carries them, otherwise every particle counts as\n"
     "one. Afterwards the cells hold a density, not a density contrast.\n\n"
     "Every coordinate must lie in [0, box_length); use Field.wrap() first\n"
-    "if a periodic snapshot has drifted onto the boundary.\n\n"
+    "if a periodic snapshot has drifted onto the boundary, or\n"
+    "Field.translate() to move a survey into its box.\n\n"
     "Args:\n"
-    "    field: The particle field to deposit."},
+    "    field: The particle field to deposit.\n\n"
+    "Raises:\n"
+    "    ValueError: If a particle lies outside the box, or the field holds\n"
+    "        none. The grid is left as it was.\n"
+    "    MemoryError: If the deposit could not allocate its scratch."},
   {"assign_cic_tessellation", (PyCFunction)sifGrid_assign_cic_tessellation,
     METH_VARARGS | METH_KEYWORDS,
     "assign_cic_tessellation(tessellation)\n"

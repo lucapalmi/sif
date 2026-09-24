@@ -39,11 +39,38 @@ typedef struct {
   /** Void radii. */
   sif_real* radii;
 
+  /** Backing arena for the two footprint views, or NULL when the catalogue
+   * carries none. Owned; not for callers. */
+  sif_real* _footprint_block;
+
+  /**
+   * @brief Fraction of each void's sphere that lies inside the survey
+   * footprint, in [0, 1], or NULL for a catalogue that has no footprint -- a
+   * periodic box, where every void is whole by construction.
+   *
+   * Written by sif_finder_exodus_survey(). A void added afterwards with
+   * sif_catalog_append() reads #SIF_CATALOG_FOOTPRINT_UNKNOWN here until
+   * something measures it.
+   */
+  sif_real* footprint;
+  /**
+   * @brief The same fraction over the shell between one and two radii, which
+   * is what says whether the void's surroundings were observed -- the part a
+   * stacked profile reaches into. NULL exactly when #footprint is.
+   */
+  sif_real* footprint_shell;
+
   /** Entries in use. */
   uint64_t n_voids;
   /** Entries the arena can hold before it must grow. */
   uint64_t capacity;
 } sif_catalog_t;
+
+/**
+ * @brief What a footprint column holds for a void nobody has measured it for.
+ * Negative, so it cannot be mistaken for a fraction.
+ */
+#define SIF_CATALOG_FOOTPRINT_UNKNOWN ((sif_real)(-1.0))
 
 /**
  * @brief Allocate an empty catalogue.
@@ -98,5 +125,35 @@ int sif_catalog_append(
  * @warning Invalidates cx/cy/cz/radii.
  */
 int sif_catalog_trim(sif_catalog_t* catalog);
+
+/**
+ * @brief Shift every void centre by @p offset.
+ *
+ * The way back out of the box a survey was searched in: pass the negated
+ * offset that sif_field_translate() moved the survey in by, and the centres
+ * return to the caller's own frame. Radii and footprints are unchanged.
+ *
+ * @param catalog The catalogue, modified in place.
+ * @param offset Added to cx, cy and cz respectively.
+ * @return SIF_OK, or SIF_ERR_INVALID on a NULL argument.
+ */
+int sif_catalog_translate(sif_catalog_t* catalog, const sif_real offset[3]);
+
+/**
+ * @brief Give the catalogue its footprint columns, sif_catalog_t::footprint
+ * and sif_catalog_t::footprint_shell.
+ *
+ * Optional because most catalogues have no use for them: a void found in a
+ * periodic box is whole by construction. Once reserved they follow the
+ * catalogue through every append and trim. A no-op if they already exist.
+ *
+ * @param catalog The catalogue.
+ * @return SIF_OK, SIF_ERR_INVALID on a NULL catalogue, or SIF_ERR_ALLOC, in
+ * which case the catalogue is left without them.
+ *
+ * @note Every void already in the catalogue starts at
+ * #SIF_CATALOG_FOOTPRINT_UNKNOWN.
+ */
+int sif_catalog_reserve_footprint(sif_catalog_t* catalog);
 
 #endif /* SIF_STRUCTURES_CATALOG_H */

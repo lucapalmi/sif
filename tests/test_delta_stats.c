@@ -1646,7 +1646,10 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_ERROR};
-  sif_init(&cfg);
+  if (sif_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
 
   const uint32_t n = (uint32_t)SIF_TEST_SCALE(64);
 

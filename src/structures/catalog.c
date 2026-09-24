@@ -54,6 +54,25 @@ static sif_real* catalog_block_alloc(uint64_t capacity, sif_real** out_cx,
   return block;
 }
 
+/* The two optional footprint views, laid out the same way. */
+#define CATALOG_N_FOOTPRINT_VIEWS 2
+
+static sif_real* catalog_footprint_alloc(
+  uint64_t capacity, sif_real** out_footprint, sif_real** out_shell) {
+
+  const uint64_t stride = catalog_stride(capacity);
+
+  sif_real* block =
+    sif_malloc_aligned(CATALOG_N_FOOTPRINT_VIEWS * stride * sizeof(sif_real));
+  if (!block)
+    return NULL;
+
+  *out_footprint = block;
+  *out_shell = block + stride;
+
+  return block;
+}
+
 /*
  * Moves the stored voids into a freshly allocated arena of `new_capacity` and
  * swaps it in. On failure the catalog is left exactly as it was.
@@ -70,9 +89,22 @@ static sif_real* catalog_block_alloc(uint64_t capacity, sif_real** out_cx,
  */
 static int catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
   sif_real *new_cx, *new_cy, *new_cz, *new_radii;
+  sif_real *new_fp = NULL, *new_fp_shell = NULL;
 
   sif_real* new_block =
     catalog_block_alloc(new_capacity, &new_cx, &new_cy, &new_cz, &new_radii);
+
+  /* The footprint arena moves with the main one or neither moves, so a
+   * failure on either leaves the catalogue exactly as it was. */
+  sif_real* new_fp_block = NULL;
+  if (new_block && catalog->_footprint_block) {
+    new_fp_block =
+      catalog_footprint_alloc(new_capacity, &new_fp, &new_fp_shell);
+    if (!new_fp_block) {
+      sif_free_aligned(new_block);
+      new_block = NULL;
+    }
+  }
 
   if (!new_block) {
     SIF_LOG_ERROR("void_catalog",
@@ -92,9 +124,19 @@ static int catalog_resize(sif_catalog_t* catalog, uint64_t new_capacity) {
     memcpy(new_cy, catalog->cy, n * sizeof(sif_real));
     memcpy(new_cz, catalog->cz, n * sizeof(sif_real));
     memcpy(new_radii, catalog->radii, n * sizeof(sif_real));
+    if (new_fp_block) {
+      memcpy(new_fp, catalog->footprint, n * sizeof(sif_real));
+      memcpy(new_fp_shell, catalog->footprint_shell, n * sizeof(sif_real));
+    }
   }
 
   sif_free_aligned(catalog->_block);
+  if (new_fp_block) {
+    sif_free_aligned(catalog->_footprint_block);
+    catalog->_footprint_block = new_fp_block;
+    catalog->footprint = new_fp;
+    catalog->footprint_shell = new_fp_shell;
+  }
 
   catalog->_block = new_block;
   catalog->cx = new_cx;
@@ -124,6 +166,9 @@ sif_catalog_t* sif_catalog_alloc(uint64_t initial_capacity) {
 
   cat->n_voids = 0;
   cat->capacity = initial_capacity;
+  cat->_footprint_block = NULL;
+  cat->footprint = NULL;
+  cat->footprint_shell = NULL;
 
   cat->_block = catalog_block_alloc(
     initial_capacity, &cat->cx, &cat->cy, &cat->cz, &cat->radii);
@@ -147,6 +192,7 @@ void sif_catalog_free(sif_catalog_t* catalog) {
   /* One arena, so one free -- the four views point into it and must not be
    * released individually. */
   sif_free_aligned(catalog->_block);
+  sif_free_aligned(catalog->_footprint_block);
   free(catalog);
 }
 
@@ -174,6 +220,10 @@ int sif_catalog_append(
   catalog->cy[n] = y;
   catalog->cz[n] = z;
   catalog->radii[n] = r;
+  if (catalog->footprint) {
+    catalog->footprint[n] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
+    catalog->footprint_shell[n] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
+  }
   catalog->n_voids++;
 
   return SIF_OK;
@@ -203,5 +253,46 @@ int sif_catalog_trim(sif_catalog_t* catalog) {
 
   SIF_LOG_TRACE(
     "void_catalog", "trimmed catalog to %" PRIu64 " voids", catalog->n_voids);
+  return SIF_OK;
+}
+
+int sif_catalog_reserve_footprint(sif_catalog_t* catalog) {
+  if (!catalog)
+    return SIF_ERR_INVALID;
+
+  if (catalog->_footprint_block)
+    return SIF_OK;
+
+  sif_real *fp, *fp_shell;
+  sif_real* block = catalog_footprint_alloc(catalog->capacity, &fp, &fp_shell);
+  if (!block) {
+    SIF_LOG_ERROR("void_catalog",
+      "failed to allocate the footprint columns for %" PRIu64 " voids",
+      catalog->capacity);
+    return SIF_ERR_ALLOC;
+  }
+
+  for (uint64_t i = 0; i < catalog->n_voids; i++) {
+    fp[i] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
+    fp_shell[i] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
+  }
+
+  catalog->_footprint_block = block;
+  catalog->footprint = fp;
+  catalog->footprint_shell = fp_shell;
+
+  return SIF_OK;
+}
+
+int sif_catalog_translate(sif_catalog_t* catalog, const sif_real offset[3]) {
+  if (!catalog || !offset)
+    return SIF_ERR_INVALID;
+
+  for (uint64_t i = 0; i < catalog->n_voids; i++) {
+    catalog->cx[i] += offset[0];
+    catalog->cy[i] += offset[1];
+    catalog->cz[i] += offset[2];
+  }
+
   return SIF_OK;
 }

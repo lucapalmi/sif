@@ -177,10 +177,18 @@ int sif_field_assign_positions(
 /*
  * True when incoming per-particle data, which the caller indexes in the
  * original particle order, has to be permuted into the field's current order.
+ *
+ * Keyed on the permutation alone, not on the Morton flag. The flag says the
+ * order is still a valid Morton order; the permutation says the arrays were
+ * reordered at all, and they stay reordered after anything that moves the
+ * positions without moving them between slots -- a wrap, a translation --
+ * clears the flag. Testing the flag as well used to hand a field that had been
+ * sorted and then wrapped its weights in the caller's order, each on the
+ * wrong particle. Only sif_field_assign_positions() drops the permutation,
+ * because only it replaces the arrays it describes.
  */
 static inline int field_needs_permutation(const sif_field_t* field) {
-  return (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) &&
-         field->original_indices != NULL;
+  return field->original_indices != NULL;
 }
 
 int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
@@ -723,4 +731,31 @@ int sif_field_require_morton(sif_field_t* field) {
     return SIF_OK;
 
   return sif_field_sort_morton(field);
+}
+
+int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
+  if (!field || !field->x || !field->y || !field->z ||
+      field->n_particles == 0 || !offset) {
+    SIF_LOG_ERROR("field", "cannot translate an empty field");
+    return SIF_ERR_INVALID;
+  }
+
+  const sif_real ox = offset[0], oy = offset[1], oz = offset[2];
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < field->n_particles; i++) {
+    field->x[i] += ox;
+    field->y[i] += oy;
+    field->z[i] += oz;
+  }
+
+  /* The bounds moved with the positions. The Morton order is dropped too,
+   * though the particles kept their relative places: each coordinate was
+   * rounded on the way, and the octree needs the order to agree with the
+   * quantization exactly, not approximately. The permutation stays -- the
+   * arrays are still in whatever order a sort left them. */
+  field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
+  field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
+
+  return SIF_OK;
 }

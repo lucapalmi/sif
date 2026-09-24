@@ -507,7 +507,17 @@ static void test_timer(void) {
 }
 
 int main(void) {
-  sif_init(SIF_CONFIG_QUIET);
+  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
+
+  /* A second call keeps the first configuration and reports success: the
+   * library is up, which is all the caller asked for. */
+  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: a second sif_init should return SIF_OK\n");
+    return 1;
+  }
 
   test_align();
   test_array_construction();

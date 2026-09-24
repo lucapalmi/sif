@@ -333,12 +333,12 @@ sif_chain_mesh_t* sif_chain_mesh_alloc_tessellation_consume(
     n_cells, tess->box_length, tess->samples, opt);
 }
 
-void sif_grid_assign_cic_tessellation(
+int sif_grid_assign_cic_tessellation(
   sif_grid_t* grid, const sif_tessellation_t* tess) {
 
   if (!grid || !tess || !tess->samples) {
     SIF_LOG_ERROR("tessellation", "invalid grid or tessellation");
-    return;
+    return SIF_ERR_INVALID;
   }
 
   if (tess->samples->n_particles == 0) {
@@ -346,7 +346,7 @@ void sif_grid_assign_cic_tessellation(
       "these samples have already been consumed by "
       "sif_chain_mesh_alloc_tessellation_consume(); there is nothing left to "
       "deposit");
-    return;
+    return SIF_ERR_INVALID;
   }
 
   /* The grid and the tessellation each carry their own box, and a mismatch
@@ -356,11 +356,11 @@ void sif_grid_assign_cic_tessellation(
     SIF_LOG_ERROR("tessellation",
       "the grid spans a box of %g but the tessellation was built in one of %g",
       (double)grid->box_length, (double)tess->box_length);
-    return;
+    return SIF_ERR_INVALID;
   }
 
   /* The samples are a field, so this is the ordinary assignment: what makes
    * the result a tessellation density is the weights they carry, not the way
    * they are deposited. */
-  sif_grid_assign_cic(grid, tess->samples);
+  return sif_grid_assign_cic(grid, tess->samples);
 }

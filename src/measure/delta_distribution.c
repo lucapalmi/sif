@@ -130,7 +130,8 @@ sif_delta_distribution_t* sif_delta_distribution_grid(const sif_grid_t* grid,
   }
 
   sif_system_state_t* state = sif__system_state();
-  if (sif__fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
+  if (!state ||
+      sif__fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
     SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
     goto fail;
   }

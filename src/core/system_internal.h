@@ -34,18 +34,21 @@ typedef struct {
    *  which may be lower than the one requested. */
   uint32_t max_threads;
 
-  /** NULL if FFTW could not be brought up; transforms then fail individually
-   *  rather than taking the process down at init. */
+  /** Never NULL in an initialized library: sif_init() fails rather than come
+   *  up without FFTW. */
   sif_fft_manager_t* fft_mgr;
 
   sif_timer_t total_runtime_timer;
 } sif_system_state_t;
 
 /**
- * @brief The system state, aborting if the library is not initialized.
+ * @brief The system state, or NULL -- with an error saying so -- if the
+ * library is not initialized.
  *
  * For call sites that cannot do anything useful without it, which is most of
- * them.
+ * them; they fail with their own status on NULL. It used to end the process
+ * instead, which from Python meant an interpreter killed by calling a finder
+ * before pysif.init().
  */
 sif_system_state_t* sif__system_state(void);
 

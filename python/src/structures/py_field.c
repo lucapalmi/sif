@@ -192,15 +192,47 @@ static PyObject* sifField_wrap(
     "wrapped", (unsigned long long)wrapped);
 }
 
+static PyObject* sifField_translate(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  double ox, oy, oz;
+  static char* kwlist[] = {"offset", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "(ddd)", kwlist, &ox, &oy, &oz))
+    return NULL;
+
+  const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
+  if (sif_field_translate(((sifFieldObject*)self_obj)->field, offset) !=
+      SIF_OK) {
+    PyErr_SetString(PyExc_ValueError, "cannot translate an empty field");
+    return NULL;
+  }
+
+  Py_RETURN_NONE;
+}
+
 static PyObject* sifField_sort_morton(PyObject* self_obj, PyObject* args) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
-  sif_field_sort_morton(self->field);
+
+  const int status = sif_field_sort_morton(self->field);
+  if (status == SIF_ERR_ALLOC)
+    return PyErr_NoMemory();
+  if (status != SIF_OK) {
+    PyErr_SetString(PyExc_ValueError, "cannot sort an empty field");
+    return NULL;
+  }
+
   Py_RETURN_NONE;
 }
 
 static PyObject* sifField_refresh_bounds(PyObject* self_obj, PyObject* args) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
-  sif_field_refresh_bounds(self->field);
+
+  if (sif_field_refresh_bounds(self->field) != SIF_OK) {
+    PyErr_SetString(
+      PyExc_ValueError, "cannot bound an empty or positionless field");
+    return NULL;
+  }
+
   Py_RETURN_NONE;
 }
 
@@ -265,6 +297,15 @@ static PyMethodDef sifField_methods[] = {
     "that were genuinely outside. A large 'wrapped' means the box length is\n"
     "wrong and the folded field is meaningless -- check it rather than\n"
     "proceeding. Only correct for a field that is periodic in this box."},
+  {"translate", (PyCFunction)sifField_translate, METH_VARARGS | METH_KEYWORDS,
+    "translate(offset)\n"
+    "--\n\n"
+    "Shift every position by offset, in place.\n\n"
+    "What moves a survey into the box pysif.finders.survey_box() chose for\n"
+    "it: data and randoms both, by the same offset. The voids found there\n"
+    "come back out with Catalog.translate(-offset).\n\n"
+    "Args:\n"
+    "    offset: Three numbers, added to x, y and z."},
   {"sort_morton", (PyCFunction)sifField_sort_morton, METH_NOARGS,
     "sort_morton()\n"
     "--\n\n"

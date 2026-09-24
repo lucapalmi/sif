@@ -109,6 +109,77 @@ static void test_velocity_permutation(void) {
   printf("  ok\n");
 }
 
+/*
+ * Moving the positions after a sort -- translating them, or wrapping one back
+ * into the box -- clears the Morton flag but leaves the arrays in sorted
+ * order, so data assigned afterwards in the caller's order still has to be
+ * permuted on the way in. It used not to be once the flag was gone, and every
+ * particle got someone else's weight.
+ */
+static void test_move_after_sort_keeps_permutation(void) {
+  printf("translate and wrap after a morton sort keep the permutation\n");
+
+  sif_real *x = malloc(N_P * sizeof(sif_real)),
+           *y = malloc(N_P * sizeof(sif_real)),
+           *z = malloc(N_P * sizeof(sif_real));
+  make_positions(x, y, z);
+
+  sif_real* m = malloc(N_P * sizeof(sif_real));
+  for (uint64_t i = 0; i < N_P; i++)
+    m[i] = (sif_real)i;
+
+  for (int how = 0; how < 2; how++) {
+    sif_field_t* f = sif_field_alloc(N_P);
+    sif_field_assign_positions(f, x, y, z);
+    CHECK(sif_field_sort_morton(f) == SIF_OK, "sort_morton failed");
+
+    if (how == 0) {
+      sif_real* before = malloc(N_P * sizeof(sif_real));
+      memcpy(before, f->x, N_P * sizeof(sif_real));
+
+      const sif_real offset[3] = {12.5f, -3.25f, 1000.0f};
+      CHECK(sif_field_translate(f, offset) == SIF_OK, "translate failed");
+
+      int moved_wrong = 0;
+      for (uint64_t i = 0; i < N_P; i++)
+        moved_wrong += f->x[i] != before[i] + offset[0];
+      CHECK(moved_wrong == 0, "%d positions were not shifted by the offset",
+        moved_wrong);
+      free(before);
+    } else {
+      /* One coordinate nudged out of the box, so the wrap actually moves
+       * something and drops the flag. */
+      f->x[N_P / 2] = -1.0f;
+      CHECK(
+        sif_field_wrap_periodic(f, BOX, NULL, NULL) == SIF_OK, "wrap failed");
+    }
+
+    CHECK((f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) == 0,
+      "%s should drop the Morton flag", how ? "wrap" : "translate");
+    CHECK((f->state_flags & SIF_FIELD_STATE_BOUNDS_VALID) == 0,
+      "%s should invalidate the bounds", how ? "wrap" : "translate");
+
+    CHECK(sif_field_assign_weights(f, m) == SIF_OK, "assign_weights failed");
+
+    int wrong = 0;
+    for (uint64_t i = 0; i < N_P; i++)
+      wrong += f->weights[i] != m[f->original_indices[i]];
+    CHECK(wrong == 0, "after %s, %d particles carry another's weight",
+      how ? "wrap" : "translate", wrong);
+
+    sif_field_free(f);
+  }
+
+  CHECK(sif_field_translate(NULL, (sif_real[3]){0, 0, 0}) == SIF_ERR_INVALID,
+    "translate(NULL) should be SIF_ERR_INVALID");
+
+  free(x);
+  free(y);
+  free(z);
+  free(m);
+  printf("  ok\n");
+}
+
 /* Assigning BEFORE the sort must also stay coherent: the sort permutes
  * everything together. */
 static void test_sort_permutes_everything(void) {
@@ -206,7 +277,7 @@ static void test_cic_mass(void) {
 
   const uint32_t n = 16;
   sif_grid_t* g = sif_grid_alloc(n, BOX);
-  sif_grid_assign_cic(g, f);
+  CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
 
   const uint64_t total = (uint64_t)n * n * n;
   const sif_real cell_vol = g->cell_length * g->cell_length * g->cell_length;
@@ -221,7 +292,7 @@ static void test_cic_mass(void) {
   printf("  deposited mass: %.6g (expected %.6g)\n", sum, expected);
 
   /* Overdensity must average to ~0. */
-  sif_grid_to_density_contrast(g);
+  CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
   double mean = 0.0;
   for (uint64_t i = 0; i < total; i++)
     mean += (double)g->values[i];
@@ -271,7 +342,7 @@ static void test_cic_tiling_is_invisible(void) {
     sif_setting_set("cic_tile_particles", tilings[t]);
 
     sif_grid_t* g = sif_grid_alloc(n, BOX);
-    sif_grid_assign_cic(g, f);
+    CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
 
     const sif_real cell_vol = g->cell_length * g->cell_length * g->cell_length;
     double sum = 0.0;
@@ -348,7 +419,7 @@ static void test_cic_cache_keys_on_content(void) {
   sif_field_assign_weights(f1, m1);
 
   sif_grid_t* g1 = sif_grid_alloc(n, BOX);
-  sif_grid_assign_cic(g1, f1);
+  CHECK(sif_grid_assign_cic(g1, f1) == SIF_OK, "CIC assignment failed");
 
   double sum1 = 0.0;
   for (uint64_t i = 0; i < total; i++)
@@ -359,7 +430,7 @@ static void test_cic_cache_keys_on_content(void) {
   sif_field_assign_weights(f2, m2);
 
   sif_grid_t* g2 = sif_grid_alloc(n, BOX);
-  sif_grid_assign_cic(g2, f2);
+  CHECK(sif_grid_assign_cic(g2, f2) == SIF_OK, "CIC assignment failed");
 
   double sum2 = 0.0;
   for (uint64_t i = 0; i < total; i++)
@@ -373,7 +444,7 @@ static void test_cic_cache_keys_on_content(void) {
   /* And the cache must still work: the same field again is a hit, and a hit
    * has to reproduce the computed grid exactly. */
   sif_grid_t* g1_again = sif_grid_alloc(n, BOX);
-  sif_grid_assign_cic(g1_again, f1);
+  CHECK(sif_grid_assign_cic(g1_again, f1) == SIF_OK, "CIC assignment failed");
 
   int identical = 1;
   for (uint64_t i = 0; i < total; i++)
@@ -409,12 +480,39 @@ static void test_cic_rejects_out_of_box(void) {
   sif_field_assign_positions(f, x, y, z);
 
   sif_grid_t* g = sif_grid_alloc(16, BOX);
-  sif_grid_assign_cic(g, f);
 
-  double sum = 0.0;
+  /* Something in the cells beforehand, so "left as it was" means something:
+   * a refusal must not zero the grid, and must not claim it holds a
+   * density. */
   for (uint64_t i = 0; i < g->total_cells; i++)
-    sum += (double)g->values[i];
-  CHECK(sum == 0.0, "an out-of-box particle should abort the assignment");
+    g->values[i] = 7.0f;
+
+  CHECK(sif_grid_assign_cic(g, f) == SIF_ERR_RANGE,
+    "an out-of-box particle should be SIF_ERR_RANGE");
+
+  int touched = 0;
+  for (uint64_t i = 0; i < g->total_cells; i++)
+    touched += g->values[i] != 7.0f;
+  CHECK(touched == 0, "a refused assignment changed %d cells", touched);
+  CHECK(g->content == SIF_GRID_EMPTY,
+    "a refused assignment should not mark the grid as a density");
+
+  /* Nothing to deposit is a refusal too, not a grid of zeros. */
+  sif_field_t* empty = sif_field_alloc(0);
+  CHECK(sif_grid_assign_cic(g, empty) == SIF_ERR_INVALID,
+    "an empty field should be SIF_ERR_INVALID");
+  sif_field_free(empty);
+
+  CHECK(sif_grid_assign_cic(g, NULL) == SIF_ERR_INVALID,
+    "a NULL field should be SIF_ERR_INVALID");
+  CHECK(sif_grid_assign_cic(NULL, f) == SIF_ERR_INVALID,
+    "a NULL grid should be SIF_ERR_INVALID");
+
+  /* And a field that is fine deposits, with SIF_OK. */
+  x[7] = 1.0f;
+  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_grid_assign_cic(g, f) == SIF_OK && g->content == SIF_GRID_DENSITY,
+    "a valid field should deposit");
 
   /* Freeing a grid whose buffer was taken must not leak the struct. */
   sif_free_aligned(g->values);
@@ -495,7 +593,7 @@ static void test_wrap_periodic(void) {
 
   /* And the field the validators used to reject now assigns. */
   sif_grid_t* g = sif_grid_alloc(16, BOX);
-  sif_grid_assign_cic(g, f);
+  CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
   double sum = 0.0;
   for (uint64_t i = 0; i < g->total_cells; i++)
     sum += (double)g->values[i];
@@ -532,7 +630,8 @@ static void test_grid_content_tag(void) {
     g->values[i] = (sif_real)(1.0 + 0.01 * (double)i);
   g->content = SIF_GRID_DENSITY;
 
-  sif_grid_to_density_contrast(g);
+  CHECK(sif_grid_to_density_contrast(g) == SIF_OK,
+    "conversion of a positive density should succeed");
   CHECK(g->content == SIF_GRID_DENSITY_CONTRAST,
     "conversion should retag the grid");
 
@@ -540,11 +639,26 @@ static void test_grid_content_tag(void) {
    * now zero. Snapshot first so we can prove nothing was touched. */
   sif_real* before = malloc((size_t)g->total_cells * sizeof(sif_real));
   memcpy(before, g->values, (size_t)g->total_cells * sizeof(sif_real));
-  sif_grid_to_density_contrast(g);
+  CHECK(sif_grid_to_density_contrast(g) == SIF_ERR_INVALID,
+    "a second conversion should be SIF_ERR_INVALID");
   CHECK(
     memcmp(before, g->values, (size_t)g->total_cells * sizeof(sif_real)) == 0,
     "a second conversion should leave the values untouched");
   free(before);
+
+  /* A grid with nothing in it has no mean to divide by: refused, untouched,
+   * still not a contrast. */
+  sif_grid_t* blank = sif_grid_alloc(8, 100.0f);
+  if (blank) {
+    blank->content = SIF_GRID_DENSITY;
+    CHECK(sif_grid_to_density_contrast(blank) == SIF_ERR_RANGE,
+      "a grid of zeros should be SIF_ERR_RANGE");
+    CHECK(blank->content == SIF_GRID_DENSITY && blank->values[0] == 0.0f,
+      "a refused conversion should leave the grid as it was");
+    sif_grid_free(blank);
+  }
+  CHECK(sif_grid_to_density_contrast(NULL) == SIF_ERR_INVALID,
+    "a NULL grid should be SIF_ERR_INVALID");
 
   sif_grid_free(g);
 }
@@ -554,9 +668,13 @@ int main(void) {
    * through the settings table, which does not exist until the library is
    * initialized -- so without this sif_setting_set() is a silent no-op and
    * the cache test passes without ever enabling the cache. */
-  sif_init(SIF_CONFIG_QUIET);
+  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_init\n");
+    return 1;
+  }
 
   test_velocity_permutation();
+  test_move_after_sort_keeps_permutation();
   test_sort_permutes_everything();
   test_require_helpers();
   test_cic_mass();
