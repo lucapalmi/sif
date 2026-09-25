@@ -1,0 +1,103 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
+[build-system]
+# NumPy 2 to build: a module compiled against its headers runs with NumPy 1.x
+# and 2.x alike, one compiled against 1.x fails to import under 2.x. How old a
+# NumPy it accepts is fixed separately, in python/CMakeLists.txt, and is the
+# floor in `dependencies` below.
+requires = ["scikit-build-core>=0.11", "numpy>=2.0"]
+build-backend = "scikit_build_core.build"
+
+[project]
+name = "pysif"
+dynamic = ["version"]
+description = "Python bindings for the sif library"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["COPYING"]
+authors = [
+    { name = "Luca Palmieri", email = "luca.palmieri16@studio.unibo.it" },
+]
+requires-python = ">=3.10"
+dependencies = ["numpy>=1.23"]
+classifiers = [
+    "Programming Language :: C",
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+    "Topic :: Scientific/Engineering :: Astronomy",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+[project.urls]
+Homepage = "https://github.com/lucapalmi/sif"
+Documentation = "https://lucapalmi.github.io/sif/"
+Issues = "https://github.com/lucapalmi/sif/issues"
+
+[tool.scikit-build]
+minimum-version = "build-system.requires"
+cmake.version = ">=3.15"
+ninja.version = ">=1.5"
+build-dir = "build/{wheel_tag}"
+cmake.build-type = "Release"
+
+# The extension module is the whole package, and CMake installs it (see
+# python/CMakeLists.txt); there is no Python source tree to copy.
+wheel.packages = []
+
+# What the source distribution leaves out: none of it is needed to build.
+sdist.exclude = [
+    "docs/", "tools/", ".github/", "STYLE.md", ".clangd", ".clang-format",
+]
+
+# The version is the C library's, read from CMakeLists.txt, so the two cannot
+# drift apart: the number written into every HDF5 file is the package's.
+[tool.scikit-build.metadata.version]
+provider = "scikit_build_core.metadata.regex"
+input = "CMakeLists.txt"
+regex = 'project\(sif VERSION (?P<value>[0-9][0-9.]*)'
+
+[tool.scikit-build.cmake.define]
+# Stated rather than inherited, so that what a pysif build does about HDF5 is
+# written down here. AUTO takes HDF5 when the machine has a serial one; a
+# wheel built for distribution should say ON (and bundle the library), so
+# that it cannot silently ship without it. Override with
+#   pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
+SIF_HDF5_SUPPORT = "AUTO"
+# ON for a build from source, which runs on the machine that compiled it. A
+# wheel for distribution must say OFF: see SIF_NATIVE_ARCH in CMakeLists.txt.
+SIF_NATIVE_ARCH = "ON"
+
+# --- binary wheels ---
+#
+# Built with cibuildwheel (`cibuildwheel --platform linux`, or macos on a Mac),
+# which runs packaging/build-deps.sh once per platform and then builds one
+# wheel per Python version against what it left in /tmp/sif-deps. Each wheel
+# is then repaired -- auditwheel on Linux, delocate on macOS -- which copies
+# FFTW, HDF5 and the OpenMP runtime into it, so it needs nothing installed.
+[tool.cibuildwheel]
+build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
+skip = ["*-musllinux_*"]
+before-all = "bash packaging/build-deps.sh /tmp/sif-deps"
+test-requires = ["h5py"]
+test-command = "python {project}/packaging/test_wheel.py"
+
+# Portable code, HDF5 required rather than hoped for, FFTW's pthreads backend
+# (see build-deps.sh), and the bundled libraries' license texts in the wheel.
+[tool.cibuildwheel.config-settings]
+"cmake.define.SIF_NATIVE_ARCH" = "OFF"
+"cmake.define.SIF_HDF5_SUPPORT" = "ON"
+"cmake.define.SIF_FFTW_THREADING" = "threads"
+"cmake.define.SIF_BUNDLED_LICENSES" = "/tmp/sif-deps/licenses"
+
+[tool.cibuildwheel.linux]
+archs = ["x86_64", "aarch64"]
+# LD_LIBRARY_PATH for auditwheel, which finds the libraries to bundle there.
+environment = { FFTW3_ROOT = "/tmp/sif-deps", HDF5_ROOT = "/tmp/sif-deps", LD_LIBRARY_PATH = "/tmp/sif-deps/lib" }
+
+[tool.cibuildwheel.macos]
+archs = ["arm64"]
+environment = { FFTW3_ROOT = "/tmp/sif-deps", HDF5_ROOT = "/tmp/sif-deps", OpenMP_ROOT = "/tmp/sif-deps", MACOSX_DEPLOYMENT_TARGET = "11.0" }

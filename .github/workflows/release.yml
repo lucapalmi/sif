@@ -1,0 +1,150 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
+# A release: wheels for every platform, the source distribution, both uploaded
+# to PyPI, and the documentation published -- all from one version tag.
+#
+#   git tag v0.2.0 && git push origin v0.2.0
+#
+# The tag has to match the version in CMakeLists.txt, which is the version
+# everything else reads; a mismatch stops the release before anything is
+# built. A PyPI version can be uploaded once and never replaced, which is why
+# releases hang off tags, one per version, and not off a branch.
+#
+# Run by hand from the Actions tab (workflow_dispatch) it is a rehearsal:
+# everything is built and tested, nothing reaches PyPI or the docs site, and
+# with `testpypi` ticked the files go to TestPyPI instead. TestPyPI also takes
+# each version once, so a second rehearsal of the same version uploads
+# nothing new (skip-existing) but still builds and tests everything.
+#
+# Uploads use PyPI's trusted publishing: no token is stored anywhere. PyPI
+# (and TestPyPI) are told once that this repository's release.yml, in the
+# `pypi` (or `testpypi`) environment, may publish pysif.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      testpypi:
+        description: "Upload the rehearsal to TestPyPI"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Tag matches CMakeLists.txt
+        if: github.event_name == 'push'
+        run: |
+          version=$(sed -n 's/^project(sif VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt)
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but CMakeLists.txt says $version"
+            exit 1
+          fi
+
+  # One job per platform, each building every Python version natively: no
+  # emulation, so the aarch64 wheels are built and tested on aarch64. What is
+  # built and how -- dependencies, settings, the test -- is all in
+  # [tool.cibuildwheel] in pyproject.toml, so a local `cibuildwheel` run does
+  # exactly this.
+  wheels:
+    needs: version
+    name: wheels (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pypa/cibuildwheel@v4.2.1
+        env:
+          CIBW_ARCHS: native
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-wheels-${{ matrix.os }}
+          path: wheelhouse/*.whl
+
+  sdist:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - run: pipx run build --sdist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist-sdist
+          path: dist/*.tar.gz
+
+  pypi:
+    if: github.event_name == 'push'
+    needs: [wheels, sdist]
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/project/pysif/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  testpypi:
+    if: github.event_name == 'workflow_dispatch' && inputs.testpypi
+    needs: [wheels, sdist]
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/project/pysif/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: dist-*
+          merge-multiple: true
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true
+
+  # The site, published with the release it documents, so what it describes
+  # is what `pip install pysif` gets. After the upload: a release that failed
+  # to reach PyPI does not get documented.
+  docs:
+    if: github.event_name == 'push'
+    needs: pypi
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r docs/requirements.txt
+      - run: sphinx-build -b html -W --keep-going docs _site
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v5

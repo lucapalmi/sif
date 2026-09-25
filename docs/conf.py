@@ -61,6 +61,7 @@ extensions = [
     "hawkmoth.ext.javadoc",  # ... written in @brief / @param style
     "sphinx.ext.intersphinx",
     "apitree",  # one API page per header, generated from include/sif
+    "sphinx_design"
 ]
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
@@ -117,7 +118,7 @@ hawkmoth_transform_default = "javadoc"
 # --- MyST ------------------------------------------------------------------
 
 myst_enable_extensions = [
-    "colon_fence",  # ::: fences, which survive being pasted into GitLab
+    "colon_fence",  # ::: fences, which survive being pasted into GitHub
     "deflist",
     "dollarmath",  # $...$ and $$...$$
     "attrs_inline",
@@ -140,7 +141,7 @@ toc_object_entries_show_parents = "hide"
 html_theme_options = {
     "accent_color": "indigo",
     "globaltoc_expand_depth": 1,
-    "gitlab_url": "https://gitlab.com/lpalmi/sif",
+    "github_url": "https://github.com/lucapalmi/sif",
 }
 
 # --- Cross-project links ---------------------------------------------------

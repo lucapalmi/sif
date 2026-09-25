@@ -1,11 +1,42 @@
 # Sif void library
 
-`sif` is a high performance library with several routines to model and measure cosmic void statistics in N-body simulations
+[![tests](https://github.com/lucapalmi/sif/actions/workflows/tests.yml/badge.svg)](https://github.com/lucapalmi/sif/actions/workflows/tests.yml)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](COPYING)
 
-## AI policy
+**sif** is a high performance library to study cosmic voids, both in 
+simulations and surveys.
 
-All the functions and algorithms in `sif` have been developed and implemented manually. Subsequent rewrites made use of coding agents for refactoring and bug hunting.
-The code comments and the Doxygen API documentation are mostly written by AI agents; this file, the style guidelines and the site documentation are all hand-written.
+The library is written in ANSI-C99, with Python bindings available via the 
+**pysif** package. The complete documentation is available 
+[here](https://lucapalmi.github.io/sif/).
+
+## Main features
+
+These are the main features of **sif**:
+
+- **exodus:** a spherical void finder for N-body simulations and surveys; fast
+and reliable. 
+- **measuring:** routines to measure the void size function, density and 
+velocity profiles for any void catalogue.
+- **modelling:** routines to compute the 
+[SvdW](https://arxiv.org/abs/astro-ph/0311260), 
+[Vdn](https://arxiv.org/abs/1304.6087) and 
+[excursion-peak](https://arxiv.org/abs/2401.14451) models for void abundances.
+
+## Project status
+
+**sif** is under active development. There is no regular schedule for the 
+releases.
+
+## Installation
+
+You can install the Python package with pip
+```
+pip install pysif
+```
+To use the C library, clone and compile the repository. A complete guide to 
+the installation is available 
+[here](https://lucapalmi.github.io/sif/installation).
 
 ## License
 
@@ -42,3 +73,15 @@ later.
 **OpenMP** — sif is parallelized with OpenMP and links the runtime provided by
 the compiler (LLVM's `libomp` or GCC's `libgomp`) under its
 own license.
+
+**HDF5** — Optionally, sif uses the HDF5 library (<https://www.hdfgroup.org/solutions/hdf5/>)
+for binary I/O. HDF5 is not bundled; it is located at configure time and must be installed
+separately. HDF5 is licensed under the 3-clause BSD License.
+
+## AI policy
+
+All the functions and algorithms in **sif** have been designed by humans. 
+Implementations, refactoring and bug-hunting are mostly done with coding agents. 
+The code comments and the Doxygen API documentation are mostly written by 
+agents; the documentation, except for the API reference, is completely 
+handwritten.

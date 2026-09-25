@@ -1,0 +1,102 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
+# Every push to main and every pull request: the test suite, the Python
+# bindings, and a docs build. Nothing is published from here; releases are
+# release.yml's business, and only on a version tag.
+
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The library and its test suite, once for each HDF5 mode.
+  #
+  # Both modes run because each compiles code the other never sees: src/io/
+  # hdf5.c against src/io/hdf5_off.c, and the tests' #ifdef SIF_HAVE_HDF5
+  # halves. A change that only builds in one of them is exactly what a single
+  # job would let through.
+  #
+  # HDF5 is installed in both. With ON it is required; with OFF it has to be
+  # ignored even though it is there -- which the OFF job checks by looking for
+  # any HDF5 symbol the library references, since "OFF" is a promise that a
+  # project embedding sif never links HDF5 at all.
+  #
+  # GCC's libgomp and Debian's FFTW (built against the same runtime) make the
+  # default SIF_FFTW_THREADING=omp safe here; see the note in CMakeLists.txt.
+  c-library:
+    name: C library (HDF5 ${{ matrix.hdf5 }})
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    strategy:
+      fail-fast: false
+      matrix:
+        hdf5: ["ON", "OFF"]
+    steps:
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential cmake libfftw3-dev libhdf5-dev binutils \
+            git ca-certificates
+      - uses: actions/checkout@v7
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DSIF_HDF5_SUPPORT=${{ matrix.hdf5 }}
+          cmake --build build -j "$(nproc)"
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Check that OFF links no HDF5
+        if: matrix.hdf5 == 'OFF'
+        run: |
+          if nm -u build/libsif.a | grep -q ' H5'; then
+            echo "::error::libsif.a references HDF5 in an OFF build"
+            exit 1
+          fi
+
+  # The bindings, built the way `pip install .` builds them, and the same
+  # smoke test the release wheels must pass.
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfftw3-dev libhdf5-dev
+      - name: Build and install pysif
+        run: pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
+      - name: Smoke test
+        run: |
+          pip install h5py
+          cd /tmp && python "$GITHUB_WORKSPACE/packaging/test_wheel.py"
+
+  # Hawkmoth parses the public headers with libclang, so this needs C system
+  # headers to resolve <stdint.h> and friends, which the runner has. It does
+  # *not* need the library built: nothing is compiled and no sif object is
+  # imported. That changes if the Python API pages are ever switched on; see
+  # docs/api/python.md.
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -r docs/requirements.txt
+      - run: sphinx-build -b html -W --keep-going docs _build/html

@@ -4,7 +4,7 @@
 # This file is part of sif. See COPYING for the full license text.
 
 cmake_minimum_required(VERSION 3.15)
-project(sif VERSION 0.0.0 LANGUAGES C)
+project(sif VERSION 0.1.0 LANGUAGES C)
 
 # Configuration
 set(CMAKE_C_STANDARD 99)
@@ -33,15 +33,30 @@ endif()
 # link line, where a compiler-only flag draws an "unused argument" warning per
 # executable. Compile options follow CMAKE_C_FLAGS_RELEASE on the command line,
 # so it lands after -ffast-math and takes the one promise back.
-set(CMAKE_C_FLAGS_RELEASE "-O3 -march=native -ffast-math")
+set(CMAKE_C_FLAGS_RELEASE "-O3 -ffast-math")
 add_compile_options($<$<CONFIG:Release>:-fno-finite-math-only>)
 set(CMAKE_C_FLAGS_DEBUG "-g -O2 -Wall -Wextra -fno-omit-frame-pointer")
+
+# Tuning for the CPU of the machine doing the build. Right for a build that
+# runs where it was compiled; wrong for one that runs elsewhere, where the
+# first instruction the other CPU lacks kills the process with SIGILL. Turn it
+# off for a binary meant to be shipped (a Python wheel), and on a cluster
+# whose login nodes differ from its compute nodes -- there, name the target
+# instead: -DSIF_NATIVE_ARCH=OFF -DCMAKE_C_FLAGS="-march=znver3".
+option(SIF_NATIVE_ARCH "Optimize for the build machine's CPU (-march=native)" ON)
+if(SIF_NATIVE_ARCH)
+  string(APPEND CMAKE_C_FLAGS_RELEASE " -march=native")
+  message(STATUS "CPU tuning: native (SIF_NATIVE_ARCH=ON)")
+else()
+  message(STATUS "CPU tuning: generic, plus whatever CMAKE_C_FLAGS names")
+endif()
 
 option(SIF_VECTORIZATION_REPORT "Enable compiler vectorization reports" OFF)
 
 # Build the tests when sif is the project being built, but not when it is
-# pulled in as a subdirectory (the Python extension does exactly that).
-if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+# pulled in as a subdirectory, nor when pip is building the Python extension.
+# SKBUILD is set by scikit-build-core, the build backend in pyproject.toml.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR AND NOT SKBUILD)
   set(SIF_TESTS_DEFAULT ON)
 else()
   set(SIF_TESTS_DEFAULT OFF)
@@ -51,6 +66,15 @@ option(SIF_BUILD_TESTS "Build the sif test suite" ${SIF_TESTS_DEFAULT})
 # Debug-only invariant checks (bounds asserts in the hot accessors). Not tied
 # to NDEBUG, which the release preset never defines.
 option(SIF_DEBUG_CHECKS "Enable internal assertions" OFF)
+
+# The Python extension, pysif. On whenever pip builds the project; a plain
+# CMake build can ask for it too, to work on the bindings without pip.
+if(SKBUILD)
+  set(SIF_PYTHON_DEFAULT ON)
+else()
+  set(SIF_PYTHON_DEFAULT OFF)
+endif()
+option(SIF_BUILD_PYTHON "Build the Python extension (pysif)" ${SIF_PYTHON_DEFAULT})
 
 # Offline data-generation programs. Not part of the library and not built by
 # default: they exist to produce emulator training sets on a cluster.
@@ -176,8 +200,8 @@ endif()
 
 message(STATUS "HDF5 I/O: ${_sif_hdf5_why}")
 
-# Readable from a project that adds sif as a subdirectory -- the Python
-# extension, which words its warnings by whether HDF5 is there.
+# Readable from a project that adds sif as a subdirectory, which cannot see
+# this directory's variables otherwise.
 set(SIF_WITH_HDF5 ${SIF_WITH_HDF5} CACHE INTERNAL "sif was built with HDF5")
 
 # Source files
@@ -333,7 +357,18 @@ if(SIF_BUILD_TOOLS)
   endforeach()
 endif()
 
+if(SIF_BUILD_PYTHON)
+  add_subdirectory(python)
+endif()
+
 # installation
+#
+# Not under pip: a wheel carries the extension alone, which has sif linked in,
+# and has no place for a static library, headers and CMake files.
+
+if(SKBUILD)
+  return()
+endif()
 
 install(TARGETS sif
     EXPORT sifTargets

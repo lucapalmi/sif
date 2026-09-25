@@ -264,7 +264,7 @@ static void test_array_sum_is_stable(void) {
 
   const double expected = 1e8 + 1e6;
   const double got = (double)sif_array_sum(a, n);
-  CHECK(SIF_REAL_ABS(got - expected) < 1.0,
+  CHECK(fabs(got - expected) < 1.0,
     "sum lost the small terms: %.1f, expected %.1f", got, expected);
 
 #ifdef _OPENMP

@@ -13,3 +13,6 @@ public/
 docs/_build/
 _err.txt
 ideas.txt
+.cache/
+__cmake_systeminformation/
+.claude/settings.local.json
