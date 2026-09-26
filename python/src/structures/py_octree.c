@@ -30,6 +30,12 @@ static int sifOctree_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
   }
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
+
+  /* Building sorts an unsorted field, which reallocates its arrays. */
+  if (!(field->field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) &&
+      py_sif_field_check_exports(field, "build an Octree over the field") < 0)
+    return -1;
+
   sif_octree_t* tmp = sif_octree_alloc(field->field, max_per_leaf);
   if (!tmp) {
     PyErr_SetString(PyExc_RuntimeError, "Failed to build sif.octree");

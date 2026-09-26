@@ -36,7 +36,7 @@ pip install pysif
 ```
 To use the C library, clone and compile the repository. A complete guide to 
 the installation is available 
-[here](https://lucapalmi.github.io/sif/installation).
+[here](https://lucapalmi.github.io/sif/installation.html).
 
 ## License
 

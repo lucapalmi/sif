@@ -24,6 +24,7 @@
 #include "sif/io/catalog_io.h"
 #include "sif/io/hdf5_io.h"
 
+#include "io/gadget_internal.h"
 #include "io/hdf5_internal.h"
 #include "sif/utils/logger.h"
 
@@ -357,3 +358,29 @@ int sif_hdf5_attr_name(const char* filepath, const char* group, uint32_t index,
   refuse(filepath);
   return SIF_ERR_UNSUPPORTED;
 }
+
+/* --- GADGET snapshots --- */
+
+int sif__gadget_h5_open(const char* path, sif_gadget_h5_file_t** out_file,
+  sif_gadget_header_t* out_header) {
+  (void)out_header;
+  *out_file = NULL;
+  SIF_LOG_ERROR(TAG,
+    "%s is an HDF5 snapshot, and this build of sif has no HDF5 support. "
+    "Rebuild with -DSIF_HDF5_SUPPORT=ON to read it",
+    path);
+  return SIF_ERR_UNSUPPORTED;
+}
+
+int sif__gadget_h5_read(sif_gadget_h5_file_t* file, uint32_t ptype,
+  sif_gadget_block_t block, uint64_t start, uint64_t count, double* out) {
+  (void)file;
+  (void)ptype;
+  (void)block;
+  (void)start;
+  (void)count;
+  (void)out;
+  return SIF_ERR_UNSUPPORTED;
+}
+
+void sif__gadget_h5_close(sif_gadget_h5_file_t* file) { (void)file; }

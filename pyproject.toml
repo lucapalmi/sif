@@ -14,7 +14,7 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "pysif"
 dynamic = ["version"]
-description = "Python bindings for the sif library"
+description = "Python bindings for the sif void library"
 readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["COPYING"]
@@ -85,10 +85,13 @@ before-all = "bash packaging/build-deps.sh /tmp/sif-deps"
 test-requires = ["h5py"]
 test-command = "python {project}/packaging/test_wheel.py"
 
-# Portable code, HDF5 required rather than hoped for, FFTW's pthreads backend
-# (see build-deps.sh), and the bundled libraries' license texts in the wheel.
+# Portable code, no paths into the build machine (the repair step bundles the
+# libraries instead), HDF5 required rather than hoped for, FFTW's pthreads
+# backend (see build-deps.sh), and the bundled libraries' license texts in the
+# wheel.
 [tool.cibuildwheel.config-settings]
 "cmake.define.SIF_NATIVE_ARCH" = "OFF"
+"cmake.define.SIF_PYTHON_RPATH" = "OFF"
 "cmake.define.SIF_HDF5_SUPPORT" = "ON"
 "cmake.define.SIF_FFTW_THREADING" = "threads"
 "cmake.define.SIF_BUNDLED_LICENSES" = "/tmp/sif-deps/licenses"

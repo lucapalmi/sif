@@ -44,4 +44,9 @@ PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_get_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds);
 
+/* GADGET snapshots (py_gadget.c) */
+PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_gadget_header(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds);
+
 #endif /* SIF_PY_IO_PY_IO_H */

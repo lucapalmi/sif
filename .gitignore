@@ -4,6 +4,8 @@ build/
 venv/
 env/
 data/
+# ...except the test fixtures, which are small and committed
+!tests/data/
 __pycache__/
 runs/
 tools/plots/

@@ -1,4 +1,4 @@
-# API reference
+# C API Reference
 
 The C reference is generated from the public headers in `include/sif/` by
 [Hawkmoth](https://hawkmoth.readthedocs.io/), which parses them with libclang
@@ -18,7 +18,6 @@ measure/index
 model/index
 io/index
 utils/index
-python
 ```
 
 The pages under each subsystem are generated at build time from the contents

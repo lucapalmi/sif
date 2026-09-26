@@ -40,13 +40,16 @@ static int sifChainMesh_init(
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
 
-  const sif_option opt =
-    (drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT) |
-    (canonical ? SIF_DEFAULT : SIF_MESH_NO_CANONICAL);
+  const sif_option opt = (drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT) |
+                         (canonical ? SIF_DEFAULT : SIF_MESH_NO_CANONICAL);
 
-  /* The consuming form empties the field rather than copying it. That is safe
-   * to expose directly because a sif.Field hands out no views into its arrays
-   * -- it degrades to an empty field, and every method still works on it. */
+  /* The consuming form empties the field rather than copying it: it degrades
+   * to an empty field, and every method still works on it. What must not
+   * survive it is a NumPy view into the arrays it takes. */
+  if (consume_field && py_sif_field_check_exports(
+                         field, "consume the field into a ChainMesh") < 0)
+    return -1;
+
   sif_chain_mesh_t* tmp = consume_field
                             ? sif_chain_mesh_alloc_consume(n_cells,
                                 (sif_real)box_length_in, field->field, opt)

@@ -59,8 +59,11 @@ extensions = [
     "myst_parser",  # prose in Markdown rather than reStructuredText
     "hawkmoth",  # C API straight from the headers
     "hawkmoth.ext.javadoc",  # ... written in @brief / @param style
+    "sphinx.ext.autodoc",  # Python API from pysif's docstrings
+    "sphinx.ext.napoleon",  # ... written in Google style (Args:, Returns:)
     "sphinx.ext.intersphinx",
     "apitree",  # one API page per header, generated from include/sif
+    "pytree",  # one API page per submodule, generated from pysif
     "sphinx_design"
 ]
 

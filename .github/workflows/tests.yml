@@ -65,8 +65,8 @@ jobs:
             exit 1
           fi
 
-  # The bindings, built the way `pip install .` builds them, and the same
-  # smoke test the release wheels must pass.
+  # The bindings, built the way `pip install .` builds them: the same smoke
+  # test the release wheels must pass, then the binding tests in tests/python.
   python:
     runs-on: ubuntu-24.04
     steps:
@@ -85,12 +85,17 @@ jobs:
         run: |
           pip install h5py
           cd /tmp && python "$GITHUB_WORKSPACE/packaging/test_wheel.py"
+      # From /tmp, so `import pysif` is the installed module and not anything
+      # in the checkout.
+      - name: Tests
+        run: |
+          pip install pytest
+          cd /tmp && python -m pytest -p no:cacheprovider \
+            "$GITHUB_WORKSPACE/tests/python"
 
-  # Hawkmoth parses the public headers with libclang, so this needs C system
-  # headers to resolve <stdint.h> and friends, which the runner has. It does
-  # *not* need the library built: nothing is compiled and no sif object is
-  # imported. That changes if the Python API pages are ever switched on; see
-  # docs/api/python.md.
+  # Hawkmoth parses the public headers with libclang for the C API pages, and
+  # autodoc imports pysif for the Python API pages, so the library must be
+  # built and installed before Sphinx runs.
   docs:
     runs-on: ubuntu-24.04
     steps:
@@ -98,5 +103,12 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfftw3-dev libhdf5-dev
       - run: pip install -r docs/requirements.txt
+      - name: Build and install pysif
+        run: pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
       - run: sphinx-build -b html -W --keep-going docs _build/html

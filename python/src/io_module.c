@@ -100,6 +100,72 @@ static PyMethodDef io_methods[] = {
     "    A column that does not parse as a number reads as 0.0 rather than\n"
     "    raising, so check that format matches the file."},
 
+  {"read_gadget", (PyCFunction)pysif_read_gadget, METH_VARARGS | METH_KEYWORDS,
+    "read_gadget(path, *, ptype=1, velocities=None, masses=False, "
+    "length='kpc', fraction=1.0, seed=0, format='auto')\n"
+    "--\n\n"
+    "Read one particle type of a GADGET snapshot into a Field.\n\n"
+    "Reads all three snapshot formats: the legacy binaries (SnapFormat 1\n"
+    "and 2, with either the GADGET-2 or the GADGET-4 header, in either byte\n"
+    "order and precision) and HDF5. A snapshot split over several files is\n"
+    "read as one: name any of its files, or the base name, and the rest are\n"
+    "found -- snap_010.N, snap_010.N.hdf5, and both inside snapdir_010/.\n\n"
+    "Args:\n"
+    "    path: A file of the snapshot, or its base name.\n"
+    "    ptype: Particle type, 0 to 5. One per call; 1 is GADGET's dark\n"
+    "        matter.\n"
+    "    velocities: None to skip them; 'raw' for u as GADGET stores it;\n"
+    "        'peculiar' for v = u * sqrt(a), a being the header's Time --\n"
+    "        which is the scale factor only in a cosmological run.\n"
+    "    masses: Read per-particle masses into the weights. A type with a\n"
+    "        mass in the header's table has one mass for every particle, and\n"
+    "        is left unweighted.\n"
+    "    length: The snapshot's length unit: 'kpc' (kpc/h, GADGET's\n"
+    "        default), 'mpc' (Mpc/h), or 'auto' to read UnitLength_in_cm\n"
+    "        from an HDF5 file. Positions and box come out in Mpc/h.\n"
+    "    fraction: Share of the particles to keep, in (0, 1]. Exactly\n"
+    "        round(fraction * N) are kept, uniformly at random, in file\n"
+    "        order.\n"
+    "    seed: Seed for the subsample: the same seed and files give the\n"
+    "        same particles.\n"
+    "    format: 'auto', 1, 2 or 'hdf5'. Anything but 'auto' is checked\n"
+    "        against the file.\n\n"
+    "Returns:\n"
+    "    tuple: (Field, box_length), the box in Mpc/h. Returned alongside\n"
+    "    the field because it is converted with it, and the header's\n"
+    "    box_size is in the file's own unit.\n\n"
+    "Raises:\n"
+    "    ValueError: For an argument out of range, a type with no\n"
+    "        particles, a fraction that keeps none, or length='auto' on a\n"
+    "        file that records no unit.\n"
+    "    OSError: For a missing, truncated or inconsistent snapshot.\n"
+    "    RuntimeError: For an HDF5 snapshot, if pysif was built without\n"
+    "        HDF5."},
+
+  {"gadget_header", (PyCFunction)pysif_gadget_header,
+    METH_VARARGS | METH_KEYWORDS,
+    "gadget_header(path, format='auto')\n"
+    "--\n\n"
+    "Read the header of one GADGET snapshot file.\n\n"
+    "Only the first file of a multi-file snapshot is read, so n_part_file\n"
+    "is that file's and n_part_total the snapshot's.\n\n"
+    "Returns:\n"
+    "    dict: format (1, 2 or 'hdf5'), swapped and legacy_header (None for\n"
+    "    HDF5), precision (bytes per position component), n_types,\n"
+    "    n_part_file, n_part_total, mass_table, time, redshift, box_size\n"
+    "    (in the file's unit), n_files, cosmology (a dict, or None if the\n"
+    "    file has none), unit_length_in_cm (None if not recorded),\n"
+    "    n_blocks, blocks (names, or None for SnapFormat 1)."},
+
+  {"inspect_gadget", (PyCFunction)pysif_inspect_gadget,
+    METH_VARARGS | METH_KEYWORDS,
+    "inspect_gadget(path, format='auto')\n"
+    "--\n\n"
+    "Print a GADGET snapshot's header: format, precision, particle counts\n"
+    "per type, masses, time, box, cosmology and blocks. For a look at a\n"
+    "snapshot before deciding how to read it; gadget_header() returns the\n"
+    "same as a dict."},
+
   {"write_catalog_ascii", (PyCFunction)pysif_write_catalog_ascii,
     METH_VARARGS | METH_KEYWORDS,
     "write_catalog_ascii(filepath, catalog)\n"
@@ -260,7 +326,7 @@ static PyMethodDef io_methods[] = {
     "('catalog', 'size_function', ...) it describes that product and goes\n"
     "when the product is rewritten.\n\n"
     "sif's own attributes (n_voids, n_bins, ... and every root name\n"
-    "beginning 'sif_') cannot be set. Without HDF5 the entry is appended to\n"
+    "beginning ``sif_``) cannot be set. Without HDF5 the entry is appended to\n"
     "<filepath>.attributes.txt instead, with a RuntimeWarning.\n\n"
     "Args:\n"
     "    filepath: The file; for the root it is created if missing.\n"
@@ -308,7 +374,8 @@ static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
            "that agree on endianness and on the precision sif was built\n"
            "with; both record a checksum and refuse a file that fails it.\n"
            "ASCII is the portable path, and far slower.\n\n"
-           "The *_hdf5 functions keep a catalogue and what was measured from\n"
+           "read_gadget() loads GADGET snapshots, in all three formats.\n\n"
+           "The ``*_hdf5`` functions keep a catalogue and what was measured from\n"
            "it in one HDF5 file, readable with h5py without pysif.",
   .m_size = -1, .m_methods = io_methods};
 

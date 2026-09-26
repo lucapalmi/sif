@@ -1,4 +1,4 @@
-# Quickstart
+# Finding voids
 
 :::{note}
 Placeholder. To cover: a field, a grid, `sif_grid_assign_cic`,

@@ -141,7 +141,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libfftw3-dev libhdf5-dev
       - run: pip install -r docs/requirements.txt
+      - name: Build and install pysif
+        run: pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
       - run: sphinx-build -b html -W --keep-going docs _site
       - uses: actions/upload-pages-artifact@v5
         with:

@@ -74,6 +74,9 @@ static PyObject* sifField_from_numpy(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
 
+  if (py_sif_field_check_exports(self, "from_numpy()") < 0)
+    return NULL;
+
   PyObject *xs_obj, *ys_obj, *zs_obj;
   PyObject *vxs_obj = NULL, *vys_obj = NULL, *vzs_obj = NULL;
   PyObject* ws_obj = NULL;
@@ -213,6 +216,9 @@ static PyObject* sifField_translate(
 static PyObject* sifField_sort_morton(PyObject* self_obj, PyObject* args) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
 
+  if (py_sif_field_check_exports(self, "sort_morton()") < 0)
+    return NULL;
+
   const int status = sif_field_sort_morton(self->field);
   if (status == SIF_ERR_ALLOC)
     return PyErr_NoMemory();
@@ -235,6 +241,73 @@ static PyObject* sifField_refresh_bounds(PyObject* self_obj, PyObject* args) {
 
   Py_RETURN_NONE;
 }
+
+/* --- Array views --- */
+
+int py_sif_field_check_exports(sifFieldObject* self, const char* action) {
+  if (self->n_exports == 0)
+    return 0;
+  PyErr_Format(PyExc_BufferError,
+    "cannot %s: the field has %zd live array view%s (field.x and the like), "
+    "and this reallocates the arrays they point into. Delete the views, or "
+    "keep copies instead (numpy.array(field.x)), first",
+    action, self->n_exports, self->n_exports == 1 ? "" : "s");
+  return -1;
+}
+
+#define EXPORT_CAPSULE "pysif.Field.view"
+
+/* The view's base: holds the field alive, and counts as an export for as long
+ * as the array does. */
+static void export_release(PyObject* capsule) {
+  sifFieldObject* owner = (sifFieldObject*)PyCapsule_GetContext(capsule);
+  owner->n_exports--;
+  Py_DECREF(owner);
+}
+
+/*
+ * A read-only, zero-copy view of one column, or None if the field does not
+ * carry it. Read-only because a write from Python would bypass what the field
+ * keeps about its own data -- its cached bounds and its Morton order.
+ */
+static PyObject* column_view(sifFieldObject* self, sif_real* data) {
+  if (!data || self->field->n_particles == 0)
+    Py_RETURN_NONE;
+
+  PyObject* guard = PyCapsule_New(data, EXPORT_CAPSULE, export_release);
+  if (!guard)
+    return NULL;
+  if (PyCapsule_SetContext(guard, self) < 0) {
+    /* No context yet, so the destructor must not run as a release. */
+    PyCapsule_SetDestructor(guard, NULL);
+    Py_DECREF(guard);
+    return NULL;
+  }
+  Py_INCREF(self);
+  self->n_exports++;
+
+  npy_intp dims[1] = {(npy_intp)self->field->n_particles};
+  PyObject* array = py_sif_wrap_borrowed(guard, 1, dims, data);
+  Py_DECREF(guard); /* the array holds it now, or it is released here */
+  return array;
+}
+
+#define COLUMN_GETTER(name)                                                    \
+  static PyObject* sifField_get_##name(PyObject* self_obj, void* closure) {    \
+    (void)closure;                                                             \
+    sifFieldObject* self = (sifFieldObject*)self_obj;                          \
+    return column_view(self, self->field->name);                               \
+  }
+
+COLUMN_GETTER(x)
+COLUMN_GETTER(y)
+COLUMN_GETTER(z)
+COLUMN_GETTER(vx)
+COLUMN_GETTER(vy)
+COLUMN_GETTER(vz)
+COLUMN_GETTER(weights)
+
+#undef COLUMN_GETTER
 
 /* --- Properties (Getters) --- */
 
@@ -264,6 +337,18 @@ static PyGetSetDef sifField_getset[] = {
     NULL},
   {"has_velocities", sifField_get_has_velocities, NULL,
     "bool: Whether the field carries velocities.", NULL},
+  {"x", sifField_get_x, NULL,
+    "ndarray: x positions, a read-only view of the field's own array (no\n"
+    "copy). See the class docstring for what a live view prevents.",
+    NULL},
+  {"y", sifField_get_y, NULL, "ndarray: y positions; see x.", NULL},
+  {"z", sifField_get_z, NULL, "ndarray: z positions; see x.", NULL},
+  {"vx", sifField_get_vx, NULL,
+    "ndarray or None: x velocities, a read-only view; see x.", NULL},
+  {"vy", sifField_get_vy, NULL, "ndarray or None: y velocities; see vx.", NULL},
+  {"vz", sifField_get_vz, NULL, "ndarray or None: z velocities; see vx.", NULL},
+  {"weights", sifField_get_weights, NULL,
+    "ndarray or None: per-particle weights, a read-only view; see x.", NULL},
   {NULL}};
 
 /* --- Method Definition Array --- */
@@ -336,7 +421,16 @@ PyTypeObject sifFieldType = {
     "A particle field: positions, and optionally velocities and\n"
     "weights.\n\n"
     "The container every other structure is built from. Fill it with\n"
-    "from_numpy(), or read one off disk with pysif.io.read_field().\n\n"
+    "from_numpy(), or read one off disk with pysif.io.read_field() or\n"
+    "pysif.io.read_gadget().\n\n"
+    "x, y, z, vx, vy, vz and weights are read-only NumPy views of the\n"
+    "field's own arrays, in its current particle order -- which\n"
+    "sort_morton() changes. They see in-place changes (wrap(),\n"
+    "translate()). While any view is alive, whatever would reallocate or\n"
+    "take the arrays raises BufferError instead: from_numpy(),\n"
+    "sort_morton(), building an Octree over an unsorted field, and\n"
+    "ChainMesh(..., consume_field=True). Delete the views first, or keep\n"
+    "copies (numpy.array(field.x)).\n\n"
     "Args:\n"
     "    capacity: Particles to make room for up front. The arrays are\n"
     "        sized by from_numpy() anyway, so this only avoids a\n"

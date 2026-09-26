@@ -6,14 +6,17 @@
 :hidden:
 :maxdepth: 2
 
-guide/index
+installation
+examples/index
 algorithms/index
+python/index
 api/index
 ```
 
 ## Start here
 
-- {doc}`guide/installation` -- building the library and the Python bindings.
-- {doc}`guide/quickstart` -- simple usage examples.
+- {doc}`installation` -- building the library and the Python bindings.
+- {doc}`examples/finding_voids` -- a complete void-finding run, in C and Python.
 - {doc}`algorithms/exodus` -- description of the **exodus** void finder.
-- {doc}`api/index` -- the C api reference
+- {doc}`python/index` -- the Python API reference.
+- {doc}`api/index` -- the C API reference.

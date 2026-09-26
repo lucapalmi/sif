@@ -34,6 +34,7 @@ set(SIF_TESTS
   test_finders      # end-to-end: both finders on a synthetic field
   test_survey       # end-to-end: the survey finder on a synthetic footprint
   test_hdf5         # the HDF5 catalogue file, or its text fallback
+  test_gadget       # GADGET snapshots, all formats, from tests/data/gadget
 )
 
 foreach(test_name IN LISTS SIF_TESTS)
@@ -66,6 +67,10 @@ foreach(test_name IN LISTS SIF_TESTS)
       ${HDF5_C_INCLUDE_DIRS} ${HDF5_INCLUDE_DIRS})
     target_link_libraries(${test_name} PRIVATE ${HDF5_C_LIBRARIES})
   endif()
+
+  # Fixture files that live in the source tree, read in place.
+  target_compile_definitions(${test_name} PRIVATE
+    SIF_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
   add_test(NAME ${test_name} COMMAND ${test_name})
 
