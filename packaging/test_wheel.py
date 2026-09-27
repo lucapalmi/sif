@@ -15,9 +15,15 @@ machine that has none of them. So it touches each one:
   - HDF5 again, next to h5py's own copy in the same process: pysif writes, h5py
     rewrites a dataset compressed, pysif reads it back -- which also checks
     that the deflate filter was built in.
+
+And it runs the command-line programs through the commands pip installed for
+them, which checks the launchers and that the executables, repaired like the
+extension, load the same bundled libraries.
 """
 
 import os
+import subprocess
+import sysconfig
 import tempfile
 import warnings
 
@@ -63,4 +69,12 @@ with h5py.File(path, "r+") as f:
 back = pysif.io.read_catalog_hdf5(path)
 assert np.array_equal(back.radii, cat.radii), "compressed dataset read wrong"
 
-print(f"pysif wheel OK: {cat.n_voids} voids, HDF5 round trip, h5py interop")
+# The program links every bundled library, so it does not start without
+# them; --version is enough to find out.
+exodus = os.path.join(sysconfig.get_path("scripts"), "sif-exodus")
+out = subprocess.run([exodus, "--version"], capture_output=True, text=True)
+assert out.returncode == 0, f"sif-exodus --version failed:\n{out.stderr}"
+assert out.stdout.startswith("sif-exodus "), out.stdout
+
+print(f"pysif wheel OK: {cat.n_voids} voids, HDF5 round trip, h5py interop, "
+      f"{out.stdout.strip()}")

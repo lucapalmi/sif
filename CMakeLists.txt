@@ -76,6 +76,10 @@ else()
 endif()
 option(SIF_BUILD_PYTHON "Build the Python extension (pysif)" ${SIF_PYTHON_DEFAULT})
 
+# The command-line programs in bin/ (sif-exodus). On by default, pip included:
+# a wheel ships them inside pysif, with launchers on PATH.
+option(SIF_BUILD_PROGRAMS "Build the command-line programs in bin/" ON)
+
 # Offline data-generation programs. Not part of the library and not built by
 # default: they exist to produce emulator training sets on a cluster.
 option(SIF_BUILD_TOOLS "Build the offline tools in tools/" OFF)
@@ -357,14 +361,64 @@ if(SIF_BUILD_TOOLS)
   endforeach()
 endif()
 
+# Where the libraries pysif and the programs link are found at run time.
+#
+# A build from source runs where it was built, against the FFTW, HDF5 and
+# OpenMP it was linked with -- which on a cluster usually live in module
+# directories the loader does not search. Without their paths recorded in the
+# binary, `import pysif` or `sif-exodus` fails on libfftw3.so or libhdf5.so
+# unless LD_LIBRARY_PATH is set in every job. So they are recorded: every
+# directory a linked library came from, the compiler's OpenMP runtime
+# included, less the system's own, which the loader searches anyway.
+#
+# A wheel for distribution must say OFF, as it does in pyproject.toml: it
+# carries its own copies of the libraries, and must not point at directories
+# on the machine that built it.
+option(SIF_RECORD_RPATH
+  "Record the linked libraries' directories in pysif and the programs (off for distributed wheels)"
+  ON)
+
+function(sif_record_rpath target)
+  if(NOT SIF_RECORD_RPATH)
+    return()
+  endif()
+
+  set_target_properties(${target} PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
+
+  # The OpenMP runtime arrives as a compiler flag (-fopenmp) rather than as a
+  # library path, so the line above does not see it; FindOpenMP knows where it
+  # is. Not a problem with the system compiler, whose runtime is in a system
+  # directory -- exactly the case of a gcc loaded from a module.
+  set(_omp_dirs "")
+  foreach(_lib IN LISTS OpenMP_C_LIB_NAMES)
+    if(OpenMP_${_lib}_LIBRARY)
+      get_filename_component(_dir "${OpenMP_${_lib}_LIBRARY}" DIRECTORY)
+      list(APPEND _omp_dirs "${_dir}")
+    endif()
+  endforeach()
+  if(_omp_dirs)
+    list(REMOVE_DUPLICATES _omp_dirs)
+    list(REMOVE_ITEM _omp_dirs ${CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES})
+    set_property(TARGET ${target} APPEND PROPERTY INSTALL_RPATH ${_omp_dirs})
+  endif()
+endfunction()
+
+# Built in <build>/programs/, which leaves <build>/bin/ to the executables:
+# the default, <build>/bin/, would hold a directory per program with the very
+# names the executables need.
+if(SIF_BUILD_PROGRAMS)
+  add_subdirectory(bin programs)
+endif()
+
 if(SIF_BUILD_PYTHON)
   add_subdirectory(python)
 endif()
 
 # installation
 #
-# Not under pip: a wheel carries the extension alone, which has sif linked in,
-# and has no place for a static library, headers and CMake files.
+# Not under pip: a wheel carries the extension and the programs, which have
+# sif linked in, and has no place for a static library, headers and CMake
+# files.
 
 if(SKBUILD)
   return()

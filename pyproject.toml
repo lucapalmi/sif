@@ -32,6 +32,12 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
 ]
 
+# The command-line programs. Each is a native executable inside the package
+# (pysif/bin/, see bin/CMakeLists.txt); these are the commands pip puts on
+# PATH to run them.
+[project.scripts]
+sif-exodus = "pysif._cli:exodus"
+
 [project.urls]
 Homepage = "https://github.com/lucapalmi/sif"
 Documentation = "https://lucapalmi.github.io/sif/"
@@ -91,7 +97,7 @@ test-command = "python {project}/packaging/test_wheel.py"
 # wheel.
 [tool.cibuildwheel.config-settings]
 "cmake.define.SIF_NATIVE_ARCH" = "OFF"
-"cmake.define.SIF_PYTHON_RPATH" = "OFF"
+"cmake.define.SIF_RECORD_RPATH" = "OFF"
 "cmake.define.SIF_HDF5_SUPPORT" = "ON"
 "cmake.define.SIF_FFTW_THREADING" = "threads"
 "cmake.define.SIF_BUNDLED_LICENSES" = "/tmp/sif-deps/licenses"

@@ -4,7 +4,8 @@ Conventions for the sif source tree. They exist so the library reads as though
 one person wrote it in one sitting, and so that a name tells you what a symbol
 is and where it lives before you go looking.
 
-Rules here are binding for `include/`, `src/`, `python/src/` and `tests/`.
+Rules here are binding for `include/`, `src/`, `bin/`, `python/src/` and
+`tests/`.
 
 `vendor/` is exempt. Third-party code stays as close to upstream as possible so
 it can be re-imported without a merge, which means upstream's naming wins even

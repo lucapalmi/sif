@@ -87,47 +87,13 @@ if(SIF_WITH_HDF5)
   target_compile_definitions(pysif PRIVATE SIF_HAVE_HDF5)
 endif()
 
-# 6. Where the libraries pysif links are found at run time.
-#
-# A build from source runs where it was built, against the FFTW, HDF5 and
-# OpenMP it was linked with -- which on a cluster usually live in module
-# directories the loader does not search. Without their paths recorded in the
-# module, `import pysif` fails on libfftw3.so or libhdf5.so unless
-# LD_LIBRARY_PATH is set in every job. So they are recorded: every directory a
-# linked library came from, the compiler's OpenMP runtime included, less the
-# system's own, which the loader searches anyway.
-#
-# A wheel for distribution must say OFF, as it does in pyproject.toml: it
-# carries its own copies of the libraries, and must not point at directories
-# on the machine that built it.
-option(SIF_PYTHON_RPATH
-  "Record the linked libraries' directories in pysif (off for distributed wheels)"
-  ON)
-
-if(SIF_PYTHON_RPATH)
-  set_target_properties(pysif PROPERTIES INSTALL_RPATH_USE_LINK_PATH TRUE)
-
-  # The OpenMP runtime arrives as a compiler flag (-fopenmp) rather than as a
-  # library path, so the line above does not see it; FindOpenMP knows where it
-  # is. Not a problem with the system compiler, whose runtime is in a system
-  # directory -- exactly the case of a gcc loaded from a module.
-  set(_pysif_omp_dirs "")
-  foreach(_lib IN LISTS OpenMP_C_LIB_NAMES)
-    if(OpenMP_${_lib}_LIBRARY)
-      get_filename_component(_dir "${OpenMP_${_lib}_LIBRARY}" DIRECTORY)
-      list(APPEND _pysif_omp_dirs "${_dir}")
-    endif()
-  endforeach()
-  if(_pysif_omp_dirs)
-    list(REMOVE_DUPLICATES _pysif_omp_dirs)
-    list(REMOVE_ITEM _pysif_omp_dirs ${CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES})
-    set_property(TARGET pysif APPEND PROPERTY INSTALL_RPATH ${_pysif_omp_dirs})
-  endif()
-endif()
+# 6. Where the libraries pysif links are found at run time: see
+# SIF_RECORD_RPATH in the top-level CMakeLists.txt.
+sif_record_rpath(pysif)
 
 # 7. Handle the macOS + Conda dynamic linking problem
 if (APPLE AND DEFINED ENV{CONDA_PREFIX})
-  # Appended, so the directories recorded under SIF_PYTHON_RPATH survive.
+  # Appended, so the directories recorded under SIF_RECORD_RPATH survive.
   set_property(TARGET pysif APPEND PROPERTY INSTALL_RPATH "$ENV{CONDA_PREFIX}/lib")
   set_target_properties(pysif PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
 endif()

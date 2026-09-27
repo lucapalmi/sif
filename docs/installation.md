@@ -58,6 +58,8 @@ The library is compiled through CMake. These are the available options
 
 - **SIF_NATIVE_ARCH:** activates the `-march=native` compile flag in Release builds. If the compiled binary is going to be used on machines with different architectures, this option should be turned off. Options **(ON|OFF)**, default **ON**.
 
+- **SIF_BUILD_PROGRAMS:** builds the command-line programs (`sif-exodus`) into `build/bin/`; `cmake --install` puts them in the `bin/` directory of the install prefix. Options **(ON|OFF)**, default **ON**.
+
 :::{admonition} HPC cluster usage
 :class: tip
 If you are on an HPC cluster, check that the login nodes have the same architecture of the compute nodes. If not, compile with `-DSIF_NATIVE_ARCH=OFF`.
@@ -94,7 +96,7 @@ pip install . -C cmake.define.OpenMP_ROOT=$(brew --prefix libomp)
 
 :::{admonition} HPC cluster usage
 :class: tip
-A build from source records where it found FFTW, HDF5 and the OpenMP runtime, so `import pysif` works without the modules loaded and without setting `LD_LIBRARY_PATH`. The modules only have to be loaded while `pip install .` runs. If the modules are later upgraded or removed, rebuild. This is the **SIF_PYTHON_RPATH** option, **ON** by default; turn it off (`-C cmake.define.SIF_PYTHON_RPATH=OFF`) only when building a wheel to distribute.
+A build from source records where it found FFTW, HDF5 and the OpenMP runtime, so `import pysif` and the command-line programs work without the modules loaded and without setting `LD_LIBRARY_PATH`. The modules only have to be loaded while `pip install .` runs. If the modules are later upgraded or removed, rebuild. This is the **SIF_RECORD_RPATH** option, **ON** by default; turn it off (`-C cmake.define.SIF_RECORD_RPATH=OFF`) only when building a wheel to distribute.
 :::
 
 ::::
