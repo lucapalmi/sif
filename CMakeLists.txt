@@ -254,7 +254,6 @@ set(SOURCES
   # utils
     src/utils/timer.c
     src/utils/logger.c
-    src/utils/str.c
     src/utils/align.c
     src/utils/array.c
     src/utils/crc32.c

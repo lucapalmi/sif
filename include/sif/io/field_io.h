@@ -7,7 +7,7 @@
 /**
  * @file field_io.h
  * @brief Reading and writing particle fields: the .xfield binary format, and
- * ASCII input.
+ * ASCII and raw binary input.
  *
  * The binary format is a fixed 64-byte header followed by the coordinate
  * arrays back to back, uncompressed and in host byte order. It exists so that
@@ -24,7 +24,8 @@
  * reader verifies. Version 1 files carry no checksum and are still accepted,
  * with a warning that they cannot be validated.
  *
- * ASCII input is the portable path, and far slower.
+ * ASCII input is the portable path, and far slower. Raw binary input reads
+ * files written by anything else, given their layout.
  */
 
 #ifndef SIF_IO_FIELD_IO_H
@@ -113,6 +114,41 @@ int sif_field_write(
   const char* filepath, const sif_field_t* field, double box_length);
 
 /**
+ * @defgroup field_format Column formats
+ * @brief How a file's columns map onto a field, for the ASCII and the binary
+ * readers alike.
+ *
+ * A format names the columns in order:
+ *
+ * `x` `y` `z`
+ *   position components
+ *
+ * `vx` `vy` `vz`
+ *   velocity components
+ *
+ * `w`
+ *   per-particle weight (a mass, a luminosity, a selection weight)
+ *
+ * `*`
+ *   a column that is present but not read. In a binary file it may carry a
+ *   width in bytes, `*8`, for a column of another type -- a 64-bit ID among
+ *   single-precision values, say. Without one it is one value at the file's
+ *   precision.
+ *
+ * Case does not matter, and spaces, tabs or commas between names are
+ * optional: `"x y z vx vy vz w"`, `"x,y,z,*,w"` and `"xyzvxvyvzw"` are all
+ * valid. Anything else is an error, and so is a name given twice, or a
+ * position or velocity named only in part -- each is stored as one block of
+ * three, so `"x y"` would leave z unwritten.
+ *
+ * A format need not name the positions: `"* * * vx vy vz"` reads only the
+ * velocities of a file that has both, into a field whose positions are
+ * already loaded. Its particles have to be in the file's order, so a field
+ * that has been Morton-sorted is refused.
+ * @{
+ */
+
+/**
  * @brief Read an ASCII table into an existing field.
  *
  * Blank lines, and lines whose first non-blank character is `#` or `;`, are
@@ -133,22 +169,82 @@ int sif_field_write(
  * @param field Field to fill. Either already sized, or with `n_particles` 0 to
  * take the count from the file.
  * @param filepath Path to the input file.
- * @param fmt Column layout, one character per column; see
- * sif_str_decode_format() for the alphabet. For example `"xyz*m"`. Position and
- * velocity must be named in full or not at all: each is reserved as one block,
- * so `"xy"` would allocate a z array and never write it.
+ * @param fmt Column layout; see the column formats above. For example `"x y z *
+ * w"`. Skip widths (`*8`) are for binary files and are refused here.
  * @param delimiter Character separating columns. Use `' '` for whitespace.
  * @param skip_header Lines to skip before the data starts.
- * @return SIF_OK, SIF_ERR_INVALID for a NULL argument or a format that names
- * no usable columns, only part of the position or velocity, or no positions
- * for a field that has none; SIF_ERR_ALLOC if a block could not be reserved;
+ * @return SIF_OK, SIF_ERR_INVALID for a NULL argument, a malformed format, one
+ * that loads no positions into a field that has none, or one that adds columns
+ * to a Morton-sorted field; SIF_ERR_ALLOC if a block could not be reserved;
  * SIF_ERR_IO if the file could not be read or held no parsable row.
  *
  * @warning A column that is present but does not parse as a number reads as
- * 0.0 rather than failing; see sif_str_extract_next_real(). Only a *missing*
- * column causes a row to be skipped.
+ * 0.0 rather than failing. Only a *missing* column causes a row to be skipped.
  */
 int sif_field_read_ascii(sif_field_t* field, const char* filepath,
   const char* fmt, char delimiter, uint32_t skip_header);
+
+/**
+ * @brief How the values of a binary file are arranged.
+ *
+ * ROWS is one record per particle, every column of it together -- `x0 y0 z0
+ * x1 y1 z1 ...`, what writing an array of C structs produces. BLOCKS is one
+ * column at a time, every particle of it together -- `x0 x1 ... y0 y1 ...`,
+ * what writing one array after another produces.
+ */
+typedef enum { SIF_BINARY_ROWS = 0x100, SIF_BINARY_BLOCKS } sif_binary_layout_t;
+
+/** @brief The precision the values were written in. */
+typedef enum {
+  SIF_BINARY_FLOAT32 = 0x200,
+  SIF_BINARY_FLOAT64
+} sif_binary_precision_t;
+
+/** @brief The byte order the values were written in. */
+typedef enum {
+  /** This machine's own: a file written here, and read here. */
+  SIF_BINARY_NATIVE = 0x300,
+  SIF_BINARY_LITTLE,
+  SIF_BINARY_BIG
+} sif_binary_endian_t;
+
+/**
+ * @brief Read a raw binary file -- a header of known length, then the values
+ * -- into an existing field.
+ *
+ * For files no other reader knows: the header is skipped without being
+ * interpreted, and everything about the data is given by the arguments. Each
+ * enumeration has its own range of values, so an argument passed in the wrong
+ * place is refused rather than read as another.
+ *
+ * A field whose `n_particles` is 0 is sized from the file: what follows the
+ * header must be a whole number of particles, or the file is refused -- a
+ * leftover means the format, the precision or the header length is wrong. A
+ * field that already has a count reads that many, and a file holding more is
+ * reported.
+ *
+ * @param field Field to fill, sized or with `n_particles` 0. As for
+ * sif_field_read_ascii(), blocks it already has are kept, so a second file can
+ * add columns to the first.
+ * @param filepath Path to the input file.
+ * @param fmt Column layout; see the column formats above. For example `"x y z
+ * *8 w"`.
+ * @param layout Rows (one record per particle) or blocks (one column at a
+ * time).
+ * @param precision Float or double, for every value column and every `*`
+ * without a width.
+ * @param endian Byte order of the values.
+ * @param header_bytes Bytes to skip before the data.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, an argument out of
+ * range or in the wrong place, or a format sif_field_read_ascii() would
+ * refuse; SIF_ERR_ALLOC; SIF_ERR_IO if the file could not be read, is shorter
+ * than the particles asked for, or does not divide into whole particles.
+ */
+SIF_NODISCARD int sif_field_read_binary(sif_field_t* field,
+  const char* filepath, const char* fmt, sif_binary_layout_t layout,
+  sif_binary_precision_t precision, sif_binary_endian_t endian,
+  uint64_t header_bytes);
+
+/** @} */
 
 #endif /* SIF_IO_FIELD_IO_H */

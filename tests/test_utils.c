@@ -23,7 +23,6 @@
 #include "sif/utils/crc32.h"
 #include "sif/utils/random.h"
 #include "sif/utils/sort.h"
-#include "sif/utils/str.h"
 #include "sif/utils/timer.h"
 
 #include <stdint.h>
@@ -289,75 +288,6 @@ static void test_array_sum_is_stable(void) {
   sif_free_aligned(a);
 }
 
-static void test_str(void) {
-  printf("format decoding and field scanning\n");
-
-  sif_col_target_t targets[8];
-
-  int n = sif_str_decode_format("xyz*m", targets, 8);
-  CHECK(n == 5, "decoded %d columns from \"xyz*m\", expected 5", n);
-  CHECK(targets[0] == SIF_COL_X && targets[2] == SIF_COL_Z &&
-          targets[3] == SIF_COL_IGNORE && targets[4] == SIF_COL_M,
-    "\"xyz*m\" decoded to the wrong targets");
-
-  CHECK(
-    sif_str_decode_format("XYZ", targets, 8) == 3, "upper case not decoded");
-  CHECK(sif_str_decode_format("uvw", targets, 8) == 3,
-    "velocity columns not decoded");
-
-  /* Unknown characters are skipped, not rejected -- which is what lets a
-   * format be written with separators, and why a typo shortens the layout
-   * instead of failing. */
-  CHECK(sif_str_decode_format("x y z", targets, 8) == 3,
-    "spaces in a format should be ignored");
-  CHECK(sif_str_decode_format("?!", targets, 8) == 0,
-    "an unrecognized format should decode to nothing");
-
-  /* Decoding stops at the caller's capacity rather than writing past it. */
-  CHECK(sif_str_decode_format("xyzuvwm", targets, 3) == 3,
-    "decoding did not stop at max_cols");
-
-  CHECK(sif_str_decode_format(NULL, targets, 8) == 0, "NULL fmt should be 0");
-  CHECK(sif_str_decode_format("xyz", NULL, 8) == 0, "NULL targets should be 0");
-
-  /* Whitespace-separated, with the cursor left ready for the next field. */
-  char line[] = "1.5 -2 3e2\n";
-  char* cursor = line;
-  sif_real v = (sif_real)0.0;
-
-  CHECK(sif_str_extract_next_real(&cursor, ' ', &v) == 1 && v == (sif_real)1.5,
-    "first field read as %g, not 1.5", (double)v);
-  CHECK(sif_str_extract_next_real(&cursor, ' ', &v) == 1 && v == (sif_real)-2.0,
-    "second field read as %g, not -2", (double)v);
-  CHECK(
-    sif_str_extract_next_real(&cursor, ' ', &v) == 1 && v == (sif_real)300.0,
-    "third field read as %g, not 300", (double)v);
-
-  /* End of line is reported as "no field", which is how a caller tells a
-   * short row from one whose columns merely failed to parse. */
-  CHECK(sif_str_extract_next_real(&cursor, ' ', &v) == 0,
-    "the end of the line should report no field");
-
-  char csv[] = "4,5,6";
-  cursor = csv;
-  CHECK(sif_str_extract_next_real(&cursor, ',', &v) == 1 && v == (sif_real)4.0,
-    "comma-delimited field read as %g, not 4", (double)v);
-
-  /* A text column is consumed and reads as zero, so one bad column does not
-   * derail the columns behind it. */
-  char mixed[] = "abc 7";
-  cursor = mixed;
-  CHECK(sif_str_extract_next_real(&cursor, ' ', &v) == 1 && v == (sif_real)0.0,
-    "a non-numeric field should read as 0, got %g", (double)v);
-  CHECK(sif_str_extract_next_real(&cursor, ' ', &v) == 1 && v == (sif_real)7.0,
-    "the field after a non-numeric one read as %g, not 7", (double)v);
-
-  char blank[] = "\n";
-  cursor = blank;
-  CHECK(sif_str_extract_next_real(&cursor, ' ', &v) == 0,
-    "a blank line should report no field");
-}
-
 static void test_crc32(void) {
   printf("crc32\n");
 
@@ -524,7 +454,6 @@ int main(void) {
   test_array_arange();
   test_array_reductions();
   test_array_sum_is_stable();
-  test_str();
   test_crc32();
   test_random();
   test_sort();

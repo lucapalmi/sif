@@ -557,7 +557,7 @@ static void test_ascii_field(void) {
 
   /* Velocities, an ignored column, and a non-space delimiter. */
   write_text("1,2,3,99,-1,-2,-3\n4,5,6,99,-4,-5,-6\n");
-  f = read_ascii("xyz*uvw", ',', 0);
+  f = read_ascii("x y z * vx vy vz", ',', 0);
   CHECK(f != NULL, "comma-delimited read failed");
   if (f) {
     CHECK(f->n_particles == 2, "comma-delimited: got %llu rows, not 2",
@@ -569,13 +569,13 @@ static void test_ascii_field(void) {
   }
 
   /* Reserving is a no-op on a block that is already there, so a second pass
-   * with a mass-only format keeps the positions the first pass loaded. */
+   * with a weight-only format keeps the positions the first pass loaded. */
   write_text("1 2 3 100\n4 5 6 200\n");
   f = read_ascii("xyz*", ' ', 0);
   CHECK(f != NULL, "first pass failed");
   if (f) {
-    CHECK(sif_field_read_ascii(f, ASCII_PATH, "***m", ' ', 0) == SIF_OK,
-      "mass-only second pass failed");
+    CHECK(sif_field_read_ascii(f, ASCII_PATH, "***w", ' ', 0) == SIF_OK,
+      "weight-only second pass failed");
     CHECK(f->x[1] == 4 && f->z[1] == 6, "the second pass lost the positions");
     CHECK(f->weights != NULL && f->weights[1] == 200, "weights did not land");
     sif_field_free(f);
@@ -599,10 +599,8 @@ static void test_ascii_field_rejections(void) {
   if (!f)
     return;
 
-  /* decode_format skips what it does not recognize and returns a count, so a
-   * typo yields a short layout rather than an error. Zero columns is where
-   * that stops being recoverable: every line would be consumed and nothing
-   * written, leaving a field of uninitialized memory that reads as loaded. */
+  /* A format that names nothing would consume every line and write nothing,
+   * leaving a field of uninitialized memory that reads as loaded. */
   CHECK(sif_field_read_ascii(f, ASCII_PATH, "", ' ', 0) == SIF_ERR_INVALID,
     "an empty format should be SIF_ERR_INVALID");
   CHECK(sif_field_read_ascii(f, ASCII_PATH, "?!", ' ', 0) == SIF_ERR_INVALID,
@@ -612,10 +610,11 @@ static void test_ascii_field_rejections(void) {
    * the three would allocate the third and never write it. */
   CHECK(sif_field_read_ascii(f, ASCII_PATH, "xy", ' ', 0) == SIF_ERR_INVALID,
     "a partial position should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xyzu", ' ', 0) == SIF_ERR_INVALID,
+  CHECK(
+    sif_field_read_ascii(f, ASCII_PATH, "xyz vx vy", ' ', 0) == SIF_ERR_INVALID,
     "a partial velocity should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "m", ' ', 0) == SIF_ERR_INVALID,
-    "a mass-only format on a field with no positions should be rejected");
+  CHECK(sif_field_read_ascii(f, ASCII_PATH, "w", ' ', 0) == SIF_ERR_INVALID,
+    "a weight-only format on a field with no positions should be rejected");
 
   CHECK(
     sif_field_read_ascii(NULL, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_INVALID,
@@ -634,6 +633,267 @@ static void test_ascii_field_rejections(void) {
   sif_field_free(f);
 }
 
+/* --- column formats --- */
+
+/* The format language, through the ASCII reader: every spelling of the same
+ * layout reads the same, and every malformed one is refused. */
+static void test_column_formats(void) {
+  printf("column formats\n");
+
+  write_text("1 2 3 4 5 6 7\n8 9 10 11 12 13 14\n");
+  const char* same[] = {"x y z vx vy vz w", "x,y,z,vx,vy,vz,w", "XYZVXVYVZW",
+    "xyzvxvyvzw", "  x\ty z vX Vy vz  w  "};
+  for (size_t i = 0; i < sizeof(same) / sizeof(*same); i++) {
+    sif_field_t* f = read_ascii(same[i], ' ', 0);
+    CHECK(f && f->n_particles == 2 && f->x[1] == 8 && f->z[1] == 10 && f->vx &&
+            f->vx[1] == 11 && f->vz[1] == 13 && f->weights &&
+            f->weights[1] == 14,
+      "format '%s' did not read as x y z vx vy vz w", same[i]);
+    sif_field_free(f);
+  }
+
+  /* w used to be vz and is now the weight. */
+  write_text("1 2 3 4\n");
+  sif_field_t* f = read_ascii("xyzw", ' ', 0);
+  CHECK(f && f->weights && f->weights[0] == 4 && !f->vx,
+    "'xyzw' should read the fourth column as the weight");
+  sif_field_free(f);
+
+  /* Old spellings, typos, repeats, dangling or misplaced pieces: all refused,
+   * none shortened into something that reads. */
+  const char* bad[] = {
+    "xyzuvw",    /* the old velocity letters */
+    "xyz*m",     /* the old weight letter */
+    "x y z x",   /* a column named twice */
+    "x y z w w", /* the weight named twice */
+    "x y z v",   /* v with nothing after it */
+    "x y z vw",  /* v with the wrong thing after it */
+    "x y z q",   /* not a column name */
+    "x y z *8",  /* a skip width, which only binary files take */
+    "* * *",     /* skips alone */
+    "x;y;z",     /* ; is not a separator */
+  };
+  write_text("1 2 3 4 5 6 7\n");
+  for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
+    f = sif_field_alloc(0);
+    CHECK(
+      sif_field_read_ascii(f, ASCII_PATH, bad[i], ' ', 0) == SIF_ERR_INVALID,
+      "format '%s' should be SIF_ERR_INVALID", bad[i]);
+    sif_field_free(f);
+  }
+
+  /* A sorted field is no longer in file order, so a column added without the
+   * positions would land on the wrong particles. Refused -- and reading the
+   * positions again is allowed, and drops the permutation the sort kept. */
+  write_text("3 0 0 30\n1 0 0 10\n2 0 0 20\n");
+  f = read_ascii("x y z *", ' ', 0);
+  if (f) {
+    CHECK(sif_field_sort_morton(f) == SIF_OK, "sort failed");
+    CHECK(
+      sif_field_read_ascii(f, ASCII_PATH, "* * * w", ' ', 0) == SIF_ERR_INVALID,
+      "adding a column to a sorted field should be SIF_ERR_INVALID");
+    CHECK(sif_field_read_ascii(f, ASCII_PATH, "x y z w", ' ', 0) == SIF_OK &&
+            f->original_indices == NULL &&
+            !(f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) && f->x[0] == 3 &&
+            f->weights[0] == 30,
+      "re-reading the positions should reset the sort");
+    sif_field_free(f);
+  }
+}
+
+/* --- raw binary --- */
+
+static const char* BIN_PATH = "test_io.bin";
+
+#define BIN_N      37u
+#define BIN_HEADER 40u
+
+/* Column c of particle i. Every value is exact in single precision, so the
+ * checks compare with ==. */
+static double bin_value(int c, uint64_t i) {
+  return 1000.0 * (c + 1) + 0.25 * (double)i;
+}
+
+/* Appends one value in the requested precision and byte order, built byte by
+ * byte rather than through the reader's own swapping code. */
+static void put_value(FILE* f, double v, int is_double, int big) {
+  unsigned char b[8];
+  uint64_t u;
+  int size;
+  if (is_double) {
+    memcpy(&u, &v, 8);
+    size = 8;
+  } else {
+    const float fv = (float)v;
+    uint32_t u32;
+    memcpy(&u32, &fv, 4);
+    u = u32;
+    size = 4;
+  }
+  for (int k = 0; k < size; k++) {
+    const int shift = big ? 8 * (size - 1 - k) : 8 * k;
+    b[k] = (unsigned char)(u >> shift);
+  }
+  fwrite(b, 1, (size_t)size, f);
+}
+
+/* A file of BIN_N particles in "x y z *8 vx vy vz w": a junk header, then
+ * the values, with a 64-bit ID in the skipped column. */
+static void write_binary(int blocks, int is_double, int big) {
+  FILE* f = fopen(BIN_PATH, "wb");
+  if (!f)
+    return;
+  for (unsigned k = 0; k < BIN_HEADER; k++)
+    fputc(0xA5, f);
+
+  /* Value columns 0..6 are x y z vx vy vz w; -1 is the ID. */
+  const int cols[] = {0, 1, 2, -1, 3, 4, 5, 6};
+  const int n_cols = 8;
+
+  if (blocks) {
+    for (int c = 0; c < n_cols; c++)
+      for (uint64_t i = 0; i < BIN_N; i++) {
+        if (cols[c] < 0) {
+          const uint64_t id = 0xDEADBEEF00000000ull + i;
+          fwrite(&id, 8, 1, f);
+        } else {
+          put_value(f, bin_value(cols[c], i), is_double, big);
+        }
+      }
+  } else {
+    for (uint64_t i = 0; i < BIN_N; i++)
+      for (int c = 0; c < n_cols; c++) {
+        if (cols[c] < 0) {
+          const uint64_t id = 0xDEADBEEF00000000ull + i;
+          fwrite(&id, 8, 1, f);
+        } else {
+          put_value(f, bin_value(cols[c], i), is_double, big);
+        }
+      }
+  }
+  fclose(f);
+}
+
+static uint64_t bin_mismatches(const sif_field_t* f, uint64_t n) {
+  uint64_t bad = 0;
+  const sif_real* arrays[] = {
+    f->x, f->y, f->z, f->vx, f->vy, f->vz, f->weights};
+  for (int c = 0; c < 7; c++) {
+    if (!arrays[c])
+      return UINT64_MAX;
+    for (uint64_t i = 0; i < n; i++)
+      bad += arrays[c][i] != (sif_real)bin_value(c, i);
+  }
+  return bad;
+}
+
+static void test_binary_field(void) {
+  printf("raw binary field input\n");
+
+  const int host_big = 0 == *(const unsigned char*)&(const uint16_t){1};
+  const char* fmt = "x y z *8 vx vy vz w";
+
+  /* Every layout, precision and byte order, sized from the file. */
+  for (int blocks = 0; blocks < 2; blocks++)
+    for (int dbl = 0; dbl < 2; dbl++)
+      for (int e = 0; e < 3; e++) {
+        const sif_binary_endian_t endian =
+          (sif_binary_endian_t)(SIF_BINARY_NATIVE + e);
+        const int big = e == 0 ? host_big : e == 2;
+        write_binary(blocks, dbl, big);
+
+        sif_field_t* f = sif_field_alloc(0);
+        const int status = sif_field_read_binary(f, BIN_PATH, fmt,
+          blocks ? SIF_BINARY_BLOCKS : SIF_BINARY_ROWS,
+          dbl ? SIF_BINARY_FLOAT64 : SIF_BINARY_FLOAT32, endian, BIN_HEADER);
+        CHECK(status == SIF_OK && f->n_particles == BIN_N,
+          "%s, %s, endian %d: status %d, %llu particles",
+          blocks ? "blocks" : "rows", dbl ? "double" : "float", e, status,
+          (unsigned long long)f->n_particles);
+        if (status == SIF_OK)
+          CHECK(bin_mismatches(f, BIN_N) == 0,
+            "%s, %s, endian %d: wrong values", blocks ? "blocks" : "rows",
+            dbl ? "double" : "float", e);
+        sif_field_free(f);
+      }
+
+  /* A pre-sized field reads that many; a count the file cannot hold is an
+   * I/O error. */
+  write_binary(0, 0, host_big);
+  sif_field_t* f = sif_field_alloc(10);
+  CHECK(sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_OK &&
+          bin_mismatches(f, 10) == 0,
+    "a pre-sized field was not filled with the first particles");
+  sif_field_free(f);
+
+  f = sif_field_alloc(BIN_N + 1);
+  CHECK(sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_ERR_IO,
+    "asking for more particles than the file holds should be SIF_ERR_IO");
+  sif_field_free(f);
+
+  /* The wrong header length, precision or format leaves a remainder, which
+   * is refused rather than rounded down into misread particles. */
+  const struct {
+    const char* fmt;
+    sif_binary_precision_t prec;
+    uint64_t header;
+  } off[] = {
+    {fmt, SIF_BINARY_FLOAT32, BIN_HEADER - 4},
+    {fmt, SIF_BINARY_FLOAT64, BIN_HEADER},
+    {"x y z * vx vy vz w", SIF_BINARY_FLOAT32, BIN_HEADER},
+  };
+  for (size_t i = 0; i < sizeof(off) / sizeof(*off); i++) {
+    f = sif_field_alloc(0);
+    CHECK(sif_field_read_binary(f, BIN_PATH, off[i].fmt, SIF_BINARY_ROWS,
+            off[i].prec, SIF_BINARY_NATIVE, off[i].header) == SIF_ERR_IO,
+      "mismatched layout %zu should be SIF_ERR_IO", i);
+    sif_field_free(f);
+  }
+
+  /* Only the velocities, into a field whose positions are already loaded --
+   * and skipping a whole block in the block layout. */
+  write_binary(1, 1, host_big);
+  f = sif_field_alloc(0);
+  CHECK(
+    sif_field_read_binary(f, BIN_PATH, "x y z *8 * * * *", SIF_BINARY_BLOCKS,
+      SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_OK &&
+      !f->vx,
+    "positions-only read failed");
+  CHECK(
+    sif_field_read_binary(f, BIN_PATH, "* * * *8 vx vy vz *", SIF_BINARY_BLOCKS,
+      SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_OK,
+    "velocities-only second read failed");
+  CHECK(f->vx && !f->weights && f->x[5] == (sif_real)bin_value(0, 5) &&
+          f->vx[5] == (sif_real)bin_value(3, 5) &&
+          f->vz[BIN_N - 1] == (sif_real)bin_value(5, BIN_N - 1),
+    "the second read did not add the velocities to the first");
+  sif_field_free(f);
+
+  /* Arguments in the wrong slot, or out of range. */
+  f = sif_field_alloc(0);
+  CHECK(sif_field_read_binary(f, BIN_PATH, fmt,
+          (sif_binary_layout_t)SIF_BINARY_FLOAT64,
+          (sif_binary_precision_t)SIF_BINARY_ROWS, SIF_BINARY_NATIVE,
+          BIN_HEADER) == SIF_ERR_INVALID,
+    "swapped layout and precision should be SIF_ERR_INVALID");
+  CHECK(
+    sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS, SIF_BINARY_FLOAT32,
+      (sif_binary_endian_t)3, BIN_HEADER) == SIF_ERR_INVALID,
+    "a bare int byte order should be SIF_ERR_INVALID");
+  CHECK(sif_field_read_binary(f, BIN_PATH, "x y z *0 w", SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 0) == SIF_ERR_INVALID,
+    "a zero skip width should be SIF_ERR_INVALID");
+  CHECK(sif_field_read_binary(f, "test_io_missing.bin", fmt, SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 0) == SIF_ERR_IO,
+    "a missing file should be SIF_ERR_IO");
+  CHECK(sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 1u << 20) == SIF_ERR_IO,
+    "a header longer than the file should be SIF_ERR_IO");
+  sif_field_free(f);
+}
+
 int main(void) {
   if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
     printf("FAIL: sif_init\n");
@@ -648,11 +908,14 @@ int main(void) {
   test_profiles_roundtrip();
   test_ascii_field();
   test_ascii_field_rejections();
+  test_column_formats();
+  test_binary_field();
 
   remove(FIELD_PATH);
   remove(GRID_PATH);
   remove(CAT_PATH);
   remove(ASCII_PATH);
+  remove(BIN_PATH);
   remove(PROF_PATH);
   remove(PROF_HALF_PATH);
 

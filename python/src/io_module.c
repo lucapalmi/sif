@@ -82,16 +82,18 @@ static PyMethodDef io_methods[] = {
 
   {"read_field_ascii", (PyCFunction)pysif_read_field_ascii,
     METH_VARARGS | METH_KEYWORDS,
-    "read_field_ascii(filepath, format, delimiter=' ', skip_lines=0)\n"
+    "read_field_ascii(filepath, format='x y z', delimiter=' ', skip_lines=0)\n"
     "--\n\n"
     "Read a particle field from an ASCII table.\n\n"
     "Far slower than the binary path, and the portable one.\n\n"
     "Args:\n"
     "    filepath: Input path.\n"
-    "    format: One character per column: 'x', 'y', 'z' for positions,\n"
-    "        'u', 'v', 'w' for velocities, 'm' for the per-particle weight, "
-    "'*' or '/' to skip\n"
-    "        a column. So 'xyz*m' reads position, skips one, then the weight.\n"
+    "    format: The columns, in order: 'x', 'y', 'z' for positions, 'vx',\n"
+    "        'vy', 'vz' for velocities, 'w' for the per-particle weight, '*'\n"
+    "        to skip a column. Case does not matter, and spaces or commas\n"
+    "        between names are optional: 'x y z * w', 'x,y,z,*,w' and\n"
+    "        'xyz*w' are the same. Anything else, a name given twice, or a\n"
+    "        position or velocity named in part, is a ValueError.\n"
     "    delimiter: Column separator; ' ' for whitespace.\n"
     "    skip_lines: Header lines to skip.\n\n"
     "Returns:\n"
@@ -99,6 +101,41 @@ static PyMethodDef io_methods[] = {
     "Note:\n"
     "    A column that does not parse as a number reads as 0.0 rather than\n"
     "    raising, so check that format matches the file."},
+
+  {"read_field_binary", (PyCFunction)pysif_read_field_binary,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_field_binary(filepath, format='x y z', *, layout='rows', "
+    "precision='float32', byteorder='native', header_bytes=0, n_particles=0, "
+    "field=None)\n"
+    "--\n\n"
+    "Read a raw binary file -- a header of known length, then the values.\n\n"
+    "For files no other reader knows: the header is skipped without being\n"
+    "read, and the arguments say everything about the data.\n\n"
+    "Args:\n"
+    "    filepath: Input path.\n"
+    "    format: The columns, as for read_field_ascii(). In a binary file a\n"
+    "        skipped column may carry its width in bytes, '*8', for a column\n"
+    "        of another type -- a 64-bit ID among float32 values, say. So\n"
+    "        'x y z *8 w'. '* * * vx vy vz' reads only the velocities.\n"
+    "    layout: 'rows', one record per particle (x0 y0 z0 x1 y1 z1 ...,\n"
+    "        what an array of structs gives), or 'blocks', one column at a\n"
+    "        time (x0 x1 ... y0 y1 ..., what one array after another gives).\n"
+    "    precision: 'float32' or 'float64', for every value column.\n"
+    "    byteorder: 'native', 'little' or 'big'.\n"
+    "    header_bytes: Bytes to skip before the data.\n"
+    "    n_particles: Particles to read; 0 takes the count from the file,\n"
+    "        which then has to hold a whole number of them.\n"
+    "    field: A Field to read into instead of a new one: blocks it already\n"
+    "        has are kept, so a second file can add columns to the first.\n"
+    "        Its particle count is used, and it must not have been\n"
+    "        Morton-sorted unless the format reloads the positions.\n\n"
+    "Returns:\n"
+    "    Field: The loaded field -- the one passed as field, if any.\n\n"
+    "Raises:\n"
+    "    ValueError: For a malformed format or an unknown option.\n"
+    "    OSError: For a file that is missing, too short, or does not divide\n"
+    "        into whole particles -- a sign the format, precision or header\n"
+    "        length is not the file's."},
 
   {"read_gadget", (PyCFunction)pysif_read_gadget, METH_VARARGS | METH_KEYWORDS,
     "read_gadget(path, *, ptype=1, velocities=None, masses=False, "
@@ -368,15 +405,17 @@ static PyMethodDef io_methods[] = {
 
 static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
   .m_name = "pysif.io",
-  .m_doc = "Reading and writing sif's on-disk formats.\n\n"
-           "The .xfield and .xgrid binary formats load without parsing or\n"
-           "copying, at the cost of being portable only between machines\n"
-           "that agree on endianness and on the precision sif was built\n"
-           "with; both record a checksum and refuse a file that fails it.\n"
-           "ASCII is the portable path, and far slower.\n\n"
-           "read_gadget() loads GADGET snapshots, in all three formats.\n\n"
-           "The ``*_hdf5`` functions keep a catalogue and what was measured from\n"
-           "it in one HDF5 file, readable with h5py without pysif.",
+  .m_doc =
+    "Reading and writing sif's on-disk formats.\n\n"
+    "The .xfield and .xgrid binary formats load without parsing or\n"
+    "copying, at the cost of being portable only between machines\n"
+    "that agree on endianness and on the precision sif was built\n"
+    "with; both record a checksum and refuse a file that fails it.\n"
+    "ASCII is the portable path, and far slower; read_field_binary()\n"
+    "reads raw binary files written by anything else, given their layout.\n\n"
+    "read_gadget() loads GADGET snapshots, in all three formats.\n\n"
+    "The ``*_hdf5`` functions keep a catalogue and what was measured from\n"
+    "it in one HDF5 file, readable with h5py without pysif.",
   .m_size = -1, .m_methods = io_methods};
 
 /* Submodule exporter called from the parent module initialization routing */

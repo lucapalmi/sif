@@ -268,7 +268,7 @@ PyObject* pysif_read_field_ascii(
   const char* filepath;
   const char* format = "x y z";
   char delimiter = ' ';
-  int skip_lines = 1;
+  int skip_lines = 0;
   const char* delim_str = " ";
 
   static char* kwlist[] = {
@@ -292,8 +292,12 @@ PyObject* pysif_read_field_ascii(
     sif_field_read_ascii(field, filepath, format, delimiter, skip_lines);
   Py_END_ALLOW_THREADS
 
-    if (status != 0) {
+    if (status != SIF_OK) {
     sif_field_free(field);
+    if (status == SIF_ERR_INVALID)
+      return PyErr_Format(PyExc_ValueError,
+        "cannot read %s with format '%s'; see the log for the reason", filepath,
+        format);
     return PyErr_Format(
       PyExc_IOError, "Failed to read ASCII field from %s", filepath);
   }
@@ -305,6 +309,121 @@ PyObject* pysif_read_field_ascii(
     return PyErr_NoMemory();
   }
 
+  obj->field = field;
+  return (PyObject*)obj;
+}
+
+/* --- raw binary input --- */
+
+/* One of a fixed set of strings, to its enumerator; a ValueError naming the
+ * argument otherwise. */
+static int binary_choice(const char* arg, const char* s,
+  const char* const* names, const int* values, int n, int* out) {
+  for (int i = 0; i < n; i++) {
+    if (strcmp(s, names[i]) == 0) {
+      *out = values[i];
+      return 0;
+    }
+  }
+  char accepted[128] = "";
+  for (int i = 0; i < n; i++) {
+    strncat(accepted, i ? ", '" : "'", sizeof(accepted) - strlen(accepted) - 1);
+    strncat(accepted, names[i], sizeof(accepted) - strlen(accepted) - 1);
+    strncat(accepted, "'", sizeof(accepted) - strlen(accepted) - 1);
+  }
+  PyErr_Format(
+    PyExc_ValueError, "%s must be one of %s, not '%s'", arg, accepted, s);
+  return -1;
+}
+
+PyObject* pysif_read_field_binary(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  const char* filepath;
+  const char* format = "x y z";
+  const char* layout_s = "rows";
+  const char* precision_s = "float32";
+  const char* byteorder_s = "native";
+  unsigned long long header_bytes = 0;
+  unsigned long long n_particles = 0;
+  PyObject* into = Py_None;
+
+  static char* kwlist[] = {"filepath", "format", "layout", "precision",
+    "byteorder", "header_bytes", "n_particles", "field", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|s$sssKKO", kwlist, &filepath,
+        &format, &layout_s, &precision_s, &byteorder_s, &header_bytes,
+        &n_particles, &into))
+    return NULL;
+
+  static const char* const layouts[] = {"rows", "blocks"};
+  static const int layout_values[] = {SIF_BINARY_ROWS, SIF_BINARY_BLOCKS};
+  static const char* const precisions[] = {"float32", "float64"};
+  static const int precision_values[] = {
+    SIF_BINARY_FLOAT32, SIF_BINARY_FLOAT64};
+  static const char* const orders[] = {"native", "little", "big"};
+  static const int order_values[] = {
+    SIF_BINARY_NATIVE, SIF_BINARY_LITTLE, SIF_BINARY_BIG};
+
+  int layout, precision, byteorder;
+  if (binary_choice("layout", layout_s, layouts, layout_values, 2, &layout) <
+        0 ||
+      binary_choice("precision", precision_s, precisions, precision_values, 2,
+        &precision) < 0 ||
+      binary_choice(
+        "byteorder", byteorder_s, orders, order_values, 3, &byteorder) < 0)
+    return NULL;
+
+  /* Into a field the caller already has -- a second file adding columns to a
+   * first -- or into a new one. */
+  sifFieldObject* target = NULL;
+  sif_field_t* field = NULL;
+  if (into != Py_None) {
+    if (!PyObject_TypeCheck(into, &sifFieldType)) {
+      PyErr_SetString(PyExc_TypeError, "field must be a pysif.Field or None");
+      return NULL;
+    }
+    if (n_particles) {
+      PyErr_SetString(PyExc_ValueError,
+        "n_particles cannot be given with field: the field's own count is "
+        "used");
+      return NULL;
+    }
+    target = (sifFieldObject*)into;
+    field = target->field;
+  } else {
+    field = sif_field_alloc(n_particles);
+    if (!field)
+      return PyErr_NoMemory();
+  }
+
+  const int status = sif_field_read_binary(field, filepath, format,
+    (sif_binary_layout_t)layout, (sif_binary_precision_t)precision,
+    (sif_binary_endian_t)byteorder, header_bytes);
+
+  if (status != SIF_OK) {
+    if (!target)
+      sif_field_free(field);
+    if (status == SIF_ERR_ALLOC)
+      return PyErr_NoMemory();
+    if (status == SIF_ERR_INVALID)
+      return PyErr_Format(PyExc_ValueError,
+        "cannot read %s with format '%s'; see the log for the reason", filepath,
+        format);
+    return PyErr_Format(
+      PyExc_OSError, "failed to read %s; see the log for the reason", filepath);
+  }
+
+  if (target) {
+    Py_INCREF(into);
+    return into;
+  }
+
+  sifFieldObject* obj =
+    (sifFieldObject*)sifFieldType.tp_alloc(&sifFieldType, 0);
+  if (!obj) {
+    sif_field_free(field);
+    return PyErr_NoMemory();
+  }
   obj->field = field;
   return (PyObject*)obj;
 }

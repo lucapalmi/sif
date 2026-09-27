@@ -18,6 +18,8 @@ PyObject* pysif_write_grid(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_grid(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_field_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_field_binary(
+  PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_write_catalog_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_catalog_ascii(

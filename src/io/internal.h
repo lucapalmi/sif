@@ -19,6 +19,7 @@
 
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
 #include <unistd.h>
 
 #include "sif/core/macros.h"
@@ -86,5 +87,27 @@ int sif__io_pread_parallel(
  * trade -- the alternative is parsing the file twice.
  */
 uint64_t sif__io_ascii_row_count(const char* filepath, uint32_t skip_header);
+
+/**
+ * @brief Reverse the bytes of a 32- or 64-bit word: the conversion between
+ * little- and big-endian, for the readers of files from other machines.
+ */
+static inline uint32_t sif__io_bswap32(uint32_t v) {
+  return (v >> 24) | ((v >> 8) & 0xff00u) | ((v << 8) & 0xff0000u) | (v << 24);
+}
+
+/** @copydoc sif__io_bswap32 */
+static inline uint64_t sif__io_bswap64(uint64_t v) {
+  return ((uint64_t)sif__io_bswap32((uint32_t)v) << 32) |
+         sif__io_bswap32((uint32_t)(v >> 32));
+}
+
+/** @brief Whether this machine stores the least significant byte first. */
+static inline int sif__io_host_is_little(void) {
+  const uint16_t one = 1;
+  unsigned char first;
+  memcpy(&first, &one, 1);
+  return first == 1;
+}
 
 #endif /* SIF__IO_INTERNAL_H */

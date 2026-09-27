@@ -19,6 +19,7 @@
 #include "sif/io/gadget_io.h"
 
 #include "io/gadget_internal.h"
+#include "io/internal.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 
@@ -100,24 +101,16 @@ static const char* format_name(sif_gadget_format_t format) {
 /* byte order                                                                */
 /* ------------------------------------------------------------------------ */
 
-static uint32_t bswap32(uint32_t v) {
-  return (v >> 24) | ((v >> 8) & 0xff00u) | ((v << 8) & 0xff0000u) | (v << 24);
-}
-
-static uint64_t bswap64(uint64_t v) {
-  return ((uint64_t)bswap32((uint32_t)v) << 32) | bswap32((uint32_t)(v >> 32));
-}
-
 static uint32_t get_u32(const unsigned char* p, bool swapped) {
   uint32_t v;
   memcpy(&v, p, 4);
-  return swapped ? bswap32(v) : v;
+  return swapped ? sif__io_bswap32(v) : v;
 }
 
 static uint64_t get_u64(const unsigned char* p, bool swapped) {
   uint64_t v;
   memcpy(&v, p, 8);
-  return swapped ? bswap64(v) : v;
+  return swapped ? sif__io_bswap64(v) : v;
 }
 
 static double get_f64(const unsigned char* p, bool swapped) {

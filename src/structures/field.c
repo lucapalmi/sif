@@ -9,7 +9,6 @@
 #include "core/system_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
-#include "sif/utils/str.h"
 
 #include <stdlib.h>
 #include <string.h>

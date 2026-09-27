@@ -18,10 +18,10 @@ set(SIF_TEST_HOME "${CMAKE_CURRENT_BINARY_DIR}/test_home")
 file(MAKE_DIRECTORY "${SIF_TEST_HOME}")
 
 set(SIF_TESTS
-  test_utils        # allocation, arrays, string scanning, crc32, prng, sort
+  test_utils        # allocation, arrays, crc32, prng, sort
   test_structures   # bitmask, catalog, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
-  test_io           # .xfield/.xgrid round trips, checksums, ASCII catalogues
+  test_io           # .xfield/.xgrid round trips, checksums, ASCII and raw binary
   test_octree       # build integrity + nearest neighbour vs brute force
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count

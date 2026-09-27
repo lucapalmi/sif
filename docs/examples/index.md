@@ -1,9 +1,9 @@
 # Examples
 
-Usage examples, in C and Python side by side.
+These pages cover some usage example of the features in **sif**: 
 
 ```{toctree}
 :maxdepth: 1
 
-finding_voids
+run_exodus
 ```
