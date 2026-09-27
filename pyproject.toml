@@ -44,9 +44,9 @@ ninja.version = ">=1.5"
 build-dir = "build/{wheel_tag}"
 cmake.build-type = "Release"
 
-# The extension module is the whole package, and CMake installs it (see
-# python/CMakeLists.txt); there is no Python source tree to copy.
-wheel.packages = []
+# The Python half of the package; CMake installs the compiled half,
+# pysif/_pysif.*.so, next to it (see python/CMakeLists.txt).
+wheel.packages = ["python/pysif"]
 
 # What the source distribution leaves out: none of it is needed to build.
 sdist.exclude = [

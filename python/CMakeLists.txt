@@ -60,7 +60,7 @@ set(PYTHON_SOURCES
 )
 
 # 3. Build the Python Extension Module
-# The target name 'pysif' must match your PyInit_pysif function in C.
+# Built as _pysif (OUTPUT_NAME, below), to match PyInit__pysif in C.
 Python3_add_library(pysif MODULE WITH_SOABI ${PYTHON_SOURCES})
 
 # 4. Include Directories (sif's own headers come with the target, below)
@@ -132,10 +132,26 @@ if (APPLE AND DEFINED ENV{CONDA_PREFIX})
   set_target_properties(pysif PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
 endif()
 
-# Into the root of the wheel, where `import pysif` finds it. A plain CMake
-# build leaves the module in the build tree, to be used from there.
+# pysif is a package: the extension is its compiled half, pysif._pysif, next
+# to the Python files in python/pysif/. pip puts those files into the wheel
+# itself (wheel.packages in pyproject.toml) and the module goes in beside
+# them.
+#
+# A plain CMake build assembles the same package in the build tree, so that
+# PYTHONPATH=<build>/python finds a working pysif without pip. The files are
+# copied, not linked: edit them in python/pysif/, and rebuild.
+set_target_properties(pysif PROPERTIES
+  OUTPUT_NAME _pysif
+  LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/pysif)
+
+file(GLOB _pysif_py CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pysif/*.py)
+foreach(_py IN LISTS _pysif_py)
+  get_filename_component(_name "${_py}" NAME)
+  configure_file("${_py}" "${CMAKE_CURRENT_BINARY_DIR}/pysif/${_name}" COPYONLY)
+endforeach()
+
 if(SKBUILD)
-  install(TARGETS pysif DESTINATION .)
+  install(TARGETS pysif DESTINATION pysif)
 endif()
 
 # The license texts of the libraries a distributed wheel carries inside it

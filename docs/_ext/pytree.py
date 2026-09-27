@@ -53,6 +53,8 @@ def _discover_submodules():
 
     found = []
     for name in dir(pysif):
+        if name.startswith("_"):  # _pysif, the compiled half, is not API
+            continue
         obj = getattr(pysif, name)
         if hasattr(obj, "__name__") and getattr(obj, "__name__", "").startswith("pysif."):
             subname = obj.__name__.split(".", 1)[1]

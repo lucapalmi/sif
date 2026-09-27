@@ -142,24 +142,17 @@ static PyMethodDef sif_module_methods[] = {
     "    str: The setting's value, or None if absent with no fallback."},
   {NULL, NULL, 0, NULL}};
 
+/* The compiled half of the pysif package: python/pysif/__init__.py imports
+ * everything from here and is what users see, docstring included. */
 static struct PyModuleDef sif_module = {
   PyModuleDef_HEAD_INIT,
-  .m_name = "pysif",
-  .m_doc = "sif: cosmic void finding and analysis.\n\n"
-           "Call init() before anything else and finalize() when done.\n\n"
-           "The data structures live here in the package root -- Field, Grid,\n"
-           "Catalog and the rest -- and the operations on them are grouped\n"
-           "into submodules: io for reading and writing, finders for void\n"
-           "identification, measure for measurements taken from data, and\n"
-           "model for theoretical predictions.\n\n"
-           "pysif.real is the NumPy scalar type matching the precision the\n"
-           "library was built with, so np.zeros(n, dtype=pysif.real) gives\n"
-           "arrays the bindings take without a conversion copy.",
+  .m_name = "pysif._pysif",
+  .m_doc = "The compiled core of pysif. Import pysif, not this module.",
   .m_size = -1,
   .m_methods = sif_module_methods,
 };
 
-PyMODINIT_FUNC PyInit_pysif(void) {
+PyMODINIT_FUNC PyInit__pysif(void) {
   /* CRITICAL: Initialize NumPy C-API */
   import_array();
 
