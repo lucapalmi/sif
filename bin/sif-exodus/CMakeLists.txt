@@ -4,4 +4,4 @@
 # This file is part of sif. See COPYING for the full license text.
 
 # sif-exodus: the exodus finder run on a parameter file.
-sif_add_program(sif-exodus main.c)
+sif_add_program(sif-exodus main.c pipeline.c)
