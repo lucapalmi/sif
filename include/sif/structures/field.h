@@ -27,7 +27,7 @@
  * **Positions are Cartesian, or sky coordinates waiting to become so.** A
  * survey arrives as right ascension, declination and redshift; loaded into
  * x, y and z, and declared as such with sif_field_t::units =
- * #SIF_FIELD_SKY, it is turned into comoving Cartesian positions by
+ * #SIF_COORDINATES_SKY, it is turned into comoving Cartesian positions by
  * sif_field_convert_sky_coordinates(). Until then, everything that bins,
  * sorts, bounds or moves positions refuses the field rather than read angles
  * as lengths.
@@ -39,22 +39,6 @@
 #include "sif/core/macros.h"
 #include "sif/model/cosmology.h"
 #include <stdint.h>
-
-/** @brief What a field's positions are. */
-typedef enum {
-  /**
-   * Cartesian coordinates in x, y and z, in the units of the box. What every
-   * function that bins, sorts, bounds or moves positions needs, and what
-   * every reader in sif produces.
-   */
-  SIF_FIELD_CARTESIAN = 0,
-  /**
-   * Sky coordinates: x holds the right ascension and y the declination, both
-   * in degrees, and z the redshift. Only sif_field_convert_sky_coordinates()
-   * takes a field like this.
-   */
-  SIF_FIELD_SKY
-} sif_field_units_t;
 
 /**
  * @defgroup field_state Field state flags
@@ -141,12 +125,12 @@ typedef struct {
   uint64_t n_particles;
 
   /**
-   * What the positions are. #SIF_FIELD_CARTESIAN from sif_field_alloc() and
-   * from every reader; set it to #SIF_FIELD_SKY after putting right
+   * What the positions are. #SIF_COORDINATES_CARTESIAN from sif_field_alloc()
+   * and from every reader; set it to #SIF_COORDINATES_SKY after putting right
    * ascension, declination and redshift into x, y and z. Assigning positions
    * does not change it: the caller knows what its arrays hold.
    */
-  sif_field_units_t units;
+  sif_coordinates_t units;
 } sif_field_t;
 
 /**
@@ -358,7 +342,8 @@ int sif_field_require_morton(sif_field_t* field);
  *
  * with the observer at the origin -- the convention of pyrecon's
  * sky_to_cartesian(). Positions come out in Mpc/h (see cosmology.h), and the
- * field is then #SIF_FIELD_CARTESIAN. Weights and velocities are untouched.
+ * field is then #SIF_COORDINATES_CARTESIAN. Weights and velocities are
+ * untouched.
  *
  * The distances come from a table in z with exact derivatives at its nodes,
  * so a field of any size costs one integral per node, not per tracer, and
@@ -370,7 +355,7 @@ int sif_field_require_morton(sif_field_t* field);
  * the field as it was.
  *
  * @param field Field holding sky coordinates (sif_field_t::units ==
- * #SIF_FIELD_SKY), modified in place.
+ * #SIF_COORDINATES_SKY), modified in place.
  * @param cosmo The cosmology the redshifts are converted in.
  * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, a field without
  * positions or already Cartesian, a coordinate out of range, or cosmological

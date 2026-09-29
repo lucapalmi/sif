@@ -123,6 +123,12 @@ int sif_field_write(
  * `x` `y` `z`
  *   position components
  *
+ * `ra` `dec` `z`
+ *   sky coordinates instead: right ascension and declination in degrees,
+ *   and redshift. They load into x, y and z, and the field comes out as
+ *   #SIF_COORDINATES_SKY, for sif_field_convert_sky_coordinates(). A format
+ *   names positions or sky coordinates, never some of each.
+ *
  * `vx` `vy` `vz`
  *   velocity components
  *

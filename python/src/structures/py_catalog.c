@@ -5,6 +5,8 @@
  */
 
 #include "py_catalog.h"
+
+#include "model/py_model.h"
 #include <numpy/arrayobject.h>
 
 /* --- Lifecycle Methods --- */
@@ -114,7 +116,19 @@ static PyObject* sifCatalog_get_n_voids(PyObject* self_obj, void* closure) {
   return PyLong_FromUnsignedLongLong(self->catalog->n_voids);
 }
 
+static PyObject* sifCatalog_get_units(PyObject* self_obj, void* closure) {
+  (void)closure;
+  return PyUnicode_FromString(
+    ((sifCatalogObject*)self_obj)->catalog->units == SIF_COORDINATES_SKY
+      ? "sky"
+      : "cartesian");
+}
+
 static PyGetSetDef sifCatalog_getset[] = {
+  {"units", sifCatalog_get_units, NULL,
+    "What the centres are: 'cartesian', as a finder gives them, or 'sky' --\n"
+    "right ascension, declination (degrees) and redshift -- after to_sky().",
+    NULL},
   {"centers", sifCatalog_get_centers, NULL,
     "Nx3 NumPy array of void centers (x, y, z)", NULL},
   {"radii", sifCatalog_get_radii, NULL, "1D NumPy array of void radii", NULL},
@@ -142,8 +156,57 @@ static PyObject* sifCatalog_translate(
     return NULL;
 
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
-  sif_catalog_translate(((sifCatalogObject*)self_obj)->catalog, offset);
+  if (sif_catalog_translate(((sifCatalogObject*)self_obj)->catalog, offset) !=
+      SIF_OK) {
+    PyErr_SetString(PyExc_ValueError,
+      "cannot translate: the catalogue holds sky coordinates");
+    return NULL;
+  }
   Py_RETURN_NONE;
+}
+
+static PyObject* sifCatalog_to_sky(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  double omega_m;
+  PyObject* omega_de = Py_None;
+  double omega_r = 0.0, w0 = -1.0, wa = 0.0;
+  static char* kwlist[] = {"omega_m", "omega_de", "omega_r", "w0", "wa", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "d|Oddd", kwlist, &omega_m, &omega_de, &omega_r, &w0, &wa))
+    return NULL;
+
+  sif_cosmology_t cosmo;
+  if (py_sif_cosmology_from(omega_m, omega_de, omega_r, w0, wa, &cosmo) < 0)
+    return NULL;
+
+  sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  if (cat->units != SIF_COORDINATES_CARTESIAN) {
+    PyErr_SetString(PyExc_ValueError, "the catalogue is already on the sky");
+    return NULL;
+  }
+
+  int status;
+  Py_BEGIN_ALLOW_THREADS status = sif_catalog_to_sky(cat, &cosmo);
+  Py_END_ALLOW_THREADS
+
+    switch (status) {
+  case SIF_OK:
+    Py_RETURN_NONE;
+  case SIF_ERR_ALLOC:
+    return PyErr_NoMemory();
+  case SIF_ERR_RANGE:
+    PyErr_SetString(PyExc_ValueError,
+      "a void centre is farther from the origin than this cosmology reaches "
+      "by z = 10^4: is the observer at the origin, and are the centres in "
+      "Mpc/h?");
+    return NULL;
+  default:
+    PyErr_SetString(PyExc_ValueError,
+      "some centres cannot be converted (not finite); the log has the count, "
+      "and the catalogue is unchanged");
+    return NULL;
+  }
 }
 
 static PyMethodDef sifCatalog_methods[] = {
@@ -155,7 +218,28 @@ static PyMethodDef sifCatalog_methods[] = {
     "offset survey_box() returned, and the centres return to your own frame.\n"
     "Radii and footprints are unchanged.\n\n"
     "Args:\n"
-    "    offset: Three numbers, added to x, y and z."},
+    "    offset: Three numbers, added to x, y and z.\n\n"
+    "Raises:\n"
+    "    ValueError: For a catalogue on the sky."},
+  {"to_sky", (PyCFunction)sifCatalog_to_sky, METH_VARARGS | METH_KEYWORDS,
+    "to_sky(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, wa=0.0)\n"
+    "--\n\n"
+    "Turn the void centres into sky coordinates, in place.\n\n"
+    "The inverse of Field.convert_sky_coordinates(), for the voids a survey\n"
+    "gave: each centre becomes the right ascension and declination of its\n"
+    "direction from the origin, in degrees (right ascension in [0, 360)),\n"
+    "and the redshift at its comoving distance from the origin. units is\n"
+    "then 'sky', and every writer writes the catalogue that way.\n\n"
+    "The observer has to be at the origin: move a catalogue found in a\n"
+    "survey box back first, with translate(-offset). Converted with the\n"
+    "cosmology the tracers were, a centre comes back to the sky within\n"
+    "single precision. Radii stay comoving lengths, in Mpc/h.\n\n"
+    "Args:\n"
+    "    omega_m, omega_de, omega_r, w0, wa: The cosmology, as for\n"
+    "        Field.convert_sky_coordinates().\n\n"
+    "Raises:\n"
+    "    ValueError: For a catalogue already on the sky, a centre that is\n"
+    "        not finite, or one past what the cosmology reaches."},
   {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */

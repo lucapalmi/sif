@@ -6,9 +6,11 @@
 
 #include "sif/structures/catalog.h"
 
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
+#include "model/cosmology_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 
@@ -166,6 +168,7 @@ sif_catalog_t* sif_catalog_alloc(uint64_t initial_capacity) {
 
   cat->n_voids = 0;
   cat->capacity = initial_capacity;
+  cat->units = SIF_COORDINATES_CARTESIAN;
   cat->_footprint_block = NULL;
   cat->footprint = NULL;
   cat->footprint_shell = NULL;
@@ -287,6 +290,11 @@ int sif_catalog_reserve_footprint(sif_catalog_t* catalog) {
 int sif_catalog_translate(sif_catalog_t* catalog, const sif_real offset[3]) {
   if (!catalog || !offset)
     return SIF_ERR_INVALID;
+  if (catalog->units != SIF_COORDINATES_CARTESIAN) {
+    SIF_LOG_ERROR("void_catalog",
+      "the catalogue holds sky coordinates; a translation would move angles");
+    return SIF_ERR_INVALID;
+  }
 
   for (uint64_t i = 0; i < catalog->n_voids; i++) {
     catalog->cx[i] += offset[0];
@@ -294,5 +302,64 @@ int sif_catalog_translate(sif_catalog_t* catalog, const sif_real offset[3]) {
     catalog->cz[i] += offset[2];
   }
 
+  return SIF_OK;
+}
+
+int sif_catalog_to_sky(sif_catalog_t* catalog, const sif_cosmology_t* cosmo) {
+  if (!catalog || !cosmo) {
+    SIF_LOG_ERROR("void_catalog", "invalid catalogue or cosmology");
+    return SIF_ERR_INVALID;
+  }
+  if (catalog->units != SIF_COORDINATES_CARTESIAN) {
+    SIF_LOG_ERROR("void_catalog", "the catalogue is already on the sky");
+    return SIF_ERR_INVALID;
+  }
+
+  /* Everything checked, and the table built, before anything is changed. */
+  const uint64_t n = catalog->n_voids;
+  double d_max = 0.0;
+  uint64_t bad = 0;
+  for (uint64_t i = 0; i < n; i++) {
+    const double x = catalog->cx[i], y = catalog->cy[i], z = catalog->cz[i];
+    const double d = sqrt(x * x + y * y + z * z);
+    if (!isfinite(d))
+      bad++;
+    else if (d > d_max)
+      d_max = d;
+  }
+  if (bad) {
+    SIF_LOG_ERROR("void_catalog",
+      "cannot convert: %" PRIu64 " of %" PRIu64 " centres are not finite", bad,
+      n);
+    return SIF_ERR_INVALID;
+  }
+
+  sif__distance_table_t table;
+  const int status = sif__distance_table_build_to(cosmo, d_max, &table);
+  if (status != SIF_OK)
+    return status;
+
+  const double deg = 180.0 / 3.14159265358979323846;
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < n; i++) {
+    const double x = catalog->cx[i], y = catalog->cy[i], z = catalog->cz[i];
+    const double d = sqrt(x * x + y * y + z * z);
+    double ra = atan2(y, x) * deg;
+    if (ra < 0.0)
+      ra += 360.0;
+    /* A centre at the observer has no direction; it is put at (0, 0). */
+    const double dec = d > 0.0 ? asin(z / d) * deg : 0.0;
+    catalog->cx[i] = (sif_real)ra;
+    catalog->cy[i] = (sif_real)dec;
+    catalog->cz[i] = (sif_real)sif__distance_table_invert(&table, d);
+  }
+
+  sif__distance_table_free(&table);
+  catalog->units = SIF_COORDINATES_SKY;
+
+  SIF_LOG_INFO("void_catalog",
+    "converted %" PRIu64 " void centres to the sky, out to D_C = %g Mpc/h", n,
+    d_max);
   return SIF_OK;
 }

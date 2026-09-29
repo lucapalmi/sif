@@ -14,7 +14,9 @@ machine that has none of them. So it touches each one:
   - HDF5, through a file round trip;
   - HDF5 again, next to h5py's own copy in the same process: pysif writes, h5py
     rewrites a dataset compressed, pysif reads it back -- which also checks
-    that the deflate filter was built in.
+    that the deflate filter was built in;
+  - cfitsio, reading the FITS fixture, plain and gzipped -- the second through
+    zlib.
 
 And it runs the command-line programs through the commands pip installed for
 them, which checks the launchers and that the executables, repaired like the
@@ -42,8 +44,7 @@ w = np.ones(N)
 for cx, cy, cz, r in [(50, 50, 50, 26), (150, 140, 60, 21), (70, 160, 150, 18)]:
     w[(x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2 < r**2] = 0.0
 
-field = pysif.Field()
-field.from_numpy(x, y, z, weights=w)
+field = pysif.field_from_numpy(x, y, z, weights=w)
 grid = pysif.Grid(64, L)
 grid.assign_cic(field)
 grid.to_density_contrast()
@@ -69,12 +70,22 @@ with h5py.File(path, "r+") as f:
 back = pysif.io.read_catalog_hdf5(path)
 assert np.array_equal(back.radii, cat.radii), "compressed dataset read wrong"
 
+# cfitsio: the committed fixture, plain and compressed.
+fits_dir = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "tests", "data", "fits")
+for name in ("catalogue.fits", "catalogue.fits.gz"):
+    table = pysif.io.read_fits(os.path.join(fits_dir, name),
+                               ra="RA", dec="DEC", z="Z", w="W1 * W2",
+                               where="Z < 0.5")
+    assert table.n_particles == 80, f"{name}: {table.n_particles} rows"
+
 # The program links every bundled library, so it does not start without
 # them; --version is enough to find out.
 exodus = os.path.join(sysconfig.get_path("scripts"), "sif-exodus")
 out = subprocess.run([exodus, "--version"], capture_output=True, text=True)
 assert out.returncode == 0, f"sif-exodus --version failed:\n{out.stderr}"
 assert out.stdout.startswith("sif-exodus "), out.stdout
+assert "with FITS" in out.stdout, out.stdout
 
 print(f"pysif wheel OK: {cat.n_voids} voids, HDF5 round trip, h5py interop, "
-      f"{out.stdout.strip()}")
+      f"FITS read, {out.stdout.strip()}")

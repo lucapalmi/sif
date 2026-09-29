@@ -11,6 +11,7 @@
 #include "sif/utils/timer.h"
 
 #include "core/system_internal.h"
+#include "io/fits_internal.h"
 #include "io/hdf5_internal.h"
 
 #include "predicates/predicates.h"
@@ -194,14 +195,16 @@ int sif_init(sif_config_t* config) {
    * at the first call, so it stays. */
   exactinit();
 
-  /* Said at start-up so that a build that came out without HDF5 -- an AUTO
-   * configure on a machine where it was not loaded -- is visible in the log
-   * of the first run, not discovered at the first HDF5 call. */
+  /* Said at start-up so that a build that came out without HDF5 or cfitsio
+   * -- an AUTO configure on a machine where it was not loaded -- is visible
+   * in the log of the first run, not discovered at the first call. */
   char hdf5[64];
   sif__hdf5_describe(hdf5, sizeof(hdf5));
+  char fits[64];
+  sif__fits_describe(fits, sizeof(fits));
 
-  SIF_LOG_INFO("system", "sif library initialized (threads: %u, %s)",
-    system_state->max_threads, hdf5);
+  SIF_LOG_INFO("system", "sif library initialized (threads: %u, %s, %s)",
+    system_state->max_threads, hdf5, fits);
 
   SIF_LOG_FLUSH();
   return SIF_OK;

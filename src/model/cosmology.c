@@ -199,6 +199,84 @@ double sif__distance_table_eval(const sif__distance_table_t* t, double z) {
          h01 * t->distance[i + 1] + h11 * t->dz * t->slope[i + 1];
 }
 
+/* How far out a table is built to find a distance: well past anything a
+ * galaxy survey reaches, and short of where the table would stop resolving
+ * the integrand. */
+#define TABLE_Z_LIMIT 1e4
+
+int sif__distance_table_build_to(
+  const sif_cosmology_t* cosmo, double d_max, sif__distance_table_t* t) {
+
+  t->distance = t->slope = NULL;
+  t->n = 0;
+  if (!(d_max >= 0.0) || !isfinite(d_max)) {
+    SIF_LOG_ERROR(
+      TAG, "the distance has to be finite and at least 0, not %g", d_max);
+    return SIF_ERR_INVALID;
+  }
+
+  /* Doubled until the table reaches the distance: a few cheap rebuilds, and
+   * no guess at the redshift a distance belongs to. */
+  for (double z_max = 1.0; z_max <= TABLE_Z_LIMIT; z_max *= 2.0) {
+    const int status = sif__distance_table_build(cosmo, z_max, t);
+    if (status != SIF_OK)
+      return status;
+    if (t->distance[t->n - 1] >= d_max)
+      return SIF_OK;
+    sif__distance_table_free(t);
+  }
+
+  SIF_LOG_ERROR(TAG,
+    "a comoving distance of %g Mpc/h is not reached by z = %g in this "
+    "cosmology",
+    d_max, TABLE_Z_LIMIT);
+  return SIF_ERR_RANGE;
+}
+
+double sif__distance_table_invert(const sif__distance_table_t* t, double d) {
+  if (d <= 0.0)
+    return 0.0;
+
+  /* The node interval holding d: the distance only grows with z. */
+  uint64_t lo = 0, hi = t->n - 1;
+  if (d >= t->distance[hi])
+    return (double)hi * t->dz;
+  while (hi - lo > 1) {
+    const uint64_t mid = lo + (hi - lo) / 2;
+    if (t->distance[mid] <= d)
+      lo = mid;
+    else
+      hi = mid;
+  }
+
+  /* Newton on the Hermite cubic of that interval, from the linear guess. The
+   * cubic is monotonic there -- its end slopes are c / H, positive -- so a
+   * few steps reach machine precision. */
+  const double d0 = t->distance[lo], d1 = t->distance[lo + 1];
+  const double m0 = t->dz * t->slope[lo], m1 = t->dz * t->slope[lo + 1];
+  double s = (d - d0) / (d1 - d0);
+  for (int it = 0; it < 8; it++) {
+    const double s2 = s * s, s3 = s2 * s;
+    const double f = (2.0 * s3 - 3.0 * s2 + 1.0) * d0 +
+                     (s3 - 2.0 * s2 + s) * m0 + (-2.0 * s3 + 3.0 * s2) * d1 +
+                     (s3 - s2) * m1 - d;
+    const double df = (6.0 * s2 - 6.0 * s) * d0 +
+                      (3.0 * s2 - 4.0 * s + 1.0) * m0 +
+                      (-6.0 * s2 + 6.0 * s) * d1 + (3.0 * s2 - 2.0 * s) * m1;
+    if (!(df > 0.0))
+      break;
+    const double step = f / df;
+    s -= step;
+    if (s < 0.0)
+      s = 0.0;
+    else if (s > 1.0)
+      s = 1.0;
+    if (fabs(step) < 1e-15)
+      break;
+  }
+  return ((double)lo + s) * t->dz;
+}
+
 void sif__distance_table_free(sif__distance_table_t* t) {
   if (!t)
     return;

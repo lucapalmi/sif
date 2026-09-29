@@ -26,8 +26,7 @@ def ball(n, radius, centre, seed):
 def survey():
     """Randoms in a ball, placed in a box by survey_box(), and their grid."""
     pts = ball(200_000, 60.0, np.array([500.0, -40.0, 12.0]), seed=1)
-    randoms = pysif.Field()
-    randoms.from_numpy(*pts.T.astype(pysif.real))
+    randoms = pysif.field_from_numpy(*pts.T.astype(pysif.real))
 
     radii = np.array([RADIUS], dtype=pysif.real)
     offset, box = pysif.finders.survey_box(randoms, radii, N_GRID)
@@ -69,7 +68,5 @@ def test_refuses_what_suggest_mesh_cells_does(survey, n, radius):
 
 
 def _one_point(box):
-    f = pysif.Field()
     half = np.array([box / 2], dtype=pysif.real)
-    f.from_numpy(half, half, half)
-    return f
+    return pysif.field_from_numpy(half, half, half)

@@ -35,6 +35,7 @@ set(PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_io.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_hdf5.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_gadget.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_fits.c
 
     # Structures Submodule
     ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_catalog.c
@@ -86,6 +87,12 @@ target_compile_definitions(pysif PRIVATE NPY_TARGET_VERSION=NPY_1_23_API_VERSION
 # library's own definition is private, so it is repeated here.
 if(SIF_WITH_HDF5)
   target_compile_definitions(pysif PRIVATE SIF_HAVE_HDF5)
+endif()
+
+# The FITS bindings refuse up front in a build without cfitsio, rather than
+# call a reader that can only refuse.
+if(SIF_WITH_FITS)
+  target_compile_definitions(pysif PRIVATE SIF_HAVE_FITS)
 endif()
 
 # 6. Where the libraries pysif links are found at run time: see

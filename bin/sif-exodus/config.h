@@ -57,7 +57,9 @@ typedef struct {
 
   /* Owned storage behind the pointers in `params`. Not for callers. */
   sif_real* _radii;
-  char* _strings[4];
+  char** _strings;
+  size_t _n_strings;
+  const char** _paths;
 } exodus_config_t;
 
 /* Run the script at `path` and read it into `config`. Every problem found is

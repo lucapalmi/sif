@@ -12,20 +12,25 @@
  * field it was measured from, and it is the thing that gets plotted and handed
  * to other tools.
  *
- * One row per void, holding the void it belongs to and then its profile, so a
- * row is self-contained and the file needs nothing else to be read:
+ * A header behind `#`, then one row per void, holding the void it belongs to
+ * and then its profile:
  *
- *     n_voids n_bins ext has_density has_velocity differential
- *     r_edge[0] r_edge[1] ... r_edge[n_bins]
- *     cx cy cz radius  density[0..n_bins-1]  v_rad[0..n_bins-1]
+ *     #n=1024
+ *     #n_bins=20
+ *     #ext=3
+ *     #differential=1
+ *     #r_edges=0 0.15 0.3 ... 3
+ *     #cx cy cz r density_0 ... density_19 v_rad_0 ... v_rad_19
+ *     101.25 250.5 33.125 12.5 -0.91 ... 12.3
  *     ...
  *
- * The two leading lines are the only ragged ones, so the table proper loads
- * with `numpy.loadtxt(path, skiprows=2)` and comes out as one row per void.
+ * The rows are plain numbers, so `numpy.loadtxt(path)` reads them as they
+ * are, one row per void. The last header line names every column: the
+ * centres are `ra dec z` for a catalogue on the sky (sif_catalog_to_sky()),
+ * and either profile block is absent when the file was written without it.
  * Bin edges are in units of each void's own radius, which is the axis the
  * profiles are binned on; multiply by the radius in the row for physical
- * units. Either profile block is absent when the file was written without it,
- * and `differential` says whether a density bin holds its own shell or
+ * units. `differential` says whether a density bin holds its own shell or
  * everything enclosed -- the values do not say which.
  *
  * That flag also decides which radius a density column belongs at: a
@@ -48,7 +53,8 @@
  * The void metadata comes from @p cat, which is why it is needed here: the
  * sets themselves hold rows, not the voids the rows belong to. Row i of a set
  * is void i of the catalogue it was measured from, so it has to be that
- * catalogue.
+ * catalogue -- converted to the sky afterwards or not, and the header says
+ * which.
  *
  * @param filepath Path to the output file, truncated if it exists.
  * @param dens Density set, or NULL to leave densities out.
@@ -67,7 +73,7 @@ int sif_profiles_write_ascii(const char* filepath,
   const sif_catalog_t* cat);
 
 /**
- * @brief Read the leading line of a profile file, without the rows.
+ * @brief Read the header of a profile file, without the rows.
  *
  * What the file holds, so a caller can size its own work or ask
  * sif_profiles_read_ascii() only for blocks that are actually there.
@@ -80,7 +86,10 @@ int sif_profiles_write_ascii(const char* filepath,
  * @param out_differential Non-zero if the density bins hold shells rather than
  * enclosed volumes, or NULL to skip.
  * @return SIF_OK, or SIF_ERR_INVALID if the file cannot be opened or its
- * first line does not parse.
+ * header does not parse.
+ *
+ * @note Files from before the `#` header -- a first line holding the shape,
+ * then one of bin edges -- are read too, here and by sif_profiles_read_ascii().
  */
 SIF_NODISCARD int sif_profiles_read_header_ascii(const char* filepath,
   uint64_t* out_n_voids, uint32_t* out_n_bins, sif_real* out_ext,
@@ -96,7 +105,8 @@ SIF_NODISCARD int sif_profiles_read_header_ascii(const char* filepath,
  *
  * @param filepath Path to the input file.
  * @param out_cat Address of a catalogue pointer for the voids the rows
- * describe, or NULL to skip.
+ * describe, or NULL to skip. On the sky when the header names the centres ra
+ * dec z.
  * @param out_dens Address of a density set pointer, or NULL to skip.
  * @param out_vel Address of a velocity set pointer, or NULL to skip.
  * @return SIF_OK, SIF_ERR_INVALID for a bad or truncated file or a request

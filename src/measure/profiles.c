@@ -358,6 +358,12 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
     (const sif_velocity_profiles_t* const*)out_vel);
   if (status != SIF_OK)
     return status;
+  if (cat->units != SIF_COORDINATES_CARTESIAN) {
+    SIF_LOG_ERROR("profiles",
+      "the catalogue holds sky coordinates; profiles are measured around "
+      "Cartesian centres, before sif_catalog_to_sky()");
+    return SIF_ERR_INVALID;
+  }
 
   /* An extension that is not a positive number -- zero, negative, or a NaN
    * that -ffast-math would let through a comparison either way -- is read as
@@ -429,9 +435,9 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
 
   /* Without weights the weighted mean is the plain one, so the flag only
    * selects a different kernel when there is something to weight by. */
-  const int vel_weighted = compute_vel && have_weights &&
-                           ((opt & SIF__PROFILES_VELOCITY_MASK) ==
-                             SIF_PROFILES_VELOCITY_WEIGHTED);
+  const int vel_weighted =
+    compute_vel && have_weights &&
+    ((opt & SIF__PROFILES_VELOCITY_MASK) == SIF_PROFILES_VELOCITY_WEIGHTED);
 
   const bin_ctx_t ctx = {.x = SIF_ASSUME_ALIGNED(mesh->x),
     .y = SIF_ASSUME_ALIGNED(mesh->y),

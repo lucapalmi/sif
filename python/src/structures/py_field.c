@@ -9,6 +9,7 @@
 #include "model/py_model.h"
 
 #include <numpy/arrayobject.h>
+#include <stdbool.h>
 #include <string.h>
 
 static void sifField_dealloc(PyObject* self_obj) {
@@ -74,64 +75,62 @@ static int column_from_numpy(
   return 0;
 }
 
-static PyObject* sifField_from_numpy(
-  PyObject* self_obj, PyObject* args, PyObject* kwds) {
-  sifFieldObject* self = (sifFieldObject*)self_obj;
+PyObject* pysif_field_from_numpy(
+  PyObject* module, PyObject* args, PyObject* kwds) {
+  (void)module;
+  PyObject *xs_obj = Py_None, *ys_obj = Py_None, *zs_obj = Py_None;
+  PyObject *ra_obj = Py_None, *dec_obj = Py_None;
+  PyObject *vxs_obj = Py_None, *vys_obj = Py_None, *vzs_obj = Py_None;
+  PyObject* ws_obj = Py_None;
+  static char* kwlist[] = {
+    "x", "y", "z", "ra", "dec", "vx", "vy", "vz", "weights", NULL};
 
-  if (py_sif_field_check_exports(self, "from_numpy()") < 0)
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OOO$OOOOOO", kwlist, &xs_obj,
+        &ys_obj, &zs_obj, &ra_obj, &dec_obj, &vxs_obj, &vys_obj, &vzs_obj,
+        &ws_obj))
     return NULL;
 
-  PyObject *xs_obj, *ys_obj, *zs_obj;
-  PyObject *vxs_obj = NULL, *vys_obj = NULL, *vzs_obj = NULL;
-  PyObject* ws_obj = NULL;
-  const char* units_s = "cartesian";
-  static char* kwlist[] = {
-    "x", "y", "z", "vx", "vy", "vz", "weights", "units", NULL};
-
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|OOOOs", kwlist, &xs_obj,
-        &ys_obj, &zs_obj, &vxs_obj, &vys_obj, &vzs_obj, &ws_obj, &units_s)) {
+  /* The names say what the positions are: x y z, or ra dec z on the sky --
+   * never some of each. */
+  const bool xy = xs_obj != Py_None || ys_obj != Py_None;
+  const bool radec = ra_obj != Py_None || dec_obj != Py_None;
+  if (xy && radec) {
+    PyErr_SetString(PyExc_ValueError,
+      "give x, y and z for positions, or ra, dec and z for sky coordinates, "
+      "not some of each");
     return NULL;
   }
-
-  sif_field_units_t units;
-  if (strcmp(units_s, "cartesian") == 0) {
-    units = SIF_FIELD_CARTESIAN;
-  } else if (strcmp(units_s, "sky") == 0) {
-    units = SIF_FIELD_SKY;
-  } else {
-    PyErr_Format(PyExc_ValueError,
-      "units must be 'cartesian' or 'sky', not '%s'", units_s);
+  PyObject* first = radec ? ra_obj : xs_obj;
+  PyObject* second = radec ? dec_obj : ys_obj;
+  if (first == Py_None || second == Py_None || zs_obj == Py_None) {
+    PyErr_SetString(
+      PyExc_ValueError, radec ? "ra, dec and z are all required"
+                              : "x, y and z are required (or ra, dec and z)");
     return NULL;
   }
 
   /* None and absent mean the same thing for every optional column. */
-  const int n_vel = (vxs_obj && vxs_obj != Py_None) +
-                    (vys_obj && vys_obj != Py_None) +
-                    (vzs_obj && vzs_obj != Py_None);
+  const int n_vel =
+    (vxs_obj != Py_None) + (vys_obj != Py_None) + (vzs_obj != Py_None);
   if (n_vel != 0 && n_vel != 3) {
     PyErr_SetString(PyExc_ValueError,
       "If providing velocities, vx, vy, and vz must all be provided");
     return NULL;
   }
 
-  if (xs_obj == Py_None || ys_obj == Py_None || zs_obj == Py_None) {
-    PyErr_SetString(PyExc_ValueError, "x, y and z are required");
-    return NULL;
-  }
-
-  /* Every column is held here until the field is built; x sets the length the
-   * others are checked against. */
+  /* Every column is held here until the field is built; the first sets the
+   * length the others are checked against. */
   enum { X, Y, Z, VX, VY, VZ, W, N_COLS };
   PyArrayObject* cols[N_COLS] = {NULL};
-  sif_field_t* fresh = NULL;
+  sif_field_t* field = NULL;
   int status = SIF_OK;
 
-  if (column_from_numpy(xs_obj, "x", -1, &cols[X]) < 0)
+  if (column_from_numpy(first, radec ? "ra" : "x", -1, &cols[X]) < 0)
     goto fail;
 
   const npy_intp n = PyArray_SHAPE(cols[X])[0];
 
-  if (column_from_numpy(ys_obj, "y", n, &cols[Y]) < 0 ||
+  if (column_from_numpy(second, radec ? "dec" : "y", n, &cols[Y]) < 0 ||
       column_from_numpy(zs_obj, "z", n, &cols[Z]) < 0 ||
       column_from_numpy(vxs_obj, "vx", n, &cols[VX]) < 0 ||
       column_from_numpy(vys_obj, "vy", n, &cols[VY]) < 0 ||
@@ -139,25 +138,18 @@ static PyObject* sifField_from_numpy(
       column_from_numpy(ws_obj, "weights", n, &cols[W]) < 0)
     goto fail;
 
-  /*
-   * Built as a new field and swapped in only once it is complete, rather than
-   * assigned into the existing one. Assigning in place would leave behind any
-   * column this call does not supply -- velocities or weights from a previous
-   * from_numpy, sized for a different particle count and describing different
-   * particles -- and a failure half-way would leave a field that is neither.
-   */
-  fresh = sif_field_alloc((uint64_t)n);
-  if (!fresh) {
+  field = sif_field_alloc((uint64_t)n);
+  if (!field) {
     PyErr_SetString(PyExc_MemoryError, "failed to allocate the field");
     goto fail;
   }
 
 #define COL(c) ((const sif_real*)PyArray_DATA(cols[c]))
-  status = sif_field_assign_positions(fresh, COL(X), COL(Y), COL(Z));
+  status = sif_field_assign_positions(field, COL(X), COL(Y), COL(Z));
   if (status == SIF_OK && cols[VX])
-    status = sif_field_assign_velocities(fresh, COL(VX), COL(VY), COL(VZ));
+    status = sif_field_assign_velocities(field, COL(VX), COL(VY), COL(VZ));
   if (status == SIF_OK && cols[W])
-    status = sif_field_assign_weights(fresh, COL(W));
+    status = sif_field_assign_weights(field, COL(W));
 #undef COL
 
   if (status != SIF_OK) {
@@ -165,20 +157,24 @@ static PyObject* sifField_from_numpy(
       PyExc_MemoryError, "failed to copy particles into the field");
     goto fail;
   }
+  field->units = radec ? SIF_COORDINATES_SKY : SIF_COORDINATES_CARTESIAN;
+
+  sifFieldObject* obj =
+    (sifFieldObject*)sifFieldType.tp_alloc(&sifFieldType, 0);
+  if (!obj) {
+    PyErr_NoMemory();
+    goto fail;
+  }
+  obj->field = field;
 
   for (int c = 0; c < N_COLS; c++)
     Py_XDECREF(cols[c]);
-
-  fresh->units = units;
-  sif_field_free(self->field);
-  self->field = fresh;
-
-  Py_RETURN_NONE;
+  return (PyObject*)obj;
 
 fail:
   for (int c = 0; c < N_COLS; c++)
     Py_XDECREF(cols[c]);
-  sif_field_free(fresh);
+  sif_field_free(field);
   return NULL;
 }
 
@@ -282,7 +278,7 @@ int py_sif_field_check_exports(sifFieldObject* self, const char* action) {
 }
 
 int py_sif_field_check_cartesian(sifFieldObject* self, const char* action) {
-  if (self->field->units == SIF_FIELD_CARTESIAN)
+  if (self->field->units == SIF_COORDINATES_CARTESIAN)
     return 0;
   PyErr_Format(PyExc_ValueError,
     "cannot %s: the field holds sky coordinates (right ascension, "
@@ -317,7 +313,7 @@ static PyObject* sifField_convert_sky_coordinates(
       PyExc_ValueError, "the field holds no positions to convert");
     return NULL;
   }
-  if (f->units != SIF_FIELD_SKY) {
+  if (f->units != SIF_COORDINATES_SKY) {
     PyErr_SetString(PyExc_ValueError,
       "the field already holds Cartesian positions; converting them would "
       "read x as a right ascension. Set units='sky' for a field that holds "
@@ -357,8 +353,9 @@ static PyObject* sifField_convert_sky_coordinates(
 static PyObject* sifField_get_units(PyObject* self_obj, void* closure) {
   (void)closure;
   return PyUnicode_FromString(
-    ((sifFieldObject*)self_obj)->field->units == SIF_FIELD_SKY ? "sky"
-                                                               : "cartesian");
+    ((sifFieldObject*)self_obj)->field->units == SIF_COORDINATES_SKY
+      ? "sky"
+      : "cartesian");
 }
 
 static int sifField_set_units(
@@ -372,7 +369,7 @@ static int sifField_set_units(
     return -1;
   }
   ((sifFieldObject*)self_obj)->field->units =
-    s[0] == 's' ? SIF_FIELD_SKY : SIF_FIELD_CARTESIAN;
+    s[0] == 's' ? SIF_COORDINATES_SKY : SIF_COORDINATES_CARTESIAN;
   return 0;
 }
 
@@ -482,31 +479,6 @@ static PyGetSetDef sifField_getset[] = {
 
 /* --- Method Definition Array --- */
 static PyMethodDef sifField_methods[] = {
-  {"from_numpy", (PyCFunction)sifField_from_numpy, METH_VARARGS | METH_KEYWORDS,
-    "from_numpy(x, y, z, vx=None, vy=None, vz=None, weights=None, "
-    "units='cartesian')\n"
-    "--\n\n"
-    "Copy positions, and optionally velocities and weights, out of NumPy\n"
-    "arrays.\n\n"
-    "All arrays must have the same length and dtype pysif.real; anything\n"
-    "else is converted, which costs a copy of the whole field. Velocities\n"
-    "are optional but must be given together.\n\n"
-    "Replaces whatever the field held before, including any velocities or\n"
-    "weights this call does not supply.\n\n"
-    "Args:\n"
-    "    x, y, z: Position components, one entry per particle.\n"
-    "    vx, vy, vz: Velocity components, or None to store no velocities.\n"
-    "    weights: Per-particle weight (a mass, a luminosity, a selection\n"
-    "        weight), or None for an unweighted field, where every particle\n"
-    "        counts as 1. The exodus finder requires them to be finite and\n"
-    "        non-negative.\n"
-    "    units: 'cartesian', or 'sky' for x, y, z holding right ascension,\n"
-    "        declination (degrees) and redshift, to be turned into positions\n"
-    "        by convert_sky_coordinates().\n\n"
-    "Raises:\n"
-    "    ValueError: If the arrays disagree in length, or for units that\n"
-    "        are neither.\n"
-    "    MemoryError: If the field's buffers could not be allocated."},
   {"convert_sky_coordinates", (PyCFunction)sifField_convert_sky_coordinates,
     METH_VARARGS | METH_KEYWORDS,
     "convert_sky_coordinates(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, "
@@ -579,21 +551,22 @@ PyTypeObject sifFieldType = {
     "--\n\n"
     "A particle field: positions, and optionally velocities and\n"
     "weights.\n\n"
-    "The container every other structure is built from. Fill it with\n"
-    "from_numpy(), or read one off disk with pysif.io.read_field() or\n"
-    "pysif.io.read_gadget().\n\n"
+    "The container every other structure is built from. Make one with\n"
+    "pysif.field_from_numpy(), or read one off disk with\n"
+    "pysif.io.read_field(), read_fits() or read_gadget(). Field() itself\n"
+    "is empty.\n\n"
     "x, y, z, vx, vy, vz and weights are read-only NumPy views of the\n"
     "field's own arrays, in its current particle order -- which\n"
     "sort_morton() changes. They see in-place changes (wrap(),\n"
     "translate()). While any view is alive, whatever would reallocate or\n"
-    "take the arrays raises BufferError instead: from_numpy(),\n"
-    "sort_morton(), building an Octree over an unsorted field, and\n"
-    "ChainMesh(..., consume_field=True). Delete the views first, or keep\n"
-    "copies (numpy.array(field.x)).\n\n"
+    "take the arrays raises BufferError instead: sort_morton(), building\n"
+    "an Octree over an unsorted field, and ChainMesh(...,\n"
+    "consume_field=True). Delete the views first, or keep copies\n"
+    "(numpy.array(field.x)).\n\n"
+    "units says what x, y and z hold: 'cartesian' positions, or 'sky' --\n"
+    "right ascension, declination and redshift.\n\n"
     "Args:\n"
-    "    capacity: Particles to make room for up front. The arrays are\n"
-    "        sized by from_numpy() anyway, so this only avoids a\n"
-    "        reallocation.",
+    "    capacity: Particles to make room for up front.",
   .tp_methods = sifField_methods,
   .tp_getset = sifField_getset,
   .tp_init = sifField_init,

@@ -57,10 +57,15 @@ int main(int argc, char** argv) {
       return 0;
     } else if (strcmp(arg, "-V") == 0 || strcmp(arg, "--version") == 0) {
       /* What the build can read and write: .xfield files are tied to the
-       * precision, and HDF5 outputs to HDF5. */
-      printf("sif-exodus %s (%s precision, %s HDF5)\n", SIF_VERSION_STRING,
-        sizeof(sif_real) == 8 ? "double" : "single",
+       * precision, HDF5 outputs to HDF5, and FITS inputs to cfitsio. */
+      printf("sif-exodus %s (%s precision, %s HDF5, %s FITS)\n",
+        SIF_VERSION_STRING, sizeof(sif_real) == 8 ? "double" : "single",
 #if defined(SIF_HAVE_HDF5)
+        "with",
+#else
+        "without",
+#endif
+#if defined(SIF_HAVE_FITS)
         "with"
 #else
         "without"

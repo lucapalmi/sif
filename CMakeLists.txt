@@ -208,6 +208,58 @@ message(STATUS "HDF5 I/O: ${_sif_hdf5_why}")
 # this directory's variables otherwise.
 set(SIF_WITH_HDF5 ${SIF_WITH_HDF5} CACHE INTERNAL "sif was built with HDF5")
 
+# cfitsio
+#
+# Optional, for reading survey catalogues from FITS tables. ON, OFF and AUTO
+# mean what they do for HDF5 above.
+#
+# Found by path rather than through a CMake package: cfitsio only ships one
+# when it was itself built with CMake, and the autotools builds on most
+# clusters do not. pkg-config, where present, supplies the hints; CFITSIO_ROOT
+# (or -DCFITSIO_ROOT=...) points at an install it does not know about.
+set(SIF_FITS_SUPPORT "AUTO" CACHE STRING "FITS input support (ON|OFF|AUTO)")
+set_property(CACHE SIF_FITS_SUPPORT PROPERTY STRINGS ON OFF AUTO)
+
+string(TOUPPER "${SIF_FITS_SUPPORT}" _sif_fits_mode)
+if(NOT _sif_fits_mode MATCHES "^(ON|OFF|AUTO)$")
+  message(FATAL_ERROR
+    "SIF_FITS_SUPPORT must be ON, OFF or AUTO, not '${SIF_FITS_SUPPORT}'")
+endif()
+
+set(SIF_WITH_FITS OFF)
+set(_sif_fits_why "disabled (SIF_FITS_SUPPORT=OFF)")
+
+if(NOT _sif_fits_mode STREQUAL "OFF")
+  find_package(PkgConfig QUIET)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(PC_CFITSIO QUIET cfitsio)
+  endif()
+
+  set(_cfitsio_hints ${CFITSIO_ROOT} $ENV{CFITSIO_ROOT})
+  find_path(CFITSIO_INCLUDE NAMES fitsio.h
+    HINTS ${_cfitsio_hints} ${PC_CFITSIO_INCLUDE_DIRS}
+    PATH_SUFFIXES include include/cfitsio)
+  find_library(CFITSIO_LIB NAMES cfitsio
+    HINTS ${_cfitsio_hints} ${PC_CFITSIO_LIBRARY_DIRS}
+    PATH_SUFFIXES lib lib64)
+
+  if(CFITSIO_INCLUDE AND CFITSIO_LIB)
+    set(SIF_WITH_FITS ON)
+    set(_sif_fits_why "cfitsio at ${CFITSIO_LIB}")
+  elseif(_sif_fits_mode STREQUAL "ON")
+    message(FATAL_ERROR
+      "cfitsio not found. Point CMake at it (-DCFITSIO_ROOT=...), or set "
+      "SIF_FITS_SUPPORT=OFF")
+  else()
+    set(_sif_fits_why
+      "not found (SIF_FITS_SUPPORT=AUTO; set it to ON to require cfitsio)")
+  endif()
+endif()
+
+message(STATUS "FITS input: ${_sif_fits_why}")
+
+set(SIF_WITH_FITS ${SIF_WITH_FITS} CACHE INTERNAL "sif was built with cfitsio")
+
 # Source files
 set(SOURCES
   # data structures
@@ -292,6 +344,13 @@ else()
 endif()
 list(APPEND SOURCES src/io/hdf5_common.c)
 
+# Likewise for FITS.
+if(SIF_WITH_FITS)
+  list(APPEND SOURCES src/io/fits_io.c)
+else()
+  list(APPEND SOURCES src/io/fits_off.c)
+endif()
+
 # Create library
 add_library(sif STATIC ${SOURCES})
 
@@ -326,6 +385,20 @@ if(SIF_WITH_HDF5)
   target_compile_definitions(sif PRIVATE
     SIF_HAVE_HDF5 ${HDF5_C_DEFINITIONS} ${HDF5_DEFINITIONS})
   target_link_libraries(sif PRIVATE ${HDF5_C_LIBRARIES})
+endif()
+
+# The same for cfitsio: fitsio.h is seen by fits_io.c alone. A static
+# libcfitsio.a carries undefined references to zlib (and, depending on how it
+# was configured, libcurl), which pkg-config lists and the linker then needs.
+if(SIF_WITH_FITS)
+  target_include_directories(sif PRIVATE ${CFITSIO_INCLUDE})
+  target_compile_definitions(sif PRIVATE SIF_HAVE_FITS)
+  target_link_libraries(sif PRIVATE ${CFITSIO_LIB})
+  if(CFITSIO_LIB MATCHES "\\.a$" AND PC_CFITSIO_STATIC_LIBRARIES)
+    list(REMOVE_ITEM PC_CFITSIO_STATIC_LIBRARIES cfitsio)
+    target_link_directories(sif PRIVATE ${PC_CFITSIO_STATIC_LIBRARY_DIRS})
+    target_link_libraries(sif PRIVATE ${PC_CFITSIO_STATIC_LIBRARIES})
+  endif()
 endif()
 
 # Linking

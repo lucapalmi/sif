@@ -39,4 +39,8 @@ int py_sif_field_check_exports(sifFieldObject* self, const char* action);
  */
 int py_sif_field_check_cartesian(sifFieldObject* self, const char* action);
 
+/* pysif.field_from_numpy(): a new Field from NumPy arrays. */
+PyObject* pysif_field_from_numpy(
+  PyObject* module, PyObject* args, PyObject* kwds);
+
 #endif /* SIF_PY_STRUCTURES_PY_FIELD_H */

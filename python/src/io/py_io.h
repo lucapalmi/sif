@@ -51,4 +51,14 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_gadget_header(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds);
 
+/* FITS catalogues (py_fits.c) */
+PyObject* pysif_read_fits(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_inspect_fits(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_catalog_fits(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_catalog_fits(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_fits_key(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds);
+
 #endif /* SIF_PY_IO_PY_IO_H */

@@ -31,6 +31,30 @@
 
 #include "sif/core/macros.h"
 
+/**
+ * @brief What a set of positions is: a field's tracers (sif_field_t::units)
+ * or a catalogue's void centres (sif_catalog_t::units).
+ *
+ * The two systems a cosmology converts between, and the reason it does:
+ * sif_field_convert_sky_coordinates() takes a survey from the sky into the
+ * Cartesian frame the finders work in, and sif_catalog_to_sky() takes the
+ * voids found back out.
+ */
+typedef enum {
+  /**
+   * Cartesian coordinates in x, y and z, in the units of the box -- comoving
+   * Mpc/h, observer at the origin, for a survey. What every function that
+   * bins, sorts, bounds or moves positions needs, and what every reader in
+   * sif produces unless told otherwise.
+   */
+  SIF_COORDINATES_CARTESIAN = 0,
+  /**
+   * Sky coordinates: x holds the right ascension and y the declination, both
+   * in degrees, and z the redshift.
+   */
+  SIF_COORDINATES_SKY
+} sif_coordinates_t;
+
 /** @brief c / (100 km/s/Mpc): the Hubble distance, in Mpc/h. */
 #define SIF_HUBBLE_DISTANCE 2997.92458
 

@@ -307,16 +307,29 @@ import pysif
 pysif.init(log_level=2)
 
 # first, load the galaxies and the randoms into two pysif.Field
-# structures. here, both are ASCII tables holding right ascension,
-# declination (in degrees) and redshift, and the galaxies carry a weight
-# in the fourth column: 'w' reads it into the field (and '*' would skip
-# a column). weights are optional, for the data and the randoms alike
-# the reader loads the three coordinates into x, y and z, so we declare
-# that they are sky coordinates rather than positions
-data = pysif.io.read_field_ascii("path/to/galaxies.txt", format="x y z w")
-randoms = pysif.io.read_field_ascii("path/to/randoms.txt", format="x y z")
-data.units = "sky"
-randoms.units = "sky"
+# structures, from FITS tables holding right ascension, declination (in
+# degrees) and redshift. each part of the field is a column, or an
+# expression over columns: here the galaxies' weight is the product of
+# two (weights are optional, for the data and the randoms alike). a
+# catalogue split over several files -- the two galactic caps here --
+# reads as one. naming them ra, dec and z (rather than x, y and z) says
+# they are sky coordinates, not positions
+#
+# the redshift cut goes in where=, and applies the same way to both
+# catalogues. the randoms are often many times the galaxies: fraction=
+# keeps a random share of what passes the cut (seed= makes it
+# reproducible). pysif.io.inspect_fits() lists a file's columns
+cut = "Z > 0.43 && Z < 0.7"
+data = pysif.io.read_fits(
+    ["path/to/galaxies_NGC.fits", "path/to/galaxies_SGC.fits"],
+    ra="RA", dec="DEC", z="Z", w="WEIGHT_SYSTOT * WEIGHT_CP",
+    where=cut,
+)
+randoms = pysif.io.read_fits(
+    ["path/to/randoms_NGC.fits", "path/to/randoms_SGC.fits"],
+    ra="RA", dec="DEC", z="Z",
+    where=cut, fraction=0.5, seed=1,
+)
 
 # exodus works in comoving cartesian coordinates, so we convert both
 # catalogues with the same cosmology: a w0waCDM background, flat unless
@@ -398,9 +411,18 @@ catalog = pysif.finders.exodus_survey(
 # cartesian positions, in Mpc/h, with the observer at the origin
 catalog.translate(-offset)
 
-# we finally save the catalog, footprint columns included, and
-# finalize the library
-pysif.io.write_catalog_ascii(filepath="path/to/voids.txt", catalog=catalog)
+# and, to hand them on in the survey's own terms, back to the sky with
+# the same cosmology: right ascension, declination and redshift. the
+# radii stay comoving lengths, in Mpc/h
+catalog.to_sky(**cosmology)
+
+# we finally save the catalog, footprint columns included, as a FITS
+# table (RA, DEC, Z, R, ...), note what it was made with in its
+# header, and finalize the library. write_catalog_hdf5 and
+# write_catalog_ascii write a sky catalogue as well
+pysif.io.write_catalog_fits("path/to/voids.fits", catalog)
+pysif.io.set_fits_key("path/to/voids.fits", "threshold", threshold)
+pysif.io.set_fits_key("path/to/voids.fits", "omega_m", cosmology["omega_m"])
 
 pysif.finalize()
 ```
@@ -411,8 +433,7 @@ pysif.finalize()
 ```c
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
-#include "sif/io/catalog_io.h"
-#include "sif/io/field_io.h"
+#include "sif/io/fits_io.h"
 #include "sif/model/cosmology.h"
 #include "sif/structures/catalog.h"
 #include "sif/structures/chain_mesh.h"
@@ -439,20 +460,32 @@ int main(void) {
     return 1;
 
   // first, load the galaxies and the randoms into two sif_field_t
-  // structures. here, both are ASCII tables holding right ascension,
-  // declination (in degrees) and redshift, and the galaxies carry a weight
-  // in the fourth column: "w" reads it into the field (and "*" would skip
-  // a column). weights are optional, for the data and the randoms alike
-  // each field is sized from its file
-  data = sif_field_read_ascii("path/to/galaxies.txt", "x y z w", ' ', 0);
-  randoms = sif_field_read_ascii("path/to/randoms.txt", "x y z", ' ', 0);
+  // structures, from FITS tables holding right ascension, declination (in
+  // degrees) and redshift. each part of the field is a column, or an
+  // expression over columns: here the galaxies' weight is the product of
+  // two (weights are optional, for the data and the randoms alike). a
+  // catalogue split over several files -- the two galactic caps here --
+  // reads as one. naming them ra, dec and z (rather than x, y and z) says
+  // they are sky coordinates, not positions
+  //
+  // the redshift cut is the filter, and applies the same way to both
+  // catalogues. the randoms are often many times the galaxies: the
+  // fraction keeps a random share of what passes the cut (the seed after
+  // it makes it reproducible). sif_fits_inspect() lists a file's columns
+  const char* cut = "Z > 0.43 && Z < 0.7";
+  const char* data_files[] = {
+    "path/to/galaxies_NGC.fits", "path/to/galaxies_SGC.fits"};
+  const char* random_files[] = {
+    "path/to/randoms_NGC.fits", "path/to/randoms_SGC.fits"};
+  const sif_fits_columns_t data_columns = {
+    .ra = "RA", .dec = "DEC", .z = "Z", .w = "WEIGHT_SYSTOT * WEIGHT_CP"};
+  const sif_fits_columns_t random_columns = {
+    .ra = "RA", .dec = "DEC", .z = "Z"};
+  data = sif_field_read_fits(data_files, 2, NULL, &data_columns, cut, 1.0, 0);
+  randoms =
+    sif_field_read_fits(random_files, 2, NULL, &random_columns, cut, 0.5, 1);
   if (!data || !randoms)
     goto done;
-
-  // the reader loads the three coordinates into x, y and z, so we declare
-  // that they are sky coordinates rather than positions
-  data->units = SIF_FIELD_SKY;
-  randoms->units = SIF_FIELD_SKY;
 
   // exodus works in comoving cartesian coordinates, so we convert both
   // catalogues with the same cosmology: a w0waCDM background, whose
@@ -544,9 +577,23 @@ int main(void) {
   if (sif_catalog_translate(catalog, back) != SIF_OK)
     goto done;
 
-  // we finally save the catalog, footprint columns included, and
-  // finalize the library
-  status = sif_catalog_write_ascii("path/to/voids.txt", catalog);
+  // and, to hand them on in the survey's own terms, back to the sky with
+  // the same cosmology: right ascension, declination and redshift. the
+  // radii stay comoving lengths, in Mpc/h
+  if (sif_catalog_to_sky(catalog, &cosmology) != SIF_OK)
+    goto done;
+
+  // we finally save the catalog, footprint columns included, as a FITS
+  // table (RA, DEC, Z, R, ...), note what it was made with in its
+  // primary header, and finalize the library. sif_catalog_write_hdf5()
+  // and sif_catalog_write_ascii() write a sky catalogue as well
+  status = sif_catalog_write_fits("path/to/voids.fits", catalog);
+  if (status == SIF_OK)
+    status = sif_fits_set_key_real("path/to/voids.fits", NULL, "threshold",
+      (double)threshold);
+  if (status == SIF_OK)
+    status = sif_fits_set_key_real(
+      "path/to/voids.fits", NULL, "omega_m", cosmology.omega_m);
 
 done:
   sif_catalog_free(catalog);

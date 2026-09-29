@@ -285,7 +285,7 @@ int sif_field_read_into(sif_field_t* field, const char* filepath) {
       filepath, header.version);
   }
 
-  field->units = SIF_FIELD_CARTESIAN;
+  field->units = SIF_COORDINATES_CARTESIAN;
   return SIF_OK;
 }
 
@@ -386,6 +386,8 @@ typedef struct {
   col_t cols[MAX_COLS];
   int n_cols;
   bool has_pos, has_vel, has_w;
+  /* The positions were named ra dec z: sky coordinates, into x, y and z. */
+  bool sky;
 } format_t;
 
 /* The widest `*N` accepted: wide enough for any record a real file has,
@@ -412,6 +414,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
   }
 
   unsigned named = 0;
+  bool named_xy = false, named_radec = false;
   const char* p = fmt;
 
   while (*p) {
@@ -423,15 +426,44 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
 
     const long at = (long)(p - fmt) + 1;
     col_t col = {COL_SKIP, 0};
+    const char* name = NULL; /* as written, for messages */
 
     switch (c) {
     case 'x':
       col.kind = COL_X;
+      named_xy = true;
       p++;
       break;
     case 'y':
       col.kind = COL_Y;
+      named_xy = true;
       p++;
+      break;
+    case 'r':
+      if (tolower((unsigned char)p[1]) != 'a') {
+        SIF_LOG_ERROR("io",
+          "format '%s', position %ld: 'r' must be followed by a -- the right "
+          "ascension is ra",
+          fmt, at);
+        return SIF_ERR_INVALID;
+      }
+      col.kind = COL_X;
+      name = "ra";
+      named_radec = true;
+      p += 2;
+      break;
+    case 'd':
+      if (tolower((unsigned char)p[1]) != 'e' ||
+          tolower((unsigned char)p[2]) != 'c') {
+        SIF_LOG_ERROR("io",
+          "format '%s', position %ld: 'd' must begin dec -- the declination",
+          fmt, at);
+        return SIF_ERR_INVALID;
+      }
+      col.kind = COL_Y;
+      name = "dec";
+      named_radec = true;
+      p += 3;
       break;
     case 'z':
       col.kind = COL_Z;
@@ -495,17 +527,27 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       return SIF_ERR_INVALID;
     default:
       SIF_LOG_ERROR("io",
-        "format '%s', position %ld: '%c' is not a column name (x y z vx vy vz "
-        "w, or * to skip)",
+        "format '%s', position %ld: '%c' is not a column name (x y z, or ra "
+        "dec z; vx vy vz w, or * to skip)",
         fmt, at, *p);
+      return SIF_ERR_INVALID;
+    }
+
+    /* x and y are positions, ra and dec sky coordinates: a format is one or
+     * the other, and z goes with either -- a length, or the redshift. */
+    if (named_xy && named_radec) {
+      SIF_LOG_ERROR("io",
+        "format '%s' mixes x y with ra dec: positions are x y z, sky "
+        "coordinates ra dec z",
+        fmt);
       return SIF_ERR_INVALID;
     }
 
     if (col.kind != COL_SKIP) {
       const unsigned bit = 1u << col.kind;
       if (named & bit) {
-        SIF_LOG_ERROR(
-          "io", "format '%s' names '%s' twice", fmt, COL_NAMES[col.kind]);
+        SIF_LOG_ERROR("io", "format '%s' names '%s' twice", fmt,
+          name ? name : COL_NAMES[col.kind]);
         return SIF_ERR_INVALID;
       }
       named |= bit;
@@ -522,6 +564,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
   const unsigned pos = (1u << COL_X) | (1u << COL_Y) | (1u << COL_Z);
   const unsigned vel = (1u << COL_VX) | (1u << COL_VY) | (1u << COL_VZ);
   out->has_pos = (named & pos) != 0;
+  out->sky = named_radec;
   out->has_vel = (named & vel) != 0;
   out->has_w = (named & (1u << COL_W)) != 0;
 
@@ -588,7 +631,7 @@ static int format_reserve(
 static void format_loaded(sif_field_t* field, const format_t* f) {
   if (!f->has_pos)
     return;
-  field->units = SIF_FIELD_CARTESIAN;
+  field->units = f->sky ? SIF_COORDINATES_SKY : SIF_COORDINATES_CARTESIAN;
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
   field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
   sif_free_aligned(field->original_indices);

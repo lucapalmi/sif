@@ -55,22 +55,29 @@ def test_distance_refusals(kwargs, message):
 # --- units and conversion ---
 
 def sky(ra, dec, z, **kwargs):
-    f = pysif.Field()
-    f.from_numpy(*(np.asarray(a, dtype=pysif.real) for a in (ra, dec, z)),
-                 units="sky", **kwargs)
-    return f
+    return pysif.field_from_numpy(
+        ra=np.asarray(ra, dtype=pysif.real), dec=np.asarray(dec, dtype=pysif.real),
+        z=np.asarray(z, dtype=pysif.real), **kwargs)
 
 
 def test_units_default_and_relabel():
-    f = pysif.Field()
-    f.from_numpy(*np.ones((3, 4), dtype=pysif.real))
+    f = pysif.field_from_numpy(*np.ones((3, 4), dtype=pysif.real))
     assert f.units == "cartesian"
     f.units = "sky"
     assert f.units == "sky"
     with pytest.raises(ValueError):
         f.units = "galactic"
-    with pytest.raises(ValueError, match="units"):
-        f.from_numpy(*np.ones((3, 4), dtype=pysif.real), units="radians")
+
+
+def test_names_say_what_the_positions_are():
+    ones = np.ones(4, dtype=pysif.real)
+    assert pysif.field_from_numpy(ra=ones, dec=ones, z=ones).units == "sky"
+    with pytest.raises(ValueError, match="not some of each"):
+        pysif.field_from_numpy(x=ones, dec=ones, z=ones)
+    with pytest.raises(ValueError, match="ra, dec and z"):
+        pysif.field_from_numpy(ra=ones, dec=ones)
+    with pytest.raises(ValueError, match="x, y and z"):
+        pysif.field_from_numpy(ones, ones)
 
 
 def test_conversion_follows_pyrecon():
@@ -97,8 +104,7 @@ def test_conversion_refusals_leave_the_field():
         f.convert_sky_coordinates(0.3)
     assert f.units == "sky" and f.y[1] == np.float32(95.0)
 
-    g = pysif.Field()
-    g.from_numpy(*np.ones((3, 2), dtype=pysif.real))
+    g = pysif.field_from_numpy(*np.ones((3, 2), dtype=pysif.real))
     with pytest.raises(ValueError, match="already holds Cartesian"):
         g.convert_sky_coordinates(0.3)
 

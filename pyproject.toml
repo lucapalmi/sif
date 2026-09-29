@@ -67,12 +67,14 @@ input = "CMakeLists.txt"
 regex = 'project\(sif VERSION (?P<value>[0-9][0-9.]*)'
 
 [tool.scikit-build.cmake.define]
-# Stated rather than inherited, so that what a pysif build does about HDF5 is
-# written down here. AUTO takes HDF5 when the machine has a serial one; a
-# wheel built for distribution should say ON (and bundle the library), so
-# that it cannot silently ship without it. Override with
+# Stated rather than inherited, so that what a pysif build does about HDF5
+# and cfitsio is written down here. AUTO takes HDF5 when the machine has a
+# serial one, and cfitsio when it has one; a wheel built for distribution
+# should say ON (and bundle the libraries), so that it cannot silently ship
+# without them. Override with
 #   pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
 SIF_HDF5_SUPPORT = "AUTO"
+SIF_FITS_SUPPORT = "AUTO"
 # ON for a build from source, which runs on the machine that compiled it. A
 # wheel for distribution must say OFF: see SIF_NATIVE_ARCH in CMakeLists.txt.
 SIF_NATIVE_ARCH = "ON"
@@ -83,7 +85,8 @@ SIF_NATIVE_ARCH = "ON"
 # which runs packaging/build-deps.sh once per platform and then builds one
 # wheel per Python version against what it left in /tmp/sif-deps. Each wheel
 # is then repaired -- auditwheel on Linux, delocate on macOS -- which copies
-# FFTW, HDF5 and the OpenMP runtime into it, so it needs nothing installed.
+# FFTW, HDF5, cfitsio and the OpenMP runtime into it, so it needs nothing
+# installed.
 [tool.cibuildwheel]
 build = ["cp310-*", "cp311-*", "cp312-*", "cp313-*", "cp314-*"]
 skip = ["*-musllinux_*"]
@@ -92,21 +95,22 @@ test-requires = ["h5py"]
 test-command = "python {project}/packaging/test_wheel.py"
 
 # Portable code, no paths into the build machine (the repair step bundles the
-# libraries instead), HDF5 required rather than hoped for, FFTW's pthreads
+# libraries instead), HDF5 and cfitsio required rather than hoped for, FFTW's pthreads
 # backend (see build-deps.sh), and the bundled libraries' license texts in the
 # wheel.
 [tool.cibuildwheel.config-settings]
 "cmake.define.SIF_NATIVE_ARCH" = "OFF"
 "cmake.define.SIF_RECORD_RPATH" = "OFF"
 "cmake.define.SIF_HDF5_SUPPORT" = "ON"
+"cmake.define.SIF_FITS_SUPPORT" = "ON"
 "cmake.define.SIF_FFTW_THREADING" = "threads"
 "cmake.define.SIF_BUNDLED_LICENSES" = "/tmp/sif-deps/licenses"
 
 [tool.cibuildwheel.linux]
 archs = ["x86_64", "aarch64"]
 # LD_LIBRARY_PATH for auditwheel, which finds the libraries to bundle there.
-environment = { FFTW3_ROOT = "/tmp/sif-deps", HDF5_ROOT = "/tmp/sif-deps", LD_LIBRARY_PATH = "/tmp/sif-deps/lib" }
+environment = { FFTW3_ROOT = "/tmp/sif-deps", HDF5_ROOT = "/tmp/sif-deps", CFITSIO_ROOT = "/tmp/sif-deps", LD_LIBRARY_PATH = "/tmp/sif-deps/lib" }
 
 [tool.cibuildwheel.macos]
 archs = ["arm64"]
-environment = { FFTW3_ROOT = "/tmp/sif-deps", HDF5_ROOT = "/tmp/sif-deps", OpenMP_ROOT = "/tmp/sif-deps", MACOSX_DEPLOYMENT_TARGET = "11.0" }
+environment = { FFTW3_ROOT = "/tmp/sif-deps", HDF5_ROOT = "/tmp/sif-deps", CFITSIO_ROOT = "/tmp/sif-deps", OpenMP_ROOT = "/tmp/sif-deps", MACOSX_DEPLOYMENT_TARGET = "11.0" }

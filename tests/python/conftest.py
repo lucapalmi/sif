@@ -17,6 +17,7 @@ import pysif
 import pytest
 
 GADGET = Path(__file__).resolve().parent.parent / "data" / "gadget"
+FITS = Path(__file__).resolve().parent.parent / "data" / "fits"
 
 # At import rather than in a fixture: HAS_HDF5 below calls into the library
 # while the tests are still being collected.
@@ -41,4 +42,15 @@ def _has_hdf5():
 
 
 HAS_HDF5 = _has_hdf5()
+
+
+def _has_fits():
+    try:
+        pysif.io.read_fits(str(FITS / "catalogue.fits"), x="RA", y="DEC", z="Z")
+    except RuntimeError:
+        return False
+    return True
+
+
+HAS_FITS = _has_fits()
 requires_hdf5 = pytest.mark.skipif(not HAS_HDF5, reason="pysif built without HDF5")

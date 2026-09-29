@@ -36,6 +36,7 @@ set(SIF_TESTS
   test_hdf5         # the HDF5 catalogue file, or its text fallback
   test_gadget       # GADGET snapshots, all formats, from tests/data/gadget
   test_cosmology    # comoving distances, sky coordinates, and their refusals
+  test_fits         # FITS tables: columns, expressions, filters, subsamples
 )
 
 foreach(test_name IN LISTS SIF_TESTS)
@@ -67,6 +68,14 @@ foreach(test_name IN LISTS SIF_TESTS)
     target_include_directories(${test_name} PRIVATE
       ${HDF5_C_INCLUDE_DIRS} ${HDF5_INCLUDE_DIRS})
     target_link_libraries(${test_name} PRIVATE ${HDF5_C_LIBRARIES})
+  endif()
+
+  # test_fits writes its own fixture with cfitsio, and reads it back with
+  # sif, when sif has cfitsio; without, it checks the reader refuses.
+  if(SIF_WITH_FITS AND test_name STREQUAL "test_fits")
+    target_compile_definitions(${test_name} PRIVATE SIF_HAVE_FITS)
+    target_include_directories(${test_name} PRIVATE ${CFITSIO_INCLUDE})
+    target_link_libraries(${test_name} PRIVATE ${CFITSIO_LIB})
   endif()
 
   # Fixture files that live in the source tree, read in place.

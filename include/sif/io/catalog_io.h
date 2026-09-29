@@ -10,10 +10,20 @@
  *
  * Text rather than binary: a catalogue is small next to the field it came
  * from, and it is the thing a user actually looks at, plots and hands to other
- * tools. The layout is one header line holding the void count, then one line
- * per void with `cx cy cz radius` separated by spaces -- and, for a catalogue
- * that carries a footprint (see sif_finder_exodus_survey()), two more columns,
- * `footprint footprint_shell`. Every row of a file has the same columns.
+ * tools. The layout is a two-line header behind `#`, which numpy.loadtxt and
+ * most other readers skip on their own, then one line per void:
+ *
+ * @code
+ * #n=1024
+ * #cx cy cz r footprint footprint_shell
+ * 101.25 250.5 33.125 12.5 1 0.84
+ * ...
+ * @endcode
+ *
+ * The first line is the void count; the second names the columns. A
+ * catalogue on the sky (sif_catalog_to_sky()) names them `ra dec z r`. The
+ * footprint columns (see sif_finder_exodus_survey()) are there only when the
+ * catalogue carries a footprint.
  */
 
 #ifndef SIF_IO_CATALOG_IO_H
@@ -39,11 +49,17 @@ int sif_catalog_write_ascii(const char* filepath, const sif_catalog_t* catalog);
 /**
  * @brief Read a catalogue written by sif_catalog_write_ascii().
  *
- * The leading count is used to size the allocation up front, so the file must
- * carry it. The first row says whether the footprint columns are there, and
- * the catalogue comes back with them exactly when they are; a file written
- * before they existed reads as it always did. An empty catalogue has no first
- * row and so comes back without them.
+ * Lines starting with `#` are comments, wherever they are. Among those before
+ * the first row, `n=N` gives the count, which sizes the catalogue up front;
+ * without one the rows are counted first and then read. A comment naming the
+ * columns places them: `cx cy cz` (or `x y z`) for Cartesian centres or `ra
+ * dec z` for sky ones, `r` (or `radius`), and optionally `footprint
+ * footprint_shell`, in any order -- columns with other names are skipped.
+ * Without names, rows are `cx cy cz r`, and six columns add the footprint.
+ *
+ * Files written before the header -- a first line holding the count alone --
+ * read as they always did. Rows have to be as many as the count says, no
+ * more and no fewer.
  *
  * @param filepath Path to the input file.
  * @return The catalogue, owned by the caller and released with

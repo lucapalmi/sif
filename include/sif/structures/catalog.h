@@ -11,12 +11,21 @@
  * This is what a finder produces and what the measurement code consumes. It
  * grows by appending, since a finder does not know how many voids it will find
  * until it has finished looking.
+ *
+ * **Centres are Cartesian, or on the sky.** A finder produces comoving
+ * Cartesian centres; for a survey, sif_catalog_to_sky() turns them into right
+ * ascension, declination and redshift, for a catalogue to hand on in the
+ * survey's own terms. Every writer writes what the catalogue holds, and says
+ * which; everything that measures around the centres refuses a sky
+ * catalogue.
  */
 
 #ifndef SIF_STRUCTURES_CATALOG_H
 #define SIF_STRUCTURES_CATALOG_H
 
 #include "sif/core/macros.h"
+#include "sif/model/cosmology.h"
+
 #include <stdint.h>
 
 /**
@@ -59,6 +68,14 @@ typedef struct {
    * stacked profile reaches into. NULL exactly when #footprint is.
    */
   sif_real* footprint_shell;
+
+  /**
+   * What cx, cy and cz hold: #SIF_COORDINATES_CARTESIAN from
+   * sif_catalog_alloc() and from every finder, #SIF_COORDINATES_SKY after
+   * sif_catalog_to_sky() -- right ascension and declination in degrees, and
+   * redshift. The radii are comoving lengths either way.
+   */
+  sif_coordinates_t units;
 
   /** Entries in use. */
   uint64_t n_voids;
@@ -135,9 +152,38 @@ int sif_catalog_trim(sif_catalog_t* catalog);
  *
  * @param catalog The catalogue, modified in place.
  * @param offset Added to cx, cy and cz respectively.
- * @return SIF_OK, or SIF_ERR_INVALID on a NULL argument.
+ * @return SIF_OK, or SIF_ERR_INVALID on a NULL argument or a sky catalogue.
  */
 int sif_catalog_translate(sif_catalog_t* catalog, const sif_real offset[3]);
+
+/**
+ * @brief Turn Cartesian void centres into sky coordinates, in place.
+ *
+ * The inverse of sif_field_convert_sky_coordinates(), for the voids a survey
+ * gave: each centre becomes the right ascension and declination of its
+ * direction from the origin, in degrees, and the redshift at which the
+ * line-of-sight comoving distance in @p cosmo is its distance from the origin.
+ * Right ascensions come out in [0, 360). The catalogue is then
+ * #SIF_COORDINATES_SKY.
+ *
+ * The observer has to be at the origin, as sif_field_convert_sky_coordinates()
+ * puts it: a catalogue found in a survey box is moved back first, with
+ * sif_catalog_translate() and the negated offset. Converted with the cosmology
+ * the tracers were, a centre comes back to the sky within single precision.
+ *
+ * Radii are left as they are, comoving lengths in Mpc/h: a void's size is not
+ * an angle. Footprints are untouched.
+ *
+ * @param catalog The catalogue, with Cartesian centres; modified in place.
+ * @param cosmo The cosmology the distances are converted in.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, a catalogue already on
+ * the sky, a centre that is not finite, or parameters
+ * sif_cosmology_comoving_distance() refuses; SIF_ERR_RANGE for a centre
+ * farther than the model reaches; SIF_ERR_ALLOC. On failure the catalogue is
+ * left as it was.
+ */
+SIF_NODISCARD int sif_catalog_to_sky(
+  sif_catalog_t* catalog, const sif_cosmology_t* cosmo);
 
 /**
  * @brief Give the catalogue its footprint columns, sif_catalog_t::footprint

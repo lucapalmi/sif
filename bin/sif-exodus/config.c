@@ -9,6 +9,7 @@
 #include "sif/core/macros.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/io/field_io.h"
+#include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
 #include "sif/utils/logger.h"
 
@@ -34,13 +35,19 @@ static const char* const SECTIONS[] = {
   "input", "grid", "mesh", "finder", "output", "run", NULL};
 
 static const char* const INPUT_KEYS[] = {
-  "path", "format", "box_length", "ascii", "binary", "gadget", NULL};
+  "path", "format", "box_length", "ascii", "binary", "gadget", "fits", NULL};
 static const char* const ASCII_KEYS[] = {
   "columns", "delimiter", "skip_header", NULL};
 static const char* const BINARY_KEYS[] = {
   "columns", "precision", "layout", "endian", "header_bytes", NULL};
 static const char* const GADGET_KEYS[] = {
   "snapformat", "ptype", "length", "masses", "fraction", "seed", NULL};
+static const char* const FITS_KEYS[] = {
+  "columns", "where", "hdu", "fraction", "seed", NULL};
+static const char* const FITS_COLUMN_KEYS[] = {"x", "y", "z", "w", NULL};
+/* Keys refused with a message of their own, rather than as unknown. */
+static const char* const FITS_COLUMN_REFUSED[] = {
+  "x", "y", "z", "w", "vx", "vy", "vz", "ra", "dec", NULL};
 static const char* const GRID_KEYS[] = {"n_cells", NULL};
 static const char* const MESH_KEYS[] = {"n_cells", NULL};
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
@@ -60,8 +67,8 @@ static const struct {
 
 /* Enumerations, in the order of the C enums they stand for. */
 static const char* const INPUT_FORMATS[] = {
-  "xfield", "ascii", "binary", "gadget", NULL};
-static const char* const OUTPUT_FORMATS[] = {"hdf5", "ascii", NULL};
+  "xfield", "ascii", "binary", "gadget", "fits", NULL};
+static const char* const OUTPUT_FORMATS[] = {"hdf5", "ascii", "fits", NULL};
 static const char* const RADII_UNITS[] = {"physical", "mps", NULL};
 static const char* const LAYOUTS[] = {"rows", "blocks", NULL};
 static const char* const PRECISIONS[] = {"float32", "float64", NULL};
@@ -422,16 +429,18 @@ static bool get_enum(reader_t* r, int t, const char* path, const char* key,
 
 /* --- the sections ------------------------------------------------------ */
 
-/* A copy of s that the configuration owns, or NULL when out of slots or
- * memory -- which the caller reports. */
+/* A copy of s that the configuration owns, or NULL when out of memory --
+ * which the caller reports. */
 static char* keep(exodus_config_t* c, const char* s) {
-  for (size_t i = 0; i < sizeof(c->_strings) / sizeof(c->_strings[0]); i++) {
-    if (!c->_strings[i]) {
-      c->_strings[i] = strdup(s);
-      return c->_strings[i];
-    }
-  }
-  return NULL;
+  char** grown =
+    realloc(c->_strings, (c->_n_strings + 1) * sizeof(*c->_strings));
+  if (!grown)
+    return NULL;
+  c->_strings = grown;
+  char* copy = strdup(s);
+  if (copy)
+    c->_strings[c->_n_strings++] = copy;
+  return copy;
 }
 
 static void set_defaults(exodus_config_t* c) {
@@ -448,6 +457,7 @@ static void set_defaults(exodus_config_t* c) {
   p->input.gadget.ptype = SIF_GADGET_PTYPE_1;
   p->input.gadget.length = SIF_GADGET_LENGTH_AUTO;
   p->input.gadget.fraction = 1.0;
+  p->input.fits.fraction = 1.0;
 
   p->finder.radii_units = EXODUS_RADII_PHYSICAL;
   p->finder.overlap_fraction = 0.0;
@@ -471,6 +481,16 @@ static void read_columns(
   if (strchr(columns, 'v') || strchr(columns, 'V')) {
     report(r, at(w, sizeof w, path, "columns"),
       "\"%s\" reads velocities, which the finder never uses; skip them with *",
+      columns);
+    return;
+  }
+  /* Sky coordinates need the survey finder, which this program does not run
+   * yet: a box is filled with positions. In the column language only ra and
+   * dec have an r or a d in them. */
+  if (strpbrk(columns, "rRdD")) {
+    report(r, at(w, sizeof w, path, "columns"),
+      "\"%s\" reads sky coordinates (ra dec z); sif-exodus finds voids in a "
+      "box, from positions x y z",
       columns);
     return;
   }
@@ -566,6 +586,147 @@ static void read_gadget(reader_t* r, int t, exodus_config_t* c) {
     c->params.input.gadget.seed = (uint64_t)v;
 }
 
+/* input.fits.columns: a name or an expression for each of x, y, z and,
+ * optionally, the weight. */
+static void read_fits_columns(reader_t* r, int t, exodus_config_t* c) {
+  const char* path = "input.fits.columns";
+  lua_State* L = r->L;
+  sif_fits_columns_t* cols = &c->params.input.fits.columns;
+  const char* const* keys = FITS_COLUMN_KEYS;
+  const char** slots[] = {&cols->x, &cols->y, &cols->z, &cols->w};
+
+  const int type = field(L, t, "columns");
+  const int ct = lua_gettop(L);
+  if (type == LUA_TNIL) {
+    report(r, path,
+      "missing: the columns to read, as columns = { x = \"X\", y = \"Y\", "
+      "z = \"Z\" }");
+  } else if (type != LUA_TTABLE) {
+    type_error(r, "input.fits", "columns", "a table", type);
+  } else {
+    /* Velocities have no key: the finder never reads them. */
+    lua_pushnil(L);
+    while (lua_next(L, ct)) {
+      const char* key =
+        lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
+      if (key && (strcmp(key, "vx") == 0 || strcmp(key, "vy") == 0 ||
+                   strcmp(key, "vz") == 0)) {
+        char w[160];
+        report(r, at(w, sizeof w, path, key),
+          "velocities are not read: the finder never uses them");
+      } else if (key && (strcmp(key, "ra") == 0 || strcmp(key, "dec") == 0)) {
+        char w[160];
+        report(r, at(w, sizeof w, path, key),
+          "sky coordinates are not read: sif-exodus finds voids in a box, "
+          "from positions x y z");
+      }
+      lua_pop(L, 1);
+    }
+    lua_settop(L, ct);
+    check_keys(r, ct, path, FITS_COLUMN_REFUSED);
+
+    for (int i = 0; keys[i]; i++) {
+      const char* v;
+      char w[160];
+      if (get_string(r, ct, path, keys[i], &v)) {
+        if (!*v)
+          report(r, at(w, sizeof w, path, keys[i]), "is empty");
+        else if (!(*slots[i] = keep(c, v)))
+          report(r, at(w, sizeof w, path, keys[i]), "out of memory");
+      } else if (i < 3 && field(L, ct, keys[i]) == LUA_TNIL) {
+        report(r, at(w, sizeof w, path, keys[i]),
+          "missing: all three positions are required");
+      }
+      lua_settop(L, ct);
+    }
+  }
+  lua_settop(L, ct - 1);
+}
+
+static void read_fits(reader_t* r, int t, exodus_config_t* c) {
+  const char* path = "input.fits";
+  lua_State* L = r->L;
+  char w[160];
+  const char* v;
+  int64_t n;
+  double x;
+
+  check_keys(r, t, path, FITS_KEYS);
+  read_fits_columns(r, t, c);
+
+  if (get_string(r, t, path, "where", &v) && *v)
+    c->params.input.fits.where = keep(c, v);
+
+  /* The table: its EXTNAME, or its extension number, 1 for the first. */
+  const int type = field(L, t, "hdu");
+  if (type == LUA_TSTRING && *lua_tostring(L, -1)) {
+    c->params.input.fits.hdu = keep(c, lua_tostring(L, -1));
+  } else if (type == LUA_TNUMBER && lua_isinteger(L, -1) &&
+             lua_tointeger(L, -1) >= 0) {
+    char num[32];
+    snprintf(num, sizeof num, "%lld", (long long)lua_tointeger(L, -1));
+    c->params.input.fits.hdu = keep(c, num);
+  } else if (type != LUA_TNIL) {
+    report(r, at(w, sizeof w, path, "hdu"),
+      "must be the table's EXTNAME or its extension number (1 for the "
+      "first)");
+  }
+  lua_settop(L, t);
+
+  if (get_number(r, t, path, "fraction", &x)) {
+    if (x > 0.0 && x <= 1.0)
+      c->params.input.fits.fraction = x;
+    else
+      report(
+        r, at(w, sizeof w, path, "fraction"), "must be in (0, 1], got %g", x);
+  }
+  if (get_integer(r, t, path, "seed", 0, INT64_MAX, &n))
+    c->params.input.fits.seed = (uint64_t)n;
+}
+
+/* input.path as a list of files, which only a FITS catalogue is read from.
+ * Returns the first, or NULL after reporting what is wrong. */
+static const char* read_path_list(reader_t* r, int t, exodus_config_t* c) {
+  lua_State* L = r->L;
+  field(L, t, "path");
+  const int lt = lua_gettop(L);
+  const char* first = NULL;
+  char w[160];
+
+  const lua_Integer n = (lua_Integer)lua_rawlen(L, lt);
+  if (n == 0 || n > UINT32_MAX) {
+    report(r, "input.path", "an empty list: name the files to read");
+  } else if (!(c->_paths = calloc((size_t)n, sizeof(char*)))) {
+    report(r, "input.path", "out of memory");
+  } else {
+    bool ok = true;
+    for (lua_Integer i = 1; i <= n; i++) {
+      const int et = lua_rawgeti(L, lt, i);
+      snprintf(w, sizeof w, "input.path[%lld]", (long long)i);
+      if (et != LUA_TSTRING || !*lua_tostring(L, -1)) {
+        report(r, w, "must be a file name");
+        ok = false;
+      } else if (!(c->_paths[i - 1] = keep(c, lua_tostring(L, -1)))) {
+        report(r, w, "out of memory");
+        ok = false;
+      }
+      lua_pop(L, 1);
+    }
+    if (ok) {
+      c->params.input.fits.paths = c->_paths;
+      c->params.input.fits.n_paths = (uint32_t)n;
+      first = c->_paths[0];
+    }
+  }
+  lua_settop(L, t);
+  return first;
+}
+
+static bool is_fits_name(const char* path) {
+  return ends_with(path, ".fits") || ends_with(path, ".fit") ||
+         ends_with(path, ".fits.gz") || ends_with(path, ".fit.gz");
+}
+
 static void read_input(reader_t* r, int root, exodus_config_t* c) {
   lua_State* L = r->L;
   exodus_params_t* p = &c->params;
@@ -575,15 +736,22 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
   int t = 0;
   char all[128], w[160];
 
+  bool path_list = false;
   const int type = field(L, root, "input");
   if (type == LUA_TSTRING) {
     path = lua_tostring(L, -1);
   } else if (type == LUA_TTABLE) {
     t = lua_gettop(L);
     check_keys(r, t, "input", INPUT_KEYS);
-    if (!get_string(r, t, "input", "path", &path) &&
-        field(L, t, "path") == LUA_TNIL)
+    const int path_type = field(L, t, "path");
+    lua_settop(L, t);
+    if (path_type == LUA_TTABLE) {
+      path_list = true;
+      path = read_path_list(r, t, c);
+    } else if (!get_string(r, t, "input", "path", &path) &&
+               path_type == LUA_TNIL) {
       report(r, "input.path", "missing: the file to read");
+    }
     lua_settop(L, t);
     get_enum(r, t, "input", "format", INPUT_FORMATS, &format);
   } else if (type == LUA_TNIL) {
@@ -595,15 +763,20 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
       lua_typename(L, type));
   }
 
-  if (path)
+  if (path && !path_list)
     p->input.path = keep(c, path);
+  else if (path)
+    p->input.path = path; /* kept already, as the list's first */
 
-  /* Only sif's own files say what they are by their name. */
+  /* Only sif's own files, and FITS files, say what they are by their
+   * name: a .dat or a .bin could be anything. */
   const bool format_given = t && field(L, t, "format") != LUA_TNIL;
   lua_settop(L, t ? t : base + 1);
   if (format < 0 && path && !format_given) {
     if (ends_with(path, ".xfield")) {
       format = EXODUS_INPUT_XFIELD;
+    } else if (is_fits_name(path)) {
+      format = EXODUS_INPUT_FITS;
     } else {
       list_names(all, sizeof all, INPUT_FORMATS);
       report(r, "input.format",
@@ -613,6 +786,24 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
   }
   if (format >= 0)
     p->input.kind = (exodus_input_kind_t)format;
+
+  if (path_list && format >= 0 && p->input.kind != EXODUS_INPUT_FITS)
+    report(r, "input.path",
+      "a list of files, which only the fits format reads; %s reads one",
+      INPUT_FORMATS[p->input.kind]);
+
+  /* A single FITS file is a list of one. */
+  if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS && !path_list &&
+      p->input.path) {
+    c->_paths = malloc(sizeof(char*));
+    if (c->_paths) {
+      c->_paths[0] = p->input.path;
+      p->input.fits.paths = c->_paths;
+      p->input.fits.n_paths = 1;
+    } else {
+      report(r, "input.path", "out of memory");
+    }
+  }
 
   if (t) {
     double box;
@@ -624,10 +815,10 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
     }
 
     /* One sub-table per format, and only the one the format reads. */
-    static const char* const subs[] = {"ascii", "binary", "gadget"};
-    static const exodus_input_kind_t kinds[] = {
-      EXODUS_INPUT_ASCII, EXODUS_INPUT_BINARY, EXODUS_INPUT_GADGET};
-    for (int i = 0; i < 3; i++) {
+    static const char* const subs[] = {"ascii", "binary", "gadget", "fits"};
+    static const exodus_input_kind_t kinds[] = {EXODUS_INPUT_ASCII,
+      EXODUS_INPUT_BINARY, EXODUS_INPUT_GADGET, EXODUS_INPUT_FITS};
+    for (int i = 0; i < 4; i++) {
       const int st = field(L, t, subs[i]);
       const int s = lua_gettop(L);
       if (st == LUA_TTABLE) {
@@ -638,8 +829,10 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
           read_ascii(r, s, c);
         else if (kinds[i] == EXODUS_INPUT_BINARY)
           read_binary(r, s, c);
-        else
+        else if (kinds[i] == EXODUS_INPUT_GADGET)
           read_gadget(r, s, c);
+        else
+          read_fits(r, s, c);
       } else if (st != LUA_TNIL) {
         type_error(r, "input", subs[i], "a table", st);
       } else if (format >= 0 && p->input.kind == EXODUS_INPUT_BINARY &&
@@ -647,16 +840,24 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
         report(r, "input.binary",
           "missing: a binary file needs at least its precision, as binary = "
           "{ precision = \"float32\" }");
+      } else if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS &&
+                 kinds[i] == EXODUS_INPUT_FITS) {
+        report(r, "input.fits",
+          "missing: a FITS table needs its columns named, as fits = { "
+          "columns = { x = \"X\", y = \"Y\", z = \"Z\" } }");
       }
       lua_settop(L, t);
     }
   } else if (format >= 0 && p->input.kind == EXODUS_INPUT_BINARY) {
     report(r, "input.binary", "missing: a binary file needs its precision");
+  } else if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS) {
+    report(r, "input.fits", "missing: a FITS table needs its columns named");
   }
 
   if (format >= 0 &&
       (p->input.kind == EXODUS_INPUT_ASCII ||
-        p->input.kind == EXODUS_INPUT_BINARY) &&
+        p->input.kind == EXODUS_INPUT_BINARY ||
+        p->input.kind == EXODUS_INPUT_FITS) &&
       !(p->input.box_length > 0.0))
     report(r, "input.box_length",
       "missing: %s files do not record their box, so the configuration "
@@ -819,11 +1020,14 @@ static void read_output(reader_t* r, int root, exodus_config_t* c) {
 
   if (path) {
     p->output.path = keep(c, path);
-    if (format < 0)
-      format = ends_with(path, ".h5") || ends_with(path, ".hdf5") ||
-                   ends_with(path, ".he5")
-                 ? EXODUS_OUTPUT_HDF5
-                 : EXODUS_OUTPUT_ASCII;
+    if (format < 0 && (ends_with(path, ".h5") || ends_with(path, ".hdf5") ||
+                        ends_with(path, ".he5")))
+      format = EXODUS_OUTPUT_HDF5;
+    else if (format < 0 &&
+             (ends_with(path, ".fits") || ends_with(path, ".fit")))
+      format = EXODUS_OUTPUT_FITS;
+    else if (format < 0)
+      format = EXODUS_OUTPUT_ASCII;
   }
   if (format >= 0)
     p->output.kind = (exodus_output_kind_t)format;
@@ -835,6 +1039,12 @@ static void read_output(reader_t* r, int root, exodus_config_t* c) {
     report(r, type == LUA_TSTRING ? "output" : "output.format",
       "this sif-exodus was built without HDF5: write an ASCII catalogue "
       "(e.g. \"voids.txt\"), or rebuild with SIF_HDF5_SUPPORT=ON");
+#endif
+#if !defined(SIF_HAVE_FITS)
+  if (path && p->output.kind == EXODUS_OUTPUT_FITS)
+    report(r, type == LUA_TSTRING ? "output" : "output.format",
+      "this sif-exodus was built without FITS support: write an HDF5 or an "
+      "ASCII catalogue, or rebuild with SIF_FITS_SUPPORT=ON");
 #endif
 
   lua_settop(L, t - 1);
@@ -1016,7 +1226,17 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     out);
 
   fputs("input = {\n  path = ", out);
-  write_lua_string(out, p->input.path);
+  if (p->input.kind == EXODUS_INPUT_FITS && p->input.fits.n_paths > 1) {
+    fputs("{\n", out);
+    for (uint32_t i = 0; i < p->input.fits.n_paths; i++) {
+      fputs("    ", out);
+      write_lua_string(out, p->input.fits.paths[i]);
+      fputs(",\n", out);
+    }
+    fputs("  }", out);
+  } else {
+    write_lua_string(out, p->input.path);
+  }
   fprintf(out, ",\n  format = \"%s\",\n", INPUT_FORMATS[p->input.kind]);
   if (p->input.box_length > 0.0) {
     format_double(num, sizeof num, p->input.box_length);
@@ -1061,6 +1281,34 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
       LENGTHS[p->input.gadget.length - SIF_GADGET_LENGTH_KPC],
       p->input.gadget.masses ? "true" : "false", num,
       (unsigned long long)p->input.gadget.seed);
+    break;
+  }
+  case EXODUS_INPUT_FITS: {
+    const sif_fits_columns_t* cols = &p->input.fits.columns;
+    fputs("  fits = {\n    columns = { x = ", out);
+    write_lua_string(out, cols->x);
+    fputs(", y = ", out);
+    write_lua_string(out, cols->y);
+    fputs(", z = ", out);
+    write_lua_string(out, cols->z);
+    if (cols->w) {
+      fputs(", w = ", out);
+      write_lua_string(out, cols->w);
+    }
+    fputs(" },\n", out);
+    if (p->input.fits.where) {
+      fputs("    where = ", out);
+      write_lua_string(out, p->input.fits.where);
+      fputs(",\n", out);
+    }
+    if (p->input.fits.hdu) {
+      fputs("    hdu = ", out);
+      write_lua_string(out, p->input.fits.hdu);
+      fputs(",\n", out);
+    }
+    format_double(num, sizeof num, p->input.fits.fraction);
+    fprintf(out, "    fraction = %s,\n    seed = %llu,\n  },\n", num,
+      (unsigned long long)p->input.fits.seed);
     break;
   }
   case EXODUS_INPUT_XFIELD:
@@ -1398,6 +1646,28 @@ static void inspect_table(
   in->n_tracers = (size - header) / record;
 }
 
+/* Every file of a FITS catalogue, opened and its structure read: whether the
+ * columns are there is found when it is read. */
+static void inspect_fits(
+  checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
+  for (uint32_t i = 0; i < p->input.fits.n_paths; i++) {
+    const char* path = p->input.fits.paths[i];
+    FILE* sink = tmpfile();
+    const int status = sink ? sif_fits_print_summary(path, sink) : SIF_OK;
+    if (sink)
+      fclose(sink);
+    if (status == SIF_ERR_UNSUPPORTED) {
+      check_say(ch, SIF_LOG_LEVEL_ERROR, "input.format",
+        "this sif-exodus was built without FITS support");
+      return;
+    }
+    if (status != SIF_OK)
+      check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path",
+        "%s cannot be read as a FITS file (see above)", path);
+  }
+  in->weighted = p->input.fits.columns.w != NULL;
+}
+
 /* "1.3 GiB", "250 MiB": a size to read, not to compute with. */
 static const char* human_bytes(char* buf, size_t n, uint64_t bytes) {
   const double mib = (double)bytes / (1024.0 * 1024.0);
@@ -1424,6 +1694,8 @@ int config_check(const exodus_config_t* c, const char* file, bool summary) {
     inspect_xfield(&ch, p->input.path, &in);
   else if (p->input.kind == EXODUS_INPUT_GADGET)
     inspect_gadget(&ch, p, &in);
+  else if (p->input.kind == EXODUS_INPUT_FITS)
+    inspect_fits(&ch, p, &in);
   else
     inspect_table(&ch, p, &in);
 
@@ -1534,8 +1806,10 @@ void config_free(exodus_config_t* c) {
   if (!c)
     return;
   free(c->_radii);
-  for (size_t i = 0; i < sizeof(c->_strings) / sizeof(c->_strings[0]); i++)
+  for (size_t i = 0; i < c->_n_strings; i++)
     free(c->_strings[i]);
+  free(c->_strings);
+  free((void*)c->_paths);
   free(c->resolved);
   memset(c, 0, sizeof *c);
 }

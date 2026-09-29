@@ -217,6 +217,25 @@ static void test_round_trips(void) {
   CHECK(sif_profiles_read_hdf5(PATH, &dens3, NULL) == SIF_OK && dens3,
     "reading the densities alone failed");
 
+  CHECK(cat2 && cat2->units == SIF_COORDINATES_CARTESIAN,
+    "a Cartesian catalogue came back on the sky");
+  sif_catalog_free(cat2);
+
+  /* A sky catalogue says so, and reads back on the sky; the attribute that
+   * says it is the library's. */
+  cat->units = SIF_COORDINATES_SKY;
+  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK,
+    "writing a sky catalogue failed");
+  cat2 = sif_catalog_read_hdf5(PATH);
+  CHECK(cat2 && cat2->units == SIF_COORDINATES_SKY && same_catalog(cat, cat2),
+    "a sky catalogue did not round-trip on the sky");
+  CHECK(sif_hdf5_set_attr_string(PATH, "catalog", "coordinates", "cartesian") ==
+          SIF_ERR_INVALID,
+    "the coordinates attribute could be overwritten");
+  cat->units = SIF_COORDINATES_CARTESIAN;
+  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK,
+    "rewriting the catalogue failed");
+
   sif_catalog_free(cat2);
   sif_density_profiles_free(dens2);
   sif_density_profiles_free(dens3);

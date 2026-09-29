@@ -14,8 +14,11 @@
  *
  * @code
  * /                     sif_format = "sif", sif_format_version, sif_version
- * /catalog              n_voids; centers (N, 3), radii (N),
- *                       footprint and footprint_shell (N) when present
+ * /catalog              n_voids, coordinates ("cartesian" or "sky");
+ *                       centers (N, 3), its columns named by its
+ *                       attribute columns ("cx cy cz" or "ra dec z");
+ *                       radii (N); footprint and footprint_shell (N)
+ *                       when present
  * /density_profiles     n_voids, n_bins, ext, differential;
  *                       r_edges (n_bins + 1), profiles (N, n_bins)
  * /velocity_profiles    n_voids, n_bins, ext; r_edges, v_rad (N, n_bins)
@@ -64,7 +67,9 @@
  *
  * The footprint columns are written when the catalogue carries them, and an
  * old footprint is removed when it does not, so the group always matches the
- * catalogue just written.
+ * catalogue just written. The `coordinates` attribute says what the centres
+ * are: for a sky catalogue (sif_catalog_to_sky()) each row of `centers` is
+ * right ascension, declination and redshift.
  *
  * @param filepath The file, created if missing.
  * @param catalog Catalogue to write.
@@ -74,7 +79,9 @@
 int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog);
 
 /**
- * @brief Read `/catalog`, footprint included when the file has one.
+ * @brief Read `/catalog`, footprint included when the file has one, and
+ * Cartesian or on the sky as the file says -- Cartesian for a file that does
+ * not say, written before catalogues could be anything else.
  *
  * @param filepath The file.
  * @return The catalogue, owned by the caller and released with

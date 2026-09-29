@@ -29,6 +29,7 @@
 
 #include "sif/core/macros.h"
 #include "sif/io/field_io.h"
+#include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
 
 #include <stdbool.h>
@@ -43,7 +44,9 @@ typedef enum {
   /* A raw binary file, laid out by `columns` and the `binary` block. */
   EXODUS_INPUT_BINARY,
   /* A GADGET snapshot, binary or HDF5, one particle type. */
-  EXODUS_INPUT_GADGET
+  EXODUS_INPUT_GADGET,
+  /* A catalogue of one or more FITS tables, Cartesian positions. */
+  EXODUS_INPUT_FITS
 } exodus_input_kind_t;
 
 /* What the radii are measured in. */
@@ -61,7 +64,10 @@ typedef enum {
    * build without HDF5 the library writes text next to the path instead. */
   EXODUS_OUTPUT_HDF5,
   /* sif_catalog_write_ascii(): the voids only, no parameters. */
-  EXODUS_OUTPUT_ASCII
+  EXODUS_OUTPUT_ASCII,
+  /* sif_catalog_write_fits(): a VOIDS table, with the run's parameters as
+   * keywords in the primary header. */
+  EXODUS_OUTPUT_FITS
 } exodus_output_kind_t;
 
 typedef struct {
@@ -107,6 +113,22 @@ typedef struct {
       double fraction;
       uint64_t seed;
     } gadget;
+
+    /* FITS only. The files are read as one catalogue, in order; `path` above
+     * is the first of them. Columns are names or expressions for x, y, z and
+     * the weight -- never velocities, which the finder does not read. */
+    struct {
+      const char* const* paths;
+      uint32_t n_paths;
+      sif_fits_columns_t columns;
+      /* Row filter, or NULL. */
+      const char* where;
+      /* The table's EXTNAME or extension number, or NULL for the first. */
+      const char* hdu;
+      /* Share of the filtered rows to keep, in (0, 1], and its seed. */
+      double fraction;
+      uint64_t seed;
+    } fits;
   } input;
 
   /* --- density grid --------------------------------------------------- */

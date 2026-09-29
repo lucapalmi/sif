@@ -51,6 +51,11 @@ if grep -q 'without HDF5' out.txt; then
 else
   HDF5=1
 fi
+if grep -q 'without FITS' out.txt; then
+  FITS=0
+else
+  FITS=1
+fi
 if grep -q 'double precision' out.txt; then
   DOUBLE=1
 else
@@ -188,6 +193,94 @@ ls voids.txt.tmp.* >/dev/null 2>&1 && fail "a refused run left a temporary"
 run -D ptype=4 --check run.lua
 expect_status 2 "a type the snapshot does not have"
 expect_error "has no particles of type 4" "a type the snapshot does not have"
+
+# --- a FITS catalogue ------------------------------------------------------
+
+# The FITS fixture: 100 rows, whole and split over two files. Its columns
+# are no survey's, only numbers to read: POS is a vector column, and the
+# weight an expression over two others.
+cat >fits.lua <<EOF
+input = {
+  path = { "$DATA/fits/part_a.fits", "$DATA/fits/part_b.fits" },
+  box_length = 400,
+  fits = {
+    columns = { x = "POS[1]", y = "RA", z = "POS[3]", w = "W1 * W2" },
+    where = "Z < 0.5",
+  },
+}
+grid = { n_cells = 16 }
+finder = { radii = { 80, 60 }, threshold = -0.7 }
+output = "fits_voids.txt"
+run = { log_level = "warning" }
+EOF
+if [ "$FITS" -eq 1 ]; then
+  run fits.lua
+  expect_status 0 "a FITS run"
+  [ -s fits_voids.txt ] || fail "a FITS run: no catalogue written"
+
+  # The two halves are the whole catalogue: the same voids from either.
+  sed "s|{ \"$DATA/fits/part_a.fits\", \"$DATA/fits/part_b.fits\" }|\"$DATA/fits/catalogue.fits\"|; s|fits_voids|whole_voids|" \
+    fits.lua >whole.lua
+  run whole.lua
+  expect_status 0 "a FITS run on the whole file"
+  cmp -s fits_voids.txt whole_voids.txt ||
+    fail "the halves and the whole file gave different catalogues"
+
+  run --check fits.lua
+  expect_status 0 "FITS --check"
+  cp out.txt fits_resolved.lua
+  run --check fits_resolved.lua
+  tail -n +2 fits_resolved.lua >a.txt
+  tail -n +2 out.txt >b.txt
+  cmp -s a.txt b.txt || fail "resolving a resolved FITS configuration changed it"
+
+  # A FITS catalogue out, with the run's settings in its primary header.
+  sed "s|fits_voids.txt|fits_voids.fits|" fits.lua >fits_out.lua
+  run fits_out.lua
+  expect_status 0 "a FITS output"
+  grep -aq "VOIDS" fits_voids.fits || fail "a FITS output: no VOIDS table"
+  grep -aq "HIERARCH SEARCH_FACTOR" fits_voids.fits ||
+    fail "a FITS output: the settings are not in the header"
+  run --check fits_out.lua
+  grep -q 'format = "fits"' out.txt || fail "a FITS output: not resolved as fits"
+
+  sed "s|part_b.fits|no_such_part.fits|" fits.lua >missing.lua
+  run --check missing.lua
+  expect_status 2 "a missing FITS file"
+  expect_error "no_such_part.fits cannot be read as a FITS file" "a missing FITS file"
+else
+  run --check fits.lua
+  expect_status 2 "FITS without cfitsio"
+  expect_error "built without FITS support" "FITS without cfitsio"
+fi
+
+# Mistakes a FITS configuration can make, found whatever the build.
+cat >fits_bad.lua <<EOF
+input = {
+  path = "$DATA/fits/catalogue.fits",
+  fits = { columns = { x = "RA", y = "DEC", vx = "RA" } },
+}
+finder = { radii = { 1 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check fits_bad.lua
+expect_status 2 "FITS mistakes"
+expect_error "input.fits.columns.vx: velocities are not read" "FITS mistakes"
+expect_error "input.fits.columns.z: missing" "FITS mistakes"
+expect_error "input.box_length: missing" "FITS mistakes"
+
+cat >list_bad.lua <<EOF
+input = {
+  path = { "a", "b" },
+  format = "gadget",
+}
+finder = { radii = { 1 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check list_bad.lua
+expect_status 2 "a list of files for GADGET"
+expect_error "input.path: a list of files, which only the fits format reads" \
+  "a list of files for GADGET"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

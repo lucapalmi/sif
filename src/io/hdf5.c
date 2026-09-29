@@ -521,10 +521,17 @@ int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog) {
                     : H5I_INVALID_HID;
   sif_real* const cols[3] = {catalog->cx, catalog->cy, catalog->cz};
 
+  /* The three columns of centers are otherwise unnamed: say which is
+   * which, as the other formats do in their headers. */
   if (dset < 0 || centers_io(dset, cols, n, 1) != SIF_OK ||
+      attr_write_str(dset, "columns",
+        catalog->units == SIF_COORDINATES_SKY ? "ra dec z" : "cx cy cz") !=
+        SIF_OK ||
       dataset_write(group, "radii", 1, dims_1, real_file_type(),
         real_mem_type(), catalog->radii) != SIF_OK ||
-      attr_write_u64(group, "n_voids", n) != SIF_OK)
+      attr_write_u64(group, "n_voids", n) != SIF_OK ||
+      attr_write_str(group, "coordinates",
+        catalog->units == SIF_COORDINATES_SKY ? "sky" : "cartesian") != SIF_OK)
     goto fail;
 
   if (catalog->footprint &&
@@ -605,6 +612,18 @@ sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
 
   /* Filled in directly rather than through sif_catalog_append(). */
   cat->n_voids = n;
+
+  /* A file written before the attribute existed holds Cartesian centres,
+   * which is all a catalogue could then hold. */
+  char coords[16];
+  if (attr_read_str(group, "coordinates", coords, sizeof coords) == SIF_OK) {
+    if (strcmp(coords, "sky") == 0) {
+      cat->units = SIF_COORDINATES_SKY;
+    } else if (strcmp(coords, "cartesian") != 0) {
+      SIF_LOG_ERROR(TAG, "/%s says its centres are \"%s\"", G_CATALOG, coords);
+      goto fail;
+    }
+  }
 
   if (link_exists(group, "footprint")) {
     if (sif_catalog_reserve_footprint(cat) != SIF_OK ||

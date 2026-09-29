@@ -9,9 +9,13 @@
 #include "measure/profiles_internal.h"
 #include "sif/utils/logger.h"
 
+#include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <strings.h>
+#include <sys/types.h>
 
 /*
  * The shape two sets have to agree on before they can share a file: they are
@@ -26,74 +30,6 @@ static int shapes_agree(
 
   return dens->n_voids == vel->n_voids && dens->n_bins == vel->n_bins &&
          dens->ext == vel->ext;
-}
-
-/*
- * The first line, which says what the rest of the file is. Left positioned at
- * the bin edges, so the reader below can carry straight on.
- */
-static int read_header(FILE* file, const char* filepath, uint64_t* n_voids,
-  uint32_t* n_bins, sif_real* ext, int* has_dens, int* has_vel,
-  int* differential) {
-
-  if (fscanf(file, "%" SCNu64 " %" SCNu32 " " SIF_SCN_REAL " %d %d %d", n_voids,
-        n_bins, ext, has_dens, has_vel, differential) != 6) {
-    SIF_LOG_ERROR("io", "failed to read the profile header from %s", filepath);
-    return SIF_ERR_INVALID;
-  }
-
-  if (*n_voids == 0 || *n_bins == 0 || (!*has_dens && !*has_vel)) {
-    SIF_LOG_ERROR("io",
-      "%s describes an empty profile set (%" PRIu64 " voids, %" PRIu32
-      " bins, density=%d velocity=%d)",
-      filepath, *n_voids, *n_bins, *has_dens, *has_vel);
-    return SIF_ERR_INVALID;
-  }
-
-  return SIF_OK;
-}
-
-int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
-  uint32_t* out_n_bins, sif_real* out_ext, int* out_has_density,
-  int* out_has_velocity, int* out_differential) {
-
-  if (!filepath) {
-    SIF_LOG_ERROR("io", "invalid filepath for sif_profiles_read_header_ascii");
-    return SIF_ERR_INVALID;
-  }
-
-  FILE* file = fopen(filepath, "r");
-  if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s for reading", filepath);
-    return SIF_ERR_INVALID;
-  }
-
-  uint64_t n_voids = 0;
-  uint32_t n_bins = 0;
-  sif_real ext = 0;
-  int has_dens = 0, has_vel = 0, differential = 0;
-
-  const int status = read_header(file, filepath, &n_voids, &n_bins, &ext,
-    &has_dens, &has_vel, &differential);
-  fclose(file);
-
-  if (status != SIF_OK)
-    return status;
-
-  if (out_n_voids)
-    *out_n_voids = n_voids;
-  if (out_n_bins)
-    *out_n_bins = n_bins;
-  if (out_ext)
-    *out_ext = ext;
-  if (out_has_density)
-    *out_has_density = has_dens;
-  if (out_has_velocity)
-    *out_has_velocity = has_vel;
-  if (out_differential)
-    *out_differential = differential;
-
-  return SIF_OK;
 }
 
 int sif_profiles_write_ascii(const char* filepath,
@@ -135,16 +71,23 @@ int sif_profiles_write_ascii(const char* filepath,
     return SIF_ERR_IO;
   }
 
-  /* The shape goes first so the reader can size both the catalogue and the
-   * rows once, instead of growing them or scanning the file twice. */
-  fprintf(file, "%" PRIu64 " %" PRIu32 " " SIF_PRI_REAL " %d %d %d\n", n_voids,
-    n_bins, ext, dens ? 1 : 0, vel ? 1 : 0,
-    (dens && dens->differential) ? 1 : 0);
-
-  /* Shared by every row, so written once. */
+  /* What the file is, then what each column is, all behind '#': the shape
+   * first, so the reader can size everything once, then the bin edges every
+   * row shares, then the names. numpy.loadtxt reads the rows as they are. */
+  fprintf(file, "#n=%" PRIu64 "\n#n_bins=%" PRIu32 "\n#ext=" SIF_PRI_REAL "\n",
+    n_voids, n_bins, ext);
+  fprintf(file, "#differential=%d\n#r_edges=", (dens && dens->differential));
   for (uint32_t j = 0; j <= n_bins; j++)
     fprintf(file, "%s" SIF_PRI_REAL, j ? " " : "", r_edges[j]);
-  fprintf(file, "\n");
+  fputs(cat->units == SIF_COORDINATES_SKY ? "\n#ra dec z r" : "\n#cx cy cz r",
+    file);
+  for (int block = 0; block < 2; block++) {
+    if (block == 0 ? !dens : !vel)
+      continue;
+    for (uint32_t j = 0; j < n_bins; j++)
+      fprintf(file, " %s_%" PRIu32, block == 0 ? "density" : "v_rad", j);
+  }
+  fputc('\n', file);
 
   for (uint64_t i = 0; i < n_voids; i++) {
     fprintf(file,
@@ -163,7 +106,7 @@ int sif_profiles_write_ascii(const char* filepath,
         fprintf(file, " " SIF_PRI_REAL, row[j]);
     }
 
-    fprintf(file, "\n");
+    fputc('\n', file);
   }
 
   /* fprintf() reports nothing useful per call, so the stream's error flag and
@@ -180,6 +123,257 @@ int sif_profiles_write_ascii(const char* filepath,
     filepath);
   return SIF_OK;
 }
+
+/* ------------------------------------------------------------------------ */
+/* the header                                                                */
+/* ------------------------------------------------------------------------ */
+
+/* What the header says the rest of the file is. */
+typedef struct {
+  uint64_t n_voids;
+  uint32_t n_bins;
+  sif_real ext;
+  int has_dens, has_vel, differential;
+  bool sky;
+  /* The bin edges, n_bins + 1 of them, from a file with the '#' header; NULL
+   * for one from before it, where they are the line after the shape. */
+  sif_real* edges;
+} header_t;
+
+/* The header of a file from before the '#' one: a single line holding the
+ * shape and the flags. Left at the bin edges, which follow it. */
+static int read_legacy_header(FILE* file, const char* filepath, header_t* h) {
+  if (fscanf(file, "%" SCNu64 " %" SCNu32 " " SIF_SCN_REAL " %d %d %d",
+        &h->n_voids, &h->n_bins, &h->ext, &h->has_dens, &h->has_vel,
+        &h->differential) != 6) {
+    SIF_LOG_ERROR("io", "failed to read the profile header from %s", filepath);
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
+}
+
+/* The values after "r_edges=", n + 1 of them, into a new array. */
+static sif_real* parse_edges(const char* text, uint32_t n_bins) {
+  sif_real* edges = malloc(((size_t)n_bins + 1) * sizeof(sif_real));
+  if (!edges)
+    return NULL;
+  const char* p = text;
+  for (uint32_t j = 0; j <= n_bins; j++) {
+    char* end;
+    edges[j] = sizeof(sif_real) == 4 ? (sif_real)strtof(p, &end)
+                                     : (sif_real)strtod(p, &end);
+    if (end == p) {
+      free(edges);
+      return NULL;
+    }
+    p = end;
+  }
+  p += strspn(p, " \t\r\n");
+  if (*p) {
+    free(edges);
+    return NULL;
+  }
+  return edges;
+}
+
+/*
+ * The names line: the centres (cx cy cz, or ra dec z), r, then density_0 ...
+ * and v_rad_0 ... for the blocks the file holds, in that order. The blocks
+ * are what it says; the rest has to be exactly this, since a profile file is
+ * sif's own and its rows are read in this order.
+ */
+static int parse_names(char* text, const char* filepath, header_t* h) {
+  static const char* const CART[] = {"cx", "cy", "cz", "r"};
+  static const char* const SKY[] = {"ra", "dec", "z", "r"};
+
+  char* save = NULL;
+  char* tok = strtok_r(text, " \t", &save);
+  h->sky = tok && strcasecmp(tok, "ra") == 0;
+  const char* const* centre = h->sky ? SKY : CART;
+  for (int c = 0; c < 4; c++, tok = strtok_r(NULL, " \t", &save)) {
+    if (!tok || strcasecmp(tok, centre[c]) != 0) {
+      SIF_LOG_ERROR("io",
+        "%s: the columns have to begin cx cy cz r, or ra dec z r", filepath);
+      return SIF_ERR_INVALID;
+    }
+  }
+
+  h->has_dens = h->has_vel = 0;
+  for (int block = 0; block < 2; block++) {
+    const char* prefix = block == 0 ? "density_" : "v_rad_";
+    if (!tok || strncasecmp(tok, prefix, strlen(prefix)) != 0)
+      continue;
+    for (uint32_t j = 0; j < h->n_bins;
+      j++, tok = strtok_r(NULL, " \t", &save)) {
+      char want[32];
+      snprintf(want, sizeof want, "%s%" PRIu32, prefix, j);
+      if (!tok || strcasecmp(tok, want) != 0) {
+        SIF_LOG_ERROR("io", "%s: expected column %s after %s", filepath, want,
+          j ? "the one before" : "the centres");
+        return SIF_ERR_INVALID;
+      }
+    }
+    *(block == 0 ? &h->has_dens : &h->has_vel) = 1;
+  }
+  if (tok) {
+    SIF_LOG_ERROR("io", "%s: column %s is not one sif writes", filepath, tok);
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
+}
+
+/* "key=value" lines, and the names line, until the first row -- which is
+ * left to be read. */
+static int read_named_header(FILE* file, const char* filepath, header_t* h) {
+  bool have_n = false, have_bins = false, have_ext = false, have_names = false;
+  char* line = NULL;
+  size_t cap = 0;
+  char* edges_text = NULL;
+  int status = SIF_OK;
+
+  for (;;) {
+    const long at = ftell(file);
+    const ssize_t len = getline(&line, &cap, file);
+    if (len < 0)
+      break;
+    char* p = line + strspn(line, " \t\r\n");
+    if (!*p)
+      continue;
+    if (*p != '#') {
+      fseek(file, at, SEEK_SET); /* the first row, for the caller */
+      break;
+    }
+    p++;
+    p += strspn(p, " \t");
+    char* end = p + strlen(p);
+    while (end > p && isspace((unsigned char)end[-1]))
+      *--end = '\0';
+
+    char* eq = strchr(p, '=');
+    if (eq) {
+      *eq = '\0';
+      const char* key = p;
+      const char* value = eq + 1;
+      char* stop;
+      if (strcmp(key, "n") == 0) {
+        h->n_voids = strtoull(value, &stop, 10);
+        have_n = stop != value;
+      } else if (strcmp(key, "n_bins") == 0) {
+        h->n_bins = (uint32_t)strtoul(value, &stop, 10);
+        have_bins = stop != value;
+      } else if (strcmp(key, "ext") == 0) {
+        h->ext = (sif_real)strtod(value, &stop);
+        have_ext = stop != value;
+      } else if (strcmp(key, "differential") == 0) {
+        h->differential = atoi(value) != 0;
+      } else if (strcmp(key, "r_edges") == 0) {
+        free(edges_text);
+        edges_text = strdup(value);
+      }
+    } else if (!have_names && have_bins) {
+      status = parse_names(p, filepath, h);
+      if (status != SIF_OK)
+        break;
+      have_names = true;
+    }
+  }
+
+  if (status == SIF_OK &&
+      !(have_n && have_bins && have_ext && edges_text && have_names)) {
+    SIF_LOG_ERROR("io",
+      "%s: the header needs n, n_bins, ext, r_edges and the column names",
+      filepath);
+    status = SIF_ERR_INVALID;
+  }
+  if (status == SIF_OK && h->n_bins > 0) {
+    h->edges = parse_edges(edges_text, h->n_bins);
+    if (!h->edges) {
+      SIF_LOG_ERROR("io", "%s: r_edges is not %" PRIu32 " numbers", filepath,
+        h->n_bins + 1);
+      status = SIF_ERR_INVALID;
+    }
+  }
+
+  free(edges_text);
+  free(line);
+  return status;
+}
+
+/*
+ * The header, of either kind: a file that starts with '#' has the named one,
+ * anything else is from before it. Left positioned at the bin edges for the
+ * old kind, at the first row for the new.
+ */
+static int read_header(FILE* file, const char* filepath, header_t* h) {
+  memset(h, 0, sizeof *h);
+
+  int c;
+  while ((c = fgetc(file)) != EOF && isspace(c))
+    ;
+  if (c != EOF)
+    ungetc(c, file);
+
+  const int status = c == '#' ? read_named_header(file, filepath, h)
+                              : read_legacy_header(file, filepath, h);
+  if (status != SIF_OK) {
+    free(h->edges);
+    h->edges = NULL;
+    return status;
+  }
+
+  if (h->n_voids == 0 || h->n_bins == 0 || (!h->has_dens && !h->has_vel)) {
+    SIF_LOG_ERROR("io",
+      "%s describes an empty profile set (%" PRIu64 " voids, %" PRIu32
+      " bins, density=%d velocity=%d)",
+      filepath, h->n_voids, h->n_bins, h->has_dens, h->has_vel);
+    free(h->edges);
+    h->edges = NULL;
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
+}
+
+int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
+  uint32_t* out_n_bins, sif_real* out_ext, int* out_has_density,
+  int* out_has_velocity, int* out_differential) {
+
+  if (!filepath) {
+    SIF_LOG_ERROR("io", "invalid filepath for sif_profiles_read_header_ascii");
+    return SIF_ERR_INVALID;
+  }
+
+  FILE* file = fopen(filepath, "r");
+  if (!file) {
+    SIF_LOG_ERROR("io", "failed to open %s for reading", filepath);
+    return SIF_ERR_INVALID;
+  }
+
+  header_t h;
+  const int status = read_header(file, filepath, &h);
+  fclose(file);
+  if (status != SIF_OK)
+    return status;
+  free(h.edges);
+
+  if (out_n_voids)
+    *out_n_voids = h.n_voids;
+  if (out_n_bins)
+    *out_n_bins = h.n_bins;
+  if (out_ext)
+    *out_ext = h.ext;
+  if (out_has_density)
+    *out_has_density = h.has_dens;
+  if (out_has_velocity)
+    *out_has_velocity = h.has_vel;
+  if (out_differential)
+    *out_differential = h.differential;
+
+  return SIF_OK;
+}
+
+/* ------------------------------------------------------------------------ */
+/* the rows                                                                  */
+/* ------------------------------------------------------------------------ */
 
 int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
@@ -205,42 +399,41 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
     return SIF_ERR_INVALID;
   }
 
-  uint64_t n_voids = 0;
-  uint32_t n_bins = 0;
-  sif_real ext = 0;
-  int has_dens = 0, has_vel = 0, differential = 0;
-
-  if (read_header(file, filepath, &n_voids, &n_bins, &ext, &has_dens, &has_vel,
-        &differential) != SIF_OK) {
+  header_t h;
+  if (read_header(file, filepath, &h) != SIF_OK) {
     fclose(file);
     return SIF_ERR_INVALID;
   }
+  const uint64_t n_voids = h.n_voids;
+  const uint32_t n_bins = h.n_bins;
 
-  /* Asked for something the file does not carry. Handing back an empty set
-   * would be indistinguishable from a measurement of zeros. */
-  if ((out_dens && !has_dens) || (out_vel && !has_vel)) {
-    SIF_LOG_ERROR("io", "%s carries no %s profiles", filepath,
-      (out_dens && !has_dens) ? "density" : "velocity");
-    fclose(file);
-    return SIF_ERR_INVALID;
-  }
-
-  int status = SIF_ERR_ALLOC;
-
+  int status = SIF_ERR_INVALID;
   sif_catalog_t* cat = NULL;
   sif_density_profiles_t* dens = NULL;
   sif_velocity_profiles_t* vel = NULL;
 
+  /* Asked for something the file does not carry. Handing back an empty set
+   * would be indistinguishable from a measurement of zeros. */
+  if ((out_dens && !h.has_dens) || (out_vel && !h.has_vel)) {
+    SIF_LOG_ERROR("io", "%s carries no %s profiles", filepath,
+      (out_dens && !h.has_dens) ? "density" : "velocity");
+    goto fail;
+  }
+
+  status = SIF_ERR_ALLOC;
   if (out_cat) {
     cat = sif_catalog_alloc(n_voids);
     if (!cat) {
       SIF_LOG_ERROR("io", "OOM allocating the catalogue for %s", filepath);
       goto fail;
     }
+    if (h.sky)
+      cat->units = SIF_COORDINATES_SKY;
   }
 
   if (out_dens) {
-    dens = sif__density_profiles_alloc(n_voids, n_bins, ext, differential != 0);
+    dens =
+      sif__density_profiles_alloc(n_voids, n_bins, h.ext, h.differential != 0);
     if (!dens) {
       SIF_LOG_ERROR("io", "OOM allocating density profiles for %s", filepath);
       goto fail;
@@ -248,7 +441,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
   }
 
   if (out_vel) {
-    vel = sif__velocity_profiles_alloc(n_voids, n_bins, ext);
+    vel = sif__velocity_profiles_alloc(n_voids, n_bins, h.ext);
     if (!vel) {
       SIF_LOG_ERROR("io", "OOM allocating velocity profiles for %s", filepath);
       goto fail;
@@ -261,7 +454,9 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
    * n_bins: what was measured is what the file says. */
   for (uint32_t j = 0; j <= n_bins; j++) {
     sif_real edge;
-    if (fscanf(file, SIF_SCN_REAL, &edge) != 1) {
+    if (h.edges) {
+      edge = h.edges[j];
+    } else if (fscanf(file, SIF_SCN_REAL, &edge) != 1) {
       SIF_LOG_ERROR(
         "io", "failed reading bin edge %" PRIu32 " from %s", j, filepath);
       goto fail;
@@ -296,7 +491,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
      * columns are there either way, and skipping them by parsing is what lets
      * a caller take only the half it wants. */
     for (int block = 0; block < 2; block++) {
-      const int present = block == 0 ? has_dens : has_vel;
+      const int present = block == 0 ? h.has_dens : h.has_vel;
       if (!present)
         continue;
 
@@ -331,6 +526,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
   if (vel)
     *out_vel = vel;
 
+  free(h.edges);
   fclose(file);
 
   SIF_LOG_INFO(
@@ -344,6 +540,7 @@ fail:
   sif_catalog_free(cat);
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
+  free(h.edges);
 
   fclose(file);
   return status;

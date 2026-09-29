@@ -30,10 +30,8 @@ def columns():
 
 @pytest.fixture
 def field(columns):
-    f = pysif.Field()
-    f.from_numpy(*columns, vx=columns[0], vy=columns[1], vz=columns[2],
-                 weights=np.full(N, 2.0))
-    return f
+    return pysif.field_from_numpy(*columns, vx=columns[0], vy=columns[1],
+                                  vz=columns[2], weights=np.full(N, 2.0))
 
 
 def test_views_match_and_are_read_only(field, columns):
@@ -49,9 +47,8 @@ def test_views_match_and_are_read_only(field, columns):
 
 
 def test_absent_columns_are_none(columns):
-    f = pysif.Field()
-    assert f.x is None
-    f.from_numpy(*columns)
+    assert pysif.Field().x is None
+    f = pysif.field_from_numpy(*columns)
     assert f.vx is None and f.vy is None and f.vz is None and f.weights is None
 
 
@@ -71,10 +68,9 @@ def test_view_outlives_the_field(field):
 
 @pytest.mark.parametrize("action", [
     lambda f, c: f.sort_morton(),
-    lambda f, c: f.from_numpy(*c),
     lambda f, c: pysif.Octree(f),  # unsorted, so building sorts it
     lambda f, c: pysif.ChainMesh(4, BOX, f, consume_field=True),
-], ids=["sort_morton", "from_numpy", "octree", "chain-mesh-consume"])
+], ids=["sort_morton", "octree", "chain-mesh-consume"])
 def test_reallocation_refused_while_viewed(field, columns, action):
     x = field.x
     want = x.copy()

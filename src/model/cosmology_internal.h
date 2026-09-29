@@ -38,6 +38,18 @@ int sif__distance_table_build(
 /* D_C(z) for z in [0, z_max] of the table. */
 double sif__distance_table_eval(const sif__distance_table_t* table, double z);
 
+/* Build the table from z = 0 out to at least the distance d_max, in Mpc/h:
+ * the table sif__distance_table_invert() needs. Returns as
+ * sif__distance_table_build(), and SIF_ERR_RANGE for a distance the model
+ * never reaches -- one past its horizon, or past z = 10^4. */
+int sif__distance_table_build_to(
+  const sif_cosmology_t* cosmo, double d_max, sif__distance_table_t* table);
+
+/* The redshift at which D_C = d, for d in [0, the table's last distance]:
+ * the inverse of sif__distance_table_eval(), on the same cubic, so that the
+ * two are each other's inverse to machine precision. */
+double sif__distance_table_invert(const sif__distance_table_t* table, double d);
+
 void sif__distance_table_free(sif__distance_table_t* table);
 
 #endif /* SIF__MODEL_COSMOLOGY_INTERNAL_H */

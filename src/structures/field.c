@@ -27,7 +27,7 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
 
   field->n_particles = n_particles;
   field->state_flags = 0;
-  field->units = SIF_FIELD_CARTESIAN;
+  field->units = SIF_COORDINATES_CARTESIAN;
 
   field->_position_block = NULL;
   field->_velocity_block = NULL;
@@ -776,7 +776,7 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
 /* --- coordinates --- */
 
 int sif__field_require_cartesian(const sif_field_t* field, const char* tag) {
-  if (field && field->units != SIF_FIELD_CARTESIAN) {
+  if (field && field->units != SIF_COORDINATES_CARTESIAN) {
     SIF_LOG_ERROR(tag,
       "the field holds sky coordinates (right ascension, declination, "
       "redshift), not positions: convert them with "
@@ -794,10 +794,11 @@ int sif_field_convert_sky_coordinates(
     SIF_LOG_ERROR("field", "invalid field or cosmology for the conversion");
     return SIF_ERR_INVALID;
   }
-  if (field->units != SIF_FIELD_SKY) {
+  if (field->units != SIF_COORDINATES_SKY) {
     SIF_LOG_ERROR("field",
       "the field already holds Cartesian positions; converting them would "
-      "read x as a right ascension. Set units to SIF_FIELD_SKY for a field "
+      "read x as a right ascension. Set units to SIF_COORDINATES_SKY for a "
+      "field "
       "that holds sky coordinates");
     return SIF_ERR_INVALID;
   }
@@ -856,7 +857,7 @@ int sif_field_convert_sky_coordinates(
 
   sif__distance_table_free(&table);
 
-  field->units = SIF_FIELD_CARTESIAN;
+  field->units = SIF_COORDINATES_CARTESIAN;
   field->state_flags &=
     ~(SIF_FIELD_STATE_BOUNDS_VALID | SIF_FIELD_STATE_MORTON_SORTED);
   return SIF_OK;

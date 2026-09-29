@@ -10,6 +10,8 @@
 #include "sif/core/settings.h"
 #include "sif/core/system.h"
 
+#include "structures/py_field.h"
+
 /* --- Submodule Initialization Hooks --- */
 extern int py_sif_register_types(PyObject* module);
 extern PyObject* py_sif_init_io(void);
@@ -119,6 +121,37 @@ static PyMethodDef sif_module_methods[] = {
     "Shut the library down, releasing everything init() acquired.\n\n"
     "Saves the settings table if it changed and tears down the FFTW plan\n"
     "cache. Nothing else may be called afterwards without init()."},
+  {"field_from_numpy", (PyCFunction)pysif_field_from_numpy,
+    METH_VARARGS | METH_KEYWORDS,
+    "field_from_numpy(x=None, y=None, z=None, *, ra=None, dec=None, "
+    "vx=None, vy=None, vz=None, weights=None)\n"
+    "--\n\n"
+    "A new Field, with its particles copied out of NumPy arrays.\n\n"
+    "The names say what the positions are: x, y and z for Cartesian\n"
+    "positions, or ra, dec and z for sky coordinates -- right ascension and\n"
+    "declination in degrees, and redshift -- which give a Field with\n"
+    "units='sky', to be turned into positions by\n"
+    "Field.convert_sky_coordinates():\n\n"
+    "    box = pysif.field_from_numpy(x, y, z, weights=w)\n"
+    "    survey = pysif.field_from_numpy(ra=ra, dec=dec, z=redshift)\n\n"
+    "All arrays must have the same length; an array not of dtype\n"
+    "pysif.real is converted, which costs a copy.\n\n"
+    "Args:\n"
+    "    x, y, z: Position components, one entry per particle; z is the\n"
+    "        redshift when ra and dec are given.\n"
+    "    ra, dec: Sky coordinates, in place of x and y.\n"
+    "    vx, vy, vz: Velocity components, all three or none.\n"
+    "    weights: Per-particle weight (a mass, a luminosity, a selection\n"
+    "        weight), or None for an unweighted field, where every particle\n"
+    "        counts as 1. The exodus finder requires them to be finite and\n"
+    "        non-negative.\n\n"
+    "Returns:\n"
+    "    Field: The new field.\n\n"
+    "Raises:\n"
+    "    ValueError: If the arrays disagree in length, a position is\n"
+    "        missing, x or y is given with ra or dec, or the velocities are\n"
+    "        given in part.\n"
+    "    MemoryError: If the field's buffers could not be allocated."},
   {"set_setting", (PyCFunction)py_sif_setting_set, METH_VARARGS | METH_KEYWORDS,
     "set_setting(key, value)\n"
     "--\n\n"

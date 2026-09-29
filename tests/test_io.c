@@ -301,6 +301,64 @@ static void test_catalog_roundtrip(void) {
   CHECK(back == NULL, "a file shorter than its count should be refused");
   sif_catalog_free(back);
 
+  /* The header sif writes: the count, then the names. */
+  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
+  f = fopen(CAT_PATH, "r");
+  char l1[64] = "", l2[128] = "";
+  if (f) {
+    if (!fgets(l1, sizeof l1, f) || !fgets(l2, sizeof l2, f))
+      l1[0] = '\0';
+    fclose(f);
+  }
+  CHECK(strcmp(l1, "#n=2\n") == 0 &&
+          strcmp(l2, "#cx cy cz r footprint footprint_shell\n") == 0,
+    "the header is not as documented: \"%s\" \"%s\"", l1, l2);
+
+  /* Named columns, in another order, with one nobody reads and comments in
+   * between; no count, so the rows are counted first. */
+  f = fopen(CAT_PATH, "w");
+  if (f) {
+    fputs("# made by hand\n#  id  R  CZ cy cx\n1 4 3 2 1\n# a note\n"
+          "2 8 7 6 5\n\n3 12 11 10 9\n",
+      f);
+    fclose(f);
+  }
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back && back->n_voids == 3 && back->cx[0] == 1 && back->cy[1] == 6 &&
+          back->cz[2] == 11 && back->radii[2] == 12 && !back->footprint &&
+          back->units == SIF_COORDINATES_CARTESIAN,
+    "named columns in another order were not placed by name");
+  sif_catalog_free(back);
+
+  /* Sky names give a sky catalogue; radius is an alias of r. */
+  f = fopen(CAT_PATH, "w");
+  if (f) {
+    fputs("#n = 1\n#ra dec z radius\n10 -5 0.5 20\n", f);
+    fclose(f);
+  }
+  back = sif_catalog_read_ascii(CAT_PATH);
+  CHECK(back && back->units == SIF_COORDINATES_SKY && back->cz[0] == 0.5f &&
+          back->radii[0] == 20,
+    "a catalogue named ra dec z did not read on the sky");
+  sif_catalog_free(back);
+
+  const char* const bad[] = {
+    "#n=1\n#ra cy z r\n1 2 3 4\n",       /* sky and Cartesian mixed */
+    "#n=1\n1 2 3 4\n5 6 7 8\n",          /* more rows than the count */
+    "#n=2\n#cx cy cz r\n1 2 3\n4 5 6\n", /* too few columns */
+    "#n=1\n#cx cy cz r\n1 2 x 4\n",      /* not a number */
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+    f = fopen(CAT_PATH, "w");
+    if (f) {
+      fputs(bad[i], f);
+      fclose(f);
+    }
+    back = sif_catalog_read_ascii(CAT_PATH);
+    CHECK(back == NULL, "malformed file %zu read", i);
+    sif_catalog_free(back);
+  }
+
   sif_catalog_t* empty = sif_catalog_alloc(1);
   CHECK(sif_catalog_write_ascii(CAT_PATH, empty) == SIF_OK,
     "writing an empty catalogue failed");
@@ -471,7 +529,72 @@ static void test_profiles_roundtrip(void) {
     CHECK(
       sif_profiles_write_ascii(PROF_PATH, NULL, NULL, cat) == SIF_ERR_INVALID,
       "writing no profile set at all should be SIF_ERR_INVALID");
+    /* The header as documented: the shape, the edges, then every column
+     * named; the density-only file has no v_rad columns. */
+    FILE* hf = fopen(PROF_HALF_PATH, "r");
+    char head[6][4096] = {{0}};
+    for (int k = 0; hf && k < 6; k++)
+      if (!fgets(head[k], sizeof head[k], hf))
+        head[k][0] = '\0';
+    if (hf)
+      fclose(hf);
+    CHECK(strncmp(head[0], "#n=", 3) == 0 &&
+            strcmp(head[1], "#n_bins=8\n") == 0 &&
+            strncmp(head[2], "#ext=4", 6) == 0 &&
+            strcmp(head[3], "#differential=0\n") == 0 &&
+            strncmp(head[4], "#r_edges=0 ", 11) == 0 &&
+            strncmp(head[5], "#cx cy cz r density_0 density_1 ", 32) == 0 &&
+            strstr(head[5], "density_7\n") && !strstr(head[5], "v_rad"),
+      "the profile header is not as documented:\n%s%s%s%s%s%s", head[0],
+      head[1], head[2], head[3], head[4], head[5]);
+
+    /* A catalogue on the sky says so, and comes back on the sky. */
+    sif_catalog_t* sky = sif_catalog_alloc(cat->n_voids);
+    for (uint64_t i = 0; i < cat->n_voids; i++)
+      sif_catalog_append(
+        sky, cat->cx[i], cat->cy[i], cat->cz[i], cat->radii[i]);
+    sky->units = SIF_COORDINATES_SKY;
+    sif_catalog_t* sky_back = NULL;
+    CHECK(sif_profiles_write_ascii(PROF_HALF_PATH, dens, NULL, sky) == SIF_OK &&
+            sif_profiles_read_ascii(PROF_HALF_PATH, &sky_back, NULL, NULL) ==
+              SIF_OK &&
+            sky_back && sky_back->units == SIF_COORDINATES_SKY &&
+            sky_back->cx[0] == sky->cx[0],
+      "profiles of a sky catalogue did not come back on the sky");
+    sif_catalog_free(sky_back);
+    sif_catalog_free(sky);
   }
+
+  /* A file from before the header: the shape line, the edges line, rows. */
+  FILE* old = fopen(PROF_HALF_PATH, "w");
+  if (old) {
+    fputs("2 2 2.0 1 0 1\n0 1 2\n1 2 3 4 0.5 0.25\n5 6 7 8 -0.5 1.5\n", old);
+    fclose(old);
+  }
+  sif_catalog_t* old_cat = NULL;
+  sif_density_profiles_t* old_dens = NULL;
+  CHECK(sif_profiles_read_ascii(PROF_HALF_PATH, &old_cat, &old_dens, NULL) ==
+            SIF_OK &&
+          old_cat && old_dens && old_dens->differential &&
+          old_dens->r_edges[2] == 2 && old_cat->radii[1] == 8 &&
+          sif_density_profiles_get(old_dens, 1)[1] == 1.5f &&
+          old_cat->units == SIF_COORDINATES_CARTESIAN,
+    "a profile file from before the header did not read as before");
+  sif_catalog_free(old_cat);
+  sif_density_profiles_free(old_dens);
+
+  /* A header naming columns sif does not write is refused. */
+  old = fopen(PROF_HALF_PATH, "w");
+  if (old) {
+    fputs("#n=1\n#n_bins=1\n#ext=2\n#r_edges=0 2\n#cx cy cz r mass_0\n"
+          "1 2 3 4 5\n",
+      old);
+    fclose(old);
+  }
+  old_dens = NULL;
+  CHECK(sif_profiles_read_ascii(PROF_HALF_PATH, NULL, &old_dens, NULL) ==
+          SIF_ERR_INVALID,
+    "an unknown profile column was accepted");
 
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
@@ -659,6 +782,25 @@ static void test_column_formats(void) {
     "'xyzw' should read the fourth column as the weight");
   sif_field_free(f);
 
+  /* ra dec z are sky coordinates: into x, y and z, and the field says so.
+   * Positions read afterwards make it Cartesian again. */
+  write_text("150.5 -2.25 0.5 7\n");
+  f = read_ascii("RA, Dec, z, w", ' ', 0);
+  CHECK(f && f->units == SIF_COORDINATES_SKY && f->x[0] == 150.5f &&
+          f->y[0] == -2.25f && f->z[0] == 0.5f && f->weights[0] == 7,
+    "'ra dec z w' did not read a sky field");
+  if (f) {
+    CHECK(
+      sif_field_read_ascii_into(f, ASCII_PATH, "x y z *", ' ', 0) == SIF_OK &&
+        f->units == SIF_COORDINATES_CARTESIAN,
+      "positions read over sky coordinates left the field on the sky");
+    CHECK(
+      sif_field_read_ascii_into(f, ASCII_PATH, "* * * w", ' ', 0) == SIF_OK &&
+        f->units == SIF_COORDINATES_CARTESIAN,
+      "a format without positions changed what the positions are");
+  }
+  sif_field_free(f);
+
   /* Old spellings, typos, repeats, dangling or misplaced pieces: all refused,
    * none shortened into something that reads. */
   const char* bad[] = {
@@ -672,6 +814,12 @@ static void test_column_formats(void) {
     "x y z *8",  /* a skip width, which only binary files take */
     "* * *",     /* skips alone */
     "x;y;z",     /* ; is not a separator */
+    "ra y z",    /* sky and Cartesian mixed */
+    "x dec z",   /* the same, the other way */
+    "ra ra z",   /* ra named twice */
+    "r dec z",   /* r without its a */
+    "ra de z",   /* dec cut short */
+    "ra dec",    /* sky coordinates without the redshift */
   };
   write_text("1 2 3 4 5 6 7\n");
   for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
