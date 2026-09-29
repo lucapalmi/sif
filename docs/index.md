@@ -20,6 +20,7 @@ examples/index
 concepts/index
 python/index
 api/index
+changelog
 ```
 
 ## Start here
