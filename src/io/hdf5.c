@@ -528,16 +528,29 @@ static int meta_write(hid_t group, const sif_catalogue_t* catalogue) {
   return SIF_OK;
 }
 
+static herr_t count_attr(
+  hid_t loc, const char* name, const H5A_info_t* info, void* data) {
+  (void)loc;
+  (void)name;
+  (void)info;
+  (*(uint32_t*)data)++;
+  return 0;
+}
+
 /* Every attribute of the group the catalogue does not use itself, as its
  * metadata -- what sif wrote, and what anyone added with
  * sif_hdf5_set_attr_string() and its kin. One whose name is no metadata key,
  * or whose value is not a scalar, is left in the file and not read. */
 static int meta_read(hid_t group, sif_catalogue_t* catalogue) {
-  H5O_info2_t info;
-  if (H5Oget_info3(group, &info, H5O_INFO_NUM_ATTRS) < 0)
+  /* Counted by iterating, as in sif_hdf5_attr_count(): H5Oget_info3 and
+   * H5O_info2_t only exist from HDF5 1.12. */
+  uint32_t n_attrs = 0;
+  hsize_t idx = 0;
+  if (H5Aiterate2(group, H5_INDEX_NAME, H5_ITER_INC, &idx, count_attr,
+        &n_attrs) < 0)
     return SIF_ERR_IO;
 
-  for (hsize_t i = 0; i < info.num_attrs; i++) {
+  for (hsize_t i = 0; i < n_attrs; i++) {
     hid_t attr = H5Aopen_by_idx(
       group, ".", H5_INDEX_NAME, H5_ITER_INC, i, H5P_DEFAULT, H5P_DEFAULT);
     if (attr < 0)
@@ -1721,15 +1734,6 @@ int sif_hdf5_attr_kind(const char* filepath, const char* group, const char* key,
   attr_target_close(file, obj);
   quiet_end(&quiet);
   return status;
-}
-
-static herr_t count_attr(
-  hid_t loc, const char* name, const H5A_info_t* info, void* data) {
-  (void)loc;
-  (void)name;
-  (void)info;
-  (*(uint32_t*)data)++;
-  return 0;
 }
 
 int sif_hdf5_attr_count(
