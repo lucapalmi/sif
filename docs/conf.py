@@ -50,8 +50,8 @@ copyright = "2026, Luca Palmieri"
 
 # Kept in step with CMakeLists.txt by hand for now; wire it up once the docs
 # build is part of the same pipeline.
-version = "0.1"
-release = "0.1.0"
+version = "0.2"
+release = "0.2.0"
 
 # --- Sources ---------------------------------------------------------------
 
