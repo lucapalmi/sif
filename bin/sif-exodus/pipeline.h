@@ -46,7 +46,9 @@ typedef enum {
   /* A GADGET snapshot, binary or HDF5, one particle type. */
   EXODUS_INPUT_GADGET,
   /* A catalogue of one or more FITS tables, Cartesian positions. */
-  EXODUS_INPUT_FITS
+  EXODUS_INPUT_FITS,
+  /* Datasets of one or more HDF5 files of any layout. */
+  EXODUS_INPUT_HDF5
 } exodus_input_kind_t;
 
 /* What the radii are measured in. */
@@ -63,10 +65,11 @@ typedef enum {
   /* /catalog in an HDF5 file, with the run's parameters as attributes. In a
    * build without HDF5 the library writes text next to the path instead. */
   EXODUS_OUTPUT_HDF5,
-  /* sif_catalog_write_ascii(): the voids only, no parameters. */
+  /* sif_catalog_write_ascii(): the voids, the run's parameters as
+   * '#key=value' header lines. */
   EXODUS_OUTPUT_ASCII,
   /* sif_catalog_write_fits(): a VOIDS table, with the run's parameters as
-   * keywords in the primary header. */
+   * its keywords. */
   EXODUS_OUTPUT_FITS
 } exodus_output_kind_t;
 
@@ -114,13 +117,16 @@ typedef struct {
       uint64_t seed;
     } gadget;
 
-    /* FITS only. The files are read as one catalogue, in order; `path` above
-     * is the first of them. Columns are names or expressions for x, y, z and
-     * the weight -- never velocities, which the finder does not read. */
+    /* FITS and HDF5: the files, read as one catalogue in order -- `path`
+     * above is the first of them -- and what fills x, y, z and the weight:
+     * FITS columns or expressions, HDF5 datasets. Never velocities, which
+     * the finder does not read. */
+    const char* const* paths;
+    uint32_t n_paths;
+    sif_field_columns_t named;
+
+    /* FITS only. */
     struct {
-      const char* const* paths;
-      uint32_t n_paths;
-      sif_fits_columns_t columns;
       /* Row filter, or NULL. */
       const char* where;
       /* The table's EXTNAME or extension number, or NULL for the first. */
@@ -129,6 +135,14 @@ typedef struct {
       double fraction;
       uint64_t seed;
     } fits;
+
+    /* HDF5 only. */
+    struct {
+      /* What Cartesian positions are multiplied by: 1e-3 from kpc/h. */
+      double length_scale;
+      double fraction;
+      uint64_t seed;
+    } hdf5;
   } input;
 
   /* --- density grid --------------------------------------------------- */

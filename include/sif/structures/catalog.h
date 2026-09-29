@@ -77,6 +77,11 @@ typedef struct {
    */
   sif_coordinates_t units;
 
+  /** Named values describing the catalogue; see the catalog_meta group.
+   * Owned; not for callers. */
+  struct sif_catalog_meta_entry* _meta;
+  uint32_t _n_meta;
+
   /** Entries in use. */
   uint64_t n_voids;
   /** Entries the arena can hold before it must grow. */
@@ -201,5 +206,84 @@ SIF_NODISCARD int sif_catalog_to_sky(
  * #SIF_CATALOG_FOOTPRINT_UNKNOWN.
  */
 int sif_catalog_reserve_footprint(sif_catalog_t* catalog);
+
+/**
+ * @defgroup catalog_meta Metadata
+ * @brief Named values that describe a catalogue -- the finder and its
+ * settings, the cosmology, where the tracers came from -- and travel with it.
+ *
+ * Every writer records them and every reader gives them back: the ASCII
+ * header as `#key=value` lines, the HDF5 file as attributes of `/catalog`,
+ * the FITS file as keywords of the VOIDS table. So a catalogue says how it
+ * was made whatever format it went through.
+ *
+ * Keys are identifiers -- a letter or '_', then letters, digits and '_', at
+ * most 64 characters -- matched without regard to case and kept in lower
+ * case, since FITS does not tell cases apart. Names the formats use for
+ * themselves (`n`, `n_voids`, `coordinates`, and the FITS structural
+ * keywords) are refused. Values are 64-bit integers, doubles or strings; a
+ * string may not hold a newline or a double quote.
+ *
+ * Setting a key that exists replaces it, whatever its kind; the order keys
+ * were first set in is kept, and is the order the writers use.
+ * @{
+ */
+
+/** @brief What kind of value a key holds. */
+typedef enum {
+  SIF_CATALOG_META_MISSING = 0,
+  SIF_CATALOG_META_INT,
+  SIF_CATALOG_META_REAL,
+  SIF_CATALOG_META_STRING
+} sif_catalog_meta_kind_t;
+
+/**
+ * @brief Set an integer value.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument or a key that is not
+ * allowed; SIF_ERR_ALLOC.
+ */
+int sif_catalog_meta_int_set(
+  sif_catalog_t* catalog, const char* key, int64_t value);
+
+/** @brief Set a real value; see sif_catalog_meta_int_set(). Not finite is
+ * refused, as no format but HDF5 could keep it. */
+int sif_catalog_meta_real_set(
+  sif_catalog_t* catalog, const char* key, double value);
+
+/** @brief Set a string value; see sif_catalog_meta_int_set(). */
+int sif_catalog_meta_string_set(
+  sif_catalog_t* catalog, const char* key, const char* value);
+
+/** @brief Remove a key. SIF_OK whether or not it was there. */
+int sif_catalog_meta_remove(sif_catalog_t* catalog, const char* key);
+
+/** @brief What kind of value a key holds, or #SIF_CATALOG_META_MISSING. */
+sif_catalog_meta_kind_t sif_catalog_meta_kind(
+  const sif_catalog_t* catalog, const char* key);
+
+/** @brief An integer value; 0 for a key that is missing or not an integer. */
+int64_t sif_catalog_meta_int_get(const sif_catalog_t* catalog, const char* key);
+
+/** @brief A numeric value, integer or real; 0 for a key that is missing or
+ * holds a string. */
+double sif_catalog_meta_real_get(const sif_catalog_t* catalog, const char* key);
+
+/**
+ * @brief A string value, or NULL for a key that is missing or not a string.
+ * The string belongs to the catalogue, and holds until the key is set again
+ * or removed, or the catalogue freed.
+ */
+const char* sif_catalog_meta_string_get(
+  const sif_catalog_t* catalog, const char* key);
+
+/** @brief How many keys the catalogue carries. */
+uint32_t sif_catalog_meta_count(const sif_catalog_t* catalog);
+
+/** @brief The name of key @p index, in the order keys were first set; NULL
+ * past the end. Owned by the catalogue, as for sif_catalog_meta_string_get().
+ */
+const char* sif_catalog_meta_name(const sif_catalog_t* catalog, uint32_t index);
+
+/** @} */
 
 #endif /* SIF_STRUCTURES_CATALOG_H */

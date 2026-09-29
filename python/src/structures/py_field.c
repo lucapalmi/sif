@@ -477,8 +477,51 @@ static PyGetSetDef sifField_getset[] = {
     "ndarray or None: per-particle weights, a read-only view; see x.", NULL},
   {NULL}};
 
+/* --- Conversion --- */
+
+static PyObject* sifField_to_numpy(PyObject* self_obj, PyObject* unused) {
+  (void)unused;
+  const sif_field_t* f = ((sifFieldObject*)self_obj)->field;
+  if (f->n_particles > 0 && !f->x) {
+    PyErr_SetString(PyExc_ValueError, "the field has no positions to export");
+    return NULL;
+  }
+
+  /* Positions, then velocities, then weights: whichever the field has. */
+  const sif_real* cols[7] = {f->x, f->y, f->z};
+  int n_cols = 3;
+  if (f->vx) {
+    cols[n_cols++] = f->vx;
+    cols[n_cols++] = f->vy;
+    cols[n_cols++] = f->vz;
+  }
+  if (f->weights)
+    cols[n_cols++] = f->weights;
+
+  npy_intp dims[2] = {(npy_intp)f->n_particles, n_cols};
+  PyObject* arr = PyArray_SimpleNew(
+    2, dims, sizeof(sif_real) == 8 ? NPY_FLOAT64 : NPY_FLOAT32);
+  if (!arr)
+    return NULL;
+  sif_real* data = PyArray_DATA((PyArrayObject*)arr);
+  for (uint64_t i = 0; i < f->n_particles; i++)
+    for (int k = 0; k < n_cols; k++)
+      data[i * (uint64_t)n_cols + (uint64_t)k] = cols[k][i];
+  return arr;
+}
+
 /* --- Method Definition Array --- */
 static PyMethodDef sifField_methods[] = {
+  {"to_numpy", (PyCFunction)sifField_to_numpy, METH_NOARGS,
+    "to_numpy()\n"
+    "--\n\n"
+    "The field as one (N, k) NumPy array, a copy: a row per particle, with\n"
+    "columns x, y, z (ra, dec, z on the sky), then vx, vy, vz if the field\n"
+    "has velocities, then the weight if it has weights -- 3, 6, 4 or 7\n"
+    "columns. Rows are in the field's current order, which sort_morton()\n"
+    "changes.\n\n"
+    "Raises:\n"
+    "    ValueError: For a field with particles but no positions."},
   {"convert_sky_coordinates", (PyCFunction)sifField_convert_sky_coordinates,
     METH_VARARGS | METH_KEYWORDS,
     "convert_sky_coordinates(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, "

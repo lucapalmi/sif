@@ -139,6 +139,42 @@ static PyMethodDef io_methods[] = {
     "        into whole particles -- a sign the format, precision or header\n"
     "        length is not the file's."},
 
+  {"read_hdf5", (PyCFunction)pysif_read_hdf5, METH_VARARGS | METH_KEYWORDS,
+    "read_hdf5(paths, *, x=None, y=None, z=None, ra=None, dec=None, "
+    "vx=None, vy=None, vz=None, w=None, length_scale=1.0, fraction=1.0, "
+    "seed=0)\n"
+    "--\n\n"
+    "Read particles out of any HDF5 file -- a simulation snapshot, a halo\n"
+    "catalogue, a mock -- into a Field.\n\n"
+    "Each part of the field is a dataset, named by its path; a dataset of\n"
+    "two dimensions, a row per particle, is read a column at a time, counted\n"
+    "from 0 as numpy counts. The dark matter of an IllustrisTNG snapshot, in\n"
+    "Mpc/h:\n\n"
+    "    field = pysif.io.read_hdf5(\n"
+    "        [\"snap_099.0.hdf5\", \"snap_099.1.hdf5\"],\n"
+    "        x=\"PartType1/Coordinates[0]\", y=\"PartType1/Coordinates[1]\",\n"
+    "        z=\"PartType1/Coordinates[2]\", length_scale=1e-3)\n\n"
+    "Several files read as one, their rows one after another. A GADGET\n"
+    "snapshot has read_gadget(), which finds its files and units by itself.\n\n"
+    "Args:\n"
+    "    paths: A path, or a list of them.\n"
+    "    x, y, z: Positions; or ra, dec, z for sky coordinates (a Field\n"
+    "        with units='sky').\n"
+    "    vx, vy, vz: Velocities: all three, or none.\n"
+    "    w: Per-particle weight, or None.\n"
+    "    length_scale: What Cartesian positions are multiplied by: 1e-3 from\n"
+    "        kpc/h to Mpc/h. Velocities and weights are read as they are.\n"
+    "    fraction: Share of the rows to keep, in (0, 1], over all the files\n"
+    "        together.\n"
+    "    seed: Seed for the subsample.\n\n"
+    "Returns:\n"
+    "    Field: The loaded field.\n\n"
+    "Raises:\n"
+    "    ValueError: For a dataset a file does not have or cannot give, row\n"
+    "        counts that disagree, or a value that is not finite.\n"
+    "    OSError: For a file that is missing or not HDF5.\n"
+    "    RuntimeError: If pysif was built without HDF5."},
+
   {"read_gadget", (PyCFunction)pysif_read_gadget, METH_VARARGS | METH_KEYWORDS,
     "read_gadget(path, *, ptype=1, velocities=None, masses=False, "
     "length='auto', fraction=1.0, seed=0, format='auto')\n"
@@ -292,6 +328,57 @@ static PyMethodDef io_methods[] = {
     "    FileNotFoundError: For a missing file.\n"
     "    ValueError: For a file with no VOIDS table of those columns."},
 
+  {"write_profiles_fits", (PyCFunction)pysif_write_profiles_fits,
+    METH_VARARGS | METH_KEYWORDS,
+    "write_profiles_fits(filepath, profiles)\n"
+    "--\n\n"
+    "Write stacked profiles into DENSITY_PROFILES and VELOCITY_PROFILES:\n"
+    "a row per void, the profile as one vector column, the shape and the\n"
+    "bin edges (EDGE0, EDGE1, ...) as keywords. Only the sets the Profiles\n"
+    "carries are written; the other is left in the file as it was.\n\n"
+    "A FITS file holds a catalogue and its products one table each, as the\n"
+    "HDF5 file does a group each: every writer creates the file if it is\n"
+    "missing and replaces only its own table, and a FITS file sif did not\n"
+    "write is never written into.\n\n"
+    "Args:\n"
+    "    filepath: The file.\n"
+    "    profiles: Profiles to write."},
+
+  {"read_profiles_fits", (PyCFunction)pysif_read_profiles_fits,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_profiles_fits(filepath)\n"
+    "--\n\n"
+    "Read the profiles write_profiles_fits() wrote: whichever sets the file\n"
+    "holds.\n\n"
+    "Returns:\n"
+    "    Profiles: The loaded profiles.\n\n"
+    "Raises:\n"
+    "    FileNotFoundError: For a missing file.\n"
+    "    ValueError: For a file that holds no profiles."},
+
+  {"write_size_function_fits", (PyCFunction)pysif_write_size_function_fits,
+    METH_VARARGS | METH_KEYWORDS,
+    "write_size_function_fits(filepath, size_function)\n"
+    "--\n\n"
+    "Write a size function into SIZE_FUNCTION: a row per bin -- R_LOW,\n"
+    "R_HIGH, R_CENTER, COUNT, VSF, ERR -- with R_MIN, R_MAX and BINNING\n"
+    "('ln' or 'linear', what VSF is per unit of) as keywords. As for\n"
+    "write_profiles_fits(), only its own table is replaced.\n\n"
+    "Args:\n"
+    "    filepath: The file.\n"
+    "    size_function: Size function to write, measured or modelled."},
+
+  {"read_size_function_fits", (PyCFunction)pysif_read_size_function_fits,
+    METH_VARARGS | METH_KEYWORDS,
+    "read_size_function_fits(filepath)\n"
+    "--\n\n"
+    "Read the size function write_size_function_fits() wrote.\n\n"
+    "Returns:\n"
+    "    SizeFunction: The loaded size function.\n\n"
+    "Raises:\n"
+    "    FileNotFoundError: For a missing file.\n"
+    "    ValueError: For a file that holds none."},
+
   {"fits_key", (PyCFunction)pysif_fits_key, METH_VARARGS | METH_KEYWORDS,
     "fits_key(path, key, hdu=None)\n"
     "--\n\n"
@@ -348,7 +435,7 @@ static PyMethodDef io_methods[] = {
 
   {"read_catalog_ascii", (PyCFunction)pysif_read_catalog_ascii,
     METH_VARARGS | METH_KEYWORDS,
-    "read_catalog_ascii(filepath)\n"
+    "read_catalog_ascii(filepath, format=None)\n"
     "--\n\n"
     "Read a catalogue written by write_catalog_ascii().\n\n"
     "Lines starting with '#' are comments. Before the first row, 'n=N'\n"
@@ -359,8 +446,16 @@ static PyMethodDef io_methods[] = {
     "skipped. Without names, rows are 'cx cy cz r', and six columns add the\n"
     "footprint. Files written before the header, whose first line is the\n"
     "count alone, read as they always did.\n\n"
+    "A catalogue another finder wrote is read with a format, which places\n"
+    "the columns in the language of the field readers: 'x y z' (or\n"
+    "'cx cy cz') or 'ra dec z' for the centre, 'r' for the radius, '*' for\n"
+    "a column not read -- '* x y z * r' for rows of an ID, the centre, a\n"
+    "volume and the radius. Names in the file are then ignored. Columns may\n"
+    "be separated by blanks or commas, and a skipped column, or one past\n"
+    "the last named, may hold anything.\n\n"
     "Args:\n"
-    "    filepath: Input path.\n\n"
+    "    filepath: Input path.\n"
+    "    format: The columns, or None to take them from the file.\n\n"
     "Returns:\n"
     "    Catalog: The loaded catalogue."},
 

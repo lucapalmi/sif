@@ -21,6 +21,7 @@
 #include "sif/io/hdf5_io.h"
 #include "sif/measure/profiles.h"
 #include "sif/structures/catalog.h"
+#include "sif/structures/field.h"
 #include "sif/structures/size_function.h"
 
 #include "measure/profiles_internal.h"
@@ -155,6 +156,140 @@ static void write_foreign_hdf5(const char* path) {
   H5Fclose(f);
 }
 
+/* A snapshot of someone else's, as IllustrisTNG writes one: particle i of
+ * the whole snapshot at (i, 2i, 3i) + 0.5 kpc/h, mass 1 + i/1024, an integer
+ * ID, rows [first, first + n) of it in this file. */
+static void write_snapshot(const char* path, int first, int n) {
+  hid_t f = H5Fcreate(path, H5F_ACC_TRUNC, H5P_DEFAULT, H5P_DEFAULT);
+  hid_t g = H5Gcreate2(f, "PartType1", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  float* pos = malloc((size_t)n * 3 * sizeof(float));
+  double* mass = malloc((size_t)n * sizeof(double));
+  int* id = malloc((size_t)n * sizeof(int));
+  for (int k = 0; k < n; k++) {
+    const int i = first + k;
+    pos[3 * k] = (float)i + 0.5f;
+    pos[3 * k + 1] = (float)(2 * i) + 0.5f;
+    pos[3 * k + 2] = (float)(3 * i) + 0.5f;
+    mass[k] = 1.0 + i / 1024.0;
+    id[k] = 1000 + i;
+  }
+  hsize_t d2[2] = {(hsize_t)n, 3}, d1[1] = {(hsize_t)n};
+  hid_t s2 = H5Screate_simple(2, d2, NULL), s1 = H5Screate_simple(1, d1, NULL);
+  hid_t c = H5Dcreate2(g, "Coordinates", H5T_IEEE_F32LE, s2, H5P_DEFAULT,
+    H5P_DEFAULT, H5P_DEFAULT);
+  hid_t m = H5Dcreate2(
+    g, "Masses", H5T_IEEE_F64LE, s1, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  hid_t d = H5Dcreate2(
+    g, "ParticleIDs", H5T_STD_I32LE, s1, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  H5Dwrite(c, H5T_NATIVE_FLOAT, H5S_ALL, H5S_ALL, H5P_DEFAULT, pos);
+  H5Dwrite(m, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, mass);
+  H5Dwrite(d, H5T_NATIVE_INT, H5S_ALL, H5S_ALL, H5P_DEFAULT, id);
+  H5Dclose(c);
+  H5Dclose(m);
+  H5Dclose(d);
+  H5Sclose(s1);
+  H5Sclose(s2);
+  H5Gclose(g);
+  H5Fclose(f);
+  free(pos);
+  free(mass);
+  free(id);
+}
+
+static void test_particles(void) {
+  printf("particles from any HDF5 file\n");
+  const char* whole = "test_hdf5_snap.hdf5";
+  const char* parts[] = {"test_hdf5_snap.0.hdf5", "test_hdf5_snap.1.hdf5"};
+  enum { N = 1000, SPLIT = 377 };
+  write_snapshot(whole, 0, N);
+  write_snapshot(parts[0], 0, SPLIT);
+  write_snapshot(parts[1], SPLIT, N - SPLIT);
+
+  const sif_field_columns_t cols = {.x = "PartType1/Coordinates[0]",
+    .y = "/PartType1/Coordinates[1]",
+    .z = "PartType1/Coordinates[2]",
+    .w = "PartType1/Masses"};
+  sif_field_t* f = sif_field_read_hdf5(&whole, 1, &cols, 1e-3, 1.0, 0);
+  CHECK(f && f->n_particles == N && f->units == SIF_COORDINATES_CARTESIAN &&
+          f->weights,
+    "a snapshot of someone else's did not read");
+  if (f) {
+    long bad = 0;
+    for (int i = 0; i < N; i++) {
+      bad += f->x[i] != (sif_real)(((float)i + 0.5f) * 1e-3);
+      bad += f->z[i] != (sif_real)(((float)(3 * i) + 0.5f) * 1e-3);
+      bad += f->weights[i] != (sif_real)(1.0 + i / 1024.0);
+    }
+    CHECK(bad == 0, "%ld values differ from the file", bad);
+  }
+
+  /* Two files read as one, the subsample drawn over both. */
+  sif_field_t* a = sif_field_read_hdf5(&whole, 1, &cols, 1.0, 0.3, 11);
+  sif_field_t* b = sif_field_read_hdf5(parts, 2, &cols, 1.0, 0.3, 11);
+  CHECK(a && b && a->n_particles == 300 && b->n_particles == 300 &&
+          memcmp(a->x, b->x, 300 * sizeof(sif_real)) == 0,
+    "the split snapshot did not read as the whole one");
+  sif_field_free(a);
+  sif_field_free(b);
+
+  /* An integer dataset is a number like any other; ra dec z a sky field. */
+  const sif_field_columns_t sky = {.ra = "PartType1/ParticleIDs",
+    .dec = "PartType1/Masses",
+    .z = "PartType1/Masses"};
+  sif_field_t* g = sif_field_read_hdf5(&whole, 1, &sky, 1.0, 1.0, 0);
+  CHECK(g && g->units == SIF_COORDINATES_SKY && g->x[5] == 1005,
+    "an integer dataset, or sky names, did not read");
+  sif_field_free(g);
+
+  const struct {
+    const char* what;
+    sif_field_columns_t cols;
+    double scale;
+  } bad[] = {
+    {"a missing dataset", {.x = "Nope", .y = "Nope", .z = "Nope"}, 1},
+    {"a 2D dataset without its column",
+      {.x = "PartType1/Coordinates",
+        .y = "PartType1/Masses",
+        .z = "PartType1/Masses"},
+      1},
+    {"a column the dataset does not have",
+      {.x = "PartType1/Coordinates[3]",
+        .y = "PartType1/Masses",
+        .z = "PartType1/Masses"},
+      1},
+    {"a column of a 1D dataset",
+      {.x = "PartType1/Masses[0]",
+        .y = "PartType1/Masses",
+        .z = "PartType1/Masses"},
+      1},
+    {"a group for a dataset",
+      {.x = "PartType1", .y = "PartType1/Masses", .z = "PartType1/Masses"}, 1},
+    {"positions mixed with sky",
+      {.x = "PartType1/Masses",
+        .dec = "PartType1/Masses",
+        .z = "PartType1/Masses"},
+      1},
+    {"a scale on sky coordinates", sky, 2},
+    {"a negative scale", cols, -1},
+  };
+  for (size_t k = 0; k < sizeof(bad) / sizeof(*bad); k++) {
+    sif_field_t* h =
+      sif_field_read_hdf5(&whole, 1, &bad[k].cols, bad[k].scale, 1.0, 0);
+    CHECK(!h, "%s accepted", bad[k].what);
+    sif_field_free(h);
+  }
+  const char* missing[] = {whole, "test_hdf5_no_such_file.hdf5"};
+  sif_field_t* h = sif_field_read_hdf5(missing, 2, &cols, 1.0, 1.0, 0);
+  CHECK(!h, "a missing second file accepted");
+  sif_field_free(h);
+
+  sif_field_free(f);
+  remove(whole);
+  remove(parts[0]);
+  remove(parts[1]);
+  printf("  ok\n");
+}
+
 /* Rewrites the layout version a sif file declares. */
 static void set_format_version(const char* path, uint32_t v) {
   hid_t f = H5Fopen(path, H5F_ACC_RDWR, H5P_DEFAULT);
@@ -220,6 +355,27 @@ static void test_round_trips(void) {
   CHECK(cat2 && cat2->units == SIF_COORDINATES_CARTESIAN,
     "a Cartesian catalogue came back on the sky");
   sif_catalog_free(cat2);
+
+  /* Metadata go with the catalogue as attributes of /catalog, and an
+   * attribute anyone adds there afterwards comes back as metadata too. */
+  sif_catalog_meta_string_set(cat, "finder", "exodus");
+  sif_catalog_meta_real_set(cat, "threshold", -0.7);
+  sif_catalog_meta_int_set(cat, "n_tracers", 123456789012LL);
+  CHECK(
+    sif_catalog_write_hdf5(PATH, cat) == SIF_OK &&
+      sif_hdf5_set_attr_string(PATH, "catalog", "Note", "by hand") == SIF_OK,
+    "writing a catalogue with metadata failed");
+  cat2 = sif_catalog_read_hdf5(PATH);
+  CHECK(cat2 && sif_catalog_meta_count(cat2) == 4 &&
+          strcmp(sif_catalog_meta_string_get(cat2, "finder"), "exodus") == 0 &&
+          sif_catalog_meta_real_get(cat2, "threshold") == -0.7 &&
+          sif_catalog_meta_int_get(cat2, "n_tracers") == 123456789012LL &&
+          strcmp(sif_catalog_meta_string_get(cat2, "note"), "by hand") == 0,
+    "the metadata did not survive HDF5");
+  sif_catalog_free(cat2);
+  sif_catalog_meta_remove(cat, "finder");
+  sif_catalog_meta_remove(cat, "threshold");
+  sif_catalog_meta_remove(cat, "n_tracers");
 
   /* A sky catalogue says so, and reads back on the sky; the attribute that
    * says it is the library's. */
@@ -510,7 +666,7 @@ static void test_fallback(void) {
   /* The catalogue dump is an ordinary sif ASCII catalogue. */
   char p[256];
   snprintf(p, sizeof(p), "%s.catalog.txt", PATH);
-  sif_catalog_t* back = sif_catalog_read_ascii(p);
+  sif_catalog_t* back = sif_catalog_read_ascii(p, NULL);
   CHECK(same_catalog(cat, back),
     "the catalogue dump should read back as the catalogue");
   sif_catalog_free(back);
@@ -578,6 +734,7 @@ int main(void) {
   test_groups();
   test_foreign_files();
   test_metadata();
+  test_particles();
 #else
   test_fallback();
 #endif

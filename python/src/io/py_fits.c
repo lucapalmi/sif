@@ -22,8 +22,10 @@
 
 #include "io/py_io.h"
 
+#include "measure/py_profiles.h"
 #include "structures/py_catalog.h"
 #include "structures/py_field.h"
+#include "structures/py_size_function.h"
 
 #include "sif/io/fits_io.h"
 
@@ -32,49 +34,6 @@
 #include <sys/stat.h>
 
 #ifdef SIF_HAVE_FITS
-
-/* --- paths --- */
-
-/* A str or os.PathLike, or a sequence of them, as file-system bytes objects
- * in a new list. */
-static PyObject* paths_list(PyObject* obj) {
-  PyObject* list = PyList_New(0);
-  if (!list)
-    return NULL;
-
-  const int single = PyUnicode_Check(obj) || PyBytes_Check(obj) ||
-                     PyObject_HasAttrString(obj, "__fspath__");
-  PyObject* seq = single ? NULL : PySequence_Fast(obj, "");
-  if (!single && !seq) {
-    PyErr_Clear();
-    PyErr_SetString(PyExc_TypeError,
-      "paths must be a path (str or os.PathLike) or a sequence of paths");
-    Py_DECREF(list);
-    return NULL;
-  }
-
-  const Py_ssize_t n = single ? 1 : PySequence_Fast_GET_SIZE(seq);
-  for (Py_ssize_t i = 0; i < n; i++) {
-    PyObject* item = single ? obj : PySequence_Fast_GET_ITEM(seq, i);
-    PyObject* bytes = NULL;
-    if (!PyUnicode_FSConverter(item, &bytes) ||
-        PyList_Append(list, bytes) < 0) {
-      Py_XDECREF(bytes);
-      Py_XDECREF(seq);
-      Py_DECREF(list);
-      return NULL;
-    }
-    Py_DECREF(bytes);
-  }
-  Py_XDECREF(seq);
-
-  if (PyList_GET_SIZE(list) == 0) {
-    PyErr_SetString(PyExc_ValueError, "paths is empty");
-    Py_DECREF(list);
-    return NULL;
-  }
-  return list;
-}
 
 /* Whether a file's structure reads: what tells an unreadable file from a
  * request the file cannot satisfy. The summary is thrown away. */
@@ -109,16 +68,6 @@ static int hdu_string(PyObject* obj, char* buf, size_t len, const char** out) {
     return *out ? 0 : -1;
   }
   PyErr_SetString(PyExc_TypeError, "hdu must be None, an EXTNAME or a number");
-  return -1;
-}
-
-/* A missing file as the operating system's error, with its errno: a
- * FileNotFoundError, as open() would raise. */
-static int require_file(const char* path) {
-  struct stat sb;
-  if (stat(path, &sb) == 0)
-    return 0;
-  PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
   return -1;
 }
 
@@ -167,7 +116,7 @@ PyObject* pysif_read_fits(PyObject* self, PyObject* args, PyObject* kwds) {
   if (hdu_string(hdu_obj, hdu_buf, sizeof hdu_buf, &hdu) < 0)
     return NULL;
 
-  PyObject* list = paths_list(paths_obj);
+  PyObject* list = py_sif_paths_list(paths_obj);
   if (!list)
     return NULL;
   const Py_ssize_t n = PyList_GET_SIZE(list);
@@ -188,10 +137,10 @@ PyObject* pysif_read_fits(PyObject* self, PyObject* args, PyObject* kwds) {
    * FileNotFoundError, as open() would raise. */
   PyObject* result = NULL;
   for (Py_ssize_t i = 0; i < n; i++)
-    if (require_file(paths[i]) < 0)
+    if (py_sif_require_file(paths[i]) < 0)
       goto done;
 
-  const sif_fits_columns_t columns = {.x = x,
+  const sif_field_columns_t columns = {.x = x,
     .y = y,
     .ra = ra,
     .dec = dec,
@@ -250,7 +199,7 @@ PyObject* pysif_inspect_fits(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
   const char* path = PyBytes_AS_STRING(path_obj);
 
-  if (require_file(path) < 0) {
+  if (py_sif_require_file(path) < 0) {
     Py_DECREF(path_obj);
     return NULL;
   }
@@ -332,7 +281,7 @@ PyObject* pysif_read_catalog_fits(
 
   const char* path = PyBytes_AS_STRING(path_obj);
   PyObject* result = NULL;
-  if (require_file(path) == 0) {
+  if (py_sif_require_file(path) == 0) {
     sif_catalog_t* cat = sif_catalog_read_fits(path);
     if (!cat) {
       PyErr_Format(PyExc_ValueError,
@@ -345,6 +294,137 @@ PyObject* pysif_read_catalog_fits(
         PyErr_NoMemory();
       } else {
         obj->catalog = cat;
+        result = (PyObject*)obj;
+      }
+    }
+  }
+  Py_DECREF(path_obj);
+  return result;
+}
+
+/* --- profiles and size functions --- */
+
+/* After a failed write: a file sif did not write, or one that cannot be
+ * written. */
+static PyObject* product_write_error(int status, const char* path) {
+  if (status == SIF_ERR_INVALID)
+    return PyErr_Format(PyExc_ValueError,
+      "cannot write %s as asked; see the log for the reason", path);
+  return PyErr_Format(PyExc_OSError,
+    "failed to write %s -- a FITS file sif did not write is never written "
+    "into; see the log",
+    path);
+}
+
+PyObject* pysif_write_profiles_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  PyObject* path_obj = NULL;
+  PyObject* prof_obj;
+  static char* kwlist[] = {"filepath", "profiles", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist,
+        PyUnicode_FSConverter, &path_obj, &sifProfilesType, &prof_obj))
+    return NULL;
+  const char* path = PyBytes_AS_STRING(path_obj);
+  const sifProfilesObject* prof = (const sifProfilesObject*)prof_obj;
+  const int status = sif_profiles_write_fits(path, prof->dens, prof->vel);
+  PyObject* result =
+    status == SIF_OK ? Py_NewRef(Py_None) : product_write_error(status, path);
+  Py_DECREF(path_obj);
+  return result;
+}
+
+PyObject* pysif_read_profiles_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  PyObject* path_obj = NULL;
+  static char* kwlist[] = {"filepath", NULL};
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, PyUnicode_FSConverter, &path_obj))
+    return NULL;
+  const char* path = PyBytes_AS_STRING(path_obj);
+  PyObject* result = NULL;
+
+  /* Whatever sets the file holds, which the C reader will not guess. */
+  int has_dens = 0, has_vel = 0;
+  sif_density_profiles_t* dens = NULL;
+  sif_velocity_profiles_t* vel = NULL;
+  if (py_sif_require_file(path) < 0)
+    goto done;
+  if (sif_profiles_read_header_fits(path, &has_dens, &has_vel) != SIF_OK) {
+    PyErr_Format(PyExc_OSError, "cannot read %s as a FITS file", path);
+    goto done;
+  }
+  if (!has_dens && !has_vel) {
+    PyErr_Format(PyExc_ValueError, "%s holds no profiles", path);
+    goto done;
+  }
+  if (sif_profiles_read_fits(
+        path, has_dens ? &dens : NULL, has_vel ? &vel : NULL) != SIF_OK) {
+    PyErr_Format(PyExc_ValueError,
+      "cannot read the profiles of %s; see the log for the reason", path);
+    goto done;
+  }
+  sifProfilesObject* prof =
+    (sifProfilesObject*)sifProfilesType.tp_alloc(&sifProfilesType, 0);
+  if (!prof) {
+    sif_density_profiles_free(dens);
+    sif_velocity_profiles_free(vel);
+    PyErr_NoMemory();
+    goto done;
+  }
+  prof->dens = dens;
+  prof->vel = vel;
+  result = (PyObject*)prof;
+
+done:
+  Py_DECREF(path_obj);
+  return result;
+}
+
+PyObject* pysif_write_size_function_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  PyObject* path_obj = NULL;
+  PyObject* vsf_obj;
+  static char* kwlist[] = {"filepath", "size_function", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist,
+        PyUnicode_FSConverter, &path_obj, &sifSizeFunctionType, &vsf_obj))
+    return NULL;
+  const char* path = PyBytes_AS_STRING(path_obj);
+  const int status =
+    sif_size_function_write_fits(path, ((sifSizeFunctionObject*)vsf_obj)->vsf);
+  PyObject* result =
+    status == SIF_OK ? Py_NewRef(Py_None) : product_write_error(status, path);
+  Py_DECREF(path_obj);
+  return result;
+}
+
+PyObject* pysif_read_size_function_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  PyObject* path_obj = NULL;
+  static char* kwlist[] = {"filepath", NULL};
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, PyUnicode_FSConverter, &path_obj))
+    return NULL;
+  const char* path = PyBytes_AS_STRING(path_obj);
+  PyObject* result = NULL;
+  if (py_sif_require_file(path) == 0) {
+    sif_size_function_t* vsf = sif_size_function_read_fits(path);
+    if (!vsf) {
+      PyErr_Format(PyExc_ValueError,
+        "cannot read the size function of %s; see the log for the reason",
+        path);
+    } else {
+      sifSizeFunctionObject* obj =
+        (sifSizeFunctionObject*)sifSizeFunctionType.tp_alloc(
+          &sifSizeFunctionType, 0);
+      if (!obj) {
+        sif_size_function_free(vsf);
+        PyErr_NoMemory();
+      } else {
+        obj->vsf = vsf;
         result = (PyObject*)obj;
       }
     }
@@ -370,7 +450,7 @@ PyObject* pysif_fits_key(PyObject* self, PyObject* args, PyObject* kwds) {
   const char* hdu;
   PyObject* result = NULL;
   if (hdu_string(hdu_obj, hdu_buf, sizeof hdu_buf, &hdu) < 0 ||
-      require_file(path) < 0)
+      py_sif_require_file(path) < 0)
     goto done;
 
   /* Typed as the header has it; the C getters give a number or text, and
@@ -417,7 +497,7 @@ PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds) {
   const char* hdu;
   PyObject* result = NULL;
   if (hdu_string(hdu_obj, hdu_buf, sizeof hdu_buf, &hdu) < 0 ||
-      require_file(path) < 0)
+      py_sif_require_file(path) < 0)
     goto done;
 
   int status;
@@ -497,6 +577,38 @@ PyObject* pysif_fits_key(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  (void)args;
+  (void)kwds;
+  return no_fits();
+}
+
+PyObject* pysif_write_profiles_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  (void)args;
+  (void)kwds;
+  return no_fits();
+}
+
+PyObject* pysif_read_profiles_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  (void)args;
+  (void)kwds;
+  return no_fits();
+}
+
+PyObject* pysif_write_size_function_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  (void)args;
+  (void)kwds;
+  return no_fits();
+}
+
+PyObject* pysif_read_size_function_fits(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   (void)self;
   (void)args;
   (void)kwds;

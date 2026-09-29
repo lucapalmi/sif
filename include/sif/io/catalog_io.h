@@ -61,10 +61,26 @@ int sif_catalog_write_ascii(const char* filepath, const sif_catalog_t* catalog);
  * read as they always did. Rows have to be as many as the count says, no
  * more and no fewer.
  *
+ * A catalogue another finder wrote is read with a format, which places the
+ * columns itself, in the language of the field readers (see the
+ * @ref field_format "column formats"): `x y z` (or `cx cy cz`) or `ra dec z`
+ * for the centre, `r` for the radius, and `*` for a column not read. For a
+ * file whose rows are an ID, the centre, a volume and then the radius:
+ *
+ * @code
+ * sif_catalog_t* cat = sif_catalog_read_ascii("voids.txt", "* x y z * r");
+ * @endcode
+ *
+ * Column names in the file are then ignored; comments, `n=` and metadata are
+ * read as ever. Columns may be separated by blanks or commas, a skipped
+ * column may hold anything, and so may any past the last one named.
+ *
  * @param filepath Path to the input file.
+ * @param fmt The columns, or NULL to take them from the file as above.
  * @return The catalogue, owned by the caller and released with
  * sif_catalog_free(). NULL on failure.
  */
-SIF_NODISCARD sif_catalog_t* sif_catalog_read_ascii(const char* filepath);
+SIF_NODISCARD sif_catalog_t* sif_catalog_read_ascii(
+  const char* filepath, const char* fmt);
 
 #endif /* SIF_IO_CATALOG_IO_H */

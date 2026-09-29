@@ -6,7 +6,8 @@
 
 /**
  * @file hdf5_io.h
- * @brief A catalogue and its products, in one HDF5 file.
+ * @brief A catalogue and its products, in one HDF5 file; and particles out of
+ * any HDF5 file.
  *
  * HDF5 because it is a standard: the file reads back with h5py, or any other
  * HDF5 reader, without sif installed. One file holds one catalogue and what
@@ -54,6 +55,7 @@
 #define SIF_IO_HDF5_IO_H
 
 #include "sif/core/macros.h"
+#include "sif/io/field_io.h"
 #include "sif/measure/profiles.h"
 #include "sif/structures/catalog.h"
 #include "sif/structures/size_function.h"
@@ -161,6 +163,55 @@ int sif_size_function_write_hdf5(
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_read_hdf5(
   const char* filepath);
+
+/**
+ * @brief Read particles out of any HDF5 file -- a simulation snapshot, a halo
+ * catalogue, a mock -- into a new field.
+ *
+ * Each part of the field is a dataset, named by its path from the root:
+ * `"Coordinates"`, or `"PartType1/Masses"`. A dataset of two dimensions, a
+ * row per particle, is read a column at a time: `"PartType1/Coordinates[0]"`
+ * is its first column, counted from 0 as h5py and numpy count. Any numeric
+ * type is read, converted by HDF5. So the dark matter of an IllustrisTNG
+ * snapshot, in Mpc/h:
+ *
+ * @code
+ * const sif_field_columns_t cols = {.x = "PartType1/Coordinates[0]",
+ *   .y = "PartType1/Coordinates[1]", .z = "PartType1/Coordinates[2]"};
+ * const char* files[] = {"snap_099.0.hdf5", "snap_099.1.hdf5"};
+ * sif_field_t* f = sif_field_read_hdf5(files, 2, &cols, 1e-3, 1.0, 0);
+ * @endcode
+ *
+ * Several files read as one, their rows one after another in the order
+ * given; every dataset has to be in every file, with the same row count as
+ * the others there, and each file is checked for that before anything is
+ * read. A GADGET snapshot has its own reader, sif_field_read_gadget(), which
+ * also finds its files and units by itself.
+ *
+ * **Subsampling** keeps exactly round(fraction * N) of the N rows, over all
+ * the files together, as sif_field_read_fits() does. A value that is not
+ * finite in any row fails the read, naming the dataset and the row.
+ *
+ * Opens any HDF5 file, not only one sif wrote; needs a build with HDF5.
+ *
+ * @param paths The files, in the order their rows are wanted.
+ * @param n_paths How many; at least 1.
+ * @param columns Which dataset fills which part of the field, and by their
+ * names whether it holds positions or sky coordinates.
+ * @param length_scale What Cartesian positions are multiplied by, to bring
+ * them to the units wanted: 1e-3 from kpc/h to Mpc/h. Velocities and weights
+ * are read as they are. 1 for sky coordinates.
+ * @param fraction Share of the rows to keep, in (0, 1].
+ * @param seed Seed for the subsample; ignored when @p fraction is 1.
+ * @return The field, owned by the caller and released with sif_field_free().
+ * NULL on any failure, with the reason in the log: an argument out of range, a
+ * dataset a file does not have or cannot give (not numeric, more than two
+ * dimensions, a column it does not have), row counts that disagree, a value
+ * not finite, a file that cannot be read, or a build without HDF5.
+ */
+SIF_NODISCARD sif_field_t* sif_field_read_hdf5(const char* const* paths,
+  uint32_t n_paths, const sif_field_columns_t* columns, double length_scale,
+  double fraction, uint64_t seed);
 
 /**
  * @defgroup hdf5_attrs Free-form metadata

@@ -42,6 +42,8 @@ static const char* input_kind_name(exodus_input_kind_t kind) {
     return "gadget";
   case EXODUS_INPUT_FITS:
     return "fits";
+  case EXODUS_INPUT_HDF5:
+    return "hdf5";
   }
   return "unknown";
 }
@@ -207,9 +209,15 @@ static int read_field(
     break;
 
   case EXODUS_INPUT_FITS:
-    field = sif_field_read_fits(p->input.fits.paths, p->input.fits.n_paths,
-      p->input.fits.hdu, &p->input.fits.columns, p->input.fits.where,
+    field = sif_field_read_fits(p->input.paths, p->input.n_paths,
+      p->input.fits.hdu, &p->input.named, p->input.fits.where,
       p->input.fits.fraction, p->input.fits.seed);
+    break;
+
+  case EXODUS_INPUT_HDF5:
+    field =
+      sif_field_read_hdf5(p->input.paths, p->input.n_paths, &p->input.named,
+        p->input.hdf5.length_scale, p->input.hdf5.fraction, p->input.hdf5.seed);
     break;
 
   default:
@@ -263,57 +271,33 @@ typedef struct {
   sif_real r_max;
 } run_facts_t;
 
-/* How a format records a named value: sif_hdf5_set_attr_*() on a group, or
- * sif_fits_set_key_*() in an HDU -- the same shape of call. */
-typedef struct {
-  int (*set_int)(const char*, const char*, const char*, int64_t);
-  int (*set_real)(const char*, const char*, const char*, double);
-  int (*set_string)(const char*, const char*, const char*, const char*);
-} describer_t;
-
-static const describer_t HDF5_DESCRIBER = {
-  sif_hdf5_set_attr_int, sif_hdf5_set_attr_real, sif_hdf5_set_attr_string};
-static const describer_t FITS_DESCRIBER = {
-  sif_fits_set_key_int, sif_fits_set_key_real, sif_fits_set_key_string};
-
-/* Record what made the catalogue: in HDF5 on /catalog, where it goes with it
- * -- a catalogue written over this one later takes these away -- and in FITS
- * in the primary header, where sif_fits_get_key_real() looks by default. */
-static int describe_catalog(const char* f, const char* g, const describer_t* d,
-  const exodus_params_t* p, const run_facts_t* r) {
-
-  int s = SIF_OK;
-  if (s == SIF_OK)
-    s = d->set_string(f, g, "finder", "exodus");
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "threshold", p->finder.threshold);
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "overlap_fraction", p->finder.overlap_fraction);
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "search_factor", p->finder.search_factor);
-  if (s == SIF_OK)
-    s = d->set_int(f, g, "n_radii", p->finder.n_radii);
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "r_min", r->r_min);
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "r_max", r->r_max);
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "box_length", r->box);
-  if (s == SIF_OK)
-    s = d->set_real(f, g, "mean_separation", r->mps);
-  if (s == SIF_OK)
-    s = d->set_int(f, g, "grid_n_cells", r->grid_cells);
-  if (s == SIF_OK)
-    s = d->set_int(f, g, "mesh_n_cells", r->mesh_cells);
-  if (s == SIF_OK)
-    s = d->set_int(f, g, "n_tracers", (int64_t)r->n_tracers);
-  if (s == SIF_OK)
-    s = d->set_int(f, g, "weighted", r->weighted);
-  if (s == SIF_OK)
-    s = d->set_string(f, g, "input", p->input.path);
-  if (s == SIF_OK)
-    s = d->set_string(f, g, "input_kind", input_kind_name(p->input.kind));
-  return s;
+/* Record what made the catalogue in its metadata, which every format then
+ * writes: attributes of /catalog in HDF5, keywords of the VOIDS table in
+ * FITS, '#key=value' lines in the ASCII header. A value that cannot be
+ * recorded -- a path with a double quote in it, say -- is warned about and
+ * left out; it is no reason to lose the run. */
+static void describe_catalog(
+  sif_catalog_t* cat, const exodus_params_t* p, const run_facts_t* r) {
+  int s = sif_catalog_meta_string_set(cat, "finder", "exodus");
+  s |= sif_catalog_meta_real_set(cat, "threshold", p->finder.threshold);
+  s |= sif_catalog_meta_real_set(
+    cat, "overlap_fraction", p->finder.overlap_fraction);
+  s |= sif_catalog_meta_real_set(cat, "search_factor", p->finder.search_factor);
+  s |= sif_catalog_meta_int_set(cat, "n_radii", p->finder.n_radii);
+  s |= sif_catalog_meta_real_set(cat, "r_min", r->r_min);
+  s |= sif_catalog_meta_real_set(cat, "r_max", r->r_max);
+  s |= sif_catalog_meta_real_set(cat, "box_length", r->box);
+  s |= sif_catalog_meta_real_set(cat, "mean_separation", r->mps);
+  s |= sif_catalog_meta_int_set(cat, "grid_n_cells", r->grid_cells);
+  s |= sif_catalog_meta_int_set(cat, "mesh_n_cells", r->mesh_cells);
+  s |= sif_catalog_meta_int_set(cat, "n_tracers", (int64_t)r->n_tracers);
+  s |= sif_catalog_meta_int_set(cat, "weighted", r->weighted);
+  s |= sif_catalog_meta_string_set(cat, "input", p->input.path);
+  s |= sif_catalog_meta_string_set(
+    cat, "input_kind", input_kind_name(p->input.kind));
+  if (s != SIF_OK)
+    SIF_LOG_WARNING(
+      TAG, "some of the run's settings could not be recorded in the catalogue");
 }
 
 /* Write the catalogue beside the output, then move it into place. An output
@@ -321,7 +305,7 @@ static int describe_catalog(const char* f, const char* g, const describer_t* d,
  * or is killed leaves it as it was -- and never merged into: an HDF5 file is
  * rewritten whole, not just its /catalog, and a FITS file likewise. */
 static int write_output(
-  const exodus_params_t* p, const run_facts_t* r, const sif_catalog_t* cat) {
+  const exodus_params_t* p, const run_facts_t* r, sif_catalog_t* cat) {
 
   const char* path = p->output.path;
   const size_t len = strlen(path) + 32;
@@ -331,14 +315,11 @@ static int write_output(
   snprintf(tmp, len, "%s.tmp.%ld", path, (long)getpid());
 
   int status;
+  describe_catalog(cat, p, r);
   if (p->output.kind == EXODUS_OUTPUT_HDF5) {
     status = sif_catalog_write_hdf5(tmp, cat);
-    if (status == SIF_OK)
-      status = describe_catalog(tmp, "catalog", &HDF5_DESCRIBER, p, r);
   } else if (p->output.kind == EXODUS_OUTPUT_FITS) {
     status = sif_catalog_write_fits(tmp, cat);
-    if (status == SIF_OK)
-      status = describe_catalog(tmp, NULL, &FITS_DESCRIBER, p, r);
   } else {
     status = sif_catalog_write_ascii(tmp, cat);
   }

@@ -11,12 +11,12 @@
 
 input = {
   path = "tracers.xfield",
-  -- xfield | ascii | binary | gadget | fits; an .xfield or a .fits file
-  -- needs none. A FITS catalogue may be a list of files, read as one:
-  -- path = { "part_0.fits", "part_1.fits" }.
+  -- xfield | ascii | binary | gadget | fits | hdf5; an .xfield or a .fits
+  -- file needs none. FITS and HDF5 inputs may be a list of files, read as
+  -- one: path = { "part_0.fits", "part_1.fits" }.
   format = "xfield",
   -- The periodic box. Recorded by .xfield and GADGET files, which a
-  -- value here overrides; ascii, binary and FITS files need it.
+  -- value here overrides; ascii, binary, FITS and HDF5 files need it.
   -- box_length = 1000,
 
   -- One table for the format being read. Columns are x y z, w for a
@@ -46,6 +46,17 @@ input = {
   --   fraction = 1,           -- a random subsample of the kept rows
   --   seed = 0,
   -- },
+  -- hdf5 = {                  -- datasets of any HDF5 file
+  --   -- A dataset by its path; [k] is column k of a 2D one, from 0.
+  --   columns = {
+  --     x = "PartType1/Coordinates[0]",
+  --     y = "PartType1/Coordinates[1]",
+  --     z = "PartType1/Coordinates[2]",
+  --   },                      -- and w, for a weight
+  --   length_scale = 1,       -- multiplies positions: 1e-3 from kpc/h
+  --   fraction = 1,
+  --   seed = 0,
+  -- },
 }
 
 grid = {
@@ -66,8 +77,8 @@ finder = {
   search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2
 }
 
--- .h5 or .hdf5: HDF5, and .fits: FITS, both with the run's settings;
--- anything else: ASCII.
+-- .h5 or .hdf5: HDF5; .fits: FITS; anything else: ASCII. Each records
+-- the run's settings alongside the voids.
 output = "voids.h5"
 -- output = { path = "voids.h5", format = "hdf5" }  -- hdf5 | ascii | fits
 

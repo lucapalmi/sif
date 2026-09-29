@@ -194,6 +194,58 @@ run -D ptype=4 --check run.lua
 expect_status 2 "a type the snapshot does not have"
 expect_error "has no particles of type 4" "a type the snapshot does not have"
 
+# --- any HDF5 file ----------------------------------------------------------
+
+# The HDF5 GADGET fixture holds the particles of the binary one: read as a
+# plain HDF5 file, through its datasets, it gives the same voids.
+cat >h5.lua <<EOF
+input = {
+  path = "$DATA/gadget/hdf5_legacy/snap_005.hdf5",
+  format = "hdf5",
+  box_length = 10,
+  hdf5 = {
+    columns = {
+      x = "ParticleType1/Coordinates[0]",
+      y = "ParticleType1/Coordinates[1]",
+      z = "ParticleType1/Coordinates[2]",
+    },
+    length_scale = 1e-3,
+  },
+}
+grid = { n_cells = 16 }
+finder = { radii = { 2, 1.5 }, threshold = -0.7 }
+output = "h5_voids.txt"
+run = { log_level = "warning" }
+EOF
+if [ "$HDF5" -eq 1 ]; then
+  run h5.lua
+  expect_status 0 "an HDF5 run"
+  sed 's/voids.txt/gadget_voids.txt/' run.lua >gadget.lua
+  run -D ptype=1 gadget.lua
+  grep -v '^#' h5_voids.txt >a.txt
+  grep -v '^#' gadget_voids.txt >b.txt
+  [ -s a.txt ] && cmp -s a.txt b.txt ||
+    fail "the snapshot read as plain HDF5 gave other voids than as GADGET"
+
+  run --check h5.lua
+  expect_status 0 "HDF5 --check"
+  cp out.txt h5_resolved.lua
+  run --check h5_resolved.lua
+  tail -n +2 h5_resolved.lua >a.txt
+  tail -n +2 out.txt >b.txt
+  cmp -s a.txt b.txt || fail "resolving a resolved HDF5 configuration changed it"
+fi
+
+cat >h5_bad.lua <<EOF
+input = { path = "$DATA/gadget/hdf5_legacy/snap_005.hdf5", format = "hdf5",
+  box_length = 10 }
+finder = { radii = { 1 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check h5_bad.lua
+expect_status 2 "an hdf5 input without datasets"
+expect_error "input.hdf5: missing" "an hdf5 input without datasets"
+
 # --- a FITS catalogue ------------------------------------------------------
 
 # The FITS fixture: 100 rows, whole and split over two files. Its columns
@@ -223,8 +275,13 @@ if [ "$FITS" -eq 1 ]; then
     fits.lua >whole.lua
   run whole.lua
   expect_status 0 "a FITS run on the whole file"
-  cmp -s fits_voids.txt whole_voids.txt ||
+  # The voids, not the header: that records which files were read.
+  grep -v '^#' fits_voids.txt >a.txt
+  grep -v '^#' whole_voids.txt >b.txt
+  cmp -s a.txt b.txt ||
     fail "the halves and the whole file gave different catalogues"
+  grep -q '^#finder="exodus"' fits_voids.txt ||
+    fail "an ASCII catalogue does not record the run's settings"
 
   run --check fits.lua
   expect_status 0 "FITS --check"
@@ -279,7 +336,7 @@ output = "voids.txt"
 EOF
 run --check list_bad.lua
 expect_status 2 "a list of files for GADGET"
-expect_error "input.path: a list of files, which only the fits format reads" \
+expect_error "input.path: a list of files, which only the fits and hdf5 formats" \
   "a list of files for GADGET"
 
 if [ "$failures" -ne 0 ]; then

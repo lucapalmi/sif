@@ -60,5 +60,24 @@ PyObject* pysif_read_catalog_fits(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_fits_key(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_profiles_fits(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_profiles_fits(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_write_size_function_fits(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_read_size_function_fits(
+  PyObject* self, PyObject* args, PyObject* kwds);
+
+/* Particles from any HDF5 file (py_hdf5.c) */
+PyObject* pysif_read_hdf5(PyObject* self, PyObject* args, PyObject* kwds);
+
+/* A path (str or os.PathLike) or a sequence of them, as a new list of
+ * file-system bytes objects; NULL with an exception set. */
+PyObject* py_sif_paths_list(PyObject* obj);
+
+/* 0 if the path exists; -1 with the OSError the system gives (a
+ * FileNotFoundError, as open() raises) if not. */
+int py_sif_require_file(const char* path);
 
 #endif /* SIF_PY_IO_PY_IO_H */

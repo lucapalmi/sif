@@ -114,6 +114,43 @@ int sif_field_write(
   const char* filepath, const sif_field_t* field, double box_length);
 
 /**
+ * @brief Which of a file's named columns fill which part of a field, for the
+ * readers of files whose columns have names: sif_field_read_fits() and
+ * sif_field_read_hdf5().
+ *
+ * What an entry says is up to the reader -- a FITS column or expression, an
+ * HDF5 dataset -- and is documented there. Built with designated
+ * initializers, so the part each one fills is written next to it and an
+ * entry left out is NULL:
+ *
+ * @code
+ * const sif_field_columns_t cols = {.ra = "RA", .dec = "DEC", .z = "Z"};
+ * @endcode
+ *
+ * The positions are named one of two ways, and the names say which: x, y and
+ * z for Cartesian positions; or ra, dec and z for sky coordinates -- right
+ * ascension and declination in degrees, and redshift -- which give a field
+ * that is #SIF_COORDINATES_SKY, for sif_field_convert_sky_coordinates().
+ * Naming some of each is refused.
+ */
+typedef struct {
+  /** Cartesian positions; with z, all three or none. */
+  const char* x;
+  const char* y;
+  /** Sky coordinates, in place of x and y; with z, all three or none. */
+  const char* ra;
+  const char* dec;
+  /** The third position, or the redshift on the sky; always required. */
+  const char* z;
+  /** Velocities: all three, or none (NULL) to read none. */
+  const char* vx;
+  const char* vy;
+  const char* vz;
+  /** Weight, or NULL for an unweighted field. */
+  const char* w;
+} sif_field_columns_t;
+
+/**
  * @defgroup field_format Column formats
  * @brief How a file's columns map onto a field, for the ASCII and the binary
  * readers alike.

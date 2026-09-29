@@ -6,6 +6,7 @@
 
 #include "sif/structures/catalog.h"
 
+#include <ctype.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,6 +14,7 @@
 #include "model/cosmology_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "structures/catalog_internal.h"
 
 /*
  * Number of sif_real views packed into the arena: cx, cy, cz, radii.
@@ -168,6 +170,8 @@ sif_catalog_t* sif_catalog_alloc(uint64_t initial_capacity) {
 
   cat->n_voids = 0;
   cat->capacity = initial_capacity;
+  cat->_meta = NULL;
+  cat->_n_meta = 0;
   cat->units = SIF_COORDINATES_CARTESIAN;
   cat->_footprint_block = NULL;
   cat->footprint = NULL;
@@ -196,6 +200,11 @@ void sif_catalog_free(sif_catalog_t* catalog) {
    * released individually. */
   sif_free_aligned(catalog->_block);
   sif_free_aligned(catalog->_footprint_block);
+  for (uint32_t i = 0; i < catalog->_n_meta; i++) {
+    free(catalog->_meta[i].key);
+    free(catalog->_meta[i].text);
+  }
+  free(catalog->_meta);
   free(catalog);
 }
 
@@ -363,3 +372,216 @@ int sif_catalog_to_sky(sif_catalog_t* catalog, const sif_cosmology_t* cosmo) {
     d_max);
   return SIF_OK;
 }
+
+/* ------------------------------------------------------------------------ */
+/* metadata                                                                  */
+/* ------------------------------------------------------------------------ */
+
+#define META_KEY_MAX 64
+
+/* The FITS keywords a table header is made of, with or without a column
+ * number after them: a key named like one would be read back as structure,
+ * or break the header it was written into. */
+static const char* const FITS_STRUCTURAL[] = {"simple", "bitpix", "naxis",
+  "extend", "xtension", "pcount", "gcount", "tfields", "ttype", "tform",
+  "tunit", "tnull", "tscal", "tzero", "tdisp", "tdim", "tbcol", "theap",
+  "extname", "extver", "extlevel", "end", "comment", "history", "continue",
+  "checksum", "datasum", "blank", "bscale", "bzero", "bunit", "hierarch", NULL};
+
+bool sif__catalog_meta_reserved(const char* key) {
+  if (strcmp(key, "n") == 0 || strcmp(key, "n_voids") == 0 ||
+      strcmp(key, "coordinates") == 0 || strcmp(key, "coords") == 0)
+    return true;
+  for (const char* const* s = FITS_STRUCTURAL; *s; s++) {
+    const size_t len = strlen(*s);
+    if (strncmp(key, *s, len) != 0)
+      continue;
+    const char* rest = key + len;
+    while (isdigit((unsigned char)*rest))
+      rest++;
+    if (!*rest)
+      return true;
+  }
+  return false;
+}
+
+/* The key in lower case, into `out`, or false for one that is not allowed. */
+static bool meta_key(const char* key, char out[META_KEY_MAX + 1]) {
+  if (!key || !(isalpha((unsigned char)key[0]) || key[0] == '_'))
+    return false;
+  size_t i = 0;
+  for (; key[i]; i++) {
+    if (i == META_KEY_MAX || !(isalnum((unsigned char)key[i]) || key[i] == '_'))
+      return false;
+    out[i] = (char)tolower((unsigned char)key[i]);
+  }
+  out[i] = '\0';
+  return !sif__catalog_meta_reserved(out);
+}
+
+static int meta_find(const sif_catalog_t* cat, const char* key) {
+  char k[META_KEY_MAX + 1];
+  size_t i = 0;
+  for (; key[i] && i < META_KEY_MAX; i++)
+    k[i] = (char)tolower((unsigned char)key[i]);
+  k[i] = '\0';
+  for (uint32_t m = 0; m < cat->_n_meta; m++)
+    if (strcmp(cat->_meta[m].key, k) == 0)
+      return (int)m;
+  return -1;
+}
+
+/* The entry for a key, new at the end or the one it already has, emptied of
+ * any string it held. NULL, with the reason logged, if the key is refused. */
+static sif_catalog_meta_entry_t* meta_slot(
+  sif_catalog_t* cat, const char* key) {
+  char k[META_KEY_MAX + 1];
+  if (!cat || !meta_key(key, k)) {
+    SIF_LOG_ERROR("void_catalog",
+      "\"%s\" cannot name a catalogue value: it has to be an identifier of at "
+      "most %d characters, and not one the file formats use themselves",
+      key ? key : "(null)", META_KEY_MAX);
+    return NULL;
+  }
+  const int at = meta_find(cat, k);
+  if (at >= 0) {
+    sif_catalog_meta_entry_t* e = &cat->_meta[at];
+    free(e->text);
+    e->text = NULL;
+    return e;
+  }
+  sif_catalog_meta_entry_t* grown =
+    realloc(cat->_meta, (cat->_n_meta + 1) * sizeof(*grown));
+  if (!grown)
+    return NULL;
+  cat->_meta = grown;
+  sif_catalog_meta_entry_t* e = &cat->_meta[cat->_n_meta];
+  memset(e, 0, sizeof *e);
+  e->key = strdup(k);
+  if (!e->key)
+    return NULL;
+  cat->_n_meta++;
+  return e;
+}
+
+int sif_catalog_meta_int_set(
+  sif_catalog_t* catalog, const char* key, int64_t value) {
+  sif_catalog_meta_entry_t* e = meta_slot(catalog, key);
+  if (!e)
+    return SIF_ERR_INVALID;
+  e->kind = SIF_CATALOG_META_INT;
+  e->i = value;
+  e->d = (double)value;
+  return SIF_OK;
+}
+
+int sif_catalog_meta_real_set(
+  sif_catalog_t* catalog, const char* key, double value) {
+  if (!isfinite(value)) {
+    SIF_LOG_ERROR("void_catalog", "catalogue value %s is not finite (%g)",
+      key ? key : "(null)", value);
+    return SIF_ERR_INVALID;
+  }
+  sif_catalog_meta_entry_t* e = meta_slot(catalog, key);
+  if (!e)
+    return SIF_ERR_INVALID;
+  e->kind = SIF_CATALOG_META_REAL;
+  e->d = value;
+  e->i = 0;
+  return SIF_OK;
+}
+
+int sif_catalog_meta_string_set(
+  sif_catalog_t* catalog, const char* key, const char* value) {
+  if (!value || strpbrk(value, "\n\r\"")) {
+    SIF_LOG_ERROR("void_catalog",
+      "catalogue value %s: a string may not be NULL or hold a newline or a "
+      "double quote",
+      key ? key : "(null)");
+    return SIF_ERR_INVALID;
+  }
+  char* copy = strdup(value);
+  if (!copy)
+    return SIF_ERR_ALLOC;
+  sif_catalog_meta_entry_t* e = meta_slot(catalog, key);
+  if (!e) {
+    free(copy);
+    return SIF_ERR_INVALID;
+  }
+  e->kind = SIF_CATALOG_META_STRING;
+  e->text = copy;
+  return SIF_OK;
+}
+
+int sif_catalog_meta_remove(sif_catalog_t* catalog, const char* key) {
+  if (!catalog || !key)
+    return SIF_ERR_INVALID;
+  const int at = meta_find(catalog, key);
+  if (at < 0)
+    return SIF_OK;
+  free(catalog->_meta[at].key);
+  free(catalog->_meta[at].text);
+  memmove(&catalog->_meta[at], &catalog->_meta[at + 1],
+    (catalog->_n_meta - (uint32_t)at - 1) * sizeof(*catalog->_meta));
+  catalog->_n_meta--;
+  return SIF_OK;
+}
+
+sif_catalog_meta_kind_t sif_catalog_meta_kind(
+  const sif_catalog_t* catalog, const char* key) {
+  if (!catalog || !key)
+    return SIF_CATALOG_META_MISSING;
+  const int at = meta_find(catalog, key);
+  return at < 0 ? SIF_CATALOG_META_MISSING : catalog->_meta[at].kind;
+}
+
+int64_t sif_catalog_meta_int_get(
+  const sif_catalog_t* catalog, const char* key) {
+  if (sif_catalog_meta_kind(catalog, key) != SIF_CATALOG_META_INT)
+    return 0;
+  return catalog->_meta[meta_find(catalog, key)].i;
+}
+
+double sif_catalog_meta_real_get(
+  const sif_catalog_t* catalog, const char* key) {
+  const sif_catalog_meta_kind_t kind = sif_catalog_meta_kind(catalog, key);
+  if (kind != SIF_CATALOG_META_INT && kind != SIF_CATALOG_META_REAL)
+    return 0.0;
+  return catalog->_meta[meta_find(catalog, key)].d;
+}
+
+const char* sif_catalog_meta_string_get(
+  const sif_catalog_t* catalog, const char* key) {
+  if (sif_catalog_meta_kind(catalog, key) != SIF_CATALOG_META_STRING)
+    return NULL;
+  return catalog->_meta[meta_find(catalog, key)].text;
+}
+
+uint32_t sif_catalog_meta_count(const sif_catalog_t* catalog) {
+  return catalog ? catalog->_n_meta : 0;
+}
+
+const char* sif_catalog_meta_name(
+  const sif_catalog_t* catalog, uint32_t index) {
+  if (!catalog || index >= catalog->_n_meta)
+    return NULL;
+  return catalog->_meta[index].key;
+}
+
+int sif__catalog_meta_copy(sif_catalog_t* to, const sif_catalog_t* from) {
+  for (uint32_t m = 0; m < from->_n_meta; m++) {
+    const sif_catalog_meta_entry_t* e = &from->_meta[m];
+    int status = SIF_OK;
+    if (e->kind == SIF_CATALOG_META_INT)
+      status = sif_catalog_meta_int_set(to, e->key, e->i);
+    else if (e->kind == SIF_CATALOG_META_REAL)
+      status = sif_catalog_meta_real_set(to, e->key, e->d);
+    else if (e->kind == SIF_CATALOG_META_STRING)
+      status = sif_catalog_meta_string_set(to, e->key, e->text);
+    if (status != SIF_OK)
+      return status;
+  }
+  return SIF_OK;
+}
+
+#undef META_KEY_MAX

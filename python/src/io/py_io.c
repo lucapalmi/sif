@@ -6,6 +6,8 @@
 
 #include "py_common.h"
 
+#include "io/py_io.h"
+
 #include "measure/py_profiles.h"
 #include "sif/io/profiles_io.h"
 #include "structures/py_catalog.h"
@@ -19,6 +21,7 @@
 #include <numpy/arrayobject.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* --- Field I/O --- */
 
@@ -457,18 +460,24 @@ PyObject* pysif_write_catalog_ascii(
 PyObject* pysif_read_catalog_ascii(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
-  static char* kwlist[] = {"filepath", NULL};
+  const char* format = NULL;
+  static char* kwlist[] = {"filepath", "format", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "s|z", kwlist, &filepath, &format)) {
     return NULL;
   }
 
   sif_catalog_t* cat = NULL;
 
-  Py_BEGIN_ALLOW_THREADS cat = sif_catalog_read_ascii(filepath);
+  Py_BEGIN_ALLOW_THREADS cat = sif_catalog_read_ascii(filepath, format);
   Py_END_ALLOW_THREADS
 
     if (!cat) {
+    if (format)
+      return PyErr_Format(PyExc_IOError,
+        "cannot read %s with format '%s'; see the log for the reason", filepath,
+        format);
     return PyErr_Format(
       PyExc_IOError, "Failed to read ASCII catalog from %s", filepath);
   }
@@ -568,4 +577,57 @@ PyObject* pysif_read_profiles_ascii(
   cat_obj->catalog = cat;
 
   return Py_BuildValue("NN", (PyObject*)prof, (PyObject*)cat_obj);
+}
+
+/* --- paths, shared by the readers of several files --- */
+
+/* A str or os.PathLike, or a sequence of them, as file-system bytes objects
+ * in a new list. */
+PyObject* py_sif_paths_list(PyObject* obj) {
+  PyObject* list = PyList_New(0);
+  if (!list)
+    return NULL;
+
+  const int single = PyUnicode_Check(obj) || PyBytes_Check(obj) ||
+                     PyObject_HasAttrString(obj, "__fspath__");
+  PyObject* seq = single ? NULL : PySequence_Fast(obj, "");
+  if (!single && !seq) {
+    PyErr_Clear();
+    PyErr_SetString(PyExc_TypeError,
+      "paths must be a path (str or os.PathLike) or a sequence of paths");
+    Py_DECREF(list);
+    return NULL;
+  }
+
+  const Py_ssize_t n = single ? 1 : PySequence_Fast_GET_SIZE(seq);
+  for (Py_ssize_t i = 0; i < n; i++) {
+    PyObject* item = single ? obj : PySequence_Fast_GET_ITEM(seq, i);
+    PyObject* bytes = NULL;
+    if (!PyUnicode_FSConverter(item, &bytes) ||
+        PyList_Append(list, bytes) < 0) {
+      Py_XDECREF(bytes);
+      Py_XDECREF(seq);
+      Py_DECREF(list);
+      return NULL;
+    }
+    Py_DECREF(bytes);
+  }
+  Py_XDECREF(seq);
+
+  if (PyList_GET_SIZE(list) == 0) {
+    PyErr_SetString(PyExc_ValueError, "paths is empty");
+    Py_DECREF(list);
+    return NULL;
+  }
+  return list;
+}
+
+/* A missing file as the operating system's error, with its errno: a
+ * FileNotFoundError, as open() would raise. */
+int py_sif_require_file(const char* path) {
+  struct stat sb;
+  if (stat(path, &sb) == 0)
+    return 0;
+  PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
+  return -1;
 }

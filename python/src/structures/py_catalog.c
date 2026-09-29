@@ -7,7 +7,10 @@
 #include "py_catalog.h"
 
 #include "model/py_model.h"
+
 #include <numpy/arrayobject.h>
+#include <stdbool.h>
+#include <string.h>
 
 /* --- Lifecycle Methods --- */
 
@@ -124,7 +127,46 @@ static PyObject* sifCatalog_get_units(PyObject* self_obj, void* closure) {
       : "cartesian");
 }
 
+/* The catalogue's metadata, as a new dict in the order keys were set. */
+static PyObject* sifCatalog_get_metadata(PyObject* self_obj, void* closure) {
+  (void)closure;
+  const sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  PyObject* dict = PyDict_New();
+  for (uint32_t m = 0; dict && m < sif_catalog_meta_count(cat); m++) {
+    const char* key = sif_catalog_meta_name(cat, m);
+    PyObject* value = NULL;
+    switch (sif_catalog_meta_kind(cat, key)) {
+    case SIF_CATALOG_META_INT:
+      value =
+        PyLong_FromLongLong((long long)sif_catalog_meta_int_get(cat, key));
+      break;
+    case SIF_CATALOG_META_REAL:
+      value = PyFloat_FromDouble(sif_catalog_meta_real_get(cat, key));
+      break;
+    case SIF_CATALOG_META_STRING:
+      value = PyUnicode_FromString(sif_catalog_meta_string_get(cat, key));
+      break;
+    default:
+      value = Py_NewRef(Py_None);
+    }
+    if (!value || PyDict_SetItemString(dict, key, value) < 0) {
+      Py_XDECREF(value);
+      Py_CLEAR(dict);
+      break;
+    }
+    Py_DECREF(value);
+  }
+  return dict;
+}
+
 static PyGetSetDef sifCatalog_getset[] = {
+  {"metadata", sifCatalog_get_metadata, NULL,
+    "dict: the named values describing the catalogue -- the finder and its\n"
+    "settings, the cosmology, anything set with set_metadata() -- a copy.\n"
+    "Every writer records them and every reader gives them back: '#key=value'\n"
+    "lines in text, attributes of /catalog in HDF5, keywords of VOIDS in\n"
+    "FITS. Keys are in lower case.",
+    NULL},
   {"units", sifCatalog_get_units, NULL,
     "What the centres are: 'cartesian', as a finder gives them, or 'sky' --\n"
     "right ascension, declination (degrees) and redshift -- after to_sky().",
@@ -144,6 +186,162 @@ static PyGetSetDef sifCatalog_getset[] = {
     "radii, or None with footprint.",
     NULL},
   {NULL}};
+
+/* --- From and to NumPy --- */
+
+/* One column: a contiguous 1D sif_real array of length n (n < 0 takes it from
+ * this one), or NULL for None. 0, or -1 with an exception. */
+static int column(
+  PyObject* obj, const char* name, npy_intp n, PyArrayObject** out) {
+  *out = NULL;
+  if (obj == Py_None)
+    return 0;
+  PyArrayObject* arr = (PyArrayObject*)PyArray_FROM_OTF(
+    obj, NPY_REAL_T, NPY_ARRAY_IN_ARRAY | NPY_ARRAY_FORCECAST);
+  if (!arr) {
+    PyErr_Format(PyExc_TypeError, "%s must be convertible to a %s array", name,
+      sizeof(sif_real) == 8 ? "float64" : "float32");
+    return -1;
+  }
+  if (PyArray_NDIM(arr) != 1 || (n >= 0 && PyArray_SHAPE(arr)[0] != n)) {
+    PyErr_Format(
+      PyExc_ValueError, "%s must be a 1D array with one entry per void", name);
+    Py_DECREF(arr);
+    return -1;
+  }
+  *out = arr;
+  return 0;
+}
+
+PyObject* pysif_catalog_from_numpy(
+  PyObject* module, PyObject* args, PyObject* kwds) {
+  (void)module;
+  PyObject *cx = Py_None, *cy = Py_None, *cz = Py_None, *r = Py_None;
+  PyObject *ra = Py_None, *dec = Py_None, *z = Py_None;
+  PyObject *fp = Py_None, *fps = Py_None;
+  static char* kwlist[] = {"cx", "cy", "cz", "r", "ra", "dec", "z", "footprint",
+    "footprint_shell", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "|OOOO$OOOOO", kwlist, &cx, &cy,
+        &cz, &r, &ra, &dec, &z, &fp, &fps))
+    return NULL;
+
+  /* The names say what the centres are, as everywhere else. */
+  const bool cart = cx != Py_None || cy != Py_None || cz != Py_None;
+  const bool sky = ra != Py_None || dec != Py_None || z != Py_None;
+  if (cart && sky) {
+    PyErr_SetString(PyExc_ValueError,
+      "give cx, cy and cz for Cartesian centres, or ra, dec and z for sky "
+      "ones, not some of each");
+    return NULL;
+  }
+  PyObject* c[3] = {sky ? ra : cx, sky ? dec : cy, sky ? z : cz};
+  if (c[0] == Py_None || c[1] == Py_None || c[2] == Py_None || r == Py_None) {
+    PyErr_SetString(PyExc_ValueError,
+      sky ? "ra, dec, z and r are all required"
+          : "cx, cy, cz and r are required (or ra, dec, z and r)");
+    return NULL;
+  }
+  if ((fp == Py_None) != (fps == Py_None)) {
+    PyErr_SetString(PyExc_ValueError,
+      "footprint and footprint_shell are given together or not at all");
+    return NULL;
+  }
+
+  enum { X, Y, Z, R, FP, FPS, N_COLS };
+  static const char* const cart_names[] = {"cx", "cy", "cz"};
+  static const char* const sky_names[] = {"ra", "dec", "z"};
+  PyArrayObject* cols[N_COLS] = {NULL};
+  sif_catalog_t* cat = NULL;
+  PyObject* result = NULL;
+
+  if (column(c[0], sky ? sky_names[0] : cart_names[0], -1, &cols[X]) < 0)
+    goto done;
+  const npy_intp n = PyArray_SHAPE(cols[X])[0];
+  if (column(c[1], sky ? sky_names[1] : cart_names[1], n, &cols[Y]) < 0 ||
+      column(c[2], sky ? sky_names[2] : cart_names[2], n, &cols[Z]) < 0 ||
+      column(r, "r", n, &cols[R]) < 0 ||
+      column(fp, "footprint", n, &cols[FP]) < 0 ||
+      column(fps, "footprint_shell", n, &cols[FPS]) < 0)
+    goto done;
+
+  cat = sif_catalog_alloc((uint64_t)n);
+  if (!cat || (cols[FP] && sif_catalog_reserve_footprint(cat) != SIF_OK)) {
+    PyErr_NoMemory();
+    goto done;
+  }
+  const size_t bytes = (size_t)n * sizeof(sif_real);
+  if (n > 0) {
+    memcpy(cat->cx, PyArray_DATA(cols[X]), bytes);
+    memcpy(cat->cy, PyArray_DATA(cols[Y]), bytes);
+    memcpy(cat->cz, PyArray_DATA(cols[Z]), bytes);
+    memcpy(cat->radii, PyArray_DATA(cols[R]), bytes);
+    if (cols[FP]) {
+      memcpy(cat->footprint, PyArray_DATA(cols[FP]), bytes);
+      memcpy(cat->footprint_shell, PyArray_DATA(cols[FPS]), bytes);
+    }
+  }
+  cat->n_voids = (uint64_t)n;
+  if (sky)
+    cat->units = SIF_COORDINATES_SKY;
+
+  sifCatalogObject* obj =
+    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+  if (!obj) {
+    PyErr_NoMemory();
+    goto done;
+  }
+  obj->catalog = cat;
+  cat = NULL;
+  result = (PyObject*)obj;
+
+done:
+  for (int k = 0; k < N_COLS; k++)
+    Py_XDECREF(cols[k]);
+  sif_catalog_free(cat);
+  return result;
+}
+
+static PyObject* sifCatalog_to_numpy(PyObject* self_obj, PyObject* unused) {
+  (void)unused;
+  const sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  const bool sky = cat->units == SIF_COORDINATES_SKY;
+  const char* names[6] = {sky ? "ra" : "cx", sky ? "dec" : "cy",
+    sky ? "z" : "cz", "r", "footprint", "footprint_shell"};
+  const sif_real* cols[6] = {cat->cx, cat->cy, cat->cz, cat->radii,
+    cat->footprint, cat->footprint_shell};
+  const int n_fields = cat->footprint ? 6 : 4;
+
+  /* The same names the file headers use, one field each, packed. */
+  PyObject* spec = PyList_New(n_fields);
+  if (!spec)
+    return NULL;
+  for (int k = 0; k < n_fields; k++) {
+    PyObject* item =
+      Py_BuildValue("(ss)", names[k], sizeof(sif_real) == 8 ? "f8" : "f4");
+    if (!item) {
+      Py_DECREF(spec);
+      return NULL;
+    }
+    PyList_SET_ITEM(spec, k, item);
+  }
+  PyArray_Descr* descr = NULL;
+  const int ok = PyArray_DescrConverter(spec, &descr);
+  Py_DECREF(spec);
+  if (!ok)
+    return NULL;
+
+  npy_intp dims[1] = {(npy_intp)cat->n_voids};
+  PyObject* arr = PyArray_Zeros(1, dims, descr, 0); /* steals descr */
+  if (!arr)
+    return NULL;
+  char* data = PyArray_DATA((PyArrayObject*)arr);
+  const size_t stride = (size_t)n_fields * sizeof(sif_real);
+  for (uint64_t i = 0; i < cat->n_voids; i++)
+    for (int k = 0; k < n_fields; k++)
+      memcpy(data + i * stride + (size_t)k * sizeof(sif_real), &cols[k][i],
+        sizeof(sif_real));
+  return arr;
+}
 
 /* --- Methods --- */
 
@@ -209,7 +407,66 @@ static PyObject* sifCatalog_to_sky(
   }
 }
 
+static PyObject* sifCatalog_set_metadata(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  const char* key;
+  PyObject* value;
+  static char* kwlist[] = {"key", "value", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO", kwlist, &key, &value))
+    return NULL;
+  sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+
+  int status;
+  if (value == Py_None) {
+    status = sif_catalog_meta_remove(cat, key);
+  } else if (PyLong_Check(value)) { /* bool included, as 1 or 0 */
+    const long long v = PyLong_AsLongLong(value);
+    if (v == -1 && PyErr_Occurred())
+      return NULL;
+    status = sif_catalog_meta_int_set(cat, key, (int64_t)v);
+  } else if (PyFloat_Check(value)) {
+    status = sif_catalog_meta_real_set(cat, key, PyFloat_AS_DOUBLE(value));
+  } else if (PyUnicode_Check(value)) {
+    const char* v = PyUnicode_AsUTF8(value);
+    if (!v)
+      return NULL;
+    status = sif_catalog_meta_string_set(cat, key, v);
+  } else {
+    PyErr_SetString(
+      PyExc_TypeError, "value must be an int, a float, a str or None");
+    return NULL;
+  }
+  if (status == SIF_ERR_ALLOC)
+    return PyErr_NoMemory();
+  if (status != SIF_OK)
+    return PyErr_Format(PyExc_ValueError,
+      "cannot set %s: a key is an identifier of at most 64 characters and not "
+      "one the file formats use (n, n_voids, coordinates, FITS structure); a "
+      "string holds no newline or double quote; a float is finite",
+      key);
+  Py_RETURN_NONE;
+}
+
 static PyMethodDef sifCatalog_methods[] = {
+  {"set_metadata", (PyCFunction)sifCatalog_set_metadata,
+    METH_VARARGS | METH_KEYWORDS,
+    "set_metadata(key, value)\n"
+    "--\n\n"
+    "Set one of the catalogue's named values, which every writer records:\n"
+    "an int, a float or a str; None removes the key.\n\n"
+    "    cat.set_metadata(\"omega_m\", 0.31)\n"
+    "    cat.set_metadata(\"survey\", \"Euclid DR1\")\n\n"
+    "Keys are matched without regard to case, as FITS keywords are.\n\n"
+    "Raises:\n"
+    "    ValueError: For a key or a value no format can keep."},
+  {"to_numpy", (PyCFunction)sifCatalog_to_numpy, METH_NOARGS,
+    "to_numpy()\n"
+    "--\n\n"
+    "The catalogue as one NumPy structured array, a copy: a record per\n"
+    "void, with fields named as the file headers name them -- cx, cy, cz, r\n"
+    "(or ra, dec, z, r on the sky), and footprint, footprint_shell when the\n"
+    "catalogue has them. pandas.DataFrame(cat.to_numpy()) and\n"
+    "astropy.table.Table(cat.to_numpy()) take it as it is."},
   {"translate", (PyCFunction)sifCatalog_translate, METH_VARARGS | METH_KEYWORDS,
     "translate(offset)\n"
     "--\n\n"

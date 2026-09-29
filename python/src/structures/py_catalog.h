@@ -22,4 +22,8 @@ typedef struct {
  */
 extern PyTypeObject sifCatalogType;
 
+/* pysif.catalog_from_numpy(): a new Catalog from NumPy arrays. */
+PyObject* pysif_catalog_from_numpy(
+  PyObject* module, PyObject* args, PyObject* kwds);
+
 #endif /* SIF_PY_STRUCTURES_PY_CATALOG_H */

@@ -32,7 +32,7 @@ static int refuse(const char* path) {
 }
 
 sif_field_t* sif_field_read_fits(const char* const* paths, uint32_t n_paths,
-  const char* hdu, const sif_fits_columns_t* columns, const char* where,
+  const char* hdu, const sif_field_columns_t* columns, const char* where,
   double fraction, uint64_t seed) {
   (void)hdu;
   (void)columns;
@@ -107,4 +107,38 @@ int sif_fits_set_key_string(
   (void)key;
   (void)value;
   return refuse(path);
+}
+
+int sif_profiles_write_fits(const char* filepath,
+  const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel) {
+  (void)dens;
+  (void)vel;
+  return refuse(filepath);
+}
+
+int sif_profiles_read_header_fits(
+  const char* filepath, int* out_has_density, int* out_has_velocity) {
+  (void)out_has_density;
+  (void)out_has_velocity;
+  return refuse(filepath);
+}
+
+int sif_profiles_read_fits(const char* filepath,
+  sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
+  if (out_dens)
+    *out_dens = NULL;
+  if (out_vel)
+    *out_vel = NULL;
+  return refuse(filepath);
+}
+
+int sif_size_function_write_fits(
+  const char* filepath, const sif_size_function_t* vsf) {
+  (void)vsf;
+  return refuse(filepath);
+}
+
+sif_size_function_t* sif_size_function_read_fits(const char* filepath) {
+  refuse(filepath);
+  return NULL;
 }

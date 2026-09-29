@@ -27,9 +27,8 @@ pysif.init(log_level=2)
 # with this command, we only load the particle positions
 # 'length=' is the unit the snapshot is written in: 'auto' (the
 # default) reads it from an HDF5 snapshot, but a binary one does not
-# record it, so it has to be named: 'kpc' for kpc/h (Gadget's
-# default) or 'mpc' for Mpc/h. positions and box_length always come
-# out in Mpc/h
+# record it, so it has to be named: 'kpc' for kpc/h or 'mpc' for Mpc/h. 
+# positions and box_length always come out in Mpc/h
 # the argument 'fraction=' allows for subsampling ('seed=' makes it
 # reproducible)
 field, box_length = pysif.io.read_gadget(
@@ -43,7 +42,7 @@ field.wrap(box_length=box_length)
 
 # now, we construct the grid and assign the particles with
 # the CiC scheme
-n_cells = 512                     # change at will
+n_cells = 512                            # change at will
 grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 grid.assign_cic(field=field)
 
@@ -237,7 +236,6 @@ target_link_libraries(run_exodus PRIVATE sif::sif m)
 ::::
 
 ::::{tab-item} sif-exodus
-The same pipeline, described in a configuration file:
 
 ```lua
 -- exodus.lua
@@ -308,17 +306,14 @@ pysif.init(log_level=2)
 
 # first, load the galaxies and the randoms into two pysif.Field
 # structures, from FITS tables holding right ascension, declination (in
-# degrees) and redshift. each part of the field is a column, or an
-# expression over columns: here the galaxies' weight is the product of
-# two (weights are optional, for the data and the randoms alike). a
-# catalogue split over several files -- the two galactic caps here --
-# reads as one. naming them ra, dec and z (rather than x, y and z) says
-# they are sky coordinates, not positions
+# degrees) and redshift. Weights are optional and can be computed 
+# on the fly from multiple columns.(simple expressions only).
+# Catalogue that split over several files can be loaded as one. 
+# The named arguments ra, dec and z (rather than x, y and z) automatically
+# set the sky coordinates.
 #
-# the redshift cut goes in where=, and applies the same way to both
-# catalogues. the randoms are often many times the galaxies: fraction=
-# keeps a random share of what passes the cut (seed= makes it
-# reproducible). pysif.io.inspect_fits() lists a file's columns
+# A cut (e.g. redshifts) can be applied directly when reading. The arguments
+# 'fraction=' and 'seed=' control the subsampling fraction and subsampling seed
 cut = "Z > 0.43 && Z < 0.7"
 data = pysif.io.read_fits(
     ["path/to/galaxies_NGC.fits", "path/to/galaxies_SGC.fits"],
@@ -334,43 +329,39 @@ randoms = pysif.io.read_fits(
 # exodus works in comoving cartesian coordinates, so we convert both
 # catalogues with the same cosmology: a w0waCDM background, flat unless
 # omega_de is given. positions come out in Mpc/h, with the observer at
-# the origin (the convention of pyrecon)
+# the origin
 cosmology = dict(omega_m=0.31, w0=-1.0, wa=0.0)
 data.convert_sky_coordinates(**cosmology)
 randoms.convert_sky_coordinates(**cosmology)
 
-# the radii. in a survey they also decide how much empty space the
-# survey needs around it (see below), so we construct them first
+# now the search radii. in a survey they also decide how much empty space the
+# survey needs around it. We use the real datatype to ensure compatibility
 search_radii = np.geomspace(10, 60, 60, dtype=pysif.real)
 
-# nothing wraps around in a survey: exodus runs in a box of empty
-# space around the footprint, wide enough that the smoothing and the
-# sphere searches never reach its far side. survey_box works out that
-# box from the randoms (which define the footprint) for this ladder
-# and this grid, along with the offset that moves the survey into it
+# we now compute the pad the survey volume in the box, 
+# to ensure the boundary conditions do not apply. 
+# The computed offset and box lengths depend on the survey footprint, 
+# the search radii and the number of cells in the grid
 n_cells = 512                     # change at will
 offset, box_length = pysif.finders.survey_box(
     randoms=randoms, radii=search_radii, n_cells=n_cells
 )
 
-# move both catalogues into the box, by the same offset
+# we now apply the offset
 data.translate(offset)
 randoms.translate(offset)
 
 # now the grids, one for the galaxies and one for the randoms, with
-# the same number of cells over the same box, both assigned with the
-# CiC scheme. unlike for a simulation, they are NOT turned into density
-# contrasts: exodus compares the two densities itself
+# the same number of cells. Unlike for a simulation, 
+# they are NOT turned into density contrast
 data_grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 data_grid.assign_cic(field=data)
 
 random_grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 random_grid.assign_cic(field=randoms)
 
-# now the chain meshes, one for each catalogue. in a survey box the
-# tracers only fill the footprint, so suggest_mesh_cells_survey sizes
-# each mesh for the density there, reading the footprint off the
-# random grid
+# now the chain meshes, one for each catalogue. The quantity is 
+# computed from the random footprint.
 max_radius = float(search_radii.max())
 n_cells_data = pysif.finders.suggest_mesh_cells_survey(
     n_particles=data.n_particles, random_grid=random_grid,
@@ -392,10 +383,7 @@ random_mesh = pysif.ChainMesh(
     drop_indices=True, consume_field=True
 )
 
-# now we can run exodus. a sphere's density contrast is measured
-# against the randoms, and every void found is kept, along with the
-# fraction of its sphere (footprint) and of the shell out to twice its
-# radius (footprint_shell) that lie inside the survey
+# now we can run exodus
 threshold = -0.7
 catalog = pysif.finders.exodus_survey(
     data_grid=data_grid,
@@ -407,22 +395,17 @@ catalog = pysif.finders.exodus_survey(
     consume_grid=True
 )
 
-# move the voids back to the frame of the catalogues: comoving
-# cartesian positions, in Mpc/h, with the observer at the origin
+# move the voids back to the frame of the catalogues
 catalog.translate(-offset)
 
-# and, to hand them on in the survey's own terms, back to the sky with
-# the same cosmology: right ascension, declination and redshift. the
-# radii stay comoving lengths, in Mpc/h
+# optionally, we can translate the voids positions in sky coordinates
 catalog.to_sky(**cosmology)
 
-# we finally save the catalog, footprint columns included, as a FITS
-# table (RA, DEC, Z, R, ...), note what it was made with in its
-# header, and finalize the library. write_catalog_hdf5 and
-# write_catalog_ascii write a sky catalogue as well
+# we finally save the catalog, in FITS format.
+# we also save some metadata, which every format keeps with it
+catalog.set_metadata("threshold", threshold)
+catalog.set_metadata("omega_m", cosmology["omega_m"])
 pysif.io.write_catalog_fits("path/to/voids.fits", catalog)
-pysif.io.set_fits_key("path/to/voids.fits", "threshold", threshold)
-pysif.io.set_fits_key("path/to/voids.fits", "omega_m", cosmology["omega_m"])
 
 pysif.finalize()
 ```
@@ -477,9 +460,9 @@ int main(void) {
     "path/to/galaxies_NGC.fits", "path/to/galaxies_SGC.fits"};
   const char* random_files[] = {
     "path/to/randoms_NGC.fits", "path/to/randoms_SGC.fits"};
-  const sif_fits_columns_t data_columns = {
+  const sif_field_columns_t data_columns = {
     .ra = "RA", .dec = "DEC", .z = "Z", .w = "WEIGHT_SYSTOT * WEIGHT_CP"};
-  const sif_fits_columns_t random_columns = {
+  const sif_field_columns_t random_columns = {
     .ra = "RA", .dec = "DEC", .z = "Z"};
   data = sif_field_read_fits(data_files, 2, NULL, &data_columns, cut, 1.0, 0);
   randoms =
@@ -584,16 +567,15 @@ int main(void) {
     goto done;
 
   // we finally save the catalog, footprint columns included, as a FITS
-  // table (RA, DEC, Z, R, ...), note what it was made with in its
-  // primary header, and finalize the library. sif_catalog_write_hdf5()
-  // and sif_catalog_write_ascii() write a sky catalogue as well
-  status = sif_catalog_write_fits("path/to/voids.fits", catalog);
+  // table (RA, DEC, Z, R, ...), with what it was made with in its
+  // metadata, which every format keeps with it, and finalize the library.
+  // sif_catalog_write_hdf5() and sif_catalog_write_ascii() write a sky
+  // catalogue as well
+  status = sif_catalog_meta_real_set(catalog, "threshold", threshold);
   if (status == SIF_OK)
-    status = sif_fits_set_key_real("path/to/voids.fits", NULL, "threshold",
-      (double)threshold);
+    status = sif_catalog_meta_real_set(catalog, "omega_m", cosmology.omega_m);
   if (status == SIF_OK)
-    status = sif_fits_set_key_real(
-      "path/to/voids.fits", NULL, "omega_m", cosmology.omega_m);
+    status = sif_catalog_write_fits("path/to/voids.fits", catalog);
 
 done:
   sif_catalog_free(catalog);

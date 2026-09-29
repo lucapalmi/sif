@@ -99,3 +99,20 @@ def test_views_are_released(field):
     gc.collect()
     assert sys.getrefcount(field) == refs
     field.sort_morton()  # no export left behind
+
+
+def test_to_numpy_columns(columns):
+    pos = np.column_stack(columns)
+    w = np.full(N, 2.0)
+    cases = [({}, pos),
+             ({"vx": columns[0], "vy": columns[1], "vz": columns[2]},
+              np.column_stack([pos, pos])),
+             ({"weights": w}, np.column_stack([pos, w])),
+             ({"vx": columns[0], "vy": columns[1], "vz": columns[2],
+               "weights": w}, np.column_stack([pos, pos, w]))]
+    for kwargs, want in cases:
+        got = pysif.field_from_numpy(*columns, **kwargs).to_numpy()
+        assert got.shape == want.shape
+        assert got.flags.writeable and got.flags.c_contiguous
+        np.testing.assert_allclose(got, want, rtol=1e-6)
+    assert pysif.Field().to_numpy().shape == (0, 3)

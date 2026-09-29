@@ -15,7 +15,11 @@
 #include "sif/core/system.h"
 #include "sif/io/fits_io.h"
 #include "sif/structures/catalog.h"
+#include "sif/structures/size_function.h"
+
+#include "measure/profiles_internal.h"
 #include "sif/structures/field.h"
+#include "structures/results_internal.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -172,17 +176,17 @@ static void remove_fixtures(void) {
 
 /* One file. */
 static sif_field_t* read1(const char* path, const char* hdu,
-  const sif_fits_columns_t* cols, const char* where, double fraction,
+  const sif_field_columns_t* cols, const char* where, double fraction,
   uint64_t seed) {
   return sif_field_read_fits(&path, 1, hdu, cols, where, fraction, seed);
 }
 
-static const sif_fits_columns_t SKY = {.ra = "RA", .dec = "DEC", .z = "Z"};
-static const sif_fits_columns_t CART = {.x = "RA", .y = "DEC", .z = "Z"};
+static const sif_field_columns_t SKY = {.ra = "RA", .dec = "DEC", .z = "Z"};
+static const sif_field_columns_t CART = {.x = "RA", .y = "DEC", .z = "Z"};
 
 /* Whether a read fails. A field that comes back anyway is freed. */
 static bool refused(const char* path, const char* hdu,
-  const sif_fits_columns_t* cols, const char* where, double fraction) {
+  const sif_field_columns_t* cols, const char* where, double fraction) {
   sif_field_t* fl = read1(path, hdu, cols, where, fraction, 0);
   sif_field_free(fl);
   return !fl;
@@ -211,7 +215,7 @@ static void test_plain(void) {
   sif_field_free(fl);
 
   /* Names match without regard to case, and SKY marks the field. */
-  const sif_fits_columns_t lower = {.ra = "ra", .dec = "Dec", .z = "z"};
+  const sif_field_columns_t lower = {.ra = "ra", .dec = "Dec", .z = "z"};
   fl = read1(FIXTURE, "galaxies", &lower, NULL, 1.0, 0);
   CHECK(fl && fl->units == SIF_COORDINATES_SKY,
     "lower-case names, or SKY, not honoured");
@@ -221,7 +225,7 @@ static void test_plain(void) {
 static void test_hdus(void) {
   printf("HDUs\n");
 
-  const sif_fits_columns_t other = {.x = "X", .y = "X", .z = "X"};
+  const sif_field_columns_t other = {.x = "X", .y = "X", .z = "X"};
   const char* ways[] = {"OTHER", "other", "2"};
   for (int k = 0; k < 3; k++) {
     sif_field_t* fl = read1(FIXTURE, ways[k], &other, NULL, 1.0, 0);
@@ -249,7 +253,7 @@ static void test_velocities_and_weights(void) {
 
   /* Integer velocity columns, a weight that is a product of a float and a
    * double column, and one that is not a product at all. */
-  const sif_fits_columns_t cols = {.ra = "RA",
+  const sif_field_columns_t cols = {.ra = "RA",
     .dec = "DEC",
     .z = "Z",
     .vx = "VX",
@@ -269,7 +273,7 @@ static void test_velocities_and_weights(void) {
   }
   sif_field_free(fl);
 
-  const sif_fits_columns_t boss = {
+  const sif_field_columns_t boss = {
     .ra = "RA", .dec = "DEC", .z = "Z", .w = "W1 * (W2 + 1) - 1"};
   fl = read1(FIXTURE, NULL, &boss, NULL, 1.0, 0);
   CHECK(fl, "a compound weight failed");
@@ -283,7 +287,8 @@ static void test_velocities_and_weights(void) {
   sif_field_free(fl);
 
   /* A constant is an expression too, repeated down the rows. */
-  const sif_fits_columns_t two = {.ra = "RA", .dec = "DEC", .z = "Z", .w = "2"};
+  const sif_field_columns_t two = {
+    .ra = "RA", .dec = "DEC", .z = "Z", .w = "2"};
   fl = read1(FIXTURE, NULL, &two, NULL, 1.0, 0);
   CHECK(fl && fl->weights[0] == 2 && fl->weights[N_ROWS - 1] == 2,
     "a constant weight was not 2 in every row");
@@ -351,7 +356,7 @@ static void test_filter_and_subsample(void) {
 static void test_undefined(void) {
   printf("undefined values\n");
 
-  const sif_fits_columns_t cols = {.ra = "RA", .dec = "DEC", .z = "ZBAD"};
+  const sif_field_columns_t cols = {.ra = "RA", .dec = "DEC", .z = "ZBAD"};
   CHECK(refused(FIXTURE, NULL, &cols, NULL, 1.0), "NaN redshifts read");
 
   /* Dropped by the filter, they are not there to refuse. */
@@ -368,7 +373,7 @@ static void test_refusals(void) {
 
   const struct {
     const char* what;
-    sif_fits_columns_t cols;
+    sif_field_columns_t cols;
   } bad[] = {
     {"a missing column", {.x = "RA", .y = "DEC", .z = "NOPE"}},
     {"a string column", {.x = "RA", .y = "DEC", .z = "NAME"}},
@@ -384,10 +389,10 @@ static void test_refusals(void) {
     CHECK(refused(FIXTURE, NULL, &bad[k].cols, NULL, 1.0), "%s accepted",
       bad[k].what);
 
-  const sif_fits_columns_t mixed = {.x = "RA", .dec = "DEC", .z = "Z"};
+  const sif_field_columns_t mixed = {.x = "RA", .dec = "DEC", .z = "Z"};
   CHECK(refused(FIXTURE, NULL, &mixed, NULL, 1.0),
     "positions and sky coordinates mixed accepted");
-  const sif_fits_columns_t half = {.ra = "RA", .z = "Z"};
+  const sif_field_columns_t half = {.ra = "RA", .z = "Z"};
   CHECK(refused(FIXTURE, NULL, &half, NULL, 1.0), "ra without dec accepted");
   CHECK(refused(FIXTURE, NULL, &SKY, NULL, 0.0), "a fraction of 0 accepted");
   CHECK(refused(FIXTURE, NULL, &SKY, NULL, 1e-9),
@@ -406,7 +411,7 @@ static void test_several_files(void) {
   /* The two halves read as one are the whole catalogue: the same rows, in
    * the same order, with the same weights. */
   const char* halves[] = {PART_A, PART_B};
-  const sif_fits_columns_t cols = {
+  const sif_field_columns_t cols = {
     .ra = "RA", .dec = "DEC", .z = "Z", .w = "W1 * W2"};
   sif_field_t* whole = read1(FIXTURE, NULL, &cols, NULL, 1.0, 0);
   sif_field_t* joined =
@@ -457,7 +462,7 @@ static void test_vectors_and_gzip(void) {
   printf("vector columns and compressed files\n");
 
   /* VEC holds 3i, 3i + 1, 3i + 2 in row i. */
-  const sif_fits_columns_t vec = {.x = "VEC[1]", .y = "VEC[2]", .z = "VEC[3]"};
+  const sif_field_columns_t vec = {.x = "VEC[1]", .y = "VEC[2]", .z = "VEC[3]"};
   sif_field_t* fl = read1(FIXTURE, NULL, &vec, NULL, 1.0, 0);
   CHECK(fl, "vector elements not read");
   if (fl) {
@@ -655,6 +660,132 @@ static void test_keywords(void) {
   remove(CAT_PATH);
 }
 
+static void test_products(void) {
+  printf("catalogue metadata and products\n");
+  remove(CAT_PATH);
+
+  enum { N = 37, NB = 12 };
+  sif_catalog_t* cat = sif_catalog_alloc(N);
+  for (int i = 0; i < N; i++)
+    (void)sif_catalog_append(cat, (sif_real)(1234.5678901234 + 0.1 * i),
+      (sif_real)(0.1234567890123 * (i + 1)), (sif_real)(9.87654321e-3 * i),
+      (sif_real)(3.14159265 + i));
+  sif_catalog_meta_string_set(cat, "finder", "exodus");
+  sif_catalog_meta_real_set(cat, "search_factor", 1.5);
+  sif_catalog_meta_int_set(cat, "n_tracers", 123456789012LL);
+  sif_catalog_meta_string_set(cat, "input",
+    "a/very/long/path/to/some/file/that/goes/on/and/on/past/sixty/eight/"
+    "characters/tracers.fits");
+
+  sif_density_profiles_t* d =
+    sif__density_profiles_alloc(N, NB, (sif_real)3.0, true);
+  sif_velocity_profiles_t* v =
+    sif__velocity_profiles_alloc(N, NB, (sif_real)2.5);
+  for (uint32_t b = 0; b <= NB; b++) {
+    d->r_edges[b] = (sif_real)(3.0 * b / NB);
+    v->r_edges[b] = (sif_real)(2.5 * b / NB);
+  }
+  for (uint64_t i = 0; i < (uint64_t)N * NB; i++) {
+    d->profiles[i] = (sif_real)(-0.987654321 + 1e-3 * (double)i);
+    v->v_rad[i] = (sif_real)(123.456789 - 0.37 * (double)i);
+  }
+  sif_size_function_t* f = sif__size_function_alloc(NB);
+  f->options = SIF_VSF_BIN_LINEAR;
+  f->r_min = 5;
+  f->r_max = 65;
+  for (uint32_t b = 0; b <= NB; b++)
+    f->r_edges[b] = (sif_real)(5.0 + 5.0 * b);
+  for (uint32_t b = 0; b < NB; b++) {
+    f->r_centers[b] = (sif_real)(7.5 + 5.0 * b);
+    f->counts[b] = (uint64_t)1 << (20 + b);
+    f->vsf[b] = (sif_real)(1.23456789e-5 / (b + 1));
+    f->err[b] = (sif_real)(2.3456789e-7 / (b + 1));
+  }
+
+  /* Every product into one file. */
+  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK &&
+          sif_profiles_write_fits(CAT_PATH, d, v) == SIF_OK &&
+          sif_size_function_write_fits(CAT_PATH, f) == SIF_OK,
+    "writing the products failed");
+
+  sif_catalog_t* cat2 = sif_catalog_read_fits(CAT_PATH);
+  CHECK(cat2 && cat2->n_voids == N &&
+          memcmp(cat2->radii, cat->radii, N * sizeof(sif_real)) == 0 &&
+          sif_catalog_meta_count(cat2) == 4 &&
+          strcmp(sif_catalog_meta_string_get(cat2, "finder"), "exodus") == 0 &&
+          sif_catalog_meta_real_get(cat2, "search_factor") == 1.5 &&
+          sif_catalog_meta_int_get(cat2, "n_tracers") == 123456789012LL &&
+          strcmp(sif_catalog_meta_string_get(cat2, "input"),
+            sif_catalog_meta_string_get(cat, "input")) == 0,
+    "the catalogue or its metadata did not survive FITS");
+  sif_catalog_free(cat2);
+
+  int has_d = -1, has_v = -1;
+  CHECK(sif_profiles_read_header_fits(CAT_PATH, &has_d, &has_v) == SIF_OK &&
+          has_d == 1 && has_v == 1,
+    "the header does not report both profile sets");
+  sif_density_profiles_t* d2 = NULL;
+  sif_velocity_profiles_t* v2 = NULL;
+  CHECK(sif_profiles_read_fits(CAT_PATH, &d2, &v2) == SIF_OK && d2 && v2 &&
+          d2->n_voids == N && d2->n_bins == NB && d2->ext == d->ext &&
+          d2->differential &&
+          memcmp(d2->r_edges, d->r_edges, (NB + 1) * sizeof(sif_real)) == 0 &&
+          memcmp(d2->profiles, d->profiles, N * NB * sizeof(sif_real)) == 0 &&
+          memcmp(v2->v_rad, v->v_rad, N * NB * sizeof(sif_real)) == 0 &&
+          v2->ext == v->ext,
+    "the profiles did not round-trip");
+  sif_density_profiles_free(d2);
+  sif_velocity_profiles_free(v2);
+
+  sif_size_function_t* f2 = sif_size_function_read_fits(CAT_PATH);
+  CHECK(f2 && f2->n_bins == NB && f2->options == f->options &&
+          f2->r_min == f->r_min && f2->r_max == f->r_max &&
+          memcmp(f2->r_edges, f->r_edges, (NB + 1) * sizeof(sif_real)) == 0 &&
+          memcmp(f2->r_centers, f->r_centers, NB * sizeof(sif_real)) == 0 &&
+          memcmp(f2->counts, f->counts, NB * sizeof(uint64_t)) == 0 &&
+          memcmp(f2->vsf, f->vsf, NB * sizeof(sif_real)) == 0 &&
+          memcmp(f2->err, f->err, NB * sizeof(sif_real)) == 0,
+    "the size function did not round-trip");
+  sif_size_function_free(f2);
+
+  /* Rewriting the catalogue replaces it, and keeps what was measured. */
+  sif_catalog_meta_remove(cat, "input");
+  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK,
+    "rewriting the catalogue failed");
+  cat2 = sif_catalog_read_fits(CAT_PATH);
+  CHECK(cat2 && sif_catalog_meta_count(cat2) == 3 &&
+          sif_catalog_meta_kind(cat2, "input") == SIF_CATALOG_META_MISSING,
+    "the old catalogue's metadata outlived it");
+  sif_catalog_free(cat2);
+  d2 = NULL;
+  CHECK(sif_profiles_read_fits(CAT_PATH, &d2, NULL) == SIF_OK && d2,
+    "rewriting the catalogue lost the profiles");
+  sif_density_profiles_free(d2);
+  static char text[8192];
+  CHECK(summary_of(CAT_PATH, text, sizeof text) && strstr(text, "5 HDUs"),
+    "rewriting the catalogue left the file with the wrong HDUs:\n%s", text);
+
+  /* Asked for what the file does not hold, or into a file that is not
+   * sif's. */
+  remove(CAT_PATH);
+  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK,
+    "writing the catalogue alone failed");
+  v2 = NULL;
+  CHECK(sif_profiles_read_fits(CAT_PATH, NULL, &v2) == SIF_ERR_INVALID && !v2,
+    "a set the file does not hold was not refused");
+  CHECK(!sif_size_function_read_fits(CAT_PATH),
+    "a size function the file does not hold was read");
+  CHECK(sif_catalog_write_fits(FIXTURE, cat) == SIF_ERR_IO &&
+          sif_profiles_write_fits(FIXTURE, d, NULL) == SIF_ERR_IO,
+    "a FITS file sif did not write was written into");
+
+  remove(CAT_PATH);
+  sif_catalog_free(cat);
+  sif_density_profiles_free(d);
+  sif_velocity_profiles_free(v);
+  sif_size_function_free(f);
+}
+
 #endif /* SIF_HAVE_FITS */
 
 int main(void) {
@@ -678,10 +809,11 @@ int main(void) {
   test_summary();
   test_catalogs();
   test_keywords();
+  test_products();
   remove_fixtures();
 #else
   printf("no cfitsio: the reader refuses\n");
-  const sif_fits_columns_t cols = {.ra = "RA", .dec = "DEC", .z = "Z"};
+  const sif_field_columns_t cols = {.ra = "RA", .dec = "DEC", .z = "Z"};
   const char* path = FIXTURE;
   sif_field_t* fl = sif_field_read_fits(&path, 1, NULL, &cols, NULL, 1.0, 0);
   CHECK(!fl, "the reader returned a field without cfitsio");

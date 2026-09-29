@@ -10,7 +10,7 @@
  * particle field.
  *
  * A FITS table names its columns, so the reader is told which column plays
- * which part: a sif_fits_columns_t maps the field's positions -- x, y and z,
+ * which part: a sif_field_columns_t maps the field's positions -- x, y and z,
  * or on the sky ra, dec and z -- velocities and weight onto names in the
  * file. Each entry is a column name or, when a
  * single column will not do, an arithmetic expression over columns in
@@ -18,7 +18,7 @@
  * columns is read:
  *
  * @code
- * const sif_fits_columns_t cols = {
+ * const sif_field_columns_t cols = {
  *   .ra = "RA", .dec = "DEC", .z = "Z",
  *   .w = "WEIGHT_SYSTOT * (WEIGHT_NOZ + WEIGHT_CP - 1)",
  * };
@@ -53,43 +53,18 @@
 #define SIF_IO_FITS_IO_H
 
 #include "sif/core/macros.h"
+#include "sif/io/field_io.h"
+#include "sif/measure/profiles.h"
 #include "sif/structures/catalog.h"
 #include "sif/structures/field.h"
+#include "sif/structures/size_function.h"
 
 #include <stdint.h>
 #include <stdio.h>
 
-/**
- * @brief Which columns fill which part of the field.
- *
- * Each entry is a column name, matched without regard to case, or an
- * arithmetic expression over columns. Built with designated initializers, so
- * the part each one fills is written next to it and an entry left out is
- * NULL.
- *
- * The positions are named one of two ways, and the names say which: x, y and
- * z for Cartesian positions, read as they are in whatever unit the file
- * uses; or ra, dec and z for sky coordinates -- right ascension and
- * declination in degrees, and redshift -- which give a field that is
- * #SIF_COORDINATES_SKY, for sif_field_convert_sky_coordinates(). Naming some
- * of each is refused.
- */
-typedef struct {
-  /** Cartesian positions; with z, all three or none. */
-  const char* x;
-  const char* y;
-  /** Sky coordinates, in place of x and y; with z, all three or none. */
-  const char* ra;
-  const char* dec;
-  /** The third position, or the redshift on the sky; always required. */
-  const char* z;
-  /** Velocities: all three, or none (NULL) to read none. */
-  const char* vx;
-  const char* vy;
-  const char* vz;
-  /** Weight, or NULL for an unweighted field. */
-  const char* w;
-} sif_fits_columns_t;
+/* The columns are named with sif_field_columns_t (field_io.h): here each
+ * entry is a column name, matched without regard to case, or an arithmetic
+ * expression over columns in cfitsio's syntax. */
 
 /**
  * @brief Read a catalogue of one or more FITS tables into a new field.
@@ -134,7 +109,7 @@ typedef struct {
  * an allocation failure, or a build without cfitsio.
  */
 SIF_NODISCARD sif_field_t* sif_field_read_fits(const char* const* paths,
-  uint32_t n_paths, const char* hdu, const sif_fits_columns_t* columns,
+  uint32_t n_paths, const char* hdu, const sif_field_columns_t* columns,
   const char* where, double fraction, uint64_t seed);
 
 /**
@@ -163,8 +138,32 @@ int sif_fits_print_summary(const char* path, FILE* stream);
 int sif_fits_inspect(const char* path);
 
 /**
- * @brief Write a catalogue as a FITS table: an empty primary HDU, then a
- * binary table named VOIDS with a row per void.
+ * @defgroup fits_products Catalogues and their products
+ * @brief A catalogue and what was measured from it, in one FITS file, as the
+ * HDF5 file holds them:
+ *
+ * @code
+ * [0] primary           SIFFMT = 'sif', SIFVER; nothing else sif writes
+ * [.] VOIDS             a row per void; COORDS, and the catalogue's metadata
+ * [.] DENSITY_PROFILES  a row per void, DENSITY[n_bins]; N_BINS, EXT,
+ *                       DIFFERENTIAL, EDGE0 ... EDGE<n_bins>
+ * [.] VELOCITY_PROFILES the same, V_RAD[n_bins]
+ * [.] SIZE_FUNCTION     a row per bin: R_LOW, R_HIGH, R_CENTER, COUNT, VSF,
+ *                       ERR; N_BINS, R_MIN, R_MAX, OPTIONS, BINNING
+ * @endcode
+ *
+ * **Every writer creates the file if it is missing and replaces only its own
+ * HDU**, so a file can hold any subset of the products, and a catalogue can
+ * be rewritten without losing what was measured from it. A product whose row
+ * count disagrees with the catalogue's is warned about, never refused. An
+ * existing file sif did not write -- no SIFFMT = 'sif' in its primary header
+ * -- is never written into. The primary header is otherwise the caller's:
+ * sif_fits_set_key_string() and its kin write there by default.
+ * @{
+ */
+
+/**
+ * @brief Write a catalogue into the VOIDS table, a row per void.
  *
  * The columns follow what the catalogue holds, with the names the ASCII
  * format gives them: CX, CY, CZ and R for Cartesian centres; RA and DEC (in
@@ -172,16 +171,15 @@ int sif_fits_inspect(const char* path);
  * sky (sif_catalog_to_sky()). The footprint columns, FOOTPRINT and
  * FOOTPRINT_SHELL, follow when the catalogue carries them. Values are written
  * at the precision sif was built with, and the table's COORDS keyword says
- * "cartesian" or "sky".
+ * "cartesian" or "sky". The catalogue's metadata (the catalog_meta group)
+ * are keywords of the same header, and travel with it.
  *
- * The primary header is left for the caller: sif_fits_set_key_int() and its
- * kin write what the catalogue came from there, where sif_fits_get_key_real()
- * looks by default.
- *
- * @param filepath The file, replaced if it exists.
+ * @param filepath The file: created if missing, its VOIDS table replaced if
+ * it has one.
  * @param catalog Catalogue to write.
  * @return SIF_OK; SIF_ERR_INVALID on a NULL argument; SIF_ERR_IO if the file
- * could not be written; SIF_ERR_UNSUPPORTED in a build without cfitsio.
+ * could not be written, or is a FITS file sif did not write;
+ * SIF_ERR_UNSUPPORTED in a build without cfitsio.
  */
 int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog);
 
@@ -191,14 +189,63 @@ int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog);
  *
  * The centres' column names say what they are: RA, DEC and Z give a
  * catalogue on the sky, CX, CY and CZ (or X, Y and Z) a Cartesian one; R or
- * RADIUS is the radius. The footprint comes back when the
- * table has both of its columns.
+ * RADIUS is the radius. The footprint comes back when the table has both of
+ * its columns, and every keyword of the table's header that is not FITS
+ * structure comes back as the catalogue's metadata, in lower case.
  *
  * @param filepath The file.
  * @return The catalogue, owned by the caller and released with
  * sif_catalog_free(); NULL on failure, with the reason in the log.
  */
 SIF_NODISCARD sif_catalog_t* sif_catalog_read_fits(const char* filepath);
+
+/**
+ * @brief Write stacked profiles into DENSITY_PROFILES and VELOCITY_PROFILES.
+ *
+ * Either set may be NULL, and a NULL one leaves its table in the file as it
+ * was. Bin edges are keywords of each table, so a set holds at most 9999
+ * bins.
+ *
+ * @return SIF_OK; SIF_ERR_INVALID if both are NULL, or for a set of too many
+ * bins; SIF_ERR_IO as for sif_catalog_write_fits().
+ */
+int sif_profiles_write_fits(const char* filepath,
+  const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel);
+
+/**
+ * @brief Which profile sets a file holds, without reading them.
+ * @return SIF_OK; SIF_ERR_IO if the file cannot be opened.
+ */
+SIF_NODISCARD int sif_profiles_read_header_fits(
+  const char* filepath, int* out_has_density, int* out_has_velocity);
+
+/**
+ * @brief Read stacked profiles, as sif_profiles_read_hdf5() does: every
+ * output optional, a set the file does not hold an error.
+ * @return SIF_OK; SIF_ERR_INVALID for a set the file does not hold;
+ * SIF_ERR_IO for a missing or malformed file; SIF_ERR_ALLOC.
+ */
+SIF_NODISCARD int sif_profiles_read_fits(const char* filepath,
+  sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel);
+
+/**
+ * @brief Write a size function into SIZE_FUNCTION, replacing it if the file
+ * has one.
+ * @return As sif_catalog_write_fits().
+ */
+int sif_size_function_write_fits(
+  const char* filepath, const sif_size_function_t* vsf);
+
+/**
+ * @brief Read SIZE_FUNCTION.
+ * @return The size function, released with sif_size_function_free(); NULL if
+ * the file or the table is missing or malformed, or this build has no
+ * cfitsio.
+ */
+SIF_NODISCARD sif_size_function_t* sif_size_function_read_fits(
+  const char* filepath);
+
+/** @} */
 
 /**
  * @defgroup fits_keys Header keywords

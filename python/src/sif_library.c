@@ -10,6 +10,7 @@
 #include "sif/core/settings.h"
 #include "sif/core/system.h"
 
+#include "structures/py_catalog.h"
 #include "structures/py_field.h"
 
 /* --- Submodule Initialization Hooks --- */
@@ -152,6 +153,30 @@ static PyMethodDef sif_module_methods[] = {
     "        missing, x or y is given with ra or dec, or the velocities are\n"
     "        given in part.\n"
     "    MemoryError: If the field's buffers could not be allocated."},
+  {"catalog_from_numpy", (PyCFunction)pysif_catalog_from_numpy,
+    METH_VARARGS | METH_KEYWORDS,
+    "catalog_from_numpy(cx=None, cy=None, cz=None, r=None, *, ra=None, "
+    "dec=None, z=None, footprint=None, footprint_shell=None)\n"
+    "--\n\n"
+    "A new Catalog, with its voids copied out of NumPy arrays: a catalogue\n"
+    "from another finder, or one cut down by hand.\n\n"
+    "The names say what the centres are, as for field_from_numpy(): cx, cy\n"
+    "and cz for Cartesian centres, or ra, dec and z -- right ascension and\n"
+    "declination in degrees, and redshift -- for a catalogue on the sky:\n\n"
+    "    box = pysif.catalog_from_numpy(cx, cy, cz, r)\n"
+    "    sky = pysif.catalog_from_numpy(ra=ra, dec=dec, z=z, r=r)\n\n"
+    "Catalog.to_numpy() is the way back.\n\n"
+    "Args:\n"
+    "    cx, cy, cz: Cartesian centres, one entry per void.\n"
+    "    r: Radii.\n"
+    "    ra, dec, z: Sky centres, in place of cx, cy and cz.\n"
+    "    footprint, footprint_shell: The footprint columns, both or "
+    "neither.\n\n"
+    "Returns:\n"
+    "    Catalog: The new catalogue.\n\n"
+    "Raises:\n"
+    "    ValueError: If the arrays disagree in length, a column is missing,\n"
+    "        or Cartesian and sky names are mixed."},
   {"set_setting", (PyCFunction)py_sif_setting_set, METH_VARARGS | METH_KEYWORDS,
     "set_setting(key, value)\n"
     "--\n\n"

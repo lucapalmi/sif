@@ -7,8 +7,10 @@
 #include "sif/io/catalog_io.h"
 
 #include "sif/utils/logger.h"
+#include "structures/catalog_internal.h"
 
 #include <ctype.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,11 +23,12 @@
  * a written file can reach; a longer line is refused as malformed rather than
  * split.
  */
-#define CATALOG_LINE_MAX 1024
+#define CATALOG_LINE_MAX 4096
 
 /* Values a row may hold: the six sif writes, and room for columns another
- * tool added that the reader skips. */
-#define CATALOG_MAX_COLS 32
+ * tool added that the reader skips. Past the last column a layout places,
+ * a row may run on with anything. */
+#define CATALOG_MAX_COLS 64
 
 int sif_catalog_write_ascii(
   const char* filepath, const sif_catalog_t* catalog) {
@@ -45,6 +48,28 @@ int sif_catalog_write_ascii(
    * names say what each column is, sky or Cartesian, footprint or not. Both
    * behind '#', so numpy.loadtxt and friends read the rows as they are. */
   fprintf(file, "#n=%" PRIu64 "\n", catalog->n_voids);
+
+  /* The catalogue's metadata, one key a line, before the names: strings in
+   * quotes, so that "10" comes back a string, numbers as they are. */
+  for (uint32_t m = 0; m < sif_catalog_meta_count(catalog); m++) {
+    const char* key = sif_catalog_meta_name(catalog, m);
+    switch (sif_catalog_meta_kind(catalog, key)) {
+    case SIF_CATALOG_META_INT:
+      fprintf(file, "#%s=%lld\n", key,
+        (long long)sif_catalog_meta_int_get(catalog, key));
+      break;
+    case SIF_CATALOG_META_REAL:
+      fprintf(
+        file, "#%s=%.17g\n", key, sif_catalog_meta_real_get(catalog, key));
+      break;
+    case SIF_CATALOG_META_STRING:
+      fprintf(
+        file, "#%s=\"%s\"\n", key, sif_catalog_meta_string_get(catalog, key));
+      break;
+    case SIF_CATALOG_META_MISSING:
+      break;
+    }
+  }
   fputs(catalog->units == SIF_COORDINATES_SKY ? "#ra dec z r" : "#cx cy cz r",
     file);
   if (catalog->footprint)
@@ -124,22 +149,35 @@ static bool parse_real(const char* s, char** end, sif_real* out) {
   return *end != s;
 }
 
-/* The values of a data row, up to CATALOG_MAX_COLS; -1 for a row with more,
- * or with something that is not a number. */
-static int parse_row(const char* text, sif_real* v) {
+/*
+ * The values of a data row, separated by blanks or commas, and how many.
+ *
+ * Without a `limit` (0) every column has to be a number, and a row with more
+ * than CATALOG_MAX_COLS, or with anything else, is -1. With one, only the
+ * first `limit` columns are looked at, and one that is not a number sets its
+ * bit in `bad` rather than failing: the caller knows which columns it reads,
+ * and another tool's file can have a name or a flag in one it skips.
+ */
+static int parse_row(const char* text, sif_real* v, int limit, uint64_t* bad) {
+  static const char SEPARATORS[] = " \t\r\n,";
   int n = 0;
   const char* p = text;
+  *bad = 0;
   for (;;) {
-    p += strspn(p, " \t\r\n");
-    if (!*p)
+    p += strspn(p, SEPARATORS);
+    if (!*p || (limit > 0 && n == limit))
       return n;
     if (n == CATALOG_MAX_COLS)
       return -1;
+    const size_t len = strcspn(p, SEPARATORS);
     char* end;
-    if (!parse_real(p, &end, &v[n]))
-      return -1;
+    if (!parse_real(p, &end, &v[n]) || (size_t)(end - p) != len) {
+      if (limit == 0)
+        return -1;
+      *bad |= UINT64_C(1) << n;
+    }
     n++;
-    p = end;
+    p += len;
   }
 }
 
@@ -214,6 +252,89 @@ static int parse_names(char* text, layout_t* out) {
   return 1;
 }
 
+/*
+ * A column format: the columns in order, as for the field readers -- `x y z`
+ * (or `cx cy cz`) or `ra dec z` for the centre, `r` for the radius, `*` for
+ * a column not read. Blanks and commas between names are optional. Every
+ * mistake is refused, with where it is.
+ */
+static int parse_format(const char* fmt, layout_t* out) {
+  layout_t l = {-1, -1, -1, -1, -1, -1, false};
+  bool cartesian = false;
+  int col = 0;
+  for (const char* p = fmt; *p;) {
+    const char c = (char)tolower((unsigned char)*p);
+    if (c == ' ' || c == '\t' || c == ',') {
+      p++;
+      continue;
+    }
+    const long at = (long)(p - fmt) + 1;
+    int* slot = NULL;
+    const char* name = NULL;
+    int len = 1;
+    if (c == 'c' && p[1] && strchr("xyz", tolower((unsigned char)p[1])))
+      p++; /* cx cy cz: the same as x y z */
+    const char d = (char)tolower((unsigned char)*p);
+    if (d == '*') {
+      p++;
+      col++;
+      continue;
+    } else if (d == 'x' || d == 'y') {
+      slot = d == 'x' ? &l.x : &l.y;
+      name = d == 'x' ? "x" : "y";
+      cartesian = true;
+    } else if (d == 'z') {
+      slot = &l.z;
+      name = "z";
+    } else if (d == 'r' && tolower((unsigned char)p[1]) == 'a') {
+      slot = &l.x;
+      name = "ra";
+      len = 2;
+      l.sky = true;
+    } else if (d == 'r') {
+      slot = &l.r;
+      name = "r";
+    } else if (d == 'd' && tolower((unsigned char)p[1]) == 'e' &&
+               tolower((unsigned char)p[2]) == 'c') {
+      slot = &l.y;
+      name = "dec";
+      len = 3;
+      l.sky = true;
+    } else {
+      SIF_LOG_ERROR("io",
+        "catalogue format '%s', position %ld: '%c' names no column -- use x "
+        "y z (or ra dec z), r, and * for a column not read",
+        fmt, at, *p);
+      return SIF_ERR_INVALID;
+    }
+    if (*slot >= 0) {
+      SIF_LOG_ERROR("io",
+        "catalogue format '%s', position %ld: %s is named twice", fmt, at,
+        name);
+      return SIF_ERR_INVALID;
+    }
+    *slot = col++;
+    p += len;
+  }
+
+  if (cartesian && l.sky) {
+    SIF_LOG_ERROR("io",
+      "catalogue format '%s' mixes sky (ra, dec) and Cartesian (x, y) "
+      "centres",
+      fmt);
+    return SIF_ERR_INVALID;
+  }
+  if (l.x < 0 || l.y < 0 || l.z < 0 || l.r < 0) {
+    SIF_LOG_ERROR("io",
+      "catalogue format '%s' has to name the centre, x y z or ra dec z, and "
+      "the radius, r",
+      fmt);
+    return SIF_ERR_INVALID;
+  }
+  *out = l;
+  return SIF_OK;
+}
+
 /* "n=123", with blanks allowed around the '='. */
 static bool parse_count(const char* text, uint64_t* n) {
   if (tolower((unsigned char)text[0]) != 'n')
@@ -235,6 +356,45 @@ static bool parse_count(const char* text, uint64_t* n) {
   return true;
 }
 
+/*
+ * A "key=value" comment, into the metadata of `into`: a quoted value is a
+ * string, one that parses whole as an integer or a number is that, anything
+ * else a string as written. Returns whether the comment was one; a key the
+ * catalogue does not allow is logged and skipped, not fatal.
+ */
+static bool parse_meta(char* text, sif_catalog_t* into) {
+  char* eq = strchr(text, '=');
+  if (!eq)
+    return false;
+  *eq = '\0';
+  char* key = text;
+  char* end = eq;
+  while (end > key && isspace((unsigned char)end[-1]))
+    *--end = '\0';
+  char* value = eq + 1;
+  value += strspn(value, " \t");
+
+  const size_t len = strlen(value);
+  if (len >= 2 && value[0] == '"' && value[len - 1] == '"') {
+    value[len - 1] = '\0';
+    (void)sif_catalog_meta_string_set(into, key, value + 1);
+    return true;
+  }
+  char* stop;
+  const long long i = strtoll(value, &stop, 10);
+  if (stop != value && !*stop) {
+    (void)sif_catalog_meta_int_set(into, key, (int64_t)i);
+    return true;
+  }
+  const double d = strtod(value, &stop);
+  if (stop != value && !*stop && isfinite(d)) {
+    (void)sif_catalog_meta_real_set(into, key, d);
+    return true;
+  }
+  (void)sif_catalog_meta_string_set(into, key, value);
+  return true;
+}
+
 /* Every exit after the file is open goes through here. */
 static sif_catalog_t* fail(FILE* file, sif_catalog_t* catalog) {
   sif_catalog_free(catalog);
@@ -242,11 +402,18 @@ static sif_catalog_t* fail(FILE* file, sif_catalog_t* catalog) {
   return NULL;
 }
 
-sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
+sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
   if (!filepath) {
     SIF_LOG_ERROR("io", "invalid filepath for read_catalog_ascii");
     return NULL;
   }
+
+  /* A format places the columns, and any names in the file are then just a
+   * comment. It is checked before the file is opened. */
+  layout_t layout = {0, 1, 2, 3, -1, -1, false};
+  if (fmt && parse_format(fmt, &layout) != SIF_OK)
+    return NULL;
+  const bool have_format = fmt != NULL;
 
   FILE* file = fopen(filepath, "r");
   if (!file) {
@@ -261,9 +428,14 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
   /* --- the header: the comments before the first row --- */
 
   uint64_t n_voids = 0;
-  bool have_count = false, have_names = false;
-  layout_t layout = {0, 1, 2, 3, -1, -1, false};
+  bool have_count = false, have_names = have_format;
   long data_at = 0; /* where the first row starts */
+
+  /* The metadata, held until the catalogue exists: its size is only known
+   * once the header is read. */
+  sif_catalog_t* meta = sif_catalog_alloc(1);
+  if (!meta)
+    return fail(file, NULL);
 
   for (;;) {
     data_at = ftell(file);
@@ -272,13 +444,16 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
       break;
     if (!have_count && parse_count(text, &n_voids)) {
       have_count = true;
-    } else if (!have_names) {
+    } else if (strchr(text, '=')) {
+      (void)parse_meta(text, meta);
+    } else if (!have_names) { /* never with a format */
       const int named = parse_names(text, &layout);
       if (named < 0) {
         SIF_LOG_ERROR("io",
           "%s: the column names mix sky (ra, dec) and Cartesian (cx, cy) "
           "centres",
           filepath);
+        sif_catalog_free(meta);
         return fail(file, NULL);
       }
       have_names = named == 1;
@@ -308,15 +483,18 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
     }
     if (fseek(file, data_at, SEEK_SET) != 0) {
       SIF_LOG_ERROR("io", "%s: cannot read the rows a second time", filepath);
+      sif_catalog_free(meta);
       return fail(file, NULL);
     }
     kind = next_line(file, line, &text);
   }
 
   sif_catalog_t* catalog = sif_catalog_alloc(n_voids);
-  if (!catalog) {
+  const int copied = catalog ? sif__catalog_meta_copy(catalog, meta) : SIF_OK;
+  sif_catalog_free(meta);
+  if (!catalog || copied != SIF_OK) {
     SIF_LOG_ERROR("io", "failed to allocate catalog for loading");
-    return fail(file, NULL);
+    return fail(file, catalog);
   }
   if (layout.sky)
     catalog->units = SIF_COORDINATES_SKY;
@@ -339,6 +517,7 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
       needed = placed[c] + 1;
 
   sif_real v[CATALOG_MAX_COLS];
+  uint64_t bad = 0;
   for (uint64_t i = 0; i < n_voids; i++) {
     while (kind == LINE_COMMENT)
       kind = next_line(file, line, &text);
@@ -347,7 +526,9 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
         "io", "%s: a line is too long to be a catalogue row", filepath);
       return fail(file, catalog);
     }
-    const int got = kind == LINE_DATA ? parse_row(text, v) : -1;
+    const int got = kind == LINE_DATA
+                      ? parse_row(text, v, have_names ? needed : 0, &bad)
+                      : -1;
 
     if (i == 0 && !have_names) {
       n_columns = got == 6 ? 6 : 4;
@@ -366,6 +547,12 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath) {
         filepath, got < 0 ? 0 : got, have_names ? needed : n_columns);
       return fail(file, catalog);
     }
+    for (int c = 0; c < 6; c++)
+      if (placed[c] >= 0 && (bad >> placed[c] & 1)) {
+        SIF_LOG_ERROR("io", "void %" PRIu64 " of %s: column %d is not a number",
+          i, filepath, placed[c] + 1);
+        return fail(file, catalog);
+      }
 
     catalog->cx[i] = v[layout.x];
     catalog->cy[i] = v[layout.y];

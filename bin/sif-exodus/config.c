@@ -34,8 +34,8 @@
 static const char* const SECTIONS[] = {
   "input", "grid", "mesh", "finder", "output", "run", NULL};
 
-static const char* const INPUT_KEYS[] = {
-  "path", "format", "box_length", "ascii", "binary", "gadget", "fits", NULL};
+static const char* const INPUT_KEYS[] = {"path", "format", "box_length",
+  "ascii", "binary", "gadget", "fits", "hdf5", NULL};
 static const char* const ASCII_KEYS[] = {
   "columns", "delimiter", "skip_header", NULL};
 static const char* const BINARY_KEYS[] = {
@@ -44,6 +44,8 @@ static const char* const GADGET_KEYS[] = {
   "snapformat", "ptype", "length", "masses", "fraction", "seed", NULL};
 static const char* const FITS_KEYS[] = {
   "columns", "where", "hdu", "fraction", "seed", NULL};
+static const char* const HDF5_KEYS[] = {
+  "columns", "length_scale", "fraction", "seed", NULL};
 static const char* const FITS_COLUMN_KEYS[] = {"x", "y", "z", "w", NULL};
 /* Keys refused with a message of their own, rather than as unknown. */
 static const char* const FITS_COLUMN_REFUSED[] = {
@@ -67,7 +69,7 @@ static const struct {
 
 /* Enumerations, in the order of the C enums they stand for. */
 static const char* const INPUT_FORMATS[] = {
-  "xfield", "ascii", "binary", "gadget", "fits", NULL};
+  "xfield", "ascii", "binary", "gadget", "fits", "hdf5", NULL};
 static const char* const OUTPUT_FORMATS[] = {"hdf5", "ascii", "fits", NULL};
 static const char* const RADII_UNITS[] = {"physical", "mps", NULL};
 static const char* const LAYOUTS[] = {"rows", "blocks", NULL};
@@ -458,6 +460,8 @@ static void set_defaults(exodus_config_t* c) {
   p->input.gadget.length = SIF_GADGET_LENGTH_AUTO;
   p->input.gadget.fraction = 1.0;
   p->input.fits.fraction = 1.0;
+  p->input.hdf5.fraction = 1.0;
+  p->input.hdf5.length_scale = 1.0;
 
   p->finder.radii_units = EXODUS_RADII_PHYSICAL;
   p->finder.overlap_fraction = 0.0;
@@ -586,12 +590,14 @@ static void read_gadget(reader_t* r, int t, exodus_config_t* c) {
     c->params.input.gadget.seed = (uint64_t)v;
 }
 
-/* input.fits.columns: a name or an expression for each of x, y, z and,
- * optionally, the weight. */
-static void read_fits_columns(reader_t* r, int t, exodus_config_t* c) {
-  const char* path = "input.fits.columns";
+/* input.fits.columns or input.hdf5.columns: what fills x, y, z and,
+ * optionally, the weight -- a FITS column or expression, an HDF5 dataset. */
+static void read_named_columns(
+  reader_t* r, int t, const char* section, exodus_config_t* c) {
+  char path[64];
+  snprintf(path, sizeof path, "%s.columns", section);
   lua_State* L = r->L;
-  sif_fits_columns_t* cols = &c->params.input.fits.columns;
+  sif_field_columns_t* cols = &c->params.input.named;
   const char* const* keys = FITS_COLUMN_KEYS;
   const char** slots[] = {&cols->x, &cols->y, &cols->z, &cols->w};
 
@@ -602,7 +608,7 @@ static void read_fits_columns(reader_t* r, int t, exodus_config_t* c) {
       "missing: the columns to read, as columns = { x = \"X\", y = \"Y\", "
       "z = \"Z\" }");
   } else if (type != LUA_TTABLE) {
-    type_error(r, "input.fits", "columns", "a table", type);
+    type_error(r, section, "columns", "a table", type);
   } else {
     /* Velocities have no key: the finder never reads them. */
     lua_pushnil(L);
@@ -652,7 +658,7 @@ static void read_fits(reader_t* r, int t, exodus_config_t* c) {
   double x;
 
   check_keys(r, t, path, FITS_KEYS);
-  read_fits_columns(r, t, c);
+  read_named_columns(r, t, path, c);
 
   if (get_string(r, t, path, "where", &v) && *v)
     c->params.input.fits.where = keep(c, v);
@@ -684,7 +690,35 @@ static void read_fits(reader_t* r, int t, exodus_config_t* c) {
     c->params.input.fits.seed = (uint64_t)n;
 }
 
-/* input.path as a list of files, which only a FITS catalogue is read from.
+/* input.hdf5: datasets of any HDF5 file. */
+static void read_hdf5_input(reader_t* r, int t, exodus_config_t* c) {
+  const char* path = "input.hdf5";
+  char w[160];
+  int64_t n;
+  double x;
+
+  check_keys(r, t, path, HDF5_KEYS);
+  read_named_columns(r, t, path, c);
+
+  if (get_number(r, t, path, "length_scale", &x)) {
+    if (x > 0.0)
+      c->params.input.hdf5.length_scale = x;
+    else
+      report(r, at(w, sizeof w, path, "length_scale"),
+        "must be positive, got %g", x);
+  }
+  if (get_number(r, t, path, "fraction", &x)) {
+    if (x > 0.0 && x <= 1.0)
+      c->params.input.hdf5.fraction = x;
+    else
+      report(
+        r, at(w, sizeof w, path, "fraction"), "must be in (0, 1], got %g", x);
+  }
+  if (get_integer(r, t, path, "seed", 0, INT64_MAX, &n))
+    c->params.input.hdf5.seed = (uint64_t)n;
+}
+
+/* input.path as a list of files, which only FITS and HDF5 inputs read.
  * Returns the first, or NULL after reporting what is wrong. */
 static const char* read_path_list(reader_t* r, int t, exodus_config_t* c) {
   lua_State* L = r->L;
@@ -713,8 +747,8 @@ static const char* read_path_list(reader_t* r, int t, exodus_config_t* c) {
       lua_pop(L, 1);
     }
     if (ok) {
-      c->params.input.fits.paths = c->_paths;
-      c->params.input.fits.n_paths = (uint32_t)n;
+      c->params.input.paths = c->_paths;
+      c->params.input.n_paths = (uint32_t)n;
       first = c->_paths[0];
     }
   }
@@ -787,19 +821,21 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
   if (format >= 0)
     p->input.kind = (exodus_input_kind_t)format;
 
-  if (path_list && format >= 0 && p->input.kind != EXODUS_INPUT_FITS)
+  const bool named = format >= 0 && (p->input.kind == EXODUS_INPUT_FITS ||
+                                      p->input.kind == EXODUS_INPUT_HDF5);
+  if (path_list && format >= 0 && !named)
     report(r, "input.path",
-      "a list of files, which only the fits format reads; %s reads one",
+      "a list of files, which only the fits and hdf5 formats read; %s reads "
+      "one",
       INPUT_FORMATS[p->input.kind]);
 
-  /* A single FITS file is a list of one. */
-  if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS && !path_list &&
-      p->input.path) {
+  /* A single FITS or HDF5 file is a list of one. */
+  if (named && !path_list && p->input.path) {
     c->_paths = malloc(sizeof(char*));
     if (c->_paths) {
       c->_paths[0] = p->input.path;
-      p->input.fits.paths = c->_paths;
-      p->input.fits.n_paths = 1;
+      p->input.paths = c->_paths;
+      p->input.n_paths = 1;
     } else {
       report(r, "input.path", "out of memory");
     }
@@ -815,10 +851,12 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
     }
 
     /* One sub-table per format, and only the one the format reads. */
-    static const char* const subs[] = {"ascii", "binary", "gadget", "fits"};
+    static const char* const subs[] = {
+      "ascii", "binary", "gadget", "fits", "hdf5"};
     static const exodus_input_kind_t kinds[] = {EXODUS_INPUT_ASCII,
-      EXODUS_INPUT_BINARY, EXODUS_INPUT_GADGET, EXODUS_INPUT_FITS};
-    for (int i = 0; i < 4; i++) {
+      EXODUS_INPUT_BINARY, EXODUS_INPUT_GADGET, EXODUS_INPUT_FITS,
+      EXODUS_INPUT_HDF5};
+    for (int i = 0; i < 5; i++) {
       const int st = field(L, t, subs[i]);
       const int s = lua_gettop(L);
       if (st == LUA_TTABLE) {
@@ -831,8 +869,10 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
           read_binary(r, s, c);
         else if (kinds[i] == EXODUS_INPUT_GADGET)
           read_gadget(r, s, c);
-        else
+        else if (kinds[i] == EXODUS_INPUT_FITS)
           read_fits(r, s, c);
+        else
+          read_hdf5_input(r, s, c);
       } else if (st != LUA_TNIL) {
         type_error(r, "input", subs[i], "a table", st);
       } else if (format >= 0 && p->input.kind == EXODUS_INPUT_BINARY &&
@@ -845,6 +885,11 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
         report(r, "input.fits",
           "missing: a FITS table needs its columns named, as fits = { "
           "columns = { x = \"X\", y = \"Y\", z = \"Z\" } }");
+      } else if (format >= 0 && p->input.kind == EXODUS_INPUT_HDF5 &&
+                 kinds[i] == EXODUS_INPUT_HDF5) {
+        report(r, "input.hdf5",
+          "missing: an HDF5 file needs its datasets named, as hdf5 = { "
+          "columns = { x = \"Group/Pos[0]\", ... } }");
       }
       lua_settop(L, t);
     }
@@ -852,12 +897,15 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
     report(r, "input.binary", "missing: a binary file needs its precision");
   } else if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS) {
     report(r, "input.fits", "missing: a FITS table needs its columns named");
+  } else if (format >= 0 && p->input.kind == EXODUS_INPUT_HDF5) {
+    report(r, "input.hdf5", "missing: an HDF5 file needs its datasets named");
   }
 
   if (format >= 0 &&
       (p->input.kind == EXODUS_INPUT_ASCII ||
         p->input.kind == EXODUS_INPUT_BINARY ||
-        p->input.kind == EXODUS_INPUT_FITS) &&
+        p->input.kind == EXODUS_INPUT_FITS ||
+        p->input.kind == EXODUS_INPUT_HDF5) &&
       !(p->input.box_length > 0.0))
     report(r, "input.box_length",
       "missing: %s files do not record their box, so the configuration "
@@ -1212,6 +1260,21 @@ static void push_sandbox(lua_State* L) {
 
 /* --- the resolved configuration ---------------------------------------- */
 
+/* The columns = { ... } line of a fits or hdf5 table. */
+static void write_named_columns(FILE* out, const sif_field_columns_t* cols) {
+  fputs("    columns = { x = ", out);
+  write_lua_string(out, cols->x);
+  fputs(", y = ", out);
+  write_lua_string(out, cols->y);
+  fputs(", z = ", out);
+  write_lua_string(out, cols->z);
+  if (cols->w) {
+    fputs(", w = ", out);
+    write_lua_string(out, cols->w);
+  }
+  fputs(" },\n", out);
+}
+
 static void write_resolved(FILE* out, const exodus_config_t* c,
   const char* file, const config_define_t* d, size_t n_d) {
 
@@ -1226,11 +1289,13 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     out);
 
   fputs("input = {\n  path = ", out);
-  if (p->input.kind == EXODUS_INPUT_FITS && p->input.fits.n_paths > 1) {
+  if ((p->input.kind == EXODUS_INPUT_FITS ||
+        p->input.kind == EXODUS_INPUT_HDF5) &&
+      p->input.n_paths > 1) {
     fputs("{\n", out);
-    for (uint32_t i = 0; i < p->input.fits.n_paths; i++) {
+    for (uint32_t i = 0; i < p->input.n_paths; i++) {
       fputs("    ", out);
-      write_lua_string(out, p->input.fits.paths[i]);
+      write_lua_string(out, p->input.paths[i]);
       fputs(",\n", out);
     }
     fputs("  }", out);
@@ -1283,19 +1348,9 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
       (unsigned long long)p->input.gadget.seed);
     break;
   }
-  case EXODUS_INPUT_FITS: {
-    const sif_fits_columns_t* cols = &p->input.fits.columns;
-    fputs("  fits = {\n    columns = { x = ", out);
-    write_lua_string(out, cols->x);
-    fputs(", y = ", out);
-    write_lua_string(out, cols->y);
-    fputs(", z = ", out);
-    write_lua_string(out, cols->z);
-    if (cols->w) {
-      fputs(", w = ", out);
-      write_lua_string(out, cols->w);
-    }
-    fputs(" },\n", out);
+  case EXODUS_INPUT_FITS:
+    fputs("  fits = {\n", out);
+    write_named_columns(out, &p->input.named);
     if (p->input.fits.where) {
       fputs("    where = ", out);
       write_lua_string(out, p->input.fits.where);
@@ -1309,6 +1364,16 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     format_double(num, sizeof num, p->input.fits.fraction);
     fprintf(out, "    fraction = %s,\n    seed = %llu,\n  },\n", num,
       (unsigned long long)p->input.fits.seed);
+    break;
+  case EXODUS_INPUT_HDF5: {
+    char scale[40];
+    fputs("  hdf5 = {\n", out);
+    write_named_columns(out, &p->input.named);
+    format_double(scale, sizeof scale, p->input.hdf5.length_scale);
+    format_double(num, sizeof num, p->input.hdf5.fraction);
+    fprintf(out,
+      "    length_scale = %s,\n    fraction = %s,\n    seed = %llu,\n  },\n",
+      scale, num, (unsigned long long)p->input.hdf5.seed);
     break;
   }
   case EXODUS_INPUT_XFIELD:
@@ -1650,8 +1715,8 @@ static void inspect_table(
  * columns are there is found when it is read. */
 static void inspect_fits(
   checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
-  for (uint32_t i = 0; i < p->input.fits.n_paths; i++) {
-    const char* path = p->input.fits.paths[i];
+  for (uint32_t i = 0; i < p->input.n_paths; i++) {
+    const char* path = p->input.paths[i];
     FILE* sink = tmpfile();
     const int status = sink ? sif_fits_print_summary(path, sink) : SIF_OK;
     if (sink)
@@ -1665,7 +1730,35 @@ static void inspect_fits(
       check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path",
         "%s cannot be read as a FITS file (see above)", path);
   }
-  in->weighted = p->input.fits.columns.w != NULL;
+  in->weighted = p->input.named.w != NULL;
+}
+
+/* Every file of an HDF5 input, there and an HDF5 file: whether the datasets
+ * are in them is found when they are read. */
+static void inspect_hdf5(
+  checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
+  static const unsigned char sig[8] = {
+    0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'};
+  for (uint32_t i = 0; i < p->input.n_paths; i++) {
+    const char* path = p->input.paths[i];
+    unsigned char head[8];
+    FILE* f = fopen(path, "rb");
+    if (!f) {
+      check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path", "cannot open %s: %s",
+        path, strerror(errno));
+      continue;
+    }
+    const size_t n = fread(head, 1, 8, f);
+    fclose(f);
+    if (n != 8 || memcmp(head, sig, 8) != 0)
+      check_say(
+        ch, SIF_LOG_LEVEL_ERROR, "input.path", "%s is not an HDF5 file", path);
+  }
+#if !defined(SIF_HAVE_HDF5)
+  check_say(ch, SIF_LOG_LEVEL_ERROR, "input.format",
+    "this sif-exodus was built without HDF5 support");
+#endif
+  in->weighted = p->input.named.w != NULL;
 }
 
 /* "1.3 GiB", "250 MiB": a size to read, not to compute with. */
@@ -1696,6 +1789,8 @@ int config_check(const exodus_config_t* c, const char* file, bool summary) {
     inspect_gadget(&ch, p, &in);
   else if (p->input.kind == EXODUS_INPUT_FITS)
     inspect_fits(&ch, p, &in);
+  else if (p->input.kind == EXODUS_INPUT_HDF5)
+    inspect_hdf5(&ch, p, &in);
   else
     inspect_table(&ch, p, &in);
 

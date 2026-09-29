@@ -20,9 +20,13 @@
 
 #include "measure/py_profiles.h"
 #include "structures/py_catalog.h"
+#include "structures/py_field.h"
 #include "structures/py_size_function.h"
 
 #include "sif/io/hdf5_io.h"
+
+#include <stdio.h>
+#include <string.h>
 
 /* After a successful write in a build without HDF5: the data is safe, in
  * text, and the caller should hear where. -1 if the warning was turned into
@@ -342,4 +346,113 @@ PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
   }
 
   return out;
+}
+
+/* --- particles from any HDF5 file --- */
+
+/* Whether a file begins with the HDF5 signature: what tells a file that is
+ * not HDF5 from a request an HDF5 file cannot satisfy. */
+static int is_hdf5_file(const char* path) {
+  static const unsigned char sig[8] = {
+    0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'};
+  unsigned char head[8];
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return 0;
+  const size_t n = fread(head, 1, 8, f);
+  fclose(f);
+  return n == 8 && memcmp(head, sig, 8) == 0;
+}
+
+PyObject* pysif_read_hdf5(PyObject* self, PyObject* args, PyObject* kwds) {
+  (void)self;
+  PyObject* paths_obj;
+  const char *x = NULL, *y = NULL, *z = NULL, *ra = NULL, *dec = NULL;
+  const char *vx = NULL, *vy = NULL, *vz = NULL, *w = NULL;
+  double length_scale = 1.0, fraction = 1.0;
+  unsigned long long seed = 0;
+  static char* kwlist[] = {"paths", "x", "y", "z", "ra", "dec", "vx", "vy",
+    "vz", "w", "length_scale", "fraction", "seed", NULL};
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O|$zzzzzzzzzddK", kwlist,
+        &paths_obj, &x, &y, &z, &ra, &dec, &vx, &vy, &vz, &w, &length_scale,
+        &fraction, &seed))
+    return NULL;
+
+#ifndef SIF_HAVE_HDF5
+  (void)paths_obj;
+  return PyErr_Format(PyExc_RuntimeError,
+    "pysif was built without HDF5 support (rebuild with "
+    "-C cmake.define.SIF_HDF5_SUPPORT=ON)");
+#else
+  /* The C side refuses all of these too, but only says why in the log. */
+  if ((x || y) && (ra || dec))
+    return PyErr_Format(PyExc_ValueError,
+      "give x, y and z for positions, or ra, dec and z for sky coordinates, "
+      "not some of each");
+  if ((ra || dec) ? !(ra && dec && z) : !(x && y && z))
+    return PyErr_Format(PyExc_TypeError,
+      "read_hdf5() needs the datasets x, y and z -- or ra, dec and z, for sky "
+      "coordinates");
+  if ((!!vx + !!vy + !!vz) % 3 != 0)
+    return PyErr_Format(
+      PyExc_ValueError, "vx, vy and vz are given all three or not at all");
+  if (!(fraction > 0 && fraction <= 1))
+    return PyErr_Format(PyExc_ValueError, "fraction must be in (0, 1]");
+  if (!(length_scale > 0) || ((ra || dec) && length_scale != 1.0))
+    return PyErr_Format(PyExc_ValueError,
+      "length_scale must be positive, and 1 for sky coordinates");
+
+  PyObject* list = py_sif_paths_list(paths_obj);
+  if (!list)
+    return NULL;
+  const Py_ssize_t n = PyList_GET_SIZE(list);
+  const char** paths = PyMem_Malloc((size_t)n * sizeof(char*));
+  PyObject* result = NULL;
+  if (!paths) {
+    PyErr_NoMemory();
+    goto done;
+  }
+  for (Py_ssize_t i = 0; i < n; i++)
+    paths[i] = PyBytes_AS_STRING(PyList_GET_ITEM(list, i));
+  for (Py_ssize_t i = 0; i < n; i++) {
+    if (py_sif_require_file(paths[i]) < 0)
+      goto done;
+    if (!is_hdf5_file(paths[i])) {
+      PyErr_Format(PyExc_OSError, "%s is not an HDF5 file", paths[i]);
+      goto done;
+    }
+  }
+
+  const sif_field_columns_t columns = {.x = x,
+    .y = y,
+    .ra = ra,
+    .dec = dec,
+    .z = z,
+    .vx = vx,
+    .vy = vy,
+    .vz = vz,
+    .w = w};
+  sif_field_t* field = sif_field_read_hdf5(
+    paths, (uint32_t)n, &columns, length_scale, fraction, (uint64_t)seed);
+  if (!field) {
+    PyErr_Format(PyExc_ValueError,
+      "cannot read %s%s as asked; see the log for the reason", paths[0],
+      n > 1 ? " and the rest" : "");
+    goto done;
+  }
+  sifFieldObject* obj =
+    (sifFieldObject*)sifFieldType.tp_alloc(&sifFieldType, 0);
+  if (!obj) {
+    sif_field_free(field);
+    PyErr_NoMemory();
+    goto done;
+  }
+  obj->field = field;
+  result = (PyObject*)obj;
+
+done:
+  PyMem_Free(paths);
+  Py_DECREF(list);
+  return result;
+#endif
 }

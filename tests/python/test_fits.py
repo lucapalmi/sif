@@ -246,3 +246,31 @@ def test_keywords(tmp_path):
         pysif.io.set_fits_key(fits, "X", float("nan"))
     with pytest.raises(TypeError):
         pysif.io.set_fits_key(fits, "X", [1, 2])
+
+
+def test_products_in_one_file(tmp_path):
+    fits = tmp_path / "voids.fits"
+    cat = pysif.catalog_from_numpy(*(np.random.default_rng(2).random((4, 30)) * 50))
+    cat.set_metadata("finder", "exodus")
+    cat.set_metadata("search_factor", 1.5)
+    pysif.io.write_catalog_fits(fits, cat)
+
+    vsf = pysif.measure.size_function_catalog(cat, 50.0, 6)
+    pysif.io.write_size_function_fits(fits, vsf)
+    back = pysif.io.read_size_function_fits(fits)
+    np.testing.assert_array_equal(back.vsf, vsf.vsf)
+    np.testing.assert_array_equal(back.counts, vsf.counts)
+
+    # Rewritten, the catalogue keeps what was measured from it.
+    cat.set_metadata("finder", "by hand")
+    pysif.io.write_catalog_fits(fits, cat)
+    again = pysif.io.read_catalog_fits(fits)
+    assert again.metadata == {"finder": "by hand", "search_factor": 1.5}
+    assert pysif.io.fits_key(fits, "SEARCH_FACTOR", hdu="VOIDS") == 1.5
+    np.testing.assert_array_equal(pysif.io.read_size_function_fits(fits).vsf,
+                                  vsf.vsf)
+
+    with pytest.raises(ValueError, match="holds no profiles"):
+        pysif.io.read_profiles_fits(fits)
+    with pytest.raises(OSError):  # a file sif did not write
+        pysif.io.write_catalog_fits(path("catalogue.fits"), cat)

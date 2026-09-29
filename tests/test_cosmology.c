@@ -302,7 +302,7 @@ static void test_catalog_to_sky(void) {
   /* ASCII keeps the flag. */
   CHECK(sif_catalog_write_ascii("test_cosmology_sky.txt", cat) == SIF_OK,
     "writing the sky catalogue failed");
-  sif_catalog_t* back = sif_catalog_read_ascii("test_cosmology_sky.txt");
+  sif_catalog_t* back = sif_catalog_read_ascii("test_cosmology_sky.txt", NULL);
   CHECK(back && back->units == SIF_COORDINATES_SKY && back->n_voids == n &&
           back->cz[7] == cat->cz[7],
     "the sky catalogue did not read back on the sky");
