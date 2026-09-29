@@ -8,6 +8,30 @@
 #include "model/py_model.h"
 
 static PyMethodDef model_methods[] = {
+  {"comoving_distance", (PyCFunction)py_sif_comoving_distance,
+    METH_VARARGS | METH_KEYWORDS,
+    "comoving_distance(z, omega_m, omega_de=None, omega_r=0.0, w0=-1.0, "
+    "wa=0.0)\n"
+    "--\n\n"
+    "Line-of-sight comoving distance to redshift z, in Mpc/h.\n\n"
+    "For a w0waCDM background: dark energy with w(a) = w0 + wa (1 - a),\n"
+    "curvature 1 - omega_m - omega_de - omega_r. The distance a survey's\n"
+    "tracers are placed at by Field.convert_sky_coordinates(), with the\n"
+    "same arguments.\n\n"
+    "Args:\n"
+    "    z: A redshift, or an array of them; at least 0.\n"
+    "    omega_m: Matter density today.\n"
+    "    omega_de: Dark-energy density today; None, the default, makes the\n"
+    "        model flat (1 - omega_m - omega_r).\n"
+    "    omega_r: Radiation density today.\n"
+    "    w0, wa: The dark-energy equation of state: -1 and 0 for a\n"
+    "        cosmological constant.\n\n"
+    "Returns:\n"
+    "    float or ndarray: D_C in Mpc/h, shaped like z.\n\n"
+    "Raises:\n"
+    "    ValueError: For a negative or non-finite redshift, a negative\n"
+    "        density, or a model with no expansion history out to z."},
+
   {"delta_moments_pk", (PyCFunction)py_sif_delta_moments_pk,
     METH_VARARGS | METH_KEYWORDS,
     "delta_moments_pk(k, pk, radii, order, window='top_hat')"

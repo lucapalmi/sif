@@ -30,6 +30,8 @@ static int sifOctree_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
   }
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
+  if (py_sif_field_check_cartesian(field, "build an Octree over it") < 0)
+    return -1;
 
   /* Building sorts an unsorted field, which reallocates its arrays. */
   if (!(field->field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) &&

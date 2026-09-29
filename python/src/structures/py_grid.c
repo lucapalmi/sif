@@ -83,6 +83,8 @@ static PyObject* sifGrid_assign_cic(
   }
 
   sifFieldObject* py_field = (sifFieldObject*)field_obj;
+  if (py_sif_field_check_cartesian(py_field, "deposit it") < 0)
+    return NULL;
 
   /* A full pass over the field and a scatter over the grid: worth the GIL at
    * the particle counts this is for, as for the tessellation deposit. */

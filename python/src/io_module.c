@@ -139,7 +139,7 @@ static PyMethodDef io_methods[] = {
 
   {"read_gadget", (PyCFunction)pysif_read_gadget, METH_VARARGS | METH_KEYWORDS,
     "read_gadget(path, *, ptype=1, velocities=None, masses=False, "
-    "length='kpc', fraction=1.0, seed=0, format='auto')\n"
+    "length='auto', fraction=1.0, seed=0, format='auto')\n"
     "--\n\n"
     "Read one particle type of a GADGET snapshot into a Field.\n\n"
     "Reads all three snapshot formats: the legacy binaries (SnapFormat 1\n"
@@ -157,9 +157,10 @@ static PyMethodDef io_methods[] = {
     "    masses: Read per-particle masses into the weights. A type with a\n"
     "        mass in the header's table has one mass for every particle, and\n"
     "        is left unweighted.\n"
-    "    length: The snapshot's length unit: 'kpc' (kpc/h, GADGET's\n"
-    "        default), 'mpc' (Mpc/h), or 'auto' to read UnitLength_in_cm\n"
-    "        from an HDF5 file. Positions and box come out in Mpc/h.\n"
+    "    length: The snapshot's length unit: 'auto', the default, reads\n"
+    "        UnitLength_in_cm from an HDF5 file; a binary file records no\n"
+    "        unit, so it has to be named -- 'kpc' (kpc/h, GADGET's default)\n"
+    "        or 'mpc' (Mpc/h). Positions and box come out in Mpc/h.\n"
     "    fraction: Share of the particles to keep, in (0, 1]. Exactly\n"
     "        round(fraction * N) are kept, uniformly at random, in file\n"
     "        order.\n"
@@ -173,8 +174,8 @@ static PyMethodDef io_methods[] = {
     "    box_size is in the file's own unit.\n\n"
     "Raises:\n"
     "    ValueError: For an argument out of range, a type with no\n"
-    "        particles, a fraction that keeps none, or length='auto' on a\n"
-    "        file that records no unit.\n"
+    "        particles, a fraction that keeps none, or length='auto' (the\n"
+    "        default) on a file that records no unit -- every binary one.\n"
     "    OSError: For a missing, truncated or inconsistent snapshot.\n"
     "    RuntimeError: For an HDF5 snapshot, if pysif was built without\n"
     "        HDF5."},

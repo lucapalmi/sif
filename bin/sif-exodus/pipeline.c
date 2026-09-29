@@ -19,9 +19,13 @@
 #include "sif/utils/logger.h"
 #include "sif/utils/timer.h"
 
+#include <errno.h>
 #include <inttypes.h>
 #include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #define TAG "sif-exodus"
 
@@ -69,7 +73,11 @@ static sif_option search_option(double factor, int* status) {
 /* --- grid -------------------------------------------------------------- */
 
 /* Cells per mean tracer separation in the default grid. */
-#define GRID_CELLS_PER_SEPARATION 4.0
+#define GRID_CELLS_PER_SEPARATION 1.0
+
+/* The default grid's floor, for a handful of tracers: below it there is no
+ * room for a top-hat to be anything but a cell or two. */
+#define GRID_MIN_CELLS 16
 
 /* The smallest n >= target that FFTW transforms fastest: even, for the
  * real-to-complex transform's halved axis, with no prime factor above 5. */
@@ -87,12 +95,59 @@ static uint32_t fft_friendly(uint32_t target) {
   }
 }
 
-/* The default grid: GRID_CELLS_PER_SEPARATION cells per mean tracer
- * separation, box / N^(1/3). */
-static uint32_t default_grid_cells(uint64_t n_tracers) {
+/* GRID_CELLS_PER_SEPARATION cells per mean tracer separation, box / N^(1/3).
+ * The finder wants its smallest radius to span two cells at least, so on this
+ * grid a ladder starts at two separations. */
+uint32_t pipeline_default_grid_cells(uint64_t n_tracers) {
   const double target =
     ceil(GRID_CELLS_PER_SEPARATION * cbrt((double)n_tracers));
-  return fft_friendly((uint32_t)target);
+  return fft_friendly(
+    target > GRID_MIN_CELLS ? (uint32_t)target : GRID_MIN_CELLS);
+}
+
+/* --- memory ------------------------------------------------------------ */
+
+static uint64_t cube(uint32_t n) { return (uint64_t)n * n * n; }
+
+/* The most the run holds at once is at one of three moments, and which one
+ * depends on the sizes:
+ *
+ *   the CIC deposit   the tracers, the grid, per-thread slabs that add up to
+ *                     about another grid, and 8 bytes a tracer to sort them;
+ *   the mesh build    the tracers, the grid, and the sort's scratch: its key,
+ *                     8 bytes a tracer, and one column to shuffle through;
+ *   the finder        the tracers (the mesh's by now), the grid's spectrum
+ *                     and its working copy, the accepted-void mask -- and,
+ *                     measured, as much again as the grid itself.
+ *
+ * The last is what a run holds by the process's own count, not what the
+ * finder's code allocates by name: the forward transform's working memory
+ * sits there, and a grid-sized allowance is what matches the resident size at
+ * 200^3 to 512^3, with one thread or eight. FFTW tuning a new size plans on a
+ * scratch grid at a moment that holds less than this, so it adds nothing.
+ * Allocations too small to matter -- the catalogue, lookup tables, per-thread
+ * histograms -- are left out. */
+uint64_t pipeline_peak_bytes(
+  uint64_t n_tracers, bool weighted, uint32_t grid_cells, uint32_t mesh_cells) {
+
+  const uint64_t r = sizeof(sif_real);
+  const uint64_t tracers = n_tracers * (weighted ? 4 : 3) * r;
+  const uint64_t grid = cube(grid_cells) * r;
+  const uint64_t spectrum =
+    (uint64_t)grid_cells * grid_cells * (grid_cells / 2 + 1) * 2 * r;
+  const uint64_t offsets = (cube(mesh_cells) + 1) * sizeof(uint64_t);
+  const uint64_t mask = cube(grid_cells) / 8;
+
+  const uint64_t cic = tracers + 2 * grid + n_tracers * sizeof(uint64_t);
+  const uint64_t mesh =
+    tracers + grid + offsets + n_tracers * (sizeof(uint64_t) + r);
+  const uint64_t finder = tracers + offsets + mask + grid + 2 * spectrum;
+
+  /* The program itself, its libraries and FFTW's plans. */
+  const uint64_t baseline = 16ull << 20;
+
+  uint64_t peak = cic > mesh ? cic : mesh;
+  return baseline + (finder > peak ? finder : peak);
 }
 
 /* --- field ------------------------------------------------------------- */
@@ -194,19 +249,25 @@ static int resolve_box(const exodus_params_t* p, double file_box, double* box) {
 
 /* --- catalogue --------------------------------------------------------- */
 
+/* What the run found out along the way, for the log and the catalogue. */
+typedef struct {
+  double box;
+  /* Mean tracer separation, box / N^(1/3). */
+  double mps;
+  uint64_t n_tracers;
+  bool weighted;
+  uint32_t grid_cells;
+  uint32_t mesh_cells;
+  /* The ladder's ends, in the box's units whatever it was given in. */
+  sif_real r_min;
+  sif_real r_max;
+} run_facts_t;
+
 /* Record what made the catalogue on /catalog, where it goes with it: a
  * catalogue written over this one later takes these away. */
-static int describe_catalog(const exodus_params_t* p, double box,
-  uint32_t grid_cells, uint32_t mesh_cells, uint64_t n_tracers, bool weighted) {
-
-  const char* f = p->output.path;
+static int describe_catalog(
+  const char* f, const exodus_params_t* p, const run_facts_t* r) {
   const char* g = "catalog";
-
-  sif_real r_min = p->finder.radii[0], r_max = p->finder.radii[0];
-  for (uint32_t i = 1; i < p->finder.n_radii; i++) {
-    r_min = fmin(r_min, p->finder.radii[i]);
-    r_max = fmax(r_max, p->finder.radii[i]);
-  }
 
   int s = SIF_OK;
   if (s == SIF_OK)
@@ -221,25 +282,62 @@ static int describe_catalog(const exodus_params_t* p, double box,
   if (s == SIF_OK)
     s = sif_hdf5_set_attr_int(f, g, "n_radii", p->finder.n_radii);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_real(f, g, "r_min", r_min);
+    s = sif_hdf5_set_attr_real(f, g, "r_min", r->r_min);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_real(f, g, "r_max", r_max);
+    s = sif_hdf5_set_attr_real(f, g, "r_max", r->r_max);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_real(f, g, "box_length", box);
+    s = sif_hdf5_set_attr_real(f, g, "box_length", r->box);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_int(f, g, "grid_n_cells", grid_cells);
+    s = sif_hdf5_set_attr_real(f, g, "mean_separation", r->mps);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_int(f, g, "mesh_n_cells", mesh_cells);
+    s = sif_hdf5_set_attr_int(f, g, "grid_n_cells", r->grid_cells);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_int(f, g, "n_tracers", (int64_t)n_tracers);
+    s = sif_hdf5_set_attr_int(f, g, "mesh_n_cells", r->mesh_cells);
   if (s == SIF_OK)
-    s = sif_hdf5_set_attr_int(f, g, "weighted", weighted);
+    s = sif_hdf5_set_attr_int(f, g, "n_tracers", (int64_t)r->n_tracers);
+  if (s == SIF_OK)
+    s = sif_hdf5_set_attr_int(f, g, "weighted", r->weighted);
   if (s == SIF_OK)
     s = sif_hdf5_set_attr_string(f, g, "input", p->input.path);
   if (s == SIF_OK)
     s = sif_hdf5_set_attr_string(
       f, g, "input_kind", input_kind_name(p->input.kind));
   return s;
+}
+
+/* Write the catalogue beside the output, then move it into place. An output
+ * that already exists is replaced only by a complete one -- a run that fails
+ * or is killed leaves it as it was -- and never merged into: an HDF5 file is
+ * rewritten whole, not just its /catalog. */
+static int write_output(
+  const exodus_params_t* p, const run_facts_t* r, const sif_catalog_t* cat) {
+
+  const char* path = p->output.path;
+  const size_t len = strlen(path) + 32;
+  char* tmp = malloc(len);
+  if (!tmp)
+    return SIF_ERR_ALLOC;
+  snprintf(tmp, len, "%s.tmp.%ld", path, (long)getpid());
+
+  int status;
+  if (p->output.kind == EXODUS_OUTPUT_HDF5) {
+    status = sif_catalog_write_hdf5(tmp, cat);
+    if (status == SIF_OK)
+      status = describe_catalog(tmp, p, r);
+  } else {
+    status = sif_catalog_write_ascii(cat, tmp);
+  }
+
+  if (status == SIF_OK && rename(tmp, path) != 0) {
+    SIF_LOG_ERROR(TAG, "could not move %s into place as %s: %s", tmp, path,
+      strerror(errno));
+    status = SIF_ERR_IO;
+  }
+  if (status != SIF_OK)
+    remove(tmp);
+
+  free(tmp);
+  return status;
 }
 
 /* --- the pipeline ------------------------------------------------------ */
@@ -249,6 +347,8 @@ int pipeline_box(const exodus_params_t* p) {
   sif_grid_t* grid = NULL;
   sif_chain_mesh_t* mesh = NULL;
   sif_catalog_t* cat = NULL;
+  sif_real* radii = NULL;
+  run_facts_t r = {0};
   sif_timer_t t_total, t;
   int status;
 
@@ -276,13 +376,14 @@ int pipeline_box(const exodus_params_t* p) {
 
   /* 1. Field. */
   sif_timer_start(&t);
-  double file_box, box;
+  double file_box;
   status = read_field(p, &field, &file_box);
   if (status != SIF_OK)
     goto done;
-  status = resolve_box(p, file_box, &box);
+  status = resolve_box(p, file_box, &r.box);
   if (status != SIF_OK)
     goto done;
+  const double box = r.box;
 
   /* Always. What it is for is rounding: a coordinate stored in single
    * precision lands on the far face of the box as often as not, and the CIC
@@ -293,17 +394,39 @@ int pipeline_box(const exodus_params_t* p) {
   if (status != SIF_OK)
     goto done;
 
-  const uint64_t n_tracers = field->n_particles;
-  const bool weighted = field->weights != NULL;
-  SIF_LOG_INFO(TAG, "field: %" PRIu64 " %s tracers from %s, box %g (%.2f s)",
-    n_tracers, weighted ? "weighted" : "unweighted", p->input.path, box,
-    seconds_since(&t));
+  r.n_tracers = field->n_particles;
+  r.weighted = field->weights != NULL;
+  r.mps = box / cbrt((double)r.n_tracers);
+  SIF_LOG_INFO(TAG,
+    "field: %" PRIu64 " %s tracers from %s, box %g, mean separation %g "
+    "(%.2f s)",
+    r.n_tracers, r.weighted ? "weighted" : "unweighted", p->input.path, box,
+    r.mps, seconds_since(&t));
+
+  /* The ladder in the box's units, which is what the finder and the
+   * catalogue work in. */
+  const double scale = p->finder.radii_units == EXODUS_RADII_MPS ? r.mps : 1.0;
+  radii = malloc(p->finder.n_radii * sizeof(sif_real));
+  if (!radii) {
+    status = SIF_ERR_ALLOC;
+    goto done;
+  }
+  for (uint32_t i = 0; i < p->finder.n_radii; i++)
+    radii[i] = (sif_real)(p->finder.radii[i] * scale);
+  r.r_min = r.r_max = radii[0];
+  for (uint32_t i = 1; i < p->finder.n_radii; i++) {
+    r.r_min = fmin(r.r_min, radii[i]);
+    r.r_max = fmax(r.r_max, radii[i]);
+  }
+  if (p->finder.radii_units == EXODUS_RADII_MPS)
+    SIF_LOG_INFO(TAG, "radii: %g to %g mean separations, %g to %g in the box",
+      r.r_min / scale, r.r_max / scale, (double)r.r_min, (double)r.r_max);
 
   /* 2. Grid. Built from the field before the mesh takes it over. */
   sif_timer_start(&t);
-  const uint32_t grid_cells =
-    p->grid.n_cells ? p->grid.n_cells : default_grid_cells(n_tracers);
-  grid = sif_grid_alloc(grid_cells, (sif_real)box);
+  r.grid_cells = p->grid.n_cells ? p->grid.n_cells
+                                 : pipeline_default_grid_cells(r.n_tracers);
+  grid = sif_grid_alloc(r.grid_cells, (sif_real)box);
   if (!grid) {
     status = SIF_ERR_ALLOC;
     goto done;
@@ -314,44 +437,42 @@ int pipeline_box(const exodus_params_t* p) {
   status = sif_grid_to_density_contrast(grid);
   if (status != SIF_OK)
     goto done;
-  SIF_LOG_INFO(TAG, "grid: %u^3 cells of %g%s, %.2f GiB (%.2f s)", grid_cells,
+  SIF_LOG_INFO(TAG, "grid: %u^3 cells of %g%s, %.2f GiB (%.2f s)", r.grid_cells,
     (double)grid->cell_length,
-    p->grid.n_cells ? "" : " (4 per mean separation)",
+    p->grid.n_cells ? "" : " (one per mean separation)",
     (double)grid->total_cells * sizeof(sif_real) / (1024.0 * 1024.0 * 1024.0),
     seconds_since(&t));
 
   /* 3. Mesh. It takes the field's storage over rather than copying it, so
    * the tracers are held once from here on; the empty field goes at once. */
   sif_timer_start(&t);
-  sif_real r_max = p->finder.radii[0];
-  for (uint32_t i = 1; i < p->finder.n_radii; i++)
-    r_max = fmax(r_max, p->finder.radii[i]);
-
-  uint32_t mesh_cells = p->mesh.n_cells;
-  if (mesh_cells == 0) {
-    mesh_cells = sif_finder_suggest_mesh_cells(n_tracers, (sif_real)box, r_max);
-    if (mesh_cells == 0) {
+  r.mesh_cells = p->mesh.n_cells;
+  if (r.mesh_cells == 0) {
+    r.mesh_cells =
+      sif_finder_suggest_mesh_cells(r.n_tracers, (sif_real)box, r.r_max);
+    if (r.mesh_cells == 0) {
       SIF_LOG_ERROR(TAG,
         "the largest radius, %g, needs a search sphere wider than the box",
-        (double)r_max);
+        (double)r.r_max);
       status = SIF_ERR_INVALID;
       goto done;
     }
   }
 
   mesh = sif_chain_mesh_alloc_consume(
-    mesh_cells, (sif_real)box, field, SIF_MESH_DROP_INDICES);
+    r.mesh_cells, (sif_real)box, field, SIF_MESH_DROP_INDICES);
   sif_field_free(field);
   field = NULL;
   if (!mesh) {
     status = SIF_ERR_ALLOC;
     goto done;
   }
-  SIF_LOG_INFO(TAG, "mesh: %u^3 cells (%.2f s)", mesh_cells, seconds_since(&t));
+  SIF_LOG_INFO(
+    TAG, "mesh: %u^3 cells (%.2f s)", r.mesh_cells, seconds_since(&t));
 
   /* 4. Finder. The grid is not needed afterwards, so it is not restored. */
   sif_timer_start(&t);
-  cat = sif_finder_exodus(grid, mesh, p->finder.radii, p->finder.n_radii,
+  cat = sif_finder_exodus(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
     SIF_FINDER_CONSUME_GRID | search);
   sif_chain_mesh_free(mesh);
@@ -367,14 +488,7 @@ int pipeline_box(const exodus_params_t* p) {
 
   /* 5. Catalogue. */
   sif_timer_start(&t);
-  if (p->output.kind == EXODUS_OUTPUT_HDF5) {
-    status = sif_catalog_write_hdf5(p->output.path, cat);
-    if (status == SIF_OK)
-      status =
-        describe_catalog(p, box, grid_cells, mesh_cells, n_tracers, weighted);
-  } else {
-    status = sif_catalog_write_ascii(cat, p->output.path);
-  }
+  status = write_output(p, &r, cat);
   if (status != SIF_OK)
     goto done;
   SIF_LOG_INFO(
@@ -383,6 +497,7 @@ int pipeline_box(const exodus_params_t* p) {
   SIF_LOG_INFO(TAG, "done in %.2f s", seconds_since(&t_total));
 
 done:
+  free(radii);
   sif_catalog_free(cat);
   sif_chain_mesh_free(mesh);
   sif_grid_free(grid);

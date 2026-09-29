@@ -71,6 +71,59 @@ PyObject* py_sif_finder_suggest_mesh_cells(
   return PyLong_FromUnsignedLong(n_cells);
 }
 
+/* --- Survey Mesh Sizing Helper --- */
+PyObject* py_sif_finder_suggest_mesh_cells_survey(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+
+  unsigned long long n_particles;
+  PyObject* grid_obj = NULL;
+  double max_radius = 0.0;
+
+  static char* kwlist[] = {"n_particles", "random_grid", "max_radius", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "KO!|d", kwlist, &n_particles,
+        &sifGridType, &grid_obj, &max_radius))
+    return NULL;
+
+  const sif_grid_t* grid = ((sifGridObject*)grid_obj)->grid;
+
+  /* The C helper folds every failure into 0; each is told apart here, as in
+   * suggest_mesh_cells(). */
+  char detail[256];
+  if (n_particles == 0) {
+    PyErr_SetString(PyExc_ValueError, "need n_particles > 0");
+    return NULL;
+  }
+  if (grid->content != SIF_GRID_DENSITY) {
+    PyErr_SetString(PyExc_ValueError,
+      grid->content == SIF_GRID_DENSITY_CONTRAST
+        ? "random_grid holds a density contrast; the survey finder and this "
+          "helper take the randoms' CIC density, before to_density_contrast()"
+        : "random_grid is empty: deposit the randoms with assign_cic() first");
+    return NULL;
+  }
+  if (max_radius > 0.0 && 2.0 * max_radius >= (double)grid->box_length) {
+    snprintf(detail, sizeof(detail),
+      "a search sphere of %g (twice max_radius) does not fit in a box of %g",
+      2.0 * max_radius, (double)grid->box_length);
+    PyErr_SetString(PyExc_ValueError, detail);
+    return NULL;
+  }
+
+  uint32_t n_cells;
+  Py_BEGIN_ALLOW_THREADS n_cells = sif_finder_suggest_mesh_cells_survey(
+    (uint64_t)n_particles, grid, (sif_real)max_radius);
+  Py_END_ALLOW_THREADS
+
+    if (n_cells == 0) {
+    PyErr_SetString(PyExc_ValueError,
+      "no usable mesh resolution: the random grid holds no randoms");
+    return NULL;
+  }
+
+  return PyLong_FromUnsignedLong(n_cells);
+}
+
 /*
  * The search factor as an option bit. The C side carries the reach as two
  * bits of the option word rather than a float, so anything asked for here
@@ -346,6 +399,9 @@ PyObject* py_sif_finder_survey_box(
 
   sif_option options;
   if (search_factor_option(search_factor, &options) < 0)
+    return NULL;
+  if (py_sif_field_check_cartesian(
+        (sifFieldObject*)randoms_obj, "size a survey box around it") < 0)
     return NULL;
 
   PyArrayObject* radii_arr = radii_from_object(radii_obj);

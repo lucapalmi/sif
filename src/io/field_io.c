@@ -10,6 +10,7 @@
 #include "sif/utils/align.h"
 #include "sif/utils/crc32.h"
 #include "sif/utils/logger.h"
+#include "structures/field_internal.h"
 
 #include <ctype.h>
 #include <stdbool.h>
@@ -62,6 +63,11 @@ int sif_field_write(
     SIF_LOG_ERROR("xfield", "field carries no positions to write");
     return SIF_ERR_INVALID;
   }
+
+  /* The format has nowhere to say what the positions are, so a field of sky
+   * coordinates would read back as one of Cartesian positions. */
+  if (sif__field_require_cartesian(field, "xfield") != SIF_OK)
+    return SIF_ERR_INVALID;
 
   FILE* file = fopen(filepath, "wb");
   if (!file) {
@@ -279,6 +285,7 @@ int sif_field_read_into(const char* filepath, sif_field_t* field) {
       filepath, header.version);
   }
 
+  field->units = SIF_FIELD_CARTESIAN;
   return SIF_OK;
 }
 
@@ -581,6 +588,7 @@ static int format_reserve(
 static void format_loaded(sif_field_t* field, const format_t* f) {
   if (!f->has_pos)
     return;
+  field->units = SIF_FIELD_CARTESIAN;
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
   field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
   sif_free_aligned(field->original_indices);

@@ -39,6 +39,8 @@ static int sifChainMesh_init(
   }
 
   sifFieldObject* field = (sifFieldObject*)field_obj;
+  if (py_sif_field_check_cartesian(field, "build a mesh from it") < 0)
+    return -1;
 
   const sif_option opt = (drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT) |
                          (canonical ? SIF_DEFAULT : SIF_MESH_NO_CANONICAL);

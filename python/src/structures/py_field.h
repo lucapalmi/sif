@@ -29,4 +29,14 @@ extern PyTypeObject sifFieldType;
  */
 int py_sif_field_check_exports(sifFieldObject* self, const char* action);
 
+/*
+ * Refuse, with a ValueError, an operation that reads positions as lengths --
+ * binning, sorting, bounding, moving -- on a field that still holds sky
+ * coordinates. The C side refuses too, but only says why in the log.
+ *
+ * @param action What was about to happen, for the message: "build a mesh".
+ * @return 0 for Cartesian positions, -1 with the exception set otherwise.
+ */
+int py_sif_field_check_cartesian(sifFieldObject* self, const char* action);
+
 #endif /* SIF_PY_STRUCTURES_PY_FIELD_H */

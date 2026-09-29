@@ -5,7 +5,11 @@
  */
 
 #include "py_field.h"
+
+#include "model/py_model.h"
+
 #include <numpy/arrayobject.h>
+#include <string.h>
 
 static void sifField_dealloc(PyObject* self_obj) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
@@ -80,10 +84,23 @@ static PyObject* sifField_from_numpy(
   PyObject *xs_obj, *ys_obj, *zs_obj;
   PyObject *vxs_obj = NULL, *vys_obj = NULL, *vzs_obj = NULL;
   PyObject* ws_obj = NULL;
-  static char* kwlist[] = {"x", "y", "z", "vx", "vy", "vz", "weights", NULL};
+  const char* units_s = "cartesian";
+  static char* kwlist[] = {
+    "x", "y", "z", "vx", "vy", "vz", "weights", "units", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|OOOO", kwlist, &xs_obj,
-        &ys_obj, &zs_obj, &vxs_obj, &vys_obj, &vzs_obj, &ws_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|OOOOs", kwlist, &xs_obj,
+        &ys_obj, &zs_obj, &vxs_obj, &vys_obj, &vzs_obj, &ws_obj, &units_s)) {
+    return NULL;
+  }
+
+  sif_field_units_t units;
+  if (strcmp(units_s, "cartesian") == 0) {
+    units = SIF_FIELD_CARTESIAN;
+  } else if (strcmp(units_s, "sky") == 0) {
+    units = SIF_FIELD_SKY;
+  } else {
+    PyErr_Format(PyExc_ValueError,
+      "units must be 'cartesian' or 'sky', not '%s'", units_s);
     return NULL;
   }
 
@@ -152,6 +169,7 @@ static PyObject* sifField_from_numpy(
   for (int c = 0; c < N_COLS; c++)
     Py_XDECREF(cols[c]);
 
+  fresh->units = units;
   sif_field_free(self->field);
   self->field = fresh;
 
@@ -174,6 +192,8 @@ static PyObject* sifField_wrap(
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "d", kwlist, &box_length)) {
     return NULL;
   }
+  if (py_sif_field_check_cartesian(self, "wrap it") < 0)
+    return NULL;
 
   uint64_t boundary = 0, wrapped = 0;
   int status = SIF_OK;
@@ -202,6 +222,9 @@ static PyObject* sifField_translate(
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "(ddd)", kwlist, &ox, &oy, &oz))
     return NULL;
+  if (py_sif_field_check_cartesian((sifFieldObject*)self_obj, "translate it") <
+      0)
+    return NULL;
 
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
   if (sif_field_translate(((sifFieldObject*)self_obj)->field, offset) !=
@@ -216,7 +239,8 @@ static PyObject* sifField_translate(
 static PyObject* sifField_sort_morton(PyObject* self_obj, PyObject* args) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
 
-  if (py_sif_field_check_exports(self, "sort_morton()") < 0)
+  if (py_sif_field_check_exports(self, "sort_morton()") < 0 ||
+      py_sif_field_check_cartesian(self, "sort it") < 0)
     return NULL;
 
   const int status = sif_field_sort_morton(self->field);
@@ -233,6 +257,8 @@ static PyObject* sifField_sort_morton(PyObject* self_obj, PyObject* args) {
 static PyObject* sifField_refresh_bounds(PyObject* self_obj, PyObject* args) {
   sifFieldObject* self = (sifFieldObject*)self_obj;
 
+  if (py_sif_field_check_cartesian(self, "bound it") < 0)
+    return NULL;
   if (sif_field_refresh_bounds(self->field) != SIF_OK) {
     PyErr_SetString(
       PyExc_ValueError, "cannot bound an empty or positionless field");
@@ -253,6 +279,101 @@ int py_sif_field_check_exports(sifFieldObject* self, const char* action) {
     "keep copies instead (numpy.array(field.x)), first",
     action, self->n_exports, self->n_exports == 1 ? "" : "s");
   return -1;
+}
+
+int py_sif_field_check_cartesian(sifFieldObject* self, const char* action) {
+  if (self->field->units == SIF_FIELD_CARTESIAN)
+    return 0;
+  PyErr_Format(PyExc_ValueError,
+    "cannot %s: the field holds sky coordinates (right ascension, "
+    "declination, redshift), not positions; call convert_sky_coordinates() "
+    "first",
+    action);
+  return -1;
+}
+
+/* --- Sky coordinates --- */
+
+static PyObject* sifField_convert_sky_coordinates(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  sifFieldObject* self = (sifFieldObject*)self_obj;
+
+  double omega_m;
+  PyObject* omega_de = Py_None;
+  double omega_r = 0.0, w0 = -1.0, wa = 0.0;
+  static char* kwlist[] = {"omega_m", "omega_de", "omega_r", "w0", "wa", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "d|Oddd", kwlist, &omega_m, &omega_de, &omega_r, &w0, &wa))
+    return NULL;
+
+  sif_cosmology_t cosmo;
+  if (py_sif_cosmology_from(omega_m, omega_de, omega_r, w0, wa, &cosmo) < 0)
+    return NULL;
+
+  sif_field_t* f = self->field;
+  if (f->n_particles == 0 || !f->x) {
+    PyErr_SetString(
+      PyExc_ValueError, "the field holds no positions to convert");
+    return NULL;
+  }
+  if (f->units != SIF_FIELD_SKY) {
+    PyErr_SetString(PyExc_ValueError,
+      "the field already holds Cartesian positions; converting them would "
+      "read x as a right ascension. Set units='sky' for a field that holds "
+      "sky coordinates");
+    return NULL;
+  }
+
+  /* The largest redshift, for the message if the cosmology cannot reach it;
+   * the C side works it out again, and checks every coordinate. */
+  double z_max = 0.0;
+  for (uint64_t i = 0; i < f->n_particles; i++)
+    if ((double)f->z[i] > z_max)
+      z_max = (double)f->z[i];
+
+  int status;
+  Py_BEGIN_ALLOW_THREADS status = sif_field_convert_sky_coordinates(f, &cosmo);
+  Py_END_ALLOW_THREADS
+
+    switch (status) {
+  case SIF_OK:
+    Py_RETURN_NONE;
+  case SIF_ERR_ALLOC:
+    return PyErr_NoMemory();
+  case SIF_ERR_RANGE:
+    return py_sif_cosmology_range_error(z_max);
+  default:
+    PyErr_SetString(PyExc_ValueError,
+      "some coordinates cannot be converted -- a declination outside "
+      "[-90, 90], a negative or non-finite redshift, or a non-finite right "
+      "ascension; the log has the counts, and the field is unchanged. Are x, "
+      "y, z the right ascension, the declination and the redshift, in "
+      "degrees?");
+    return NULL;
+  }
+}
+
+static PyObject* sifField_get_units(PyObject* self_obj, void* closure) {
+  (void)closure;
+  return PyUnicode_FromString(
+    ((sifFieldObject*)self_obj)->field->units == SIF_FIELD_SKY ? "sky"
+                                                               : "cartesian");
+}
+
+static int sifField_set_units(
+  PyObject* self_obj, PyObject* value, void* closure) {
+  (void)closure;
+  const char* s =
+    value && PyUnicode_Check(value) ? PyUnicode_AsUTF8(value) : NULL;
+  if (!s || (strcmp(s, "cartesian") != 0 && strcmp(s, "sky") != 0)) {
+    PyErr_Clear();
+    PyErr_SetString(PyExc_ValueError, "units must be 'cartesian' or 'sky'");
+    return -1;
+  }
+  ((sifFieldObject*)self_obj)->field->units =
+    s[0] == 's' ? SIF_FIELD_SKY : SIF_FIELD_CARTESIAN;
+  return 0;
 }
 
 #define EXPORT_CAPSULE "pysif.Field.view"
@@ -337,6 +458,14 @@ static PyGetSetDef sifField_getset[] = {
     NULL},
   {"has_velocities", sifField_get_has_velocities, NULL,
     "bool: Whether the field carries velocities.", NULL},
+  {"units", sifField_get_units, sifField_set_units,
+    "str: What the positions are: 'cartesian', or 'sky' for right\n"
+    "ascension and declination (degrees) and redshift held in x, y, z.\n"
+    "A sky field is refused by everything that reads positions as lengths\n"
+    "-- grids, meshes, octrees, wrap(), translate(), sort_morton() -- until\n"
+    "convert_sky_coordinates() turns it into positions. Setting it only\n"
+    "relabels the arrays; it does not convert them.",
+    NULL},
   {"x", sifField_get_x, NULL,
     "ndarray: x positions, a read-only view of the field's own array (no\n"
     "copy). See the class docstring for what a live view prevents.",
@@ -354,7 +483,8 @@ static PyGetSetDef sifField_getset[] = {
 /* --- Method Definition Array --- */
 static PyMethodDef sifField_methods[] = {
   {"from_numpy", (PyCFunction)sifField_from_numpy, METH_VARARGS | METH_KEYWORDS,
-    "from_numpy(x, y, z, vx=None, vy=None, vz=None, weights=None)\n"
+    "from_numpy(x, y, z, vx=None, vy=None, vz=None, weights=None, "
+    "units='cartesian')\n"
     "--\n\n"
     "Copy positions, and optionally velocities and weights, out of NumPy\n"
     "arrays.\n\n"
@@ -369,10 +499,39 @@ static PyMethodDef sifField_methods[] = {
     "    weights: Per-particle weight (a mass, a luminosity, a selection\n"
     "        weight), or None for an unweighted field, where every particle\n"
     "        counts as 1. The exodus finder requires them to be finite and\n"
-    "        non-negative.\n\n"
+    "        non-negative.\n"
+    "    units: 'cartesian', or 'sky' for x, y, z holding right ascension,\n"
+    "        declination (degrees) and redshift, to be turned into positions\n"
+    "        by convert_sky_coordinates().\n\n"
     "Raises:\n"
-    "    ValueError: If the arrays disagree in length.\n"
+    "    ValueError: If the arrays disagree in length, or for units that\n"
+    "        are neither.\n"
     "    MemoryError: If the field's buffers could not be allocated."},
+  {"convert_sky_coordinates", (PyCFunction)sifField_convert_sky_coordinates,
+    METH_VARARGS | METH_KEYWORDS,
+    "convert_sky_coordinates(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, "
+    "wa=0.0)\n"
+    "--\n\n"
+    "Turn sky coordinates into comoving Cartesian positions, in place.\n\n"
+    "The field has to hold right ascension, declination (both in degrees)\n"
+    "and redshift in x, y and z, with units='sky'. Each tracer goes to the\n"
+    "line-of-sight comoving distance of its redshift, along its direction,\n"
+    "with the observer at the origin -- the convention of pyrecon's\n"
+    "sky_to_cartesian(). Positions come out in Mpc/h, and units becomes\n"
+    "'cartesian'. Weights and velocities are untouched.\n\n"
+    "Every coordinate is checked first: on a declination outside [-90, 90]\n"
+    "or a negative or non-finite redshift nothing is changed.\n\n"
+    "Args:\n"
+    "    omega_m: Matter density today.\n"
+    "    omega_de: Dark-energy density today; None, the default, makes the\n"
+    "        model flat.\n"
+    "    omega_r: Radiation density today.\n"
+    "    w0, wa: The dark-energy equation of state, w(a) = w0 + wa (1 - a):\n"
+    "        -1 and 0 for a cosmological constant.\n\n"
+    "Raises:\n"
+    "    ValueError: For a field that is not in sky coordinates or holds\n"
+    "        one out of range, a bad cosmology, or one with no expansion\n"
+    "        history out to the largest redshift."},
   {"wrap", (PyCFunction)sifField_wrap, METH_VARARGS | METH_KEYWORDS,
     "wrap(box_length) -> dict\n\n"
     "Fold every coordinate into [0, box_length) periodically, in place.\n"

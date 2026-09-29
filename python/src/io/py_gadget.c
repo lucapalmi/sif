@@ -295,7 +295,7 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
   int ptype = 1;
   PyObject* velocities_obj = Py_None;
   int masses = 0;
-  const char* length_s = "kpc";
+  const char* length_s = "auto";
   double fraction = 1.0;
   unsigned long long seed = 0;
   PyObject* format_obj = NULL;
@@ -353,6 +353,19 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
     if (parse_choice("length", length_s, names, values, 3,
           "'kpc', 'mpc' or 'auto'", &length) < 0)
       return NULL;
+  }
+
+  /* 'auto' is the default, and a binary snapshot records no unit for it to
+   * find. The reader refuses that too, but only says why in the log; the
+   * header, one small read, lets the exception say it. */
+  if (length == SIF_GADGET_LENGTH_AUTO) {
+    sif_gadget_header_t h;
+    if (sif_gadget_read_header(path, format, &h) == SIF_OK &&
+        h.format != SIF_GADGET_FORMAT_HDF5)
+      return PyErr_Format(PyExc_ValueError,
+        "%s is a binary snapshot, which does not record its length unit: pass "
+        "length='kpc' (kpc/h, GADGET's default) or length='mpc' (Mpc/h)",
+        path);
   }
 
   sif_field_t* field = NULL;

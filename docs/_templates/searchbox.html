@@ -1,0 +1,8 @@
+{#- Shibuya's box, with a magnifying glass in place of the "/" shortcut hint.
+    The shortcut itself still works. -#}
+{%- if pathto('search') != '#' -%}
+<form class="searchbox flex items-center" action="{{ pathto('search') }}" method="get">
+  <iconify-icon class="searchbox-icon" icon="lucide:search" aria-hidden="true"></iconify-icon>
+  <input type="text" name="q" placeholder="{{ _('Search') }}" />
+</form>
+{%- endif -%}

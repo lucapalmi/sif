@@ -11,6 +11,7 @@
 #include "core/system_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "structures/field_internal.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -74,6 +75,11 @@ static sif_chain_mesh_t* chain_mesh_new(
     SIF_LOG_ERROR("chain_mesh", "cannot build a mesh from a NULL field");
     return NULL;
   }
+
+  /* Before anything is taken: the consuming build leaves a field it refuses
+   * here as it was. */
+  if (sif__field_require_cartesian(field, "chain_mesh") != SIF_OK)
+    return NULL;
 
   if (n_cells == 0 || !(box_length > 0.0f)) {
     SIF_LOG_ERROR("chain_mesh", "invalid geometry (n_cells=%u, box_length=%g)",

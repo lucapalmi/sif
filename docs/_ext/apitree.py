@@ -112,8 +112,6 @@ def generate(app):
             "```\n",
         )
 
-    app.env.note_dependency(str(include_root))
-
 
 def setup(app):
     app.connect("builder-inited", generate)

@@ -33,6 +33,14 @@ def path(rel):
     return str(GADGET / rel)
 
 
+def read(rel, **kwargs):
+    """read_gadget in the fixtures' unit, kpc/h, unless a test names another:
+    the default, 'auto', reads the unit from an HDF5 file and refuses a
+    binary one, which records none."""
+    kwargs.setdefault("length", "kpc")
+    return pysif.io.read_gadget(path(rel), **kwargs)
+
+
 def expected(ptype):
     g = np.arange(N_TOTAL[ptype])
     x = 100.0 * ptype + 0.5 * g + 0.125
@@ -45,8 +53,7 @@ def expected(ptype):
 @pytest.mark.parametrize("snap", SNAPSHOTS)
 @pytest.mark.parametrize("ptype", [0, 1, 2])
 def test_values(snap, ptype):
-    field, box = pysif.io.read_gadget(
-        path(snap), ptype=ptype, velocities="raw", masses=True)
+    field, box = read(snap, ptype=ptype, velocities="raw", masses=True)
     x, vx, m = expected(ptype)
     dt = field.x.dtype
 
@@ -66,21 +73,32 @@ def test_values(snap, ptype):
 
 
 def test_defaults_skip_velocities_and_masses():
-    field, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), ptype=0)
+    field, _ = read("f1_legacy/snap_005", ptype=0)
     assert field.has_velocities is False and field.vx is None
     assert field.weights is None
 
 
 def test_peculiar_velocities():
     # u * sqrt(a), with a = 0.25
-    field, _ = pysif.io.read_gadget(
-        path("f1_legacy/snap_005"), velocities="peculiar")
+    field, _ = read("f1_legacy/snap_005", velocities="peculiar")
     _, vx, _ = expected(1)
     np.testing.assert_array_equal(field.vx, (0.5 * vx).astype(field.vx.dtype))
 
 
+def test_default_length_is_auto():
+    # a binary snapshot records no unit, so it has to be named
+    with pytest.raises(ValueError, match="length='kpc'"):
+        pysif.io.read_gadget(path("f1_legacy/snap_005"))
+
+
+@requires_hdf5
+def test_default_length_reads_hdf5_unit():
+    field, box = pysif.io.read_gadget(path("hdf5_g4/snap_005"))
+    assert box == pytest.approx(10.0, rel=1e-12)
+
+
 def test_length_mpc_is_not_converted():
-    field, box = pysif.io.read_gadget(path("f1_legacy/snap_005"), length="mpc")
+    field, box = read("f1_legacy/snap_005", length="mpc")
     x, _, _ = expected(1)
     assert box == 10000.0
     np.testing.assert_array_equal(field.x, x.astype(field.x.dtype))
@@ -89,7 +107,7 @@ def test_length_mpc_is_not_converted():
 @requires_hdf5
 @pytest.mark.parametrize("snap", ["hdf5_g4/snap_005", "hdf5_legacy/snap_005"])
 def test_length_auto_from_hdf5(snap):
-    field, box = pysif.io.read_gadget(path(snap), length="auto")
+    field, box = read(snap, length="auto")
     x, _, _ = expected(1)
     assert box == pytest.approx(10.0, rel=1e-12)
     np.testing.assert_allclose(field.x, x * 1e-3, rtol=1e-6)
@@ -97,16 +115,16 @@ def test_length_auto_from_hdf5(snap):
 
 @pytest.mark.parametrize("fmt", [1, "1"])
 def test_explicit_format(fmt):
-    field, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), format=fmt)
+    field, _ = read("f1_legacy/snap_005", format=fmt)
     assert field.n_particles == 100
 
 
 # --- subsampling ---
 
 def test_subsample_exact_ordered_reproducible():
-    a, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), fraction=0.3, seed=7)
-    b, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), fraction=0.3, seed=7)
-    c, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), fraction=0.3, seed=8)
+    a, _ = read("f1_legacy/snap_005", fraction=0.3, seed=7)
+    b, _ = read("f1_legacy/snap_005", fraction=0.3, seed=7)
+    c, _ = read("f1_legacy/snap_005", fraction=0.3, seed=8)
 
     assert a.n_particles == 30
     assert np.all(np.diff(a.x) > 0)  # file order kept
@@ -116,8 +134,8 @@ def test_subsample_exact_ordered_reproducible():
 
 @pytest.mark.parametrize("snap", SNAPSHOTS)
 def test_subsample_same_across_formats(snap):
-    ref, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), fraction=0.3, seed=7)
-    other, _ = pysif.io.read_gadget(path(snap), fraction=0.3, seed=7)
+    ref, _ = read("f1_legacy/snap_005", fraction=0.3, seed=7)
+    other, _ = read(snap, fraction=0.3, seed=7)
     np.testing.assert_array_equal(ref.x, other.x)
 
 
@@ -176,7 +194,7 @@ def test_inspect_prints_to_sys_stdout(capsys):
 ])
 def test_bad_arguments(kwargs, message):
     with pytest.raises(ValueError, match=message):
-        pysif.io.read_gadget(path("f1_legacy/snap_005"), **kwargs)
+        read("f1_legacy/snap_005", **kwargs)
 
 
 @pytest.mark.parametrize("kwargs", [
@@ -186,7 +204,7 @@ def test_bad_arguments(kwargs, message):
 ])
 def test_requests_the_snapshot_cannot_satisfy(kwargs):
     with pytest.raises(ValueError):
-        pysif.io.read_gadget(path("f1_legacy/snap_005"), **kwargs)
+        read("f1_legacy/snap_005", **kwargs)
 
 
 def test_options_are_keyword_only():
@@ -201,7 +219,7 @@ def test_options_are_keyword_only():
 ])
 def test_io_errors(rel, kwargs):
     with pytest.raises(OSError):
-        pysif.io.read_gadget(path(rel), **kwargs)
+        read(rel, **kwargs)
 
 
 @pytest.mark.skipif(HAS_HDF5, reason="pysif built with HDF5")
@@ -223,18 +241,18 @@ def test_ntypes2_header():
 
 
 def test_ntypes2_values():
-    field, box = pysif.io.read_gadget(path(NTYPES2), velocities="raw", masses=True)
+    field, box = read(NTYPES2, velocities="raw", masses=True)
     x, vx, _ = expected(1)
     assert box == 10.0 and field.weights is None
     np.testing.assert_array_equal(field.x, (x * 1e-3).astype(field.x.dtype))
     np.testing.assert_array_equal(field.vx, vx.astype(field.vx.dtype))
 
-    ref, _ = pysif.io.read_gadget(path("f1_legacy/snap_005"), fraction=0.3, seed=7)
-    sub, _ = pysif.io.read_gadget(path(NTYPES2), fraction=0.3, seed=7)
+    ref, _ = read("f1_legacy/snap_005", fraction=0.3, seed=7)
+    sub, _ = read(NTYPES2, fraction=0.3, seed=7)
     np.testing.assert_array_equal(ref.x, sub.x)
 
 
 @pytest.mark.parametrize("ptype", [0, 2])  # empty, and beyond NTYPES
 def test_ntypes2_missing_types(ptype):
     with pytest.raises(ValueError):
-        pysif.io.read_gadget(path(NTYPES2), ptype=ptype)
+        read(NTYPES2, ptype=ptype)

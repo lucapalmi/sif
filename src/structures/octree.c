@@ -7,6 +7,7 @@
 #include "sif/structures/octree.h"
 
 #include "sif/utils/logger.h"
+#include "structures/field_internal.h"
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -65,6 +66,8 @@ sif_octree_t* sif_octree_alloc(sif_field_t* field, uint32_t max_per_leaf) {
     SIF_LOG_ERROR("octree", "invalid field or max_per_leaf");
     return NULL;
   }
+  if (sif__field_require_cartesian(field, "octree") != SIF_OK)
+    return NULL;
 
   /* Node ranges are uint32_t pairs, which is what keeps a node at 16 bytes and
    * four of them in a cache line. Past 4 G particles that stops being a

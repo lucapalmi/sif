@@ -7,9 +7,13 @@
 #include "sif/structures/field.h"
 
 #include "core/system_internal.h"
+#include "field_internal.h"
+#include "model/cosmology_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 
+#include <inttypes.h>
+#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +27,7 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
 
   field->n_particles = n_particles;
   field->state_flags = 0;
+  field->units = SIF_FIELD_CARTESIAN;
 
   field->_position_block = NULL;
   field->_velocity_block = NULL;
@@ -321,6 +326,9 @@ int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
     return SIF_ERR_INVALID;
   }
 
+  if (sif__field_require_cartesian(field, "field") != SIF_OK)
+    return SIF_ERR_INVALID;
+
   if (!(box_length > 0.0f)) {
     SIF_LOG_ERROR("field", "invalid box length %g", (double)box_length);
     return SIF_ERR_INVALID;
@@ -371,6 +379,8 @@ int sif_field_refresh_bounds(sif_field_t* field) {
     SIF_LOG_ERROR("field", "invalid or empty field");
     return SIF_ERR_INVALID;
   }
+  if (sif__field_require_cartesian(field, "field") != SIF_OK)
+    return SIF_ERR_INVALID;
 
   sif_real min_x = SIF_REAL_MAX_VAL, min_y = SIF_REAL_MAX_VAL,
            min_z = SIF_REAL_MAX_VAL;
@@ -421,7 +431,7 @@ int sif_field_refresh_bounds(sif_field_t* field) {
 }
 
 int sif_field_require_bounds(sif_field_t* field) {
-  if (!field)
+  if (!field || sif__field_require_cartesian(field, "field") != SIF_OK)
     return SIF_ERR_INVALID;
 
   if (field->state_flags & SIF_FIELD_STATE_BOUNDS_VALID)
@@ -584,6 +594,8 @@ int sif_field_sort_morton(sif_field_t* field) {
     SIF_LOG_ERROR("field", "invalid or empty field");
     return SIF_ERR_INVALID;
   }
+  if (sif__field_require_cartesian(field, "field") != SIF_OK)
+    return SIF_ERR_INVALID;
   if (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) {
     return SIF_OK; /* Already sorted! */
   }
@@ -723,7 +735,7 @@ int sif_field_sort_morton(sif_field_t* field) {
 }
 
 int sif_field_require_morton(sif_field_t* field) {
-  if (!field)
+  if (!field || sif__field_require_cartesian(field, "field") != SIF_OK)
     return SIF_ERR_INVALID;
 
   if (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED)
@@ -738,6 +750,8 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
     SIF_LOG_ERROR("field", "cannot translate an empty field");
     return SIF_ERR_INVALID;
   }
+  if (sif__field_require_cartesian(field, "field") != SIF_OK)
+    return SIF_ERR_INVALID;
 
   const sif_real ox = offset[0], oy = offset[1], oz = offset[2];
 
@@ -756,5 +770,94 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
   field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
 
+  return SIF_OK;
+}
+
+/* --- coordinates --- */
+
+int sif__field_require_cartesian(const sif_field_t* field, const char* tag) {
+  if (field && field->units != SIF_FIELD_CARTESIAN) {
+    SIF_LOG_ERROR(tag,
+      "the field holds sky coordinates (right ascension, declination, "
+      "redshift), not positions: convert them with "
+      "sif_field_convert_sky_coordinates() first");
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
+}
+
+int sif_field_convert_sky_coordinates(
+  sif_field_t* field, const sif_cosmology_t* cosmo) {
+
+  if (!field || !cosmo || !field->x || !field->y || !field->z ||
+      field->n_particles == 0) {
+    SIF_LOG_ERROR("field", "invalid field or cosmology for the conversion");
+    return SIF_ERR_INVALID;
+  }
+  if (field->units != SIF_FIELD_SKY) {
+    SIF_LOG_ERROR("field",
+      "the field already holds Cartesian positions; converting them would "
+      "read x as a right ascension. Set units to SIF_FIELD_SKY for a field "
+      "that holds sky coordinates");
+    return SIF_ERR_INVALID;
+  }
+
+  /* Everything checked before anything is changed: a refused field comes
+   * back as it went in. */
+  const uint64_t n = field->n_particles;
+  const sif_real* ra = field->x;
+  const sif_real* dec = field->y;
+  const sif_real* red = field->z;
+  uint64_t bad_ra = 0, bad_dec = 0, bad_z = 0;
+  double z_max = 0.0;
+
+#pragma omp parallel for schedule(static)                                      \
+  reduction(+ : bad_ra, bad_dec, bad_z) reduction(max : z_max)
+  for (uint64_t i = 0; i < n; i++) {
+    bad_ra += !isfinite(ra[i]);
+    bad_dec += !(dec[i] >= -90.0f && dec[i] <= 90.0f);
+    if (!(red[i] >= 0.0f) || !isfinite(red[i]))
+      bad_z++;
+    else if ((double)red[i] > z_max)
+      z_max = (double)red[i];
+  }
+
+  if (bad_ra || bad_dec || bad_z) {
+    SIF_LOG_ERROR("field",
+      "cannot convert: %" PRIu64 " right ascensions not finite, %" PRIu64
+      " declinations outside [-90, 90], %" PRIu64
+      " redshifts negative or not finite, of %" PRIu64
+      ". Are the columns in the order ra, dec, z, and in degrees?",
+      bad_ra, bad_dec, bad_z, n);
+    return SIF_ERR_INVALID;
+  }
+
+  sif__distance_table_t table;
+  const int status = sif__distance_table_build(cosmo, z_max, &table);
+  if (status != SIF_OK)
+    return status;
+
+  const double deg = 3.14159265358979323846 / 180.0;
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < n; i++) {
+    const double d = sif__distance_table_eval(&table, (double)red[i]);
+    const double a = (double)ra[i] * deg, b = (double)dec[i] * deg;
+    const double cos_b = cos(b);
+    field->x[i] = (sif_real)(d * cos_b * cos(a));
+    field->y[i] = (sif_real)(d * cos_b * sin(a));
+    field->z[i] = (sif_real)(d * sin(b));
+  }
+
+  SIF_LOG_INFO("field",
+    "converted %" PRIu64 " tracers from the sky, out to z = %g (D_C = %g "
+    "Mpc/h)",
+    n, z_max, sif__distance_table_eval(&table, z_max));
+
+  sif__distance_table_free(&table);
+
+  field->units = SIF_FIELD_CARTESIAN;
+  field->state_flags &=
+    ~(SIF_FIELD_STATE_BOUNDS_VALID | SIF_FIELD_STATE_MORTON_SORTED);
   return SIF_OK;
 }

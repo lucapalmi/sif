@@ -428,17 +428,45 @@ static void run_workflow(void) {
   CHECK(sif_grid_assign_cic(gr, fr) == SIF_OK, "CIC assignment failed");
 
   /* Sized for the density inside the footprint, which is what the box
-   * average would badly understate. */
+   * average would badly understate. The helper reads the footprint off the
+   * random grid; by hand, it is the ball the randoms were drawn in. The two
+   * have to agree to within the cell or so CIC adds along the boundary --
+   * and the helper's reading, if anything, is the larger volume. */
+  const uint32_t cells_d =
+    sif_finder_suggest_mesh_cells_survey(N_DATA, gr, radii[0]);
+  const uint32_t cells_r =
+    sif_finder_suggest_mesh_cells_survey(N_RANDOMS, gr, radii[0]);
+
   const double foot_vol = (4.0 / 3.0) * 3.14159265358979 * pow(FOOT_R, 3);
   const double box_vol = (double)box * (double)box * (double)box;
-  sif_chain_mesh_t* md = sif_chain_mesh_alloc(
-    sif_finder_suggest_mesh_cells(
-      (uint64_t)(N_DATA * box_vol / foot_vol), box, radii[0]),
-    box, fd, SIF_MESH_DROP_INDICES);
-  sif_chain_mesh_t* mr = sif_chain_mesh_alloc(
-    sif_finder_suggest_mesh_cells(
-      (uint64_t)(N_RANDOMS * box_vol / foot_vol), box, radii[0]),
-    box, fr, SIF_MESH_DROP_INDICES);
+  const uint32_t by_hand = sif_finder_suggest_mesh_cells(
+    (uint64_t)(N_RANDOMS * box_vol / foot_vol), box, radii[0]);
+  CHECK(cells_r > 0 && cells_r <= by_hand && cells_r >= 0.85 * by_hand,
+    "survey mesh sizing: %u cells, against %u from the footprint's volume",
+    cells_r, by_hand);
+  CHECK(cells_d > 0 && cells_d <= cells_r,
+    "survey mesh sizing: the data (%u cells) are sparser than the randoms "
+    "(%u cells)",
+    cells_d, cells_r);
+
+  printf("  mesh cells: data %u, randoms %u (by hand %u, box average %u)\n",
+    cells_d, cells_r, by_hand,
+    sif_finder_suggest_mesh_cells(N_RANDOMS, box, radii[0]));
+
+  /* A box-filling suggestion would have been much coarser. */
+  CHECK(cells_r > sif_finder_suggest_mesh_cells(N_RANDOMS, box, radii[0]),
+    "survey mesh sizing is no finer than the box average's");
+
+  /* What it refuses: no tracers, and a grid that is not the randoms' density. */
+  CHECK(sif_finder_suggest_mesh_cells_survey(0, gr, radii[0]) == 0,
+    "survey mesh sizing accepted no tracers");
+  CHECK(sif_finder_suggest_mesh_cells_survey(N_DATA, gd, 2.0f * box) == 0,
+    "survey mesh sizing accepted a search sphere wider than the box");
+
+  sif_chain_mesh_t* md =
+    sif_chain_mesh_alloc(cells_d, box, fd, SIF_MESH_DROP_INDICES);
+  sif_chain_mesh_t* mr =
+    sif_chain_mesh_alloc(cells_r, box, fr, SIF_MESH_DROP_INDICES);
   sif_field_free(fd);
   sif_field_free(fr);
 

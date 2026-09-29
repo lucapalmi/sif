@@ -239,6 +239,7 @@ set(SOURCES
     src/model/delta_moments.c
     src/model/bbks.c
     src/model/size_function.c
+    src/model/cosmology.c
     src/model/excursion_set.c
     src/model/ep_upcrossing.c
     src/model/ep_emu.c

@@ -35,6 +35,7 @@ set(SIF_TESTS
   test_survey       # end-to-end: the survey finder on a synthetic footprint
   test_hdf5         # the HDF5 catalogue file, or its text fallback
   test_gadget       # GADGET snapshots, all formats, from tests/data/gadget
+  test_cosmology    # comoving distances, sky coordinates, and their refusals
 )
 
 foreach(test_name IN LISTS SIF_TESTS)
@@ -79,3 +80,15 @@ foreach(test_name IN LISTS SIF_TESTS)
     TIMEOUT 600
   )
 endforeach()
+
+# The command-line programs, from the outside: a shell script per program,
+# run against the executable the build made.
+if(SIF_BUILD_PROGRAMS)
+  add_test(NAME test_sif_exodus
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/programs/test_sif_exodus.sh
+      $<TARGET_FILE:sif-exodus> ${CMAKE_CURRENT_SOURCE_DIR}/data)
+  set_tests_properties(test_sif_exodus PROPERTIES
+    ENVIRONMENT "HOME=${SIF_TEST_HOME};OMP_NUM_THREADS=4"
+    TIMEOUT 600
+  )
+endif()

@@ -100,6 +100,7 @@
 #include "sif/structures/chain_mesh.h"
 
 #include "core/system_internal.h"
+#include "structures/field_internal.h"
 
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -2436,6 +2437,8 @@ int sif_finder_exodus_survey_box(const sif_field_t* randoms,
     SIF_LOG_ERROR(TAG, "invalid randoms, radii or outputs for the survey box");
     return SIF_ERR_INVALID;
   }
+  if (sif__field_require_cartesian(randoms, TAG) != SIF_OK)
+    return SIF_ERR_INVALID;
 
   /* Below this the grid cell is too large a share of the box for any padding
    * to settle: every cell added to the box widens the margin it needs by more
@@ -2963,4 +2966,41 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   ctx_release(&ctx, grid);
 
   return result;
+}
+
+uint32_t sif_finder_suggest_mesh_cells_survey(
+  uint64_t n_particles, const sif_grid_t* random_grid, sif_real max_radius) {
+
+  if (n_particles == 0 || !random_grid || !random_grid->values) {
+    SIF_LOG_ERROR(TAG, "invalid tracer count or random grid for sizing a mesh");
+    return 0;
+  }
+  if (random_grid->content != SIF_GRID_DENSITY) {
+    SIF_LOG_ERROR(TAG,
+      "the random grid has to hold the CIC density of the randoms, not %s",
+      random_grid->content == SIF_GRID_DENSITY_CONTRAST ? "a density contrast"
+                                                        : "nothing");
+    return 0;
+  }
+
+  /* The footprint, as the cells any random reached. */
+  uint64_t occupied = 0;
+  const sif_real* v = random_grid->values;
+#pragma omp parallel for schedule(static) reduction(+ : occupied)
+  for (uint64_t c = 0; c < random_grid->total_cells; c++)
+    occupied += v[c] > 0.0f;
+
+  if (occupied == 0) {
+    SIF_LOG_ERROR(TAG, "the random grid holds no randoms");
+    return 0;
+  }
+
+  /* The count the whole box would hold at the footprint's density. */
+  const double filled =
+    (double)n_particles * (double)random_grid->total_cells / (double)occupied;
+  const uint64_t n_equiv =
+    filled >= 1.8e19 ? UINT64_MAX : (uint64_t)ceil(filled);
+
+  return sif_finder_suggest_mesh_cells(
+    n_equiv, random_grid->box_length, max_radius);
 }

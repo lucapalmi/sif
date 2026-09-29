@@ -1,35 +1,267 @@
-/* 1. TYPOGRAPHY: Native system fonts */
+/* 1. TYPOGRAPHY
+ * Inter for text and headings, JetBrains Mono for code; both come from
+ * Google Fonts via html_css_files in conf.py. Shibuya already names Inter
+ * first but never loads it, so without that link the page silently fell
+ * back to the system font. */
 :root {
-  --sy-f-sys: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --sy-f-mono: ui-monospace, SFMono-Regular, "JetBrains Mono", monospace;
+  --sy-f-text: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --sy-f-heading: var(--sy-f-text);
+  --sy-f-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
-/* 2. LIGHT MODE COLORS */
-html[data-theme="light"] {
+body {
+  font-feature-settings: "cv11", "ss01";  /* Inter's single-storey a, open digits */
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 2-3. COLOURS
+ * Shibuya flips modes with a class on <html> (.light / .dark), not a
+ * data-theme attribute, and names its background --sy-c-background. These
+ * blocks used to target data-theme and --sy-c-bg, and never applied. */
+html.light {
   --sy-c-text: #334155;
   --sy-c-heading: #0f172a;
-  --sy-c-bg: #f8fafc;
+  --sy-c-background: #fcfcfd;
 }
 
-/* 3. DARK MODE COLORS */
-html[data-theme="dark"] {
-  --sy-c-bg: #0f172a;       /* Deep slate background instead of pure black */
-  --sy-c-text: #cbd5e1;     /* Softer text */
+html.dark {
+  --sy-c-background: #0f1420;        /* deep slate instead of pure black */
+  --sy-c-background-dropback: #0b0f18;
+  --sy-c-surface: #161c2a;
+  --sy-c-text: #cbd5e1;
+  --sy-c-heading: #f1f5f9;
+  --sy-c-divider: #1f2737;
+  --sy-c-border: #273044;
 }
 
-/* 4. STRUCTURE: Underline Headers (applies to both modes) */
-main h1, 
-main h2,
-.document h1,
-.document h2 {
+/* 4. HEADINGS
+ * h1 carries the page; h2 opens a section with a hairline rule. */
+.yue h1 {
+  font-size: 2.4rem;
+  font-weight: 750;
+  letter-spacing: -0.025em;
+  margin-bottom: 0.6em;
+}
+
+.yue h2 {
   border-bottom: 1px solid var(--sy-c-divider);
-  padding-bottom: 0.3em;
-  margin-top: 1.5em;
-  margin-bottom: 0.8em;
+  padding-bottom: 0.35em;
+  margin-top: 2.2em;
+  font-weight: 650;
+  letter-spacing: -0.015em;
 }
 
-/* 5. CODE BLOCKS (applies to both modes) */
-div.highlight {
+.yue h3 {
+  font-weight: 600;
+}
+
+/* The lead paragraph right under the title reads as a subtitle. */
+.yue h1 + p {
+  font-size: 1.15rem;
+  line-height: 1.65;
+  color: var(--sy-c-light);
+}
+
+/* 5. CODE
+ * Blocks get a border and a little air; inline code a soft accent tint. */
+.yue div.highlight {
   border: 1px solid var(--sy-c-divider);
-  border-radius: 6px;
+  border-radius: 8px;
+}
+
+.yue div.highlight pre {
+  font-size: 0.86rem;
+  line-height: 1.6;
+  padding: 1em 1.2em;
+}
+
+.yue :not(pre) > code.literal,
+.yue :not(pre) > code.docutils {
+  background: var(--accent-a3);
+  color: var(--accent-12);
+  border: none;
+  border-radius: 4px;
+  padding: 0.1em 0.35em;
+  font-size: 0.88em;
+}
+
+/* Inside a link, the code keeps the link colour. */
+.yue a code.literal {
+  color: inherit;
+}
+
+/* 6. BOLD INSIDE LINKS
+ * Shibuya colours every <strong> with --sy-c-bold, and gives the link colour
+ * back only inside the page body. Everywhere else -- the sidebar, the "on
+ * this page" panel, the previous/next links -- a bold **sif** or **exodus**
+ * in a link title came out in the plain text colour. */
+a strong,
+a em,
+.sd-card-title strong,
+.sd-tab-set > label strong,
+.sd-summary-title strong {
+  color: inherit;
+}
+
+/* 7. ACCENT FOR SPHINX-DESIGN
+ * sphinx-design has its own palette, which the theme does not set: tabs,
+ * dropdowns and cards came out grey. Pointed at the theme's accent scale, so
+ * they follow html_theme_options["accent_color"] in both modes. */
+:root {
+  --sd-color-primary: var(--accent-9);
+  --sd-color-primary-highlight: var(--accent-10);
+  --sd-color-primary-text: var(--accent-contrast);
+  --sd-color-tabs-label-active: var(--accent-11);
+  --sd-color-tabs-underline-active: var(--accent-9);
+  --sd-color-tabs-label-hover: var(--accent-11);
+  --sd-color-tabs-underline-hover: var(--accent-7);
+  --sd-color-tabs-label-inactive: var(--sy-c-light);
+  --sd-color-tabs-underline-inactive: transparent;
+  --sd-color-tabs-underline: var(--sy-c-divider);
+  --sd-color-card-border: var(--sy-c-divider);
+  --sd-color-card-border-hover: var(--accent-8);
+}
+
+/* A tab set reads as one block: the labels over a tinted, rounded panel. */
+.sd-tab-set {
+  margin: 1.5em 0;
+}
+
+.sd-tab-set > label {
+  padding: 0.6em 1.1em 0.5em;
+}
+
+.sd-tab-set > .sd-tab-content {
+  background: var(--accent-a2);
+  border: 1px solid var(--accent-a5);
+  border-radius: 0 8px 8px 8px;
+  padding: 1em 1.25em;
+}
+
+/* Code inside a tab sits on the page background, so it stands out from the
+ * tint around it. */
+.sd-tab-content div.highlight {
+  background: var(--sy-c-background);
+}
+
+/* Dropdowns: a tinted title bar, the accent on the chevron. */
+details.sd-dropdown {
+  border: 1px solid var(--accent-a5);
+  border-radius: 8px;
+}
+
+details.sd-dropdown > summary.sd-summary-title {
+  background: var(--accent-a3);
+  color: var(--accent-12);
+  font-weight: 600;
+}
+
+details.sd-dropdown .sd-summary-up,
+details.sd-dropdown .sd-summary-down {
+  color: var(--accent-11);
+}
+
+/* Cards: lift and take the accent on hover. */
+/* sphinx-design's resting shadow is drawn for a light page, and on a dark
+ * one it outlines every card in grey; the border is enough at rest. */
+.sd-card {
+  box-shadow: none !important;
+  border-radius: 10px;
+  transition: border-color 150ms, box-shadow 150ms, transform 150ms;
+}
+
+.sd-card:hover {
+  box-shadow: 0 4px 16px var(--accent-a4) !important;
+  transform: translateY(-2px);
+}
+
+.sd-card .sd-card-title {
+  color: var(--accent-11);
+}
+
+/* 8. HEADER
+ * A solid amber bar. The earlier amber wash was too faint against the page
+ * and read as faded; a neutral bar lost the colour altogether. On a full
+ * accent the wordmark, icons and search need dark ink to stay legible, in
+ * both modes (amber stays bright in dark mode too). */
+.sy-head-blur {
+  background: var(--accent-9);
+  box-shadow: 0 1px 0 var(--accent-10), 0 2px 8px rgb(0 0 0 / 0.08);
+}
+
+.sy-head {
+  --head-ink: #1c1407;
+}
+
+.sy-head-brand,
+.sy-head-brand strong {
+  color: var(--head-ink);
+  font-weight: 750;
+  letter-spacing: -0.02em;
+}
+
+.sy-head-actions button,
+.sy-head-actions a,
+.sy-head-socials a,
+.sy-head .searchbox-icon {
+  color: var(--head-ink);
+}
+
+.sy-head .searchbox input {
+  background: rgb(255 255 255 / 0.45);
+  color: var(--head-ink);
+  border: none;
+}
+
+.sy-head .searchbox input::placeholder {
+  color: rgb(28 20 7 / 0.6);
+}
+
+.sy-head .searchbox input:focus {
+  background: rgb(255 255 255 / 0.8);
+}
+
+/* Search: a magnifying glass inside the field instead of the "/" key hint
+ * (see _templates/searchbox.html). */
+.searchbox-icon {
+  position: absolute;
+  left: 10px;
+  font-size: 0.95rem;
+  color: var(--sy-c-light);
+  pointer-events: none;
+}
+
+.searchbox input {
+  padding-left: 32px;
+}
+
+/* 9. FOOTER
+ * On a page shorter than the window the footer sat right under the content,
+ * with empty space below it. The body is a column and the page between
+ * header and footer takes up the slack, so the footer rests on the bottom. */
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+body > .sy-page {
+  flex: 1 0 auto;
+  width: 100%;
+}
+
+/* One line, not a band: less padding, and no social icons (the GitHub link
+ * lives in the header; see _templates/partials/foot-socials.html). */
+.sy-foot {
+  padding-top: 0.6rem;
+  padding-bottom: 0.6rem;
+}
+
+.sy-foot-copyright p {
+  margin: 0;
+  display: inline;
+}
+
+.sy-foot-copyright p + p::before {
+  content: " · ";
 }

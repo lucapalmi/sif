@@ -149,6 +149,30 @@ static PyMethodDef finders_methods[] = {
     "    int: n_cells to pass to ChainMesh, or 0 if no mesh can hold a\n"
     "    search sphere that wide."},
 
+  {"suggest_mesh_cells_survey",
+    (PyCFunction)py_sif_finder_suggest_mesh_cells_survey,
+    METH_VARARGS | METH_KEYWORDS,
+    "suggest_mesh_cells_survey(n_particles, random_grid, max_radius=0.0)\n"
+    "--\n\n"
+    "Suggest a ChainMesh resolution for exodus_survey().\n\n"
+    "suggest_mesh_cells() assumes the tracers fill the box, which in a\n"
+    "survey box they do not: they occupy the footprint, and the padding\n"
+    "around it is empty. This sizes the mesh for the density inside the\n"
+    "footprint instead, reading the footprint off the randoms' grid as the\n"
+    "share of its cells any random reached. Call it for each mesh, the\n"
+    "data's and the randoms', with that set's own count.\n\n"
+    "Args:\n"
+    "    n_particles: Tracers the mesh will hold.\n"
+    "    random_grid: The randoms' Grid after assign_cic(), and before any\n"
+    "        to_density_contrast(), over the survey box.\n"
+    "    max_radius: Largest smoothing radius the run will use, as for\n"
+    "        suggest_mesh_cells().\n\n"
+    "Returns:\n"
+    "    int: n_cells to pass to ChainMesh.\n\n"
+    "Raises:\n"
+    "    ValueError: For no tracers, a grid holding no randoms or a density\n"
+    "        contrast, or a search sphere wider than the box."},
+
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef finders_module = {PyModuleDef_HEAD_INIT,

@@ -1,0 +1,25 @@
+Lua 5.5.1 (released 24 Jul 2026), from https://www.lua.org/ftp/lua-5.5.1.tar.gz
+
+The interpreter the command-line programs read their configuration files
+with. Only the programs link it (bin/CMakeLists.txt); the library and pysif
+never see it.
+
+What is here is upstream's src/ directory, every file byte-for-byte as
+released, less three that are not needed:
+
+  Makefile         sif builds it with CMake
+  lua.c, luac.c    the stand-alone interpreter and compiler
+
+No file carries a local modification. Of what is here, only the core and the
+libraries a configuration may use are compiled -- base, math, string, table,
+utf8 and os, the last trimmed to a few read-only functions at run time; see
+the list in bin/CMakeLists.txt.
+
+LICENSE is the copyright notice from the end of lua.h, unchanged. It is MIT,
+compatible with sif's GPL-3.0-or-later, and it ships in the wheel with the
+other bundled libraries' licences.
+
+To update: unpack the new release, replace every file here by its namesake
+from src/ (leaving out the three above), refresh LICENSE from lua.h and the
+version at the top of this file, and check the "Incompatibilities" section
+of doc/manual.html against bin/sif-exodus/config.c.

@@ -46,6 +46,15 @@ typedef enum {
   EXODUS_INPUT_GADGET
 } exodus_input_kind_t;
 
+/* What the radii are measured in. */
+typedef enum {
+  /* The units of the box, which are the catalogue's. */
+  EXODUS_RADII_PHYSICAL,
+  /* Mean tracer separations, box / N^(1/3): scaled to the box's units once
+   * the field has been read, and recorded that way in the catalogue. */
+  EXODUS_RADII_MPS
+} exodus_radii_units_t;
+
 /* The format the catalogue is written in. */
 typedef enum {
   /* /catalog in an HDF5 file, with the run's parameters as attributes. In a
@@ -102,8 +111,8 @@ typedef struct {
 
   /* --- density grid --------------------------------------------------- */
   struct {
-    /* Cells per side; 0 takes 4 cells per mean tracer separation,
-     * 4 * N^(1/3), rounded up to a size the FFT is fast at. */
+    /* Cells per side; 0 takes one cell per mean tracer separation,
+     * N^(1/3), rounded up to a size the FFT is fast at. */
     uint32_t n_cells;
   } grid;
 
@@ -116,9 +125,10 @@ typedef struct {
 
   /* --- finder --------------------------------------------------------- */
   struct {
-    /* The radius ladder, in any order, in the units of the box. */
+    /* The radius ladder, in any order, in `radii_units`. */
     const sif_real* radii;
     uint32_t n_radii;
+    exodus_radii_units_t radii_units;
     /* Density contrast a void is grown to; negative. */
     double threshold;
     /* Allowed overlap, as a fraction of the smaller void's radius. */
@@ -129,11 +139,22 @@ typedef struct {
   } finder;
 
   /* --- output --------------------------------------------------------- */
+  /* Written beside the path and moved into place when complete, replacing
+   * whatever was there. */
   struct {
     exodus_output_kind_t kind;
     const char* path;
   } output;
 } exodus_params_t;
+
+/* Cells per side of the default grid for n tracers: one per mean
+ * separation, rounded up to a size the FFT is fast at. */
+uint32_t pipeline_default_grid_cells(uint64_t n_tracers);
+
+/* About the most memory a box run holds at once, in bytes, from the sizes
+ * alone. */
+uint64_t pipeline_peak_bytes(
+  uint64_t n_tracers, bool weighted, uint32_t grid_cells, uint32_t mesh_cells);
 
 /* Run the pipeline on a periodic box. Returns SIF_OK, or the status of the
  * step that failed, which has already been logged. */

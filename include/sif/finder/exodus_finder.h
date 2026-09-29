@@ -265,4 +265,36 @@ static inline uint32_t sif_finder_suggest_mesh_cells(
   return (uint32_t)n;
 }
 
+/**
+ * @brief Suggested chain-mesh resolution for sif_finder_exodus_survey().
+ *
+ * sif_finder_suggest_mesh_cells() sizes a mesh for tracers that fill the box,
+ * which in a survey box they do not: they occupy the footprint, and the
+ * padding around it is empty by construction. Sized from the box average, a
+ * mesh would put several times the intended number of tracers in every cell
+ * the survey covers -- the only cells that cost anything. This sizes it for
+ * the density inside the footprint instead: the same rule, applied to the
+ * count the box would hold if it were filled at that density.
+ *
+ * The footprint is read off the randoms' grid, as the share of its cells that
+ * any random reached. CIC spreads each random over eight cells, so that share
+ * slightly overstates the footprint -- by about a cell along its boundary --
+ * and the suggestion errs a little coarse, which costs speed and never the
+ * result: the catalogue is the same at any mesh resolution.
+ *
+ * Call it once for each mesh -- the data's and the randoms' -- with that
+ * set's own count and the same random grid.
+ *
+ * @param n_particles Number of tracers the mesh will hold.
+ * @param random_grid The randoms' CIC density, from sif_grid_assign_cic() --
+ * NOT a density contrast -- over the box the meshes will span.
+ * @param max_radius Largest smoothing radius the run will use; see
+ * sif_finder_suggest_mesh_cells().
+ * @return n_cells to hand to sif_chain_mesh_alloc(), or 0 for invalid input
+ * (no tracers, a grid that holds no randoms or a density contrast) or a
+ * geometry no mesh can serve.
+ */
+SIF_NODISCARD uint32_t sif_finder_suggest_mesh_cells_survey(
+  uint64_t n_particles, const sif_grid_t* random_grid, sif_real max_radius);
+
 #endif /* SIF_FINDER_EXODUS_FINDER_H */

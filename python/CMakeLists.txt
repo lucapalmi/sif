@@ -54,6 +54,7 @@ set(PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/py_bbks.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/py_size_function.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/model/py_excursion_set.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/model/py_cosmology.c
 
     # Finders Submodule
     ${CMAKE_CURRENT_SOURCE_DIR}/src/finders/py_finders.c

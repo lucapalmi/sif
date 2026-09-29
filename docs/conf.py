@@ -64,7 +64,8 @@ extensions = [
     "sphinx.ext.intersphinx",
     "apitree",  # one API page per header, generated from include/sif
     "pytree",  # one API page per submodule, generated from pysif
-    "sphinx_design"
+    "sphinx_design",
+    "sphinx_copybutton",  # a copy button on every code block
 ]
 
 source_suffix = {".md": "markdown", ".rst": "restructuredtext"}
@@ -133,7 +134,17 @@ myst_heading_anchors = 3
 
 html_theme = "shibuya"
 html_static_path = ["_static"]
-html_css_files = ["custom.css"]
+templates_path = ["_templates"]
+html_css_files = [
+    "https://fonts.googleapis.com/css2?family=Inter:wght@400..800"
+    "&family=JetBrains+Mono:wght@400;600&display=swap",
+    "custom.css",
+]
+
+# globaltoc_expand_depth = 1 opens every top-level section of the sidebar,
+# and the two API trees are long enough to push everything else off the
+# screen; this closes them again unless the page is inside one.
+html_js_files = [("sidebar.js", {"defer": "defer"})]
 html_title = "sif"
 
 # A struct member is not a place on the page worth navigating to, and with one
@@ -142,10 +153,17 @@ html_title = "sif"
 toc_object_entries_show_parents = "hide"
 
 html_theme_options = {
-    "accent_color": "indigo",
+    "accent_color": "amber",
     "globaltoc_expand_depth": 1,
     "github_url": "https://github.com/lucapalmi/sif",
 }
+
+# The prompts in the shell examples are not part of the command: copying a
+# block takes what follows "$ " or ">>> " and leaves the prompt and any output.
+copybutton_prompt_text = r"\$ |>>> |\.\.\. "
+copybutton_prompt_is_regexp = True
+copybutton_only_copy_prompt_lines = False
+
 
 # --- Cross-project links ---------------------------------------------------
 

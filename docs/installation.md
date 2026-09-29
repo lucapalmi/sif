@@ -3,7 +3,6 @@
 :::::{tab-set}
 
 ::::{tab-item} Stable release
-<br>
 You can install the latest stable release with pip
 
 ```shell
@@ -14,7 +13,6 @@ In this case, the library is configured with HDF5 support.
 :::: 
 
 ::::{tab-item} Development
-<br>
 First, clone the repository and move into it
 
 ```shell

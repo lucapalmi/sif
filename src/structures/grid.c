@@ -16,6 +16,7 @@
 #include "sif/io/grid_io.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "structures/field_internal.h"
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -752,6 +753,9 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
     SIF_LOG_ERROR("grid_cic", "the field holds no particles to deposit");
     return SIF_ERR_INVALID;
   }
+
+  if (sif__field_require_cartesian(field, "grid_cic") != SIF_OK)
+    return SIF_ERR_INVALID;
 
   const int valid = grid_validate_positions(
     field->x, field->y, field->z, field->n_particles, grid->box_length);
