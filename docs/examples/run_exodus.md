@@ -239,10 +239,13 @@ target_link_libraries(run_exodus PRIVATE sif::sif m)
 
 ```lua
 -- exodus.lua
+mode = "box"
+
 input = {
   path = "path/to/snapshot",
   format = "gadget",
-  gadget = { ptype = 1, length = "mpc" },
+  ptype = 1,
+  length = "mpc",
 }
 
 -- the grid is left at its default: one cell per mean particle
@@ -279,11 +282,11 @@ at the top and `path = "path/to/snapdir_" .. snap .. "/snap_" .. snap`,
 `sif-exodus -D snap=042 exodus.lua` runs the same file on another
 snapshot.
 
-`sif-exodus --template` prints a configuration with every setting and its
-default:
+`sif-exodus --template box` prints a configuration with every setting and
+its default:
 
 :::{dropdown} The template
-```{literalinclude} ../../bin/sif-exodus/template.lua
+```{literalinclude} ../../bin/sif-exodus/template_box.lua
 :language: lua
 ```
 :::
@@ -592,6 +595,62 @@ done:
 ```
 
 It builds with the same `CMakeLists.txt` as the simulation example.
+::::
+
+::::{tab-item} sif-exodus
+
+```lua
+-- survey.lua
+mode = "survey"
+
+-- the galaxies and the randoms, each read as a box's input is: path,
+-- format and the format's settings. the columns are sky coordinates,
+-- which is what a survey reads unless coordinates = "cartesian" says
+-- otherwise; the cosmology takes them to comoving Mpc/h, and the voids
+-- back onto the sky. flat unless omega_de is given
+local cut = "Z > 0.43 && Z < 0.7"
+input = {
+  cosmology = { omega_m = 0.31 },
+  data = {
+    path = { "path/to/galaxies_NGC.fits", "path/to/galaxies_SGC.fits" },
+    format = "fits",
+    columns = { ra = "RA", dec = "DEC", z = "Z", w = "WEIGHT_SYSTOT * WEIGHT_CP" },
+    where = cut,
+  },
+  random = {
+    path = { "path/to/randoms_NGC.fits", "path/to/randoms_SGC.fits" },
+    format = "fits",
+    columns = { ra = "RA", dec = "DEC", z = "Z" },
+    where = cut,
+    fraction = 0.5,
+    seed = 1,
+  },
+}
+
+-- the box around the survey, its padding and the offset into it are
+-- worked out from the randoms; the grid spans that box
+grid = { n_cells = 512 }
+
+finder = {
+  radii = geomspace(10, 60, 60),
+  threshold = -0.7,
+}
+
+-- the run's settings, the cosmology among them, go in the metadata
+output = "path/to/voids.fits"
+```
+
+`sif-exodus --check survey.lua` shows what it resolves to and how large
+the run will be -- which for a survey means reading the files, since the
+footprint decides the box -- and `sif-exodus survey.lua` runs it.
+`sif-exodus --template survey` prints a configuration with every setting
+and its default:
+
+:::{dropdown} The template
+```{literalinclude} ../../bin/sif-exodus/template_survey.lua
+:language: lua
+```
+:::
 ::::
 
 :::::

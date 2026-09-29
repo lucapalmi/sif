@@ -5,7 +5,10 @@
  */
 
 /* The configuration file: a Lua script, run in a sandbox, whose sections --
- * input, grid, mesh, finder, output, run -- become an exodus_params_t.
+ * mode, then input, grid, mesh, finder, output, run -- become an
+ * exodus_params_t. mode, "box" or "survey", is required, and decides what
+ * the sections may hold: a survey's input names randoms and a cosmology
+ * where a box's names its box, and its mesh sizes two meshes.
  *
  * The script can compute anything Lua can (math, string, table, utf8, and
  * os.getenv/date/time/clock), but it cannot read or write files, run
@@ -59,7 +62,8 @@ typedef struct {
   sif_real* _radii;
   char** _strings;
   size_t _n_strings;
-  const char** _paths;
+  /* The data's (or a box's) path list, and the randoms'. */
+  const char** _paths[2];
 } exodus_config_t;
 
 /* Run the script at `path` and read it into `config`. Every problem found is
@@ -88,9 +92,11 @@ int config_check(const exodus_config_t* config, const char* file, bool summary);
 /* Release everything config_load() allocated. */
 void config_free(exodus_config_t* config);
 
-/* A commented configuration with every setting at its default, for
- * `sif-exodus --template`: template.lua, compiled in by CMakeLists.txt, so
- * that the documentation can show the same file. */
-extern const char config_template[];
+/* Commented configurations with every setting at its default, for
+ * `sif-exodus --template box` and `--template survey`: template_box.lua and
+ * template_survey.lua, compiled in by CMakeLists.txt, so that the
+ * documentation can show the same files. */
+extern const char config_template_box[];
+extern const char config_template_survey[];
 
 #endif /* SIF_EXODUS_CONFIG_H */

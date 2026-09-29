@@ -4,8 +4,9 @@
  * This file is part of sif. See COPYING for the full license text.
  */
 
-/* The exodus pipeline in a periodic box, from a particle file to a void
- * catalogue on disk:
+/* The exodus pipelines, from particle files to a void catalogue on disk.
+ *
+ * In a periodic box, pipeline_box():
  *
  *   field    read the positions (and weights, if asked for), fold them into
  *            the box
@@ -14,8 +15,19 @@
  *   finder   sif_finder_exodus() over the grid and the mesh
  *   catalog  write it, with what made it
  *
- * A survey, with randoms in place of the box mean, will be a pipeline of its
- * own beside this one (pipeline_survey()), chosen between in main.c.
+ * On a survey, pipeline_survey(), with randoms in place of the box mean:
+ *
+ *   fields   read the data and the randoms; take both off the sky with the
+ *            cosmology, if they are on it
+ *   box      measure the footprint off the randoms, choose the padded box
+ *            the survey is searched in, move both into it
+ *   grids    CIC-deposit each, left as densities
+ *   meshes   one each, sized for the density inside the footprint
+ *   finder   sif_finder_exodus_survey()
+ *   catalog  move the voids back out of the box -- and onto the sky, if
+ *            asked -- and write it, with what made it
+ *
+ * main.c chooses between them by exodus_params_t::mode.
  *
  * Everything the run needs is in exodus_params_t, which says nothing about
  * where it came from: the configuration file fills it, the pipeline only
@@ -31,6 +43,7 @@
 #include "sif/io/field_io.h"
 #include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
+#include "sif/model/cosmology.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -55,8 +68,9 @@ typedef enum {
 typedef enum {
   /* The units of the box, which are the catalogue's. */
   EXODUS_RADII_PHYSICAL,
-  /* Mean tracer separations, box / N^(1/3): scaled to the box's units once
-   * the field has been read, and recorded that way in the catalogue. */
+  /* Mean tracer separations, box / N^(1/3) -- on a survey, the data's
+   * inside the footprint: scaled to the box's units once the fields have
+   * been read, and recorded that way in the catalogue. */
   EXODUS_RADII_MPS
 } exodus_radii_units_t;
 
@@ -73,90 +87,127 @@ typedef enum {
   EXODUS_OUTPUT_FITS
 } exodus_output_kind_t;
 
+/* Which pipeline runs. */
+typedef enum {
+  /* A simulation: one tracer set in a periodic box. */
+  EXODUS_MODE_BOX,
+  /* A survey: data and randoms, with edges, possibly on the sky. */
+  EXODUS_MODE_SURVEY
+} exodus_mode_t;
+
+/* One particle file, or set of files, and how to read it: the tracers of a
+ * box, or a survey's data or randoms. */
 typedef struct {
-  /* --- input ---------------------------------------------------------- */
+  exodus_input_kind_t kind;
+  const char* path;
+
+  /* Side of the periodic box. 0 takes it from the file, which only an
+   * .xfield or a GADGET snapshot records; a text or raw binary input has to
+   * give it. Given for a file that records one, it wins, with a warning if
+   * the two disagree. */
+  double box_length;
+
+  /* ASCII and binary: the column format of sif_field_read_ascii() --
+   * "x y z", "* x y z w", ... Positions, and a weight if the run is to be
+   * weighted; velocity columns are refused, since the finder never reads
+   * them. An .xfield is read whole: it is sif's own, and carries what it
+   * was written with. */
+  const char* columns;
+
+  /* ASCII only. */
+  char delimiter;
+  uint32_t skip_header;
+
+  /* Binary only. */
   struct {
-    exodus_input_kind_t kind;
-    const char* path;
+    sif_binary_layout_t layout;
+    sif_binary_precision_t precision;
+    sif_binary_endian_t endian;
+    uint64_t header_bytes;
+  } binary;
 
-    /* Side of the periodic box. 0 takes it from the file, which only an
-     * .xfield or a GADGET snapshot records; a text or raw binary input has to
-     * give it. Given for a file that records one, it wins, with a warning if
-     * the two disagree. */
-    double box_length;
+  /* GADGET only. Velocities are never read. */
+  struct {
+    sif_gadget_format_t format;
+    sif_gadget_ptype_t ptype;
+    sif_gadget_length_t length;
+    /* Read particle masses into the weights. */
+    bool masses;
+    /* Share of the particles to keep, in (0, 1], and the subsample's
+     * seed. */
+    double fraction;
+    uint64_t seed;
+  } gadget;
 
-    /* ASCII and binary: the column format of sif_field_read_ascii() --
-     * "x y z", "* x y z w", ... Positions, and a weight if the run is to be
-     * weighted; velocity columns are refused, since the finder never reads
-     * them. An .xfield is read whole: it is sif's own, and carries what it
-     * was written with. */
-    const char* columns;
+  /* FITS and HDF5: the files, read as one catalogue in order -- `path`
+   * above is the first of them -- and what fills x, y, z and the weight:
+   * FITS columns or expressions, HDF5 datasets. Never velocities, which
+   * the finder does not read. */
+  const char* const* paths;
+  uint32_t n_paths;
+  sif_field_columns_t named;
 
-    /* ASCII only. */
-    char delimiter;
-    uint32_t skip_header;
+  /* FITS only. */
+  struct {
+    /* Row filter, or NULL. */
+    const char* where;
+    /* The table's EXTNAME or extension number, or NULL for the first. */
+    const char* hdu;
+    /* Share of the filtered rows to keep, in (0, 1], and its seed. */
+    double fraction;
+    uint64_t seed;
+  } fits;
 
-    /* Binary only. */
-    struct {
-      sif_binary_layout_t layout;
-      sif_binary_precision_t precision;
-      sif_binary_endian_t endian;
-      uint64_t header_bytes;
-    } binary;
+  /* HDF5 only. */
+  struct {
+    /* What Cartesian positions are multiplied by: 1e-3 from kpc/h. */
+    double length_scale;
+    double fraction;
+    uint64_t seed;
+  } hdf5;
+} exodus_input_t;
 
-    /* GADGET only. Velocities are never read. */
-    struct {
-      sif_gadget_format_t format;
-      sif_gadget_ptype_t ptype;
-      sif_gadget_length_t length;
-      /* Read particle masses into the weights. */
-      bool masses;
-      /* Share of the particles to keep, in (0, 1], and the subsample's
-       * seed. */
-      double fraction;
-      uint64_t seed;
-    } gadget;
+typedef struct {
+  exodus_mode_t mode;
 
-    /* FITS and HDF5: the files, read as one catalogue in order -- `path`
-     * above is the first of them -- and what fills x, y, z and the weight:
-     * FITS columns or expressions, HDF5 datasets. Never velocities, which
-     * the finder does not read. */
-    const char* const* paths;
-    uint32_t n_paths;
-    sif_field_columns_t named;
+  /* --- input ---------------------------------------------------------- */
+  /* The tracers: a box's, or a survey's data. */
+  exodus_input_t input;
+  /* Survey only: the randoms, which describe the footprint and the
+   * selection. Read like the data, from any format; box_length is not used. */
+  exodus_input_t randoms;
 
-    /* FITS only. */
-    struct {
-      /* Row filter, or NULL. */
-      const char* where;
-      /* The table's EXTNAME or extension number, or NULL for the first. */
-      const char* hdu;
-      /* Share of the filtered rows to keep, in (0, 1], and its seed. */
-      double fraction;
-      uint64_t seed;
-    } fits;
-
-    /* HDF5 only. */
-    struct {
-      /* What Cartesian positions are multiplied by: 1e-3 from kpc/h. */
-      double length_scale;
-      double fraction;
-      uint64_t seed;
-    } hdf5;
-  } input;
+  /* --- survey --------------------------------------------------------- */
+  struct {
+    /* The background that takes sky coordinates to comoving positions, in
+     * Mpc/h, and the voids back. Needed when the inputs are on the sky -- and
+     * both have to be, or neither -- and when sky is set. */
+    bool has_cosmology;
+    sif_cosmology_t cosmology;
+    /* Write the voids' centres as ra, dec and redshift; otherwise as
+     * comoving positions with the observer at the origin, the frame the
+     * inputs were in or were converted to. The configuration sets it from
+     * input.coordinates, so the voids come out as the inputs went in. */
+    bool sky;
+  } survey;
 
   /* --- density grid --------------------------------------------------- */
   struct {
-    /* Cells per side; 0 takes one cell per mean tracer separation,
-     * N^(1/3), rounded up to a size the FFT is fast at. */
+    /* Cells per side; 0 takes one cell per mean tracer separation, rounded
+     * up to a size the FFT is fast at. In a survey the separation is the
+     * data's inside the footprint, and the cells span the padded box. */
     uint32_t n_cells;
   } grid;
 
   /* --- chain mesh ----------------------------------------------------- */
   struct {
-    /* Cells per side; 0 takes sif_finder_suggest_mesh_cells(). Only speed
-     * and memory depend on it, never the catalogue. */
+    /* Cells per side -- a survey's data mesh -- where 0 takes
+     * sif_finder_suggest_mesh_cells(), or on a survey
+     * sif_finder_suggest_mesh_cells_survey(). Only speed and memory depend
+     * on it, never the catalogue. */
     uint32_t n_cells;
+    /* Survey only: the randoms' mesh, the same way. */
+    uint32_t n_cells_random;
   } mesh;
 
   /* --- finder --------------------------------------------------------- */
@@ -195,5 +246,42 @@ uint64_t pipeline_peak_bytes(
 /* Run the pipeline on a periodic box. Returns SIF_OK, or the status of the
  * step that failed, which has already been logged. */
 SIF_NODISCARD int pipeline_box(const exodus_params_t* params);
+
+/* Run the pipeline on a survey, the same way. */
+SIF_NODISCARD int pipeline_survey(const exodus_params_t* params);
+
+/* What a survey run will be. Unlike a box's, its shape is only known once
+ * the randoms are read -- the footprint sizes the box, the grid and the
+ * meshes -- so working it out reads both files and measures the footprint,
+ * as the run does first. */
+typedef struct {
+  uint64_t n_tracers;
+  uint64_t n_randoms;
+  bool weighted;
+  bool randoms_weighted;
+  /* The footprint's comoving volume, and the data's mean separation in it. */
+  double footprint_volume;
+  double mps;
+  /* The padded box the survey is searched in. */
+  double box;
+  /* The ladder's ends, in comoving units whatever it was given in. */
+  double r_min;
+  double r_max;
+  uint32_t grid_cells;
+  /* The meshes: as given, or about what the run will choose. */
+  uint32_t mesh_cells;
+  uint32_t random_mesh_cells;
+  uint64_t peak_bytes;
+} survey_plan_t;
+
+/* Work out `plan`, with the library initialized. Returns SIF_OK, or the
+ * status of what failed, already logged. */
+SIF_NODISCARD int pipeline_survey_plan(
+  const exodus_params_t* params, survey_plan_t* plan);
+
+/* About the most memory a survey run holds at once, in bytes. */
+uint64_t pipeline_survey_peak_bytes(uint64_t n_data, bool data_weighted,
+  uint64_t n_randoms, bool randoms_weighted, uint32_t grid_cells,
+  uint32_t data_mesh_cells, uint32_t random_mesh_cells);
 
 #endif /* SIF_EXODUS_PIPELINE_H */

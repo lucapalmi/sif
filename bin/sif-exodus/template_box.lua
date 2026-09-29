@@ -1,13 +1,17 @@
--- sif-exodus configuration.
+-- sif-exodus configuration: a periodic box.
 --
 -- A Lua script: settings are name = value, grouped in sections, and a
--- value can be anything Lua computes. Only input, finder.radii,
+-- value can be anything Lua computes. Only mode, input, finder.radii,
 -- finder.threshold and output are required; every other setting below
 -- is at its default and can be left out.
 --
 -- Command-line variables arrive as strings: `sif-exodus -D snap=010`
 -- makes `snap` here "010", and `snap = snap or "010"` gives it a
 -- default. `sif-exodus --check` shows what a file resolves to.
+
+-- box: a simulation, one tracer set in a periodic box. survey: data and
+-- randoms, with edges (sif-exodus --template survey).
+mode = "box"
 
 input = {
   path = "tracers.xfield",
@@ -19,35 +23,34 @@ input = {
   -- value here overrides; ascii, binary, FITS and HDF5 files need it.
   -- box_length = 1000,
 
-  -- One table for the format being read. Columns are x y z, w for a
-  -- weight, * for a column to skip: "* x y z w".
-  -- ascii = { columns = "x y z", delimiter = " ", skip_header = 0 },
-  -- binary = {
+  -- Beside path and format, the settings of that format, and only those.
+  --
+  -- ascii: columns are x y z, w for a weight, * for a column to skip.
+  --   columns = "x y z",      -- e.g. "* x y z w"
+  --   delimiter = " ",
+  --   skip_header = 0,
+  -- binary:
   --   columns = "x y z",
   --   precision = "float32",  -- float32 | float64: required
   --   layout = "rows",        -- rows (x0 y0 z0 x1 ...) | blocks (x0 x1 ... y0 ...)
   --   endian = "native",      -- native | little | big
   --   header_bytes = 0,
-  -- },
-  -- gadget = {
+  -- gadget:
   --   snapformat = "auto",    -- 1 | 2 | 3 (HDF5) | "auto"
   --   ptype = 1,
   --   length = "auto",        -- kpc | mpc | auto (HDF5 files only)
   --   masses = false,         -- true: particle masses as weights
   --   fraction = 1,           -- a random subsample, in (0, 1]
   --   seed = 0,
-  -- },
-  -- fits = {
-  --   -- A column, or an expression over columns: w = "W1 * W2",
-  --   -- x = "POS[1]" for an element of a vector column.
+  -- fits: a column, or an expression over columns, for each position --
+  -- w = "W1 * W2", x = "POS[1]" for an element of a vector column.
   --   columns = { x = "X", y = "Y", z = "Z" },  -- and w, for a weight
   --   where = "Z > 0",        -- rows to keep; nil keeps every row
   --   hdu = 1,                -- the table: EXTNAME or number; nil: the first
   --   fraction = 1,           -- a random subsample of the kept rows
   --   seed = 0,
-  -- },
-  -- hdf5 = {                  -- datasets of any HDF5 file
-  --   -- A dataset by its path; [k] is column k of a 2D one, from 0.
+  -- hdf5: a dataset for each position, by its path; [k] is column k of a
+  -- 2D one, from 0.
   --   columns = {
   --     x = "PartType1/Coordinates[0]",
   --     y = "PartType1/Coordinates[1]",
@@ -56,7 +59,6 @@ input = {
   --   length_scale = 1,       -- multiplies positions: 1e-3 from kpc/h
   --   fraction = 1,
   --   seed = 0,
-  -- },
 }
 
 grid = {

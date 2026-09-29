@@ -96,7 +96,15 @@ expect_status 2 "-D without ="
 # --- the template, and what --check makes of it ---------------------------
 
 run --template
-expect_status 0 "--template"
+expect_status 2 "--template without a mode"
+expect_error "--template takes the mode" "--template without a mode"
+
+run --template survey
+expect_status 0 "--template survey"
+grep -q '^mode = "survey"' out.txt || fail "--template survey: not a survey"
+
+run --template box
+expect_status 0 "--template box"
 cp out.txt template.lua
 if [ "$HDF5" -eq 0 ]; then
   run --check template.lua
@@ -124,6 +132,7 @@ cmp -s a.txt b.txt || fail "resolving the resolved configuration changed it"
 # --- mistakes -------------------------------------------------------------
 
 cat >typos.lua <<'EOF'
+mode = "box"
 input = "tracers.xfield"
 gird = { n_cells = 64 }
 finder = { radii = { 1, 2 }, treshold = -0.7 }
@@ -158,10 +167,13 @@ expect_status 2 "-D naming a section"
 # The legacy binary GADGET fixture: 100 type-1 particles in a 10 Mpc/h box,
 # found with -D the way a batch job would.
 cat >run.lua <<EOF
+mode = "box"
 input = {
   path = "$DATA/gadget/f1_legacy/snap_005",
   format = "gadget",
-  gadget = { snapformat = 1, ptype = tonumber(ptype), length = "kpc" },
+  snapformat = 1,
+  ptype = tonumber(ptype),
+  length = "kpc",
 }
 grid = { n_cells = 16 }
 finder = { radii = { 2, 1.5 }, threshold = -0.7 }
@@ -199,18 +211,17 @@ expect_error "has no particles of type 4" "a type the snapshot does not have"
 # The HDF5 GADGET fixture holds the particles of the binary one: read as a
 # plain HDF5 file, through its datasets, it gives the same voids.
 cat >h5.lua <<EOF
+mode = "box"
 input = {
   path = "$DATA/gadget/hdf5_legacy/snap_005.hdf5",
   format = "hdf5",
   box_length = 10,
-  hdf5 = {
-    columns = {
-      x = "ParticleType1/Coordinates[0]",
-      y = "ParticleType1/Coordinates[1]",
-      z = "ParticleType1/Coordinates[2]",
-    },
-    length_scale = 1e-3,
+  columns = {
+    x = "ParticleType1/Coordinates[0]",
+    y = "ParticleType1/Coordinates[1]",
+    z = "ParticleType1/Coordinates[2]",
   },
+  length_scale = 1e-3,
 }
 grid = { n_cells = 16 }
 finder = { radii = { 2, 1.5 }, threshold = -0.7 }
@@ -237,6 +248,7 @@ if [ "$HDF5" -eq 1 ]; then
 fi
 
 cat >h5_bad.lua <<EOF
+mode = "box"
 input = { path = "$DATA/gadget/hdf5_legacy/snap_005.hdf5", format = "hdf5",
   box_length = 10 }
 finder = { radii = { 1 }, threshold = -0.7 }
@@ -244,7 +256,7 @@ output = "voids.txt"
 EOF
 run --check h5_bad.lua
 expect_status 2 "an hdf5 input without datasets"
-expect_error "input.hdf5: missing" "an hdf5 input without datasets"
+expect_error "input.columns: missing" "an hdf5 input without datasets"
 
 # --- a FITS catalogue ------------------------------------------------------
 
@@ -252,13 +264,12 @@ expect_error "input.hdf5: missing" "an hdf5 input without datasets"
 # are no survey's, only numbers to read: POS is a vector column, and the
 # weight an expression over two others.
 cat >fits.lua <<EOF
+mode = "box"
 input = {
   path = { "$DATA/fits/part_a.fits", "$DATA/fits/part_b.fits" },
   box_length = 400,
-  fits = {
-    columns = { x = "POS[1]", y = "RA", z = "POS[3]", w = "W1 * W2" },
-    where = "Z < 0.5",
-  },
+  columns = { x = "POS[1]", y = "RA", z = "POS[3]", w = "W1 * W2" },
+  where = "Z < 0.5",
 }
 grid = { n_cells = 16 }
 finder = { radii = { 80, 60 }, threshold = -0.7 }
@@ -313,20 +324,25 @@ fi
 
 # Mistakes a FITS configuration can make, found whatever the build.
 cat >fits_bad.lua <<EOF
+mode = "box"
 input = {
   path = "$DATA/fits/catalogue.fits",
-  fits = { columns = { x = "RA", y = "DEC", vx = "RA" } },
+  columns = { x = "RA", y = "DEC", vx = "RA" },
+  delimiter = ",",
 }
 finder = { radii = { 1 }, threshold = -0.7 }
 output = "voids.txt"
 EOF
 run --check fits_bad.lua
 expect_status 2 "FITS mistakes"
-expect_error "input.fits.columns.vx: velocities are not read" "FITS mistakes"
-expect_error "input.fits.columns.z: missing" "FITS mistakes"
+expect_error "input.columns.vx: velocities are not read" "FITS mistakes"
+expect_error "input.columns.z: missing" "FITS mistakes"
+expect_error "input.delimiter: a setting of ascii files, and this is fits" \
+  "FITS mistakes"
 expect_error "input.box_length: missing" "FITS mistakes"
 
 cat >list_bad.lua <<EOF
+mode = "box"
 input = {
   path = { "a", "b" },
   format = "gadget",
@@ -338,6 +354,142 @@ run --check list_bad.lua
 expect_status 2 "a list of files for GADGET"
 expect_error "input.path: a list of files, which only the fits and hdf5 formats" \
   "a list of files for GADGET"
+
+# --- the mode --------------------------------------------------------------
+
+cat >nomode.lua <<'EOF'
+input = "tracers.xfield"
+finder = { radii = { 1 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check nomode.lua
+expect_status 2 "no mode"
+expect_error 'mode: missing: mode = "box"' "no mode"
+
+# A key of the other mode is named as such.
+cat >crossed.lua <<'EOF'
+mode = "box"
+input = { path = "tracers.xfield", random = "r.xfield" }
+mesh = { n_cells_data = 16 }
+finder = { radii = { 1 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check crossed.lua
+expect_status 2 "survey keys in a box"
+expect_error 'input.random: a setting of mode = "survey"' "survey keys in a box"
+expect_error 'mesh.n_cells_data: a setting of mode = "survey"' "survey keys in a box"
+
+# --- a survey ---------------------------------------------------------------
+
+# A patch of sky, 40 by 30 degrees at redshift 0.1 to 0.2, uniformly filled:
+# data and randoms alike, five times as many randoms. awk's generator makes
+# it; the voids are whatever it gives, only their shape is checked.
+sky_points() {
+  awk -v n="$1" -v seed="$2" 'BEGIN {
+    srand(seed); pi = atan2(0, -1); top = sin(30 * pi / 180)
+    for (i = 0; i < n; i++) {
+      s = top * rand()
+      printf "%.6f %.6f %.6f\n", 150 + 40 * rand(),
+        atan2(s, sqrt(1 - s * s)) * 180 / pi, 0.1 + 0.1 * rand()
+    }
+  }'
+}
+sky_points 3000 1 >sky_data.txt
+sky_points 15000 2 >sky_randoms.txt
+
+cat >survey.lua <<'EOF'
+mode = "survey"
+input = {
+  cosmology = { omega_m = 0.31 },
+  data = { path = "sky_data.txt", format = "ascii" },
+  random = { path = "sky_randoms.txt", format = "ascii" },
+}
+finder = { radii = { 45, 35 }, threshold = -0.7 }
+output = "survey_voids.txt"
+run = { log_level = "warning" }
+EOF
+run survey.lua
+expect_status 0 "a survey"
+grep -q '^#mode="survey"' survey_voids.txt ||
+  fail "a survey: the catalogue does not record its mode"
+grep -q '^#ra dec z r footprint footprint_shell$' survey_voids.txt ||
+  fail "a survey on the sky: the voids are not on the sky, with footprints"
+
+run --check survey.lua
+expect_status 0 "survey --check"
+expect_error "data: 3000 unweighted tracers; randoms: 15000" "survey --check"
+expect_error "memory: about" "survey --check"
+grep -q 'coordinates = "sky"' out.txt || fail "a survey: sky is not the default"
+cp out.txt survey_resolved.lua
+run --check survey_resolved.lua
+tail -n +2 survey_resolved.lua >a.txt
+tail -n +2 out.txt >b.txt
+cmp -s a.txt b.txt || fail "resolving a resolved survey configuration changed it"
+
+# A survey in Cartesian coordinates: positions in, positions out, and no
+# cosmology. The patch's numbers, read as positions, make a slab.
+awk '{ print $1 - 150, 10 * $2, 1000 * $3 }' sky_data.txt >xyz_data.txt
+awk '{ print $1 - 150, 10 * $2, 1000 * $3 }' sky_randoms.txt >xyz_randoms.txt
+cat >cartesian.lua <<'EOF'
+mode = "survey"
+input = {
+  coordinates = "cartesian",
+  data = { path = "xyz_data.txt", format = "ascii", columns = "x y z" },
+  random = { path = "xyz_randoms.txt", format = "ascii", columns = "x y z" },
+}
+mesh = { n_cells_data = 12, n_cells_random = 16 }
+finder = { radii = { 25, 20 }, threshold = -0.7 }
+output = "cartesian_voids.txt"
+run = { log_level = "warning" }
+EOF
+run cartesian.lua
+expect_status 0 "a Cartesian survey"
+grep -q '^#cx cy cz r footprint footprint_shell$' cartesian_voids.txt ||
+  fail "a Cartesian survey: the voids are not in Cartesian coordinates"
+grep -q '^#random_mesh_n_cells=16$' cartesian_voids.txt ||
+  fail "a Cartesian survey: mesh.n_cells_random was not used"
+
+# A mesh coarser than the search sphere breaks the padding the box has.
+sed 's/n_cells_data = 12/n_cells_data = 4/' cartesian.lua >coarse.lua
+run coarse.lua
+expect_status 1 "a mesh too coarse for the survey box"
+expect_error "mesh.n_cells_data = 4 makes cells of" "a mesh too coarse for the survey box"
+run --check coarse.lua
+expect_status 2 "--check: a mesh too coarse for the survey box"
+expect_error "mesh.n_cells_data = 4 makes cells of" "a mesh too coarse for the survey box"
+
+# What a survey configuration can get wrong.
+cat >survey_bad.lua <<'EOF'
+mode = "survey"
+input = {
+  path = "sky_data.txt",
+  box_length = 100,
+  data = { path = "sky_data.txt", format = "ascii", columns = "x y z" },
+  random = { path = "r.xfield" },
+}
+mesh = { n_cells = 16 }
+finder = { radii = { 40 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check survey_bad.lua
+expect_status 2 "survey mistakes"
+expect_error 'input.box_length: a setting of mode = "box"' "survey mistakes"
+expect_error "input.path: a survey reads two inputs" "survey mistakes"
+expect_error 'mesh.n_cells: a setting of mode = "box"' "survey mistakes"
+expect_error "input.cosmology: missing" "survey mistakes"
+expect_error 'input.coordinates is "sky": read ra dec z' "survey mistakes"
+expect_error "input.random.format: xfield files hold positions" "survey mistakes"
+
+cat >box_sky.lua <<'EOF'
+mode = "box"
+input = { path = "d.txt", format = "ascii", box_length = 10,
+  columns = "ra dec z" }
+finder = { radii = { 4 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check box_sky.lua
+expect_status 2 "sky coordinates in a box"
+expect_error "which only a survey does" "sky coordinates in a box"
 
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"

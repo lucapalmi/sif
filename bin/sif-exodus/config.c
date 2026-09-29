@@ -31,11 +31,18 @@
 
 /* --- what a configuration may say ------------------------------------ */
 
+/* The top level: mode, which is a setting rather than a section, and the
+ * sections. */
 static const char* const SECTIONS[] = {
-  "input", "grid", "mesh", "finder", "output", "run", NULL};
+  "mode", "input", "grid", "mesh", "finder", "output", "run", NULL};
 
-static const char* const INPUT_KEYS[] = {"path", "format", "box_length",
-  "ascii", "binary", "gadget", "fits", "hdf5", NULL};
+/* Some sections take other keys in a survey than in a box. */
+
+/* An input -- a box's, or a survey's data or randoms -- is its path and
+ * format, and the settings of that format, next to them: FORMAT_KEYS, in
+ * the order of exodus_input_kind_t. */
+static const char* const SOURCE_KEYS[] = {"path", "format", NULL};
+static const char* const XFIELD_KEYS[] = {NULL};
 static const char* const ASCII_KEYS[] = {
   "columns", "delimiter", "skip_header", NULL};
 static const char* const BINARY_KEYS[] = {
@@ -46,12 +53,33 @@ static const char* const FITS_KEYS[] = {
   "columns", "where", "hdu", "fraction", "seed", NULL};
 static const char* const HDF5_KEYS[] = {
   "columns", "length_scale", "fraction", "seed", NULL};
+static const char* const* const FORMAT_KEYS[] = {
+  XFIELD_KEYS, ASCII_KEYS, BINARY_KEYS, GADGET_KEYS, FITS_KEYS, HDF5_KEYS};
+
+/* Every key a box's input can hold, whatever its format: what tells a
+ * setting written at the top level that it belongs there. */
+static const char* const INPUT_KEYS[] = {"path", "format", "box_length",
+  "columns", "delimiter", "skip_header", "precision", "layout", "endian",
+  "header_bytes", "snapformat", "ptype", "length", "masses", "fraction", "seed",
+  "where", "hdu", "length_scale", NULL};
+/* A box's input holds one input, and its box. */
+static const char* const BOX_INPUT_KEYS[] = {"box_length", NULL};
+/* A survey's holds two, and what they share. */
+static const char* const SURVEY_INPUT_KEYS[] = {
+  "data", "random", "coordinates", "cosmology", NULL};
+static const char* const COSMOLOGY_KEYS[] = {
+  "omega_m", "omega_de", "omega_r", "w0", "wa", NULL};
+/* The columns of a fits or hdf5 table: positions, or sky coordinates. */
 static const char* const FITS_COLUMN_KEYS[] = {"x", "y", "z", "w", NULL};
-/* Keys refused with a message of their own, rather than as unknown. */
-static const char* const FITS_COLUMN_REFUSED[] = {
+static const char* const SKY_COLUMN_KEYS[] = {"ra", "dec", "z", "w", NULL};
+/* Every name a columns table can hold; those not read in the run at hand
+ * are refused with a message of their own, rather than as unknown. */
+static const char* const COLUMN_NAMES[] = {
   "x", "y", "z", "w", "vx", "vy", "vz", "ra", "dec", NULL};
 static const char* const GRID_KEYS[] = {"n_cells", NULL};
 static const char* const MESH_KEYS[] = {"n_cells", NULL};
+static const char* const SURVEY_MESH_KEYS[] = {
+  "n_cells_data", "n_cells_random", NULL};
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
   "overlap_fraction", "search_factor", NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
@@ -63,11 +91,14 @@ static const char* const RUN_KEYS[] = {
 static const struct {
   const char* section;
   const char* const* keys;
-} SECTION_KEYS[] = {{"input", INPUT_KEYS}, {"grid", GRID_KEYS},
-  {"mesh", MESH_KEYS}, {"finder", FINDER_KEYS}, {"output", OUTPUT_KEYS},
-  {"run", RUN_KEYS}};
+} SECTION_KEYS[] = {{"input", INPUT_KEYS}, {"input", SURVEY_INPUT_KEYS},
+  {"grid", GRID_KEYS}, {"mesh", MESH_KEYS}, {"mesh", SURVEY_MESH_KEYS},
+  {"finder", FINDER_KEYS}, {"output", OUTPUT_KEYS}, {"run", RUN_KEYS}};
 
 /* Enumerations, in the order of the C enums they stand for. */
+static const char* const MODES[] = {"box", "survey", NULL};
+/* Not an enum: sky is exodus_params_t::survey.sky. */
+static const char* const COORDINATES[] = {"sky", "cartesian", NULL};
 static const char* const INPUT_FORMATS[] = {
   "xfield", "ascii", "binary", "gadget", "fits", "hdf5", NULL};
 static const char* const OUTPUT_FORMATS[] = {"hdf5", "ascii", "fits", NULL};
@@ -246,9 +277,10 @@ static int field(lua_State* L, int t, const char* key) {
   return lua_rawget(L, t);
 }
 
-/* Every key of the table at t has to be one of `keys`. */
-static void check_keys(
-  reader_t* r, int t, const char* path, const char* const* keys) {
+/* Every key of the table at t has to be one of `keys`. One of `other`, if
+ * given, is a key of the other mode, `other_mode`, and said to be. */
+static void check_keys_in(reader_t* r, int t, const char* path,
+  const char* const* keys, const char* const* other, const char* other_mode) {
 
   lua_State* L = r->L;
   char w[160], names[256];
@@ -262,7 +294,12 @@ static void check_keys(
         luaL_typename(L, -2));
     } else {
       const char* key = lua_tostring(L, -2);
-      if (list_index(key, keys) < 0) {
+      if (list_index(key, keys) < 0 && other && list_index(key, other) >= 0) {
+        list_names(names, sizeof names, keys);
+        report(r, at(w, sizeof w, path, key),
+          "a setting of mode = \"%s\"; here %s takes %s", other_mode, path,
+          names);
+      } else if (list_index(key, keys) < 0) {
         const char* guess = closest(key, keys);
         if (guess) {
           report(r, at(w, sizeof w, path, key),
@@ -276,6 +313,11 @@ static void check_keys(
     }
     lua_pop(L, 1);
   }
+}
+
+static void check_keys(
+  reader_t* r, int t, const char* path, const char* const* keys) {
+  check_keys_in(r, t, path, keys, NULL, NULL);
 }
 
 static void type_error(
@@ -445,6 +487,31 @@ static char* keep(exodus_config_t* c, const char* s) {
   return copy;
 }
 
+/* check_keys, for a section whose keys depend on the mode. */
+static void check_mode_keys(reader_t* r, int t, const char* path,
+  const exodus_config_t* c, const char* const* box_keys,
+  const char* const* survey_keys) {
+  const bool survey = c->params.mode == EXODUS_MODE_SURVEY;
+  check_keys_in(r, t, path, survey ? survey_keys : box_keys,
+    survey ? box_keys : survey_keys, survey ? "box" : "survey");
+}
+
+/* mode: required, and read before anything else, since it decides what the
+ * rest may say. */
+static bool read_mode(reader_t* r, int root, exodus_config_t* c) {
+  int i;
+  if (get_enum(r, root, "", "mode", MODES, &i)) {
+    c->params.mode = (exodus_mode_t)i;
+    return true;
+  }
+  if (field(r->L, root, "mode") == LUA_TNIL)
+    report(r, "mode",
+      "missing: mode = \"box\" for a simulation, or \"survey\" for data "
+      "and randoms");
+  lua_pop(r->L, 1);
+  return false;
+}
+
 static void set_defaults(exodus_config_t* c) {
   exodus_params_t* p = &c->params;
   memset(p, 0, sizeof *p);
@@ -462,6 +529,8 @@ static void set_defaults(exodus_config_t* c) {
   p->input.fits.fraction = 1.0;
   p->input.hdf5.fraction = 1.0;
   p->input.hdf5.length_scale = 1.0;
+  p->randoms = p->input;
+  p->survey.sky = true;
 
   p->finder.radii_units = EXODUS_RADII_PHYSICAL;
   p->finder.overlap_fraction = 0.0;
@@ -473,173 +542,236 @@ static void set_defaults(exodus_config_t* c) {
   c->run.tune_fft = true;
 }
 
-/* input.ascii or input.binary: the column format, and velocities refused
- * here as well as in the pipeline, since here the message can say where. */
+/* Whether the positions being read are sky coordinates: a survey's, with
+ * input.coordinates = "sky". */
+static bool on_sky(const exodus_config_t* c) {
+  return c->params.mode == EXODUS_MODE_SURVEY && c->params.survey.sky;
+}
+
+/* One input being read, and what its messages call it: a box's tracers
+ * ("input"), or a survey's data ("input.data") or randoms ("input.random"). */
+typedef struct {
+  exodus_input_t* in;
+  const char* name;
+  /* Which of the configuration's path lists it owns. */
+  int slot;
+} source_t;
+
+/* An ascii or binary input's column format, checked here as well as by the
+ * reader, since here the message can say where: velocities are never read,
+ * and the positions have to be the coordinates the run says. In the column
+ * language only ra and dec have an r or a d in them. */
 static void read_columns(
-  reader_t* r, int t, const char* path, exodus_config_t* c) {
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
 
   char w[160];
   const char* columns;
-  if (!get_string(r, t, path, "columns", &columns))
+  at(w, sizeof w, s->name, "columns");
+  const int type = field(r->L, t, "columns");
+  lua_pop(r->L, 1);
+  if (type == LUA_TTABLE) {
+    report(r, w,
+      "%s files take a column format, such as columns = \"%s\"; a table of "
+      "names is for fits and hdf5",
+      INPUT_FORMATS[s->in->kind], on_sky(c) ? "ra dec z" : "x y z");
     return;
-  if (strchr(columns, 'v') || strchr(columns, 'V')) {
-    report(r, at(w, sizeof w, path, "columns"),
+  }
+  if (!get_string(r, t, s->name, "columns", &columns))
+    return;
+
+  const bool sky_names = strpbrk(columns, "rRdD") != NULL;
+  if (strchr(columns, 'v') || strchr(columns, 'V'))
+    report(r, w,
       "\"%s\" reads velocities, which the finder never uses; skip them with *",
       columns);
-    return;
-  }
-  /* Sky coordinates need the survey finder, which this program does not run
-   * yet: a box is filled with positions. In the column language only ra and
-   * dec have an r or a d in them. */
-  if (strpbrk(columns, "rRdD")) {
-    report(r, at(w, sizeof w, path, "columns"),
-      "\"%s\" reads sky coordinates (ra dec z); sif-exodus finds voids in a "
-      "box, from positions x y z",
+  else if (sky_names && c->params.mode == EXODUS_MODE_BOX)
+    report(r, w,
+      "\"%s\" reads sky coordinates (ra dec z), which only a survey does: set "
+      "mode = \"survey\", or read positions x y z",
       columns);
-    return;
-  }
-  c->params.input.columns = keep(c, columns);
+  else if (sky_names && !on_sky(c))
+    report(r, w,
+      "\"%s\" reads sky coordinates (ra dec z), but input.coordinates is "
+      "\"cartesian\": read x y z",
+      columns);
+  else if (!sky_names && on_sky(c) && strpbrk(columns, "xXyY"))
+    report(r, w,
+      "\"%s\" reads positions (x y z), but input.coordinates is \"sky\": read "
+      "ra dec z, or set coordinates = \"cartesian\"",
+      columns);
+  else
+    s->in->columns = keep(c, columns);
 }
 
-static void read_ascii(reader_t* r, int t, exodus_config_t* c) {
-  const char* path = "input.ascii";
+/* fraction and seed: the subsample every reader that has one takes. */
+static void read_subsample(
+  reader_t* r, int t, const source_t* s, double* fraction, uint64_t* seed) {
+  char w[160];
+  double x;
+  int64_t v;
+  if (get_number(r, t, s->name, "fraction", &x)) {
+    if (x > 0.0 && x <= 1.0)
+      *fraction = x;
+    else
+      report(r, at(w, sizeof w, s->name, "fraction"),
+        "must be in (0, 1], got %g", x);
+  }
+  if (get_integer(r, t, s->name, "seed", 0, INT64_MAX, &v))
+    *seed = (uint64_t)v;
+}
+
+static void read_ascii(
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
   char w[160];
   const char* delim;
   int64_t v;
 
-  check_keys(r, t, path, ASCII_KEYS);
-  read_columns(r, t, path, c);
-
-  if (get_string(r, t, path, "delimiter", &delim)) {
+  read_columns(r, t, s, c);
+  if (get_string(r, t, s->name, "delimiter", &delim)) {
     if (strlen(delim) != 1)
-      report(r, at(w, sizeof w, path, "delimiter"),
+      report(r, at(w, sizeof w, s->name, "delimiter"),
         "must be one character, such as \" \", \",\" or \"\\t\"; got \"%s\"",
         delim);
     else
-      c->params.input.delimiter = delim[0];
+      s->in->delimiter = delim[0];
   }
-  if (get_integer(r, t, path, "skip_header", 0, UINT32_MAX, &v))
-    c->params.input.skip_header = (uint32_t)v;
+  if (get_integer(r, t, s->name, "skip_header", 0, UINT32_MAX, &v))
+    s->in->skip_header = (uint32_t)v;
 }
 
-static void read_binary(reader_t* r, int t, exodus_config_t* c) {
-  const char* path = "input.binary";
+static void read_binary(
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
+  char w[160];
   int i;
   int64_t v;
 
-  check_keys(r, t, path, BINARY_KEYS);
-  read_columns(r, t, path, c);
-
-  if (get_enum(r, t, path, "precision", PRECISIONS, &i))
-    c->params.input.binary.precision = SIF_BINARY_FLOAT32 + i;
+  read_columns(r, t, s, c);
+  if (get_enum(r, t, s->name, "precision", PRECISIONS, &i))
+    s->in->binary.precision = SIF_BINARY_FLOAT32 + i;
   else if (field(r->L, t, "precision") == LUA_TNIL)
-    report(r, "input.binary.precision",
-      "required: \"float32\" or \"float64\", the file does not say");
+    report(r, at(w, sizeof w, s->name, "precision"),
+      "missing: \"float32\" or \"float64\", which a binary file does not say");
   lua_settop(r->L, t);
 
-  if (get_enum(r, t, path, "layout", LAYOUTS, &i))
-    c->params.input.binary.layout = SIF_BINARY_ROWS + i;
-  if (get_enum(r, t, path, "endian", ENDIANS, &i))
-    c->params.input.binary.endian = SIF_BINARY_NATIVE + i;
-  if (get_integer(r, t, path, "header_bytes", 0, INT64_MAX, &v))
-    c->params.input.binary.header_bytes = (uint64_t)v;
+  if (get_enum(r, t, s->name, "layout", LAYOUTS, &i))
+    s->in->binary.layout = SIF_BINARY_ROWS + i;
+  if (get_enum(r, t, s->name, "endian", ENDIANS, &i))
+    s->in->binary.endian = SIF_BINARY_NATIVE + i;
+  if (get_integer(r, t, s->name, "header_bytes", 0, INT64_MAX, &v))
+    s->in->binary.header_bytes = (uint64_t)v;
 }
 
-static void read_gadget(reader_t* r, int t, exodus_config_t* c) {
-  const char* path = "input.gadget";
+static void read_gadget(reader_t* r, int t, const source_t* s) {
   lua_State* L = r->L;
   char w[160];
   int i;
   int64_t v;
-  double x;
   bool b;
-
-  check_keys(r, t, path, GADGET_KEYS);
 
   /* SnapFormat, as GADGET's own parameter file spells it: 1, 2 or 3 (HDF5),
    * or "auto" to read it from the file. */
   const int type = field(L, t, "snapformat");
   if (type == LUA_TSTRING && strcmp(lua_tostring(L, -1), "auto") == 0) {
-    c->params.input.gadget.format = SIF_GADGET_FORMAT_AUTO;
+    s->in->gadget.format = SIF_GADGET_FORMAT_AUTO;
   } else if (type == LUA_TSTRING && strcmp(lua_tostring(L, -1), "hdf5") == 0) {
-    c->params.input.gadget.format = SIF_GADGET_FORMAT_HDF5;
+    s->in->gadget.format = SIF_GADGET_FORMAT_HDF5;
   } else if (type == LUA_TNUMBER && lua_isinteger(L, -1) &&
              lua_tointeger(L, -1) >= 1 && lua_tointeger(L, -1) <= 3) {
-    c->params.input.gadget.format =
+    s->in->gadget.format =
       SIF_GADGET_FORMAT_1 + (int)(lua_tointeger(L, -1) - 1);
   } else if (type != LUA_TNIL) {
-    report(r, at(w, sizeof w, path, "snapformat"),
+    report(r, at(w, sizeof w, s->name, "snapformat"),
       "must be 1, 2, 3 (HDF5) or \"auto\"");
   }
   lua_pop(L, 1);
 
-  if (get_integer(r, t, path, "ptype", 0, 5, &v))
-    c->params.input.gadget.ptype = SIF_GADGET_PTYPE_0 + (int)v;
-  if (get_enum(r, t, path, "length", LENGTHS, &i))
-    c->params.input.gadget.length = SIF_GADGET_LENGTH_KPC + i;
-  if (get_bool(r, t, path, "masses", &b))
-    c->params.input.gadget.masses = b;
-  if (get_number(r, t, path, "fraction", &x)) {
-    if (x > 0.0 && x <= 1.0)
-      c->params.input.gadget.fraction = x;
-    else
-      report(
-        r, at(w, sizeof w, path, "fraction"), "must be in (0, 1], got %g", x);
-  }
-  if (get_integer(r, t, path, "seed", 0, INT64_MAX, &v))
-    c->params.input.gadget.seed = (uint64_t)v;
+  if (get_integer(r, t, s->name, "ptype", 0, 5, &v))
+    s->in->gadget.ptype = SIF_GADGET_PTYPE_0 + (int)v;
+  if (get_enum(r, t, s->name, "length", LENGTHS, &i))
+    s->in->gadget.length = SIF_GADGET_LENGTH_KPC + i;
+  if (get_bool(r, t, s->name, "masses", &b))
+    s->in->gadget.masses = b;
+  read_subsample(r, t, s, &s->in->gadget.fraction, &s->in->gadget.seed);
 }
 
-/* input.fits.columns or input.hdf5.columns: what fills x, y, z and,
- * optionally, the weight -- a FITS column or expression, an HDF5 dataset. */
+/* What a columns table names the positions by: x y z, or ra dec z on the
+ * sky. */
+static const char* columns_example(const exodus_config_t* c) {
+  return on_sky(c) ? "columns = { ra = \"RA\", dec = \"DEC\", z = \"Z\" }"
+                   : "columns = { x = \"X\", y = \"Y\", z = \"Z\" }";
+}
+
+/* A fits or hdf5 input's columns table: what fills the three positions and,
+ * optionally, the weight -- a FITS column or expression, an HDF5 dataset.
+ * The positions are x, y, z, or ra, dec, z for a survey on the sky. */
 static void read_named_columns(
-  reader_t* r, int t, const char* section, exodus_config_t* c) {
-  char path[64];
-  snprintf(path, sizeof path, "%s.columns", section);
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
+  char path[80], w[160];
+  at(path, sizeof path, s->name, "columns");
   lua_State* L = r->L;
-  sif_field_columns_t* cols = &c->params.input.named;
-  const char* const* keys = FITS_COLUMN_KEYS;
-  const char** slots[] = {&cols->x, &cols->y, &cols->z, &cols->w};
+  sif_field_columns_t* cols = &s->in->named;
+  const bool sky = on_sky(c);
+  const char* const* keys = sky ? SKY_COLUMN_KEYS : FITS_COLUMN_KEYS;
+  const char** slots[4];
+  slots[0] = sky ? &cols->ra : &cols->x;
+  slots[1] = sky ? &cols->dec : &cols->y;
+  slots[2] = &cols->z;
+  slots[3] = &cols->w;
 
   const int type = field(L, t, "columns");
   const int ct = lua_gettop(L);
   if (type == LUA_TNIL) {
+    report(r, path, "missing: what to read, as %s", columns_example(c));
+  } else if (type == LUA_TSTRING) {
     report(r, path,
-      "missing: the columns to read, as columns = { x = \"X\", y = \"Y\", "
-      "z = \"Z\" }");
+      "%s files take a table of what fills each position, as %s; a column "
+      "format string is for ascii and binary",
+      INPUT_FORMATS[s->in->kind], columns_example(c));
   } else if (type != LUA_TTABLE) {
-    type_error(r, section, "columns", "a table", type);
+    type_error(r, s->name, "columns", "a table", type);
   } else {
-    /* Velocities have no key: the finder never reads them. */
+    /* Names that mean something, but not here, get a message of their own
+     * rather than "unknown key" -- and positions named for the other
+     * coordinates are not also reported missing. */
+    bool misnamed = false;
     lua_pushnil(L);
     while (lua_next(L, ct)) {
       const char* key =
         lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
-      if (key && (strcmp(key, "vx") == 0 || strcmp(key, "vy") == 0 ||
-                   strcmp(key, "vz") == 0)) {
-        char w[160];
+      const bool velocity =
+        key && (strcmp(key, "vx") == 0 || strcmp(key, "vy") == 0 ||
+                 strcmp(key, "vz") == 0);
+      const bool radec =
+        key && (strcmp(key, "ra") == 0 || strcmp(key, "dec") == 0);
+      const bool xy = key && (strcmp(key, "x") == 0 || strcmp(key, "y") == 0);
+      misnamed = misnamed || (radec && !sky) || (xy && sky);
+      if (velocity)
         report(r, at(w, sizeof w, path, key),
           "velocities are not read: the finder never uses them");
-      } else if (key && (strcmp(key, "ra") == 0 || strcmp(key, "dec") == 0)) {
-        char w[160];
+      else if (radec && c->params.mode == EXODUS_MODE_BOX)
         report(r, at(w, sizeof w, path, key),
-          "sky coordinates are not read: sif-exodus finds voids in a box, "
-          "from positions x y z");
-      }
+          "sky coordinates are read by a survey only: set mode = \"survey\", "
+          "or name x, y and z");
+      else if (radec && !sky)
+        report(r, at(w, sizeof w, path, key),
+          "input.coordinates is \"cartesian\": name x, y and z");
+      else if (xy && sky)
+        report(r, at(w, sizeof w, path, key),
+          "input.coordinates is \"sky\": name ra, dec and z, or set "
+          "coordinates = \"cartesian\"");
       lua_pop(L, 1);
     }
     lua_settop(L, ct);
-    check_keys(r, ct, path, FITS_COLUMN_REFUSED);
+    check_keys(r, ct, path, COLUMN_NAMES);
 
     for (int i = 0; keys[i]; i++) {
       const char* v;
-      char w[160];
       if (get_string(r, ct, path, keys[i], &v)) {
         if (!*v)
           report(r, at(w, sizeof w, path, keys[i]), "is empty");
         else if (!(*slots[i] = keep(c, v)))
           report(r, at(w, sizeof w, path, keys[i]), "out of memory");
-      } else if (i < 3 && field(L, ct, keys[i]) == LUA_TNIL) {
+      } else if (i < 3 && !misnamed && field(L, ct, keys[i]) == LUA_TNIL) {
         report(r, at(w, sizeof w, path, keys[i]),
           "missing: all three positions are required");
       }
@@ -649,107 +781,87 @@ static void read_named_columns(
   lua_settop(L, ct - 1);
 }
 
-static void read_fits(reader_t* r, int t, exodus_config_t* c) {
-  const char* path = "input.fits";
+static void read_fits(
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
   lua_State* L = r->L;
   char w[160];
   const char* v;
-  int64_t n;
-  double x;
 
-  check_keys(r, t, path, FITS_KEYS);
-  read_named_columns(r, t, path, c);
-
-  if (get_string(r, t, path, "where", &v) && *v)
-    c->params.input.fits.where = keep(c, v);
+  read_named_columns(r, t, s, c);
+  if (get_string(r, t, s->name, "where", &v) && *v)
+    s->in->fits.where = keep(c, v);
 
   /* The table: its EXTNAME, or its extension number, 1 for the first. */
   const int type = field(L, t, "hdu");
   if (type == LUA_TSTRING && *lua_tostring(L, -1)) {
-    c->params.input.fits.hdu = keep(c, lua_tostring(L, -1));
+    s->in->fits.hdu = keep(c, lua_tostring(L, -1));
   } else if (type == LUA_TNUMBER && lua_isinteger(L, -1) &&
              lua_tointeger(L, -1) >= 0) {
     char num[32];
     snprintf(num, sizeof num, "%lld", (long long)lua_tointeger(L, -1));
-    c->params.input.fits.hdu = keep(c, num);
+    s->in->fits.hdu = keep(c, num);
   } else if (type != LUA_TNIL) {
-    report(r, at(w, sizeof w, path, "hdu"),
+    report(r, at(w, sizeof w, s->name, "hdu"),
       "must be the table's EXTNAME or its extension number (1 for the "
       "first)");
   }
   lua_settop(L, t);
-
-  if (get_number(r, t, path, "fraction", &x)) {
-    if (x > 0.0 && x <= 1.0)
-      c->params.input.fits.fraction = x;
-    else
-      report(
-        r, at(w, sizeof w, path, "fraction"), "must be in (0, 1], got %g", x);
-  }
-  if (get_integer(r, t, path, "seed", 0, INT64_MAX, &n))
-    c->params.input.fits.seed = (uint64_t)n;
+  read_subsample(r, t, s, &s->in->fits.fraction, &s->in->fits.seed);
 }
 
-/* input.hdf5: datasets of any HDF5 file. */
-static void read_hdf5_input(reader_t* r, int t, exodus_config_t* c) {
-  const char* path = "input.hdf5";
+/* An hdf5 input: datasets of any HDF5 file. */
+static void read_hdf5_input(
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
   char w[160];
-  int64_t n;
   double x;
 
-  check_keys(r, t, path, HDF5_KEYS);
-  read_named_columns(r, t, path, c);
-
-  if (get_number(r, t, path, "length_scale", &x)) {
+  read_named_columns(r, t, s, c);
+  if (get_number(r, t, s->name, "length_scale", &x)) {
     if (x > 0.0)
-      c->params.input.hdf5.length_scale = x;
+      s->in->hdf5.length_scale = x;
     else
-      report(r, at(w, sizeof w, path, "length_scale"),
+      report(r, at(w, sizeof w, s->name, "length_scale"),
         "must be positive, got %g", x);
   }
-  if (get_number(r, t, path, "fraction", &x)) {
-    if (x > 0.0 && x <= 1.0)
-      c->params.input.hdf5.fraction = x;
-    else
-      report(
-        r, at(w, sizeof w, path, "fraction"), "must be in (0, 1], got %g", x);
-  }
-  if (get_integer(r, t, path, "seed", 0, INT64_MAX, &n))
-    c->params.input.hdf5.seed = (uint64_t)n;
+  read_subsample(r, t, s, &s->in->hdf5.fraction, &s->in->hdf5.seed);
 }
 
-/* input.path as a list of files, which only FITS and HDF5 inputs read.
- * Returns the first, or NULL after reporting what is wrong. */
-static const char* read_path_list(reader_t* r, int t, exodus_config_t* c) {
+/* path as a list of files, which only FITS and HDF5 inputs read. Returns the
+ * first, or NULL after reporting what is wrong. */
+static const char* read_path_list(
+  reader_t* r, int t, const source_t* s, exodus_config_t* c) {
   lua_State* L = r->L;
   field(L, t, "path");
   const int lt = lua_gettop(L);
   const char* first = NULL;
-  char w[160];
+  char where[64], w[160];
+  at(where, sizeof where, s->name, "path");
 
   const lua_Integer n = (lua_Integer)lua_rawlen(L, lt);
+  const char** paths = NULL;
   if (n == 0 || n > UINT32_MAX) {
-    report(r, "input.path", "an empty list: name the files to read");
-  } else if (!(c->_paths = calloc((size_t)n, sizeof(char*)))) {
-    report(r, "input.path", "out of memory");
+    report(r, where, "an empty list: name the files to read");
+  } else if (!(paths = calloc((size_t)n, sizeof(char*)))) {
+    report(r, where, "out of memory");
   } else {
+    c->_paths[s->slot] = paths;
     bool ok = true;
     for (lua_Integer i = 1; i <= n; i++) {
       const int et = lua_rawgeti(L, lt, i);
-      snprintf(w, sizeof w, "input.path[%lld]", (long long)i);
+      snprintf(w, sizeof w, "%s[%lld]", where, (long long)i);
       if (et != LUA_TSTRING || !*lua_tostring(L, -1)) {
         report(r, w, "must be a file name");
         ok = false;
-      } else if (!(c->_paths[i - 1] = keep(c, lua_tostring(L, -1)))) {
+      } else if (!(paths[i - 1] = keep(c, lua_tostring(L, -1)))) {
         report(r, w, "out of memory");
         ok = false;
       }
       lua_pop(L, 1);
     }
     if (ok) {
-      c->params.input.paths = c->_paths;
-      c->params.input.n_paths = (uint32_t)n;
-      first = c->_paths[0];
+      s->in->paths = paths;
+      s->in->n_paths = (uint32_t)n;
+      first = paths[0];
     }
   }
   lua_settop(L, t);
@@ -761,51 +873,98 @@ static bool is_fits_name(const char* path) {
          ends_with(path, ".fits.gz") || ends_with(path, ".fit.gz");
 }
 
-static void read_input(reader_t* r, int root, exodus_config_t* c) {
+/*
+ * The keys of an input's table: path and format, `extra` (the box's
+ * box_length), and the settings of its format -- or, when the format could
+ * not be told, of any format, since what is wrong then is the format. A
+ * setting of another format is said to be one.
+ */
+static void check_source_keys(
+  reader_t* r, int t, const source_t* s, int format, const char* const* extra) {
+
   lua_State* L = r->L;
-  exodus_params_t* p = &c->params;
-  const int base = lua_gettop(L);
+  char w[160];
+  lua_pushnil(L);
+  while (lua_next(L, t)) {
+    const char* key =
+      lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
+    if (!key) {
+      report(r, s->name,
+        "holds name = value settings, not a list; found an entry with a %s "
+        "key",
+        luaL_typename(L, -2));
+    } else if (list_index(key, SOURCE_KEYS) < 0 &&
+               !(extra && list_index(key, extra) >= 0) &&
+               !(format >= 0 && list_index(key, FORMAT_KEYS[format]) >= 0)) {
+      int owner = -1;
+      for (int k = 0; k < 6 && owner < 0; k++)
+        if (list_index(key, FORMAT_KEYS[k]) >= 0)
+          owner = k;
+      if (owner >= 0 && format >= 0)
+        report(r, at(w, sizeof w, s->name, key),
+          "a setting of %s files, and this is %s", INPUT_FORMATS[owner],
+          INPUT_FORMATS[format]);
+      else if (owner < 0 && s->slot == 0 &&
+               list_index(key, SURVEY_INPUT_KEYS) >= 0 &&
+               strcmp(s->name, "input") == 0)
+        report(
+          r, at(w, sizeof w, s->name, key), "a setting of mode = \"survey\"");
+      else if (owner < 0) {
+        const char* guess = closest(key, INPUT_KEYS);
+        if (guess)
+          report(r, at(w, sizeof w, s->name, key),
+            "unknown key (did you mean %s?)", guess);
+        else
+          report(r, at(w, sizeof w, s->name, key), "unknown key");
+      }
+    }
+    lua_pop(L, 1);
+  }
+}
+
+/*
+ * One input, whose value is at index v: a file name, or a table of path,
+ * format and the format's settings, and `extra` -- which the caller reads.
+ * Returns the format, or -1 if it could not be told.
+ */
+static int read_source(reader_t* r, int v, const source_t* s,
+  exodus_config_t* c, const char* const* extra) {
+
+  lua_State* L = r->L;
+  exodus_input_t* in = s->in;
   const char* path = NULL;
   int format = -1;
   int t = 0;
   char all[128], w[160];
 
   bool path_list = false;
-  const int type = field(L, root, "input");
-  if (type == LUA_TSTRING) {
-    path = lua_tostring(L, -1);
-  } else if (type == LUA_TTABLE) {
-    t = lua_gettop(L);
-    check_keys(r, t, "input", INPUT_KEYS);
+  bool format_given = false;
+  if (lua_type(L, v) == LUA_TSTRING) {
+    path = lua_tostring(L, v);
+  } else {
+    t = v;
     const int path_type = field(L, t, "path");
     lua_settop(L, t);
     if (path_type == LUA_TTABLE) {
       path_list = true;
-      path = read_path_list(r, t, c);
-    } else if (!get_string(r, t, "input", "path", &path) &&
+      path = read_path_list(r, t, s, c);
+    } else if (!get_string(r, t, s->name, "path", &path) &&
                path_type == LUA_TNIL) {
-      report(r, "input.path", "missing: the file to read");
+      report(r, at(w, sizeof w, s->name, "path"), "missing: the file to read");
     }
     lua_settop(L, t);
-    get_enum(r, t, "input", "format", INPUT_FORMATS, &format);
-  } else if (type == LUA_TNIL) {
-    report(r, "input",
-      "missing: the tracers, as input = \"file.xfield\" or input = { path = "
-      "..., format = ... }");
-  } else {
-    report(r, "input", "must be a file name or a table, got a %s",
-      lua_typename(L, type));
+    get_enum(r, t, s->name, "format", INPUT_FORMATS, &format);
+    format_given = field(L, t, "format") != LUA_TNIL;
+    lua_settop(L, t);
   }
 
   if (path && !path_list)
-    p->input.path = keep(c, path);
+    in->path = keep(c, path);
   else if (path)
-    p->input.path = path; /* kept already, as the list's first */
+    in->path = path; /* kept already, as the list's first */
 
   /* Only sif's own files, and FITS files, say what they are by their
    * name: a .dat or a .bin could be anything. */
-  const bool format_given = t && field(L, t, "format") != LUA_TNIL;
-  lua_settop(L, t ? t : base + 1);
   if (format < 0 && path && !format_given) {
     if (ends_with(path, ".xfield")) {
       format = EXODUS_INPUT_XFIELD;
@@ -813,95 +972,257 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
       format = EXODUS_INPUT_FITS;
     } else {
       list_names(all, sizeof all, INPUT_FORMATS);
-      report(r, "input.format",
+      report(r, at(w, sizeof w, s->name, "format"),
         "missing: the format of \"%s\" cannot be told from its name (%s)", path,
         all);
     }
   }
   if (format >= 0)
-    p->input.kind = (exodus_input_kind_t)format;
+    in->kind = (exodus_input_kind_t)format;
 
-  const bool named = format >= 0 && (p->input.kind == EXODUS_INPUT_FITS ||
-                                      p->input.kind == EXODUS_INPUT_HDF5);
+  /* A file of positions cannot hold sky coordinates. */
+  if (format >= 0 && on_sky(c) &&
+      (in->kind == EXODUS_INPUT_XFIELD || in->kind == EXODUS_INPUT_GADGET))
+    report(r, at(w, sizeof w, s->name, "format"),
+      "%s files hold positions, and input.coordinates is \"sky\": set "
+      "coordinates = \"cartesian\"",
+      INPUT_FORMATS[in->kind]);
+
+  const bool named = format >= 0 && (in->kind == EXODUS_INPUT_FITS ||
+                                      in->kind == EXODUS_INPUT_HDF5);
   if (path_list && format >= 0 && !named)
-    report(r, "input.path",
+    report(r, at(w, sizeof w, s->name, "path"),
       "a list of files, which only the fits and hdf5 formats read; %s reads "
       "one",
-      INPUT_FORMATS[p->input.kind]);
+      INPUT_FORMATS[in->kind]);
 
   /* A single FITS or HDF5 file is a list of one. */
-  if (named && !path_list && p->input.path) {
-    c->_paths = malloc(sizeof(char*));
-    if (c->_paths) {
-      c->_paths[0] = p->input.path;
-      p->input.paths = c->_paths;
-      p->input.n_paths = 1;
+  if (named && !path_list && in->path) {
+    c->_paths[s->slot] = malloc(sizeof(char*));
+    if (c->_paths[s->slot]) {
+      c->_paths[s->slot][0] = in->path;
+      in->paths = c->_paths[s->slot];
+      in->n_paths = 1;
     } else {
-      report(r, "input.path", "out of memory");
+      report(r, at(w, sizeof w, s->name, "path"), "out of memory");
     }
   }
 
-  if (t) {
+  /* On the sky, the text and binary columns default to ra dec z. */
+  if (on_sky(c))
+    in->columns = "ra dec z";
+
+  if (t)
+    check_source_keys(r, t, s, format, extra);
+  if (format < 0)
+    return format;
+
+  if (!t) {
+    /* A bare file name: fine for the formats that need nothing else. */
+    if (in->kind == EXODUS_INPUT_BINARY)
+      report(r, at(w, sizeof w, s->name, "precision"),
+        "missing: a binary file needs at least its precision, as { path = "
+        "..., format = \"binary\", precision = \"float32\" }");
+    else if (named)
+      report(r, at(w, sizeof w, s->name, "columns"),
+        "missing: what to read, as { path = ..., %s }", columns_example(c));
+    return format;
+  }
+
+  switch (in->kind) {
+  case EXODUS_INPUT_ASCII:
+    read_ascii(r, t, s, c);
+    break;
+  case EXODUS_INPUT_BINARY:
+    read_binary(r, t, s, c);
+    break;
+  case EXODUS_INPUT_GADGET:
+    read_gadget(r, t, s);
+    break;
+  case EXODUS_INPUT_FITS:
+    read_fits(r, t, s, c);
+    break;
+  case EXODUS_INPUT_HDF5:
+    read_hdf5_input(r, t, s, c);
+    break;
+  case EXODUS_INPUT_XFIELD:
+    break;
+  }
+  lua_settop(L, t);
+  return format;
+}
+
+/* input.cosmology: the background that takes the survey off the sky, and
+ * its voids back. A flat model unless omega_de is given. */
+static void read_cosmology(reader_t* r, int t, exodus_config_t* c) {
+  const char* path = "input.cosmology";
+  lua_State* L = r->L;
+  sif_cosmology_t* k = &c->params.survey.cosmology;
+  char w[160];
+  double x;
+
+  const int type = field(L, t, "cosmology");
+  const int ct = lua_gettop(L);
+  if (type == LUA_TNIL) {
+    if (on_sky(c))
+      report(r, path,
+        "missing: the background that turns redshifts into distances, as "
+        "cosmology = { omega_m = 0.31 }");
+  } else if (type != LUA_TTABLE) {
+    type_error(r, "input", "cosmology", "a table", type);
+  } else if (!on_sky(c)) {
+    report(r, path,
+      "not used: input.coordinates is \"cartesian\", so nothing is taken "
+      "off the sky or put back on it");
+  } else {
+    check_keys(r, ct, path, COSMOLOGY_KEYS);
+    k->omega_m = 0.0;
+    k->omega_r = 0.0;
+    k->w0 = -1.0;
+    k->wa = 0.0;
+    bool flat = true;
+
+    if (get_number(r, ct, path, "omega_m", &x)) {
+      if (x > 0.0)
+        k->omega_m = x;
+      else
+        report(
+          r, at(w, sizeof w, path, "omega_m"), "must be positive, got %g", x);
+    } else if (field(L, ct, "omega_m") == LUA_TNIL) {
+      report(r, at(w, sizeof w, path, "omega_m"),
+        "missing: the matter density today, e.g. 0.31");
+    }
+    lua_settop(L, ct);
+    if (get_number(r, ct, path, "omega_r", &x)) {
+      if (x >= 0.0)
+        k->omega_r = x;
+      else
+        report(
+          r, at(w, sizeof w, path, "omega_r"), "must be at least 0, got %g", x);
+    }
+    if (get_number(r, ct, path, "omega_de", &x)) {
+      if (x >= 0.0) {
+        k->omega_de = x;
+        flat = false;
+      } else {
+        report(r, at(w, sizeof w, path, "omega_de"),
+          "must be at least 0, got %g", x);
+      }
+    }
+    if (get_number(r, ct, path, "w0", &x))
+      k->w0 = x;
+    if (get_number(r, ct, path, "wa", &x))
+      k->wa = x;
+    if (flat)
+      k->omega_de = 1.0 - k->omega_m - k->omega_r;
+    c->params.survey.has_cosmology = true;
+  }
+  lua_settop(L, ct - 1);
+}
+
+/* A survey's input: the data and the randoms, each read like a box's input,
+ * and what they share -- the coordinates and the cosmology. */
+static void read_survey_input(reader_t* r, int t, exodus_config_t* c) {
+  lua_State* L = r->L;
+  exodus_params_t* p = &c->params;
+  const source_t sets[2] = {
+    {&p->input, "input.data", 0}, {&p->randoms, "input.random", 1}};
+  const char* const what[2] = {"the data", "the random catalogue"};
+  char w[160];
+  int i;
+
+  /* The keys of a box's input, written straight into a survey's, get told
+   * where they go. */
+  lua_pushnil(L);
+  while (lua_next(L, t)) {
+    const char* key =
+      lua_type(L, -2) == LUA_TSTRING ? lua_tostring(L, -2) : NULL;
+    if (!key) {
+      report(r, "input",
+        "holds name = value settings, not a list; found an entry with a %s "
+        "key",
+        luaL_typename(L, -2));
+    } else if (list_index(key, SURVEY_INPUT_KEYS) >= 0) {
+      /* read below */
+    } else if (strcmp(key, "box_length") == 0) {
+      report(r, "input.box_length",
+        "a setting of mode = \"box\": a survey's box is chosen around its "
+        "footprint");
+    } else if (list_index(key, INPUT_KEYS) >= 0) {
+      report(r, at(w, sizeof w, "input", key),
+        "a survey reads two inputs, each with its own %s: input = { data = { "
+        "%s = ... }, random = { %s = ... } }",
+        key, key, key);
+    } else {
+      const char* guess = closest(key, SURVEY_INPUT_KEYS);
+      if (guess)
+        report(r, at(w, sizeof w, "input", key),
+          "unknown key (did you mean %s?)", guess);
+      else
+        report(r, at(w, sizeof w, "input", key),
+          "unknown key; a survey's input takes data, random, coordinates and "
+          "cosmology");
+    }
+    lua_pop(L, 1);
+  }
+
+  /* The coordinates first: they decide what the columns may name. */
+  if (get_enum(r, t, "input", "coordinates", COORDINATES, &i))
+    p->survey.sky = i == 0;
+  read_cosmology(r, t, c);
+
+  for (int k = 0; k < 2; k++) {
+    const int type = field(L, t, k == 0 ? "data" : "random");
+    const int v = lua_gettop(L);
+    if (type == LUA_TNIL)
+      report(r, sets[k].name, "missing: %s, as { path = ..., format = ... }",
+        what[k]);
+    else if (type == LUA_TTABLE || type == LUA_TSTRING)
+      read_source(r, v, &sets[k], c, NULL);
+    else
+      report(r, sets[k].name, "must be a file name or a table, got a %s",
+        lua_typename(L, type));
+    lua_settop(L, t);
+  }
+}
+
+static void read_input(reader_t* r, int root, exodus_config_t* c) {
+  lua_State* L = r->L;
+  exodus_params_t* p = &c->params;
+  const bool survey = p->mode == EXODUS_MODE_SURVEY;
+  const int base = lua_gettop(L);
+  const source_t box_input = {&p->input, "input", 0};
+  int format = -1;
+
+  const int type = field(L, root, "input");
+  const int t = lua_gettop(L);
+  if (type == LUA_TNIL) {
+    report(r, "input",
+      survey ? "missing: the data and the randoms, as input = { data = { path "
+               "= ... }, random = { path = ... } }"
+             : "missing: the tracers, as input = \"file.xfield\" or input = { "
+               "path = ..., format = ... }");
+  } else if (type == LUA_TSTRING && survey) {
+    report(r, "input",
+      "a survey reads data and randoms: input = { data = { path = ... }, "
+      "random = { path = ... } }");
+  } else if (type != LUA_TTABLE && type != LUA_TSTRING) {
+    report(r, "input", "must be a file name or a table, got a %s",
+      lua_typename(L, type));
+  } else if (survey) {
+    read_survey_input(r, t, c);
+  } else {
+    format = read_source(r, t, &box_input, c, BOX_INPUT_KEYS);
     double box;
-    if (get_number(r, t, "input", "box_length", &box)) {
+    if (type == LUA_TTABLE && get_number(r, t, "input", "box_length", &box)) {
       if (box > 0.0)
         p->input.box_length = box;
       else
         report(r, "input.box_length", "must be positive, got %g", box);
     }
-
-    /* One sub-table per format, and only the one the format reads. */
-    static const char* const subs[] = {
-      "ascii", "binary", "gadget", "fits", "hdf5"};
-    static const exodus_input_kind_t kinds[] = {EXODUS_INPUT_ASCII,
-      EXODUS_INPUT_BINARY, EXODUS_INPUT_GADGET, EXODUS_INPUT_FITS,
-      EXODUS_INPUT_HDF5};
-    for (int i = 0; i < 5; i++) {
-      const int st = field(L, t, subs[i]);
-      const int s = lua_gettop(L);
-      if (st == LUA_TTABLE) {
-        if (format >= 0 && p->input.kind != kinds[i])
-          report(r, at(w, sizeof w, "input", subs[i]),
-            "given, but input.format is %s", INPUT_FORMATS[p->input.kind]);
-        else if (kinds[i] == EXODUS_INPUT_ASCII)
-          read_ascii(r, s, c);
-        else if (kinds[i] == EXODUS_INPUT_BINARY)
-          read_binary(r, s, c);
-        else if (kinds[i] == EXODUS_INPUT_GADGET)
-          read_gadget(r, s, c);
-        else if (kinds[i] == EXODUS_INPUT_FITS)
-          read_fits(r, s, c);
-        else
-          read_hdf5_input(r, s, c);
-      } else if (st != LUA_TNIL) {
-        type_error(r, "input", subs[i], "a table", st);
-      } else if (format >= 0 && p->input.kind == EXODUS_INPUT_BINARY &&
-                 kinds[i] == EXODUS_INPUT_BINARY) {
-        report(r, "input.binary",
-          "missing: a binary file needs at least its precision, as binary = "
-          "{ precision = \"float32\" }");
-      } else if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS &&
-                 kinds[i] == EXODUS_INPUT_FITS) {
-        report(r, "input.fits",
-          "missing: a FITS table needs its columns named, as fits = { "
-          "columns = { x = \"X\", y = \"Y\", z = \"Z\" } }");
-      } else if (format >= 0 && p->input.kind == EXODUS_INPUT_HDF5 &&
-                 kinds[i] == EXODUS_INPUT_HDF5) {
-        report(r, "input.hdf5",
-          "missing: an HDF5 file needs its datasets named, as hdf5 = { "
-          "columns = { x = \"Group/Pos[0]\", ... } }");
-      }
-      lua_settop(L, t);
-    }
-  } else if (format >= 0 && p->input.kind == EXODUS_INPUT_BINARY) {
-    report(r, "input.binary", "missing: a binary file needs its precision");
-  } else if (format >= 0 && p->input.kind == EXODUS_INPUT_FITS) {
-    report(r, "input.fits", "missing: a FITS table needs its columns named");
-  } else if (format >= 0 && p->input.kind == EXODUS_INPUT_HDF5) {
-    report(r, "input.hdf5", "missing: an HDF5 file needs its datasets named");
   }
 
-  if (format >= 0 &&
+  if (!survey && format >= 0 &&
       (p->input.kind == EXODUS_INPUT_ASCII ||
         p->input.kind == EXODUS_INPUT_BINARY ||
         p->input.kind == EXODUS_INPUT_FITS ||
@@ -915,7 +1236,7 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
   lua_settop(L, base);
 }
 
-/* grid and mesh have one setting each, and the same one. */
+/* grid: one setting, the same in either mode. */
 static void read_cells(reader_t* r, int root, const char* name,
   const char* const* keys, int64_t min, uint32_t* n_cells) {
 
@@ -927,6 +1248,28 @@ static void read_cells(reader_t* r, int root, const char* name,
     get_count(r, t, name, "n_cells", min, 1 << 16, n_cells);
   } else if (type != LUA_TNIL) {
     report(r, name, "must be a table, got a %s", lua_typename(L, type));
+  }
+  lua_settop(L, t - 1);
+}
+
+/* mesh: one in a box, and in a survey one for the data and one for the
+ * randoms, each sized for its own density. */
+static void read_mesh(reader_t* r, int root, exodus_config_t* c) {
+  lua_State* L = r->L;
+  const int type = field(L, root, "mesh");
+  const int t = lua_gettop(L);
+  if (type == LUA_TTABLE) {
+    check_mode_keys(r, t, "mesh", c, MESH_KEYS, SURVEY_MESH_KEYS);
+    if (c->params.mode == EXODUS_MODE_SURVEY) {
+      get_count(
+        r, t, "mesh", "n_cells_data", 1, 1 << 16, &c->params.mesh.n_cells);
+      get_count(r, t, "mesh", "n_cells_random", 1, 1 << 16,
+        &c->params.mesh.n_cells_random);
+    } else {
+      get_count(r, t, "mesh", "n_cells", 1, 1 << 16, &c->params.mesh.n_cells);
+    }
+  } else if (type != LUA_TNIL) {
+    report(r, "mesh", "must be a table, got a %s", lua_typename(L, type));
   }
   lua_settop(L, t - 1);
 }
@@ -1260,12 +1603,13 @@ static void push_sandbox(lua_State* L) {
 
 /* --- the resolved configuration ---------------------------------------- */
 
-/* The columns = { ... } line of a fits or hdf5 table. */
-static void write_named_columns(FILE* out, const sif_field_columns_t* cols) {
-  fputs("    columns = { x = ", out);
-  write_lua_string(out, cols->x);
-  fputs(", y = ", out);
-  write_lua_string(out, cols->y);
+/* The columns = { ... } line of a fits or hdf5 input, at indent `ind`. */
+static void write_named_columns(
+  FILE* out, const sif_field_columns_t* cols, const char* ind, bool sky) {
+  fprintf(out, "%scolumns = { %s = ", ind, sky ? "ra" : "x");
+  write_lua_string(out, sky ? cols->ra : cols->x);
+  fprintf(out, ", %s = ", sky ? "dec" : "y");
+  write_lua_string(out, sky ? cols->dec : cols->y);
   fputs(", z = ", out);
   write_lua_string(out, cols->z);
   if (cols->w) {
@@ -1275,10 +1619,103 @@ static void write_named_columns(FILE* out, const sif_field_columns_t* cols) {
   fputs(" },\n", out);
 }
 
+/* One input's path and format, as the keys of a table at indent `ind`. */
+static void write_source_head(
+  FILE* out, const exodus_input_t* in, const char* ind) {
+  fprintf(out, "%spath = ", ind);
+  if ((in->kind == EXODUS_INPUT_FITS || in->kind == EXODUS_INPUT_HDF5) &&
+      in->n_paths > 1) {
+    fputs("{\n", out);
+    for (uint32_t i = 0; i < in->n_paths; i++) {
+      fprintf(out, "%s  ", ind);
+      write_lua_string(out, in->paths[i]);
+      fputs(",\n", out);
+    }
+    fprintf(out, "%s}", ind);
+  } else {
+    write_lua_string(out, in->path);
+  }
+  fprintf(out, ",\n%sformat = \"%s\",\n", ind, INPUT_FORMATS[in->kind]);
+}
+
+/* The settings of its format, beside them. */
+static void write_source_settings(
+  FILE* out, const exodus_input_t* in, const char* ind, bool sky) {
+  char num[40];
+  switch (in->kind) {
+  case EXODUS_INPUT_ASCII: {
+    const char delim[2] = {in->delimiter, '\0'};
+    fprintf(out, "%scolumns = ", ind);
+    write_lua_string(out, in->columns);
+    fprintf(out, ",\n%sdelimiter = ", ind);
+    write_lua_string(out, delim);
+    fprintf(out, ",\n%sskip_header = %u,\n", ind, in->skip_header);
+    break;
+  }
+  case EXODUS_INPUT_BINARY:
+    fprintf(out, "%scolumns = ", ind);
+    write_lua_string(out, in->columns);
+    fprintf(out,
+      ",\n%sprecision = \"%s\",\n%slayout = \"%s\",\n%sendian = \"%s\",\n"
+      "%sheader_bytes = %llu,\n",
+      ind, PRECISIONS[in->binary.precision - SIF_BINARY_FLOAT32], ind,
+      LAYOUTS[in->binary.layout - SIF_BINARY_ROWS], ind,
+      ENDIANS[in->binary.endian - SIF_BINARY_NATIVE], ind,
+      (unsigned long long)in->binary.header_bytes);
+    break;
+  case EXODUS_INPUT_GADGET: {
+    const sif_gadget_format_t f = in->gadget.format;
+    fprintf(out, "%ssnapformat = ", ind);
+    if (f == SIF_GADGET_FORMAT_AUTO)
+      fputs("\"auto\"", out);
+    else
+      fprintf(out, "%d", (int)(f - SIF_GADGET_FORMAT_1) + 1);
+    format_double(num, sizeof num, in->gadget.fraction);
+    fprintf(out,
+      ",\n%sptype = %d,\n%slength = \"%s\",\n%smasses = %s,\n%sfraction = "
+      "%s,\n%sseed = %llu,\n",
+      ind, (int)(in->gadget.ptype - SIF_GADGET_PTYPE_0), ind,
+      LENGTHS[in->gadget.length - SIF_GADGET_LENGTH_KPC], ind,
+      in->gadget.masses ? "true" : "false", ind, num, ind,
+      (unsigned long long)in->gadget.seed);
+    break;
+  }
+  case EXODUS_INPUT_FITS:
+    write_named_columns(out, &in->named, ind, sky);
+    if (in->fits.where) {
+      fprintf(out, "%swhere = ", ind);
+      write_lua_string(out, in->fits.where);
+      fputs(",\n", out);
+    }
+    if (in->fits.hdu) {
+      fprintf(out, "%shdu = ", ind);
+      write_lua_string(out, in->fits.hdu);
+      fputs(",\n", out);
+    }
+    format_double(num, sizeof num, in->fits.fraction);
+    fprintf(out, "%sfraction = %s,\n%sseed = %llu,\n", ind, num, ind,
+      (unsigned long long)in->fits.seed);
+    break;
+  case EXODUS_INPUT_HDF5: {
+    char scale[40];
+    write_named_columns(out, &in->named, ind, sky);
+    format_double(scale, sizeof scale, in->hdf5.length_scale);
+    format_double(num, sizeof num, in->hdf5.fraction);
+    fprintf(out, "%slength_scale = %s,\n%sfraction = %s,\n%sseed = %llu,\n",
+      ind, scale, ind, num, ind, (unsigned long long)in->hdf5.seed);
+    break;
+  }
+  case EXODUS_INPUT_XFIELD:
+    break;
+  }
+}
+
 static void write_resolved(FILE* out, const exodus_config_t* c,
   const char* file, const config_define_t* d, size_t n_d) {
 
   const exodus_params_t* p = &c->params;
+  const bool survey = p->mode == EXODUS_MODE_SURVEY;
+  const bool sky = survey && p->survey.sky;
   char num[40];
 
   fprintf(out, "-- sif-exodus %s: %s as it resolved", SIF_VERSION_STRING, file);
@@ -1288,96 +1725,37 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
         "its own.\n\n",
     out);
 
-  fputs("input = {\n  path = ", out);
-  if ((p->input.kind == EXODUS_INPUT_FITS ||
-        p->input.kind == EXODUS_INPUT_HDF5) &&
-      p->input.n_paths > 1) {
-    fputs("{\n", out);
-    for (uint32_t i = 0; i < p->input.n_paths; i++) {
-      fputs("    ", out);
-      write_lua_string(out, p->input.paths[i]);
-      fputs(",\n", out);
-    }
-    fputs("  }", out);
-  } else {
-    write_lua_string(out, p->input.path);
-  }
-  fprintf(out, ",\n  format = \"%s\",\n", INPUT_FORMATS[p->input.kind]);
-  if (p->input.box_length > 0.0) {
-    format_double(num, sizeof num, p->input.box_length);
-    fprintf(out, "  box_length = %s,\n", num);
-  } else {
-    fputs("  -- box_length: from the file\n", out);
-  }
+  fprintf(out, "mode = \"%s\"\n\n", MODES[p->mode]);
 
-  switch (p->input.kind) {
-  case EXODUS_INPUT_ASCII: {
-    const char delim[2] = {p->input.delimiter, '\0'};
-    fputs("  ascii = { columns = ", out);
-    write_lua_string(out, p->input.columns);
-    fputs(", delimiter = ", out);
-    write_lua_string(out, delim);
-    fprintf(out, ", skip_header = %u },\n", p->input.skip_header);
-    break;
-  }
-  case EXODUS_INPUT_BINARY:
-    fputs("  binary = {\n    columns = ", out);
-    write_lua_string(out, p->input.columns);
-    fprintf(out,
-      ",\n    precision = \"%s\",\n    layout = \"%s\",\n    endian = "
-      "\"%s\",\n    header_bytes = %llu,\n  },\n",
-      PRECISIONS[p->input.binary.precision - SIF_BINARY_FLOAT32],
-      LAYOUTS[p->input.binary.layout - SIF_BINARY_ROWS],
-      ENDIANS[p->input.binary.endian - SIF_BINARY_NATIVE],
-      (unsigned long long)p->input.binary.header_bytes);
-    break;
-  case EXODUS_INPUT_GADGET: {
-    const sif_gadget_format_t f = p->input.gadget.format;
-    fputs("  gadget = {\n    snapformat = ", out);
-    if (f == SIF_GADGET_FORMAT_AUTO)
-      fputs("\"auto\"", out);
-    else
-      fprintf(out, "%d", (int)(f - SIF_GADGET_FORMAT_1) + 1);
-    format_double(num, sizeof num, p->input.gadget.fraction);
-    fprintf(out,
-      ",\n    ptype = %d,\n    length = \"%s\",\n    masses = %s,\n    "
-      "fraction = %s,\n    seed = %llu,\n  },\n",
-      (int)(p->input.gadget.ptype - SIF_GADGET_PTYPE_0),
-      LENGTHS[p->input.gadget.length - SIF_GADGET_LENGTH_KPC],
-      p->input.gadget.masses ? "true" : "false", num,
-      (unsigned long long)p->input.gadget.seed);
-    break;
-  }
-  case EXODUS_INPUT_FITS:
-    fputs("  fits = {\n", out);
-    write_named_columns(out, &p->input.named);
-    if (p->input.fits.where) {
-      fputs("    where = ", out);
-      write_lua_string(out, p->input.fits.where);
-      fputs(",\n", out);
+  fputs("input = {\n", out);
+  if (!survey) {
+    write_source_head(out, &p->input, "  ");
+    if (p->input.box_length > 0.0) {
+      format_double(num, sizeof num, p->input.box_length);
+      fprintf(out, "  box_length = %s,\n", num);
+    } else {
+      fputs("  -- box_length: from the file\n", out);
     }
-    if (p->input.fits.hdu) {
-      fputs("    hdu = ", out);
-      write_lua_string(out, p->input.fits.hdu);
-      fputs(",\n", out);
+    write_source_settings(out, &p->input, "  ", false);
+  } else {
+    fprintf(out, "  coordinates = \"%s\",\n", sky ? "sky" : "cartesian");
+    if (sky) {
+      const sif_cosmology_t* k = &p->survey.cosmology;
+      const double v[] = {k->omega_m, k->omega_de, k->omega_r, k->w0, k->wa};
+      fputs("  cosmology = {", out);
+      for (int i = 0; COSMOLOGY_KEYS[i]; i++) {
+        format_double(num, sizeof num, v[i]);
+        fprintf(out, "%s %s = %s", i ? "," : "", COSMOLOGY_KEYS[i], num);
+      }
+      fputs(" },\n", out);
     }
-    format_double(num, sizeof num, p->input.fits.fraction);
-    fprintf(out, "    fraction = %s,\n    seed = %llu,\n  },\n", num,
-      (unsigned long long)p->input.fits.seed);
-    break;
-  case EXODUS_INPUT_HDF5: {
-    char scale[40];
-    fputs("  hdf5 = {\n", out);
-    write_named_columns(out, &p->input.named);
-    format_double(scale, sizeof scale, p->input.hdf5.length_scale);
-    format_double(num, sizeof num, p->input.hdf5.fraction);
-    fprintf(out,
-      "    length_scale = %s,\n    fraction = %s,\n    seed = %llu,\n  },\n",
-      scale, num, (unsigned long long)p->input.hdf5.seed);
-    break;
-  }
-  case EXODUS_INPUT_XFIELD:
-    break;
+    const exodus_input_t* sets[2] = {&p->input, &p->randoms};
+    for (int k = 0; k < 2; k++) {
+      fprintf(out, "  %s = {\n", k == 0 ? "data" : "random");
+      write_source_head(out, sets[k], "    ");
+      write_source_settings(out, sets[k], "    ", sky);
+      fputs("  },\n", out);
+    }
   }
   fputs("}\n\n", out);
 
@@ -1385,10 +1763,19 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     fprintf(out, "grid = { n_cells = %u }\n", p->grid.n_cells);
   else
     fputs("grid = { n_cells = \"auto\" }\n", out);
-  if (p->mesh.n_cells)
+  if (survey) {
+    char data_cells[16] = "\"auto\"", random_cells[16] = "\"auto\"";
+    if (p->mesh.n_cells)
+      snprintf(data_cells, sizeof data_cells, "%u", p->mesh.n_cells);
+    if (p->mesh.n_cells_random)
+      snprintf(random_cells, sizeof random_cells, "%u", p->mesh.n_cells_random);
+    fprintf(out, "mesh = { n_cells_data = %s, n_cells_random = %s }\n\n",
+      data_cells, random_cells);
+  } else if (p->mesh.n_cells) {
     fprintf(out, "mesh = { n_cells = %u }\n\n", p->mesh.n_cells);
-  else
+  } else {
     fputs("mesh = { n_cells = \"auto\" }\n\n", out);
+  }
 
   fputs("finder = {\n  radii = {", out);
   for (uint32_t i = 0; i < p->finder.n_radii; i++) {
@@ -1436,7 +1823,8 @@ int config_load(const char* path, const config_define_t* defines,
     if (!is_identifier(n) || list_index(n, LUA_KEYWORDS) >= 0)
       report(&r, "-D", "%s is not a name a script can use", n);
     else if (list_index(n, SECTIONS) >= 0)
-      report(&r, "-D", "%s is a section; set it in the file", n);
+      report(
+        &r, "-D", "%s is part of the configuration; set it in the file", n);
   }
   if (r.n_errors)
     return -1;
@@ -1496,16 +1884,26 @@ int config_load(const char* path, const config_define_t* defines,
     check_top_level(&r, env, preset, defines, n_defines);
   }
 
+  /* Without a mode, what the rest may say is not known: stop here. */
+  if (!read_mode(&r, root, c)) {
+    lua_close(L);
+    if (r.n_errors > 1)
+      fprintf(stderr, "%s: %d problems\n", path, r.n_errors);
+    config_free(c);
+    return -1;
+  }
   read_input(&r, root, c);
   read_cells(&r, root, "grid", GRID_KEYS, 8, &c->params.grid.n_cells);
-  read_cells(&r, root, "mesh", MESH_KEYS, 1, &c->params.mesh.n_cells);
+  read_mesh(&r, root, c);
   read_finder(&r, root, c);
   read_output(&r, root, c);
   read_run(&r, root, c);
 
   lua_close(L);
 
-  if (r.n_errors == 0 && (!c->params.input.path || !c->params.output.path)) {
+  if (r.n_errors == 0 &&
+      (!c->params.input.path || !c->params.output.path ||
+        (c->params.mode == EXODUS_MODE_SURVEY && !c->params.randoms.path))) {
     fprintf(stderr, "%s: out of memory\n", path);
     r.n_errors++;
   }
@@ -1606,11 +2004,15 @@ static uint64_t binary_record_bytes(const char* columns, uint64_t value_bytes) {
   return bytes;
 }
 
-static void inspect_xfield(checker_t* ch, const char* path, input_facts_t* in) {
+static void inspect_xfield(checker_t* ch, const exodus_input_t* src,
+  const char* name, input_facts_t* in) {
+  const char* path = src->path;
+  char where[64];
+  snprintf(where, sizeof where, "%s.path", name);
   sif_xfield_header_t h;
   FILE* f = fopen(path, "rb");
   if (!f) {
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path", "cannot open %s: %s", path,
+    check_say(ch, SIF_LOG_LEVEL_ERROR, where, "cannot open %s: %s", path,
       strerror(errno));
     return;
   }
@@ -1619,11 +2021,11 @@ static void inspect_xfield(checker_t* ch, const char* path, input_facts_t* in) {
 
   if (!whole || memcmp(h.magic, SIF_XFIELD_MAGIC, 4) != 0) {
     check_say(
-      ch, SIF_LOG_LEVEL_ERROR, "input.path", "%s is not an .xfield file", path);
+      ch, SIF_LOG_LEVEL_ERROR, where, "%s is not an .xfield file", path);
     return;
   }
   if ((h.is_double != 0) != (sizeof(sif_real) == 8)) {
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path",
+    check_say(ch, SIF_LOG_LEVEL_ERROR, where,
       "%s was written in %s precision, and this sif-exodus works in %s", path,
       h.is_double ? "double" : "single",
       sizeof(sif_real) == 8 ? "double" : "single");
@@ -1634,77 +2036,81 @@ static void inspect_xfield(checker_t* ch, const char* path, input_facts_t* in) {
   in->weighted = h.has_weights != 0;
 }
 
-static void inspect_gadget(
-  checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
+static void inspect_gadget(checker_t* ch, const exodus_input_t* src,
+  const char* name, input_facts_t* in) {
+  char where[64], ptype[64], length[64];
+  snprintf(where, sizeof where, "%s.path", name);
+  snprintf(ptype, sizeof ptype, "%s.gadget.ptype", name);
+  snprintf(length, sizeof length, "%s.gadget.length", name);
 
   sif_gadget_header_t h;
-  if (sif_gadget_read_header(p->input.path, p->input.gadget.format, &h) !=
-      SIF_OK) {
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path",
-      "%s cannot be read as a GADGET snapshot (see above)", p->input.path);
+  if (sif_gadget_read_header(src->path, src->gadget.format, &h) != SIF_OK) {
+    check_say(ch, SIF_LOG_LEVEL_ERROR, where,
+      "%s cannot be read as a GADGET snapshot (see above)", src->path);
     return;
   }
 
-  const int type = (int)(p->input.gadget.ptype - SIF_GADGET_PTYPE_0);
+  const int type = (int)(src->gadget.ptype - SIF_GADGET_PTYPE_0);
   if (h.n_part_total[type] == 0) {
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.gadget.ptype",
-      "%s has no particles of type %d", p->input.path, type);
+    check_say(ch, SIF_LOG_LEVEL_ERROR, ptype, "%s has no particles of type %d",
+      src->path, type);
     return;
   }
 
   /* The box in Mpc/h, as the reader converts it. */
   double to_mpc = 0.0;
-  if (p->input.gadget.length == SIF_GADGET_LENGTH_KPC)
+  if (src->gadget.length == SIF_GADGET_LENGTH_KPC)
     to_mpc = 1e-3;
-  else if (p->input.gadget.length == SIF_GADGET_LENGTH_MPC)
+  else if (src->gadget.length == SIF_GADGET_LENGTH_MPC)
     to_mpc = 1.0;
   else if (h.format != SIF_GADGET_FORMAT_HDF5)
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.gadget.length",
+    check_say(ch, SIF_LOG_LEVEL_ERROR, length,
       "a binary snapshot does not record its length unit: say \"kpc\" or "
       "\"mpc\"");
   else if (h.unit_length_in_cm > 0.0)
     to_mpc = h.unit_length_in_cm / 3.085677581e24;
   else
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.gadget.length",
-      "%s does not record its length unit: say \"kpc\" or \"mpc\"",
-      p->input.path);
+    check_say(ch, SIF_LOG_LEVEL_ERROR, length,
+      "%s does not record its length unit: say \"kpc\" or \"mpc\"", src->path);
 
   in->n_tracers =
-    (uint64_t)llround(p->input.gadget.fraction * (double)h.n_part_total[type]);
+    (uint64_t)llround(src->gadget.fraction * (double)h.n_part_total[type]);
   in->box = h.box_size * to_mpc;
-  in->weighted = p->input.gadget.masses && h.mass_table[type] == 0.0;
+  in->weighted = src->gadget.masses && h.mass_table[type] == 0.0;
 }
 
-static void inspect_table(
-  checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
+static void inspect_table(checker_t* ch, const exodus_input_t* src,
+  const char* name, input_facts_t* in) {
+  char where[64];
+  snprintf(where, sizeof where, "%s.path", name);
 
   struct stat st;
-  FILE* f = fopen(p->input.path, "rb");
+  FILE* f = fopen(src->path, "rb");
   if (!f || fstat(fileno(f), &st) != 0) {
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path", "cannot open %s: %s",
-      p->input.path, strerror(errno));
+    check_say(ch, SIF_LOG_LEVEL_ERROR, where, "cannot open %s: %s", src->path,
+      strerror(errno));
     if (f)
       fclose(f);
     return;
   }
   fclose(f);
 
-  in->weighted = strchr(p->input.columns, 'w') || strchr(p->input.columns, 'W');
-  if (p->input.kind == EXODUS_INPUT_ASCII)
+  in->weighted = strchr(src->columns, 'w') || strchr(src->columns, 'W');
+  if (src->kind == EXODUS_INPUT_ASCII)
     return; /* counted only by reading it */
 
   const uint64_t size = (uint64_t)st.st_size;
-  const uint64_t header = p->input.binary.header_bytes;
+  const uint64_t header = src->binary.header_bytes;
   const uint64_t record = binary_record_bytes(
-    p->input.columns, p->input.binary.precision == SIF_BINARY_FLOAT64 ? 8 : 4);
+    src->columns, src->binary.precision == SIF_BINARY_FLOAT64 ? 8 : 4);
   if (record == 0)
     return;
   if (size < header || (size - header) % record != 0) {
-    check_say(ch, SIF_LOG_LEVEL_ERROR, "input.binary",
+    check_say(ch, SIF_LOG_LEVEL_ERROR, name,
       "%s holds %llu bytes after its %llu-byte header, which is not a whole "
       "number of %llu-byte particles: check columns, precision and "
       "header_bytes",
-      p->input.path, (unsigned long long)(size < header ? 0 : size - header),
+      src->path, (unsigned long long)(size < header ? 0 : size - header),
       (unsigned long long)header, (unsigned long long)record);
     return;
   }
@@ -1713,52 +2119,70 @@ static void inspect_table(
 
 /* Every file of a FITS catalogue, opened and its structure read: whether the
  * columns are there is found when it is read. */
-static void inspect_fits(
-  checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
-  for (uint32_t i = 0; i < p->input.n_paths; i++) {
-    const char* path = p->input.paths[i];
+static void inspect_fits(checker_t* ch, const exodus_input_t* src,
+  const char* name, input_facts_t* in) {
+  char where[64];
+  snprintf(where, sizeof where, "%s.path", name);
+  for (uint32_t i = 0; i < src->n_paths; i++) {
+    const char* path = src->paths[i];
     FILE* sink = tmpfile();
     const int status = sink ? sif_fits_print_summary(path, sink) : SIF_OK;
     if (sink)
       fclose(sink);
     if (status == SIF_ERR_UNSUPPORTED) {
-      check_say(ch, SIF_LOG_LEVEL_ERROR, "input.format",
+      check_say(ch, SIF_LOG_LEVEL_ERROR, name,
         "this sif-exodus was built without FITS support");
       return;
     }
     if (status != SIF_OK)
-      check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path",
+      check_say(ch, SIF_LOG_LEVEL_ERROR, where,
         "%s cannot be read as a FITS file (see above)", path);
   }
-  in->weighted = p->input.named.w != NULL;
+  in->weighted = src->named.w != NULL;
 }
 
 /* Every file of an HDF5 input, there and an HDF5 file: whether the datasets
  * are in them is found when they are read. */
-static void inspect_hdf5(
-  checker_t* ch, const exodus_params_t* p, input_facts_t* in) {
+static void inspect_hdf5(checker_t* ch, const exodus_input_t* src,
+  const char* name, input_facts_t* in) {
+  char where[64];
+  snprintf(where, sizeof where, "%s.path", name);
   static const unsigned char sig[8] = {
     0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'};
-  for (uint32_t i = 0; i < p->input.n_paths; i++) {
-    const char* path = p->input.paths[i];
+  for (uint32_t i = 0; i < src->n_paths; i++) {
+    const char* path = src->paths[i];
     unsigned char head[8];
     FILE* f = fopen(path, "rb");
     if (!f) {
-      check_say(ch, SIF_LOG_LEVEL_ERROR, "input.path", "cannot open %s: %s",
-        path, strerror(errno));
+      check_say(ch, SIF_LOG_LEVEL_ERROR, where, "cannot open %s: %s", path,
+        strerror(errno));
       continue;
     }
     const size_t n = fread(head, 1, 8, f);
     fclose(f);
     if (n != 8 || memcmp(head, sig, 8) != 0)
-      check_say(
-        ch, SIF_LOG_LEVEL_ERROR, "input.path", "%s is not an HDF5 file", path);
+      check_say(ch, SIF_LOG_LEVEL_ERROR, where, "%s is not an HDF5 file", path);
   }
 #if !defined(SIF_HAVE_HDF5)
-  check_say(ch, SIF_LOG_LEVEL_ERROR, "input.format",
+  check_say(ch, SIF_LOG_LEVEL_ERROR, name,
     "this sif-exodus was built without HDF5 support");
 #endif
-  in->weighted = p->input.named.w != NULL;
+  in->weighted = src->named.w != NULL;
+}
+
+/* What an input says about itself, whatever its format. */
+static void inspect_input(checker_t* ch, const exodus_input_t* src,
+  const char* name, input_facts_t* in) {
+  if (src->kind == EXODUS_INPUT_XFIELD)
+    inspect_xfield(ch, src, name, in);
+  else if (src->kind == EXODUS_INPUT_GADGET)
+    inspect_gadget(ch, src, name, in);
+  else if (src->kind == EXODUS_INPUT_FITS)
+    inspect_fits(ch, src, name, in);
+  else if (src->kind == EXODUS_INPUT_HDF5)
+    inspect_hdf5(ch, src, name, in);
+  else
+    inspect_table(ch, src, name, in);
 }
 
 /* "1.3 GiB", "250 MiB": a size to read, not to compute with. */
@@ -1777,22 +2201,100 @@ static uint64_t physical_memory(void) {
   return pages > 0 && page > 0 ? (uint64_t)pages * (uint64_t)page : 0;
 }
 
+static void check_output(checker_t* ch, const exodus_params_t* p);
+
+/*
+ * A survey's shape. Its box, grid and meshes all follow from the footprint,
+ * which only reading the randoms measures, so for --check (`summary`) both
+ * inputs are read and the footprint measured, as the run would; before a run
+ * the files are only opened, since the run is about to measure it anyway.
+ */
+static void check_survey(
+  checker_t* ch, const exodus_params_t* p, bool summary) {
+  input_facts_t data = {0, 0.0, false}, randoms = {0, 0.0, false};
+  inspect_input(ch, &p->input, "input.data", &data);
+  inspect_input(ch, &p->randoms, "input.random", &randoms);
+  if (!summary || ch->n_errors)
+    return;
+
+  if (p->survey.sky) {
+    const sif_cosmology_t* k = &p->survey.cosmology;
+    check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+      "coordinates: sky, to comoving Mpc/h with omega_m %g, omega_de %g, "
+      "omega_r %g, w0 %g, wa %g; the voids are written back on the sky",
+      k->omega_m, k->omega_de, k->omega_r, k->w0, k->wa);
+  } else {
+    check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+      "coordinates: cartesian, observer at the origin");
+  }
+
+  survey_plan_t plan;
+  if (pipeline_survey_plan(p, &plan) != SIF_OK) {
+    check_say(ch, SIF_LOG_LEVEL_ERROR, "input",
+      "the survey could not be laid out (see above)");
+    return;
+  }
+
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+    "data: %llu %s tracers; randoms: %llu %s",
+    (unsigned long long)plan.n_tracers,
+    plan.weighted ? "weighted" : "unweighted",
+    (unsigned long long)plan.n_randoms,
+    plan.randoms_weighted ? "weighted" : "unweighted");
+  if (plan.n_randoms < plan.n_tracers)
+    check_say(ch, SIF_LOG_LEVEL_WARNING, "input.random",
+      "fewer randoms than tracers: the footprint and the mean density are "
+      "only as good as the randoms");
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+    "footprint: %.4g (Mpc/h)^3, mean separation %g; searched in a box of %g",
+    plan.footprint_volume, plan.mps, plan.box);
+
+  if (p->finder.radii_units == EXODUS_RADII_MPS)
+    check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+      "radii: %u, from %g to %g (%g to %g mean separations)", p->finder.n_radii,
+      plan.r_min, plan.r_max, plan.r_min / plan.mps, plan.r_max / plan.mps);
+  else
+    check_say(ch, SIF_LOG_LEVEL_INFO, NULL, "radii: %u, from %g to %g",
+      p->finder.n_radii, plan.r_min, plan.r_max);
+
+  const double cell = plan.box / plan.grid_cells;
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL, "grid: %u^3 cells of %g%s",
+    plan.grid_cells, cell, p->grid.n_cells ? "" : " (auto)");
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+    "meshes: %u^3 cells for the data%s, %u^3 for the randoms%s",
+    plan.mesh_cells, p->mesh.n_cells ? "" : " (about, auto)",
+    plan.random_mesh_cells, p->mesh.n_cells_random ? "" : " (about, auto)");
+
+  if (plan.r_min < 2.0 * cell)
+    check_say(ch, SIF_LOG_LEVEL_WARNING, "finder.radii",
+      "the smallest radius, %g, spans under two cells of the grid (%g): "
+      "start the ladder at %g or above, or give grid.n_cells = %u or more",
+      plan.r_min, cell, 2.0 * cell,
+      (unsigned)ceil(2.0 * plan.box / plan.r_min));
+
+  char a[32], b[32];
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL, "memory: about %s at the peak",
+    human_bytes(a, sizeof a, plan.peak_bytes));
+  const uint64_t ram = physical_memory();
+  if (ram && plan.peak_bytes > ram)
+    check_say(ch, SIF_LOG_LEVEL_WARNING, NULL,
+      "the run needs about %s and this machine has %s",
+      human_bytes(a, sizeof a, plan.peak_bytes), human_bytes(b, sizeof b, ram));
+}
+
 int config_check(const exodus_config_t* c, const char* file, bool summary) {
   const exodus_params_t* p = &c->params;
   checker_t ch = {file, !summary, 0};
   input_facts_t in = {0, 0.0, false};
 
+  if (p->mode == EXODUS_MODE_SURVEY) {
+    check_survey(&ch, p, summary);
+    check_output(&ch, p);
+    return ch.n_errors ? -1 : 0;
+  }
+
   /* 1. The input, as far as its header goes. */
-  if (p->input.kind == EXODUS_INPUT_XFIELD)
-    inspect_xfield(&ch, p->input.path, &in);
-  else if (p->input.kind == EXODUS_INPUT_GADGET)
-    inspect_gadget(&ch, p, &in);
-  else if (p->input.kind == EXODUS_INPUT_FITS)
-    inspect_fits(&ch, p, &in);
-  else if (p->input.kind == EXODUS_INPUT_HDF5)
-    inspect_hdf5(&ch, p, &in);
-  else
-    inspect_table(&ch, p, &in);
+  inspect_input(&ch, &p->input, "input", &in);
 
   const double box = p->input.box_length > 0.0 ? p->input.box_length : in.box;
   const uint64_t n = in.n_tracers;
@@ -1874,8 +2376,13 @@ int config_check(const exodus_config_t* c, const char* file, bool summary) {
         human_bytes(a, sizeof a, peak), human_bytes(b, sizeof b, ram));
   }
 
-  /* 5. The output: a directory that takes files, and nothing lost silently
-   * when it already exists. */
+  check_output(&ch, p);
+  return ch.n_errors ? -1 : 0;
+}
+
+/* The output: a directory that takes files, and nothing lost silently when
+ * it already exists. */
+static void check_output(checker_t* ch, const exodus_params_t* p) {
   char* dir = strdup(p->output.path);
   if (dir) {
     char* slash = strrchr(dir, '/');
@@ -1886,15 +2393,13 @@ int config_check(const exodus_config_t* c, const char* file, bool summary) {
     else
       *slash = '\0';
     if (access(dir, W_OK) != 0)
-      check_say(&ch, SIF_LOG_LEVEL_ERROR, "output.path",
+      check_say(ch, SIF_LOG_LEVEL_ERROR, "output.path",
         "cannot write into %s: %s", dir, strerror(errno));
     free(dir);
   }
   if (access(p->output.path, F_OK) == 0)
-    check_say(&ch, SIF_LOG_LEVEL_WARNING, "output.path",
+    check_say(ch, SIF_LOG_LEVEL_WARNING, "output.path",
       "%s exists, and will be replaced when the run completes", p->output.path);
-
-  return ch.n_errors ? -1 : 0;
 }
 
 void config_free(exodus_config_t* c) {
@@ -1904,7 +2409,8 @@ void config_free(exodus_config_t* c) {
   for (size_t i = 0; i < c->_n_strings; i++)
     free(c->_strings[i]);
   free(c->_strings);
-  free((void*)c->_paths);
+  free((void*)c->_paths[0]);
+  free((void*)c->_paths[1]);
   free(c->resolved);
   memset(c, 0, sizeof *c);
 }

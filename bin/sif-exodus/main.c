@@ -9,7 +9,7 @@
  *
  *   sif-exodus [-D name=value ...] CONFIG     run
  *   sif-exodus --check [-D ...] CONFIG        resolve and check, do not run
- *   sif-exodus --template                     a configuration to start from
+ *   sif-exodus --template box|survey          a configuration to start from
  *
  * Exit status: 0 on success, 1 when the run fails, 2 when the command line
  * or the configuration is wrong -- which --check says without running.
@@ -37,7 +37,9 @@ static void print_usage(FILE* out) {
         "options:\n"
         "  -D NAME=VALUE  set NAME to the string VALUE in CONFIG; repeatable\n"
         "  -c, --check    resolve and check CONFIG, print it, and stop\n"
-        "  -t, --template print a configuration to start from, and stop\n"
+        "  -t, --template MODE\n"
+        "                 print a configuration to start from, for MODE box\n"
+        "                 or survey, and stop\n"
         "  -h, --help     show this message and exit\n"
         "  -V, --version  show the version and exit\n",
     out);
@@ -73,7 +75,17 @@ int main(int argc, char** argv) {
       );
       return 0;
     } else if (strcmp(arg, "-t") == 0 || strcmp(arg, "--template") == 0) {
-      fputs(config_template, stdout);
+      const char* mode = i + 1 < argc ? argv[i + 1] : NULL;
+      if (mode && strcmp(mode, "box") == 0) {
+        fputs(config_template_box, stdout);
+      } else if (mode && strcmp(mode, "survey") == 0) {
+        fputs(config_template_survey, stdout);
+      } else {
+        fprintf(stderr,
+          "sif-exodus: --template takes the mode: --template box or "
+          "--template survey\n");
+        return 2;
+      }
       return 0;
     } else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--check") == 0) {
       check_only = true;
@@ -123,7 +135,22 @@ int main(int argc, char** argv) {
     return 2;
 
   if (check_only) {
+    /* A survey's shape is only known once its files are read, which takes
+     * the library; its own log stays quiet but for what goes wrong. */
+    const bool survey = config.params.mode == EXODUS_MODE_SURVEY;
+    sif_omp_config_t check_omp = {.n_threads = config.run.n_threads};
+    sif_config_t check_lib = {.omp_config = &check_omp,
+      .log_level = config.run.log_level > SIF_LOG_LEVEL_WARNING
+                     ? config.run.log_level
+                     : SIF_LOG_LEVEL_WARNING};
+    if (survey && sif_init(&check_lib) != SIF_OK) {
+      fputs("sif-exodus: could not initialize the library\n", stderr);
+      config_free(&config);
+      return 1;
+    }
     const int ok = config_check(&config, config_path, true);
+    if (survey)
+      sif_finalize();
     fputs(config.resolved, stdout);
     fflush(stdout);
     config_free(&config);
@@ -151,7 +178,9 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const int status = pipeline_box(&config.params);
+  const int status = config.params.mode == EXODUS_MODE_SURVEY
+                       ? pipeline_survey(&config.params)
+                       : pipeline_box(&config.params);
 
   sif_finalize();
   config_free(&config);
