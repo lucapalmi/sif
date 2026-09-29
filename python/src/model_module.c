@@ -40,7 +40,7 @@ static PyMethodDef model_methods[] = {
     "Evaluates the spectral moments sigma_0..sigma_order from a tabulated "
     "power spectrum, as the continuum integral.\n"
     "The theory counterpart of measure.delta_moments_grid: no box, no "
-    "realization, no cosmic variance."},
+    "realisation, no cosmic variance."},
 
   {"bbks_g", (PyCFunction)py_sif_bbks_g, METH_VARARGS | METH_KEYWORDS,
     "bbks_g(gamma, w, g='fitted')"
@@ -235,5 +235,5 @@ static struct PyModuleDef model_module = {PyModuleDef_HEAD_INIT,
            "prediction and a measurement can be compared directly.",
   .m_size = -1, .m_methods = model_methods};
 
-/* Submodule exporter called from the parent module initialization routing */
+/* Submodule exporter called from the parent module initialisation routing */
 PyObject* py_sif_init_model(void) { return PyModule_Create(&model_module); }

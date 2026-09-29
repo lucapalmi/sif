@@ -76,7 +76,7 @@ static PyObject* sifDeltaDistribution_get_delta_edges(
   return py_sif_wrap_borrowed(self_obj, 1, dims, self->dist->delta_edges);
 }
 
-static PyObject* sifDeltaDistribution_get_delta_centers(
+static PyObject* sifDeltaDistribution_get_delta_centres(
   PyObject* self_obj, void* closure) {
   sifDeltaDistributionObject* self = (sifDeltaDistributionObject*)self_obj;
   if (!self->dist || !self->dist->delta_edges)
@@ -118,8 +118,8 @@ static PyGetSetDef sifDeltaDistribution_getset[] = {
     NULL},
   {"delta_edges", sifDeltaDistribution_get_delta_edges, NULL,
     "1D array of delta bin edges", NULL},
-  {"delta_centers", sifDeltaDistribution_get_delta_centers, NULL,
-    "1D array of delta bin centers", NULL},
+  {"delta_centres", sifDeltaDistribution_get_delta_centres, NULL,
+    "1D array of delta bin centres", NULL},
   {"distributions", sifDeltaDistribution_get_distributions, NULL,
     "2D array of delta PDFs, one row per radius", NULL},
   {NULL}};

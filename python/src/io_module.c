@@ -300,30 +300,30 @@ static PyMethodDef io_methods[] = {
     "vector column (read as NAME[1] ... NAME[n]) or one read_fits() cannot\n"
     "use. For finding the names to pass to read_fits()."},
 
-  {"write_catalog_fits", (PyCFunction)pysif_write_catalog_fits,
+  {"write_catalogue_fits", (PyCFunction)pysif_write_catalogue_fits,
     METH_VARARGS | METH_KEYWORDS,
-    "write_catalog_fits(filepath, catalog)\n"
+    "write_catalogue_fits(filepath, catalogue)\n"
     "--\n\n"
     "Write a catalogue as a FITS table: an empty primary HDU, then a binary\n"
     "table named VOIDS, one row per void.\n\n"
-    "The columns follow Catalog.units: CX, CY, CZ, R for Cartesian centres;\n"
+    "The columns follow Catalogue.units: CX, CY, CZ, R for Cartesian centres;\n"
     "RA, DEC (degrees), Z (redshift), R (comoving, Mpc/h) for a\n"
-    "catalogue on the sky -- see Catalog.to_sky(). FOOTPRINT and\n"
+    "catalogue on the sky -- see Catalogue.to_sky(). FOOTPRINT and\n"
     "FOOTPRINT_SHELL follow when the catalogue has them. The primary header\n"
     "is left for set_fits_key(), to record what the catalogue came from.\n\n"
     "Args:\n"
     "    filepath: Output path, replaced if it exists.\n"
-    "    catalog: Catalogue to write."},
+    "    catalogue: Catalogue to write."},
 
-  {"read_catalog_fits", (PyCFunction)pysif_read_catalog_fits,
+  {"read_catalogue_fits", (PyCFunction)pysif_read_catalogue_fits,
     METH_VARARGS | METH_KEYWORDS,
-    "read_catalog_fits(filepath)\n"
+    "read_catalogue_fits(filepath)\n"
     "--\n\n"
-    "Read a catalogue written by write_catalog_fits(): on the sky if its\n"
+    "Read a catalogue written by write_catalogue_fits(): on the sky if its\n"
     "table has RA, DEC and Z columns, Cartesian if CX, CY and CZ (or X, Y\n"
     "and Z). R or RADIUS is the radius.\n\n"
     "Returns:\n"
-    "    Catalog: The loaded catalogue.\n\n"
+    "    Catalogue: The loaded catalogue.\n\n"
     "Raises:\n"
     "    FileNotFoundError: For a missing file.\n"
     "    ValueError: For a file with no VOIDS table of those columns."},
@@ -361,7 +361,7 @@ static PyMethodDef io_methods[] = {
     "write_size_function_fits(filepath, size_function)\n"
     "--\n\n"
     "Write a size function into SIZE_FUNCTION: a row per bin -- R_LOW,\n"
-    "R_HIGH, R_CENTER, COUNT, VSF, ERR -- with R_MIN, R_MAX and BINNING\n"
+    "R_HIGH, R_CENTRE, COUNT, VSF, ERR -- with R_MIN, R_MAX and BINNING\n"
     "('ln' or 'linear', what VSF is per unit of) as keywords. As for\n"
     "write_profiles_fits(), only its own table is replaced.\n\n"
     "Args:\n"
@@ -413,9 +413,9 @@ static PyMethodDef io_methods[] = {
     "        allow, or a value that is not finite.\n"
     "    OSError: If the file could not be written."},
 
-  {"write_catalog_ascii", (PyCFunction)pysif_write_catalog_ascii,
+  {"write_catalogue_ascii", (PyCFunction)pysif_write_catalogue_ascii,
     METH_VARARGS | METH_KEYWORDS,
-    "write_catalog_ascii(filepath, catalog)\n"
+    "write_catalogue_ascii(filepath, catalogue)\n"
     "--\n\n"
     "Write a catalogue as text: a two-line header behind '#', then a row\n"
     "per void.\n\n"
@@ -423,7 +423,7 @@ static PyMethodDef io_methods[] = {
     "    #cx cy cz r footprint footprint_shell\n"
     "    101.25 250.5 33.125 12.5 1 0.84\n\n"
     "The first line is the count, the second names the columns: 'ra dec z\n"
-    "r' for a catalogue on the sky (Catalog.to_sky()), and the footprint\n"
+    "r' for a catalogue on the sky (Catalogue.to_sky()), and the footprint\n"
     "columns only when the catalogue carries one, as one from\n"
     "finders.exodus_survey() does. numpy.loadtxt(filepath) reads the rows\n"
     "as they are.\n\n"
@@ -431,13 +431,13 @@ static PyMethodDef io_methods[] = {
     "exactly, so a write/read round trip is lossless.\n\n"
     "Args:\n"
     "    filepath: Output path, truncated if it exists.\n"
-    "    catalog: Catalogue to write."},
+    "    catalogue: Catalogue to write."},
 
-  {"read_catalog_ascii", (PyCFunction)pysif_read_catalog_ascii,
+  {"read_catalogue_ascii", (PyCFunction)pysif_read_catalogue_ascii,
     METH_VARARGS | METH_KEYWORDS,
-    "read_catalog_ascii(filepath, format=None)\n"
+    "read_catalogue_ascii(filepath, format=None)\n"
     "--\n\n"
-    "Read a catalogue written by write_catalog_ascii().\n\n"
+    "Read a catalogue written by write_catalogue_ascii().\n\n"
     "Lines starting with '#' are comments. Before the first row, 'n=N'\n"
     "gives the count -- without it the rows are counted first -- and a\n"
     "comment naming the columns places them, in any order: 'cx cy cz' (or\n"
@@ -457,11 +457,11 @@ static PyMethodDef io_methods[] = {
     "    filepath: Input path.\n"
     "    format: The columns, or None to take them from the file.\n\n"
     "Returns:\n"
-    "    Catalog: The loaded catalogue."},
+    "    Catalogue: The loaded catalogue."},
 
   {"write_profiles_ascii", (PyCFunction)pysif_write_profiles_ascii,
     METH_VARARGS | METH_KEYWORDS,
-    "write_profiles_ascii(filepath, profiles, catalog)\n"
+    "write_profiles_ascii(filepath, profiles, catalogue)\n"
     "--\n\n"
     "Write stacked profiles as text, one row per void.\n\n"
     "A header behind '#', then a row per void -- the void it belongs to,\n"
@@ -475,7 +475,7 @@ static PyMethodDef io_methods[] = {
     "    101.25 250.5 33.125 12.5 -0.91 ... 12.3\n\n"
     "The rows are plain numbers, so numpy.loadtxt(path) reads them as they\n"
     "are, and the last header line names every column: the centres are\n"
-    "'ra dec z' for a catalogue on the sky (Catalog.to_sky()), and only the\n"
+    "'ra dec z' for a catalogue on the sky (Catalogue.to_sky()), and only the\n"
     "profile blocks the Profiles carries are there. Bin edges are in units\n"
     "of each void's own radius; multiply by the radius in the row for\n"
     "physical units.\n\n"
@@ -484,7 +484,7 @@ static PyMethodDef io_methods[] = {
     "Args:\n"
     "    filepath: Output path, truncated if it exists.\n"
     "    profiles: Profiles to write.\n"
-    "    catalog: The catalogue they were measured from, which is where the\n"
+    "    catalogue: The catalogue they were measured from, which is where the\n"
     "        per-void columns come from. Row i is void i, so it has to be\n"
     "        that catalogue and not another of the same length."},
 
@@ -496,15 +496,15 @@ static PyMethodDef io_methods[] = {
     "Args:\n"
     "    filepath: Input path.\n\n"
     "Returns:\n"
-    "    tuple: (Profiles, Catalog). The Profiles carries whichever blocks\n"
+    "    tuple: (Profiles, Catalogue). The Profiles carries whichever blocks\n"
     "    the file holds; has_density and has_velocity say which."},
 
-  {"write_catalog_hdf5", (PyCFunction)pysif_write_catalog_hdf5,
+  {"write_catalogue_hdf5", (PyCFunction)pysif_write_catalogue_hdf5,
     METH_VARARGS | METH_KEYWORDS,
-    "write_catalog_hdf5(filepath, catalog)\n"
+    "write_catalogue_hdf5(filepath, catalogue)\n"
     "--\n\n"
-    "Write a catalogue into /catalog of an HDF5 file.\n\n"
-    "The file can hold any subset of catalog, density_profiles,\n"
+    "Write a catalogue into /catalogue of an HDF5 file.\n\n"
+    "The file can hold any subset of catalogue, density_profiles,\n"
     "velocity_profiles and size_function, each in its own group; this\n"
     "replaces only its own and creates the file if it is missing. It reads\n"
     "back with h5py without pysif. An existing file sif did not write is\n"
@@ -513,17 +513,17 @@ static PyMethodDef io_methods[] = {
     "<filepath>.<product>.txt instead, with a RuntimeWarning saying so.\n\n"
     "Args:\n"
     "    filepath: The file.\n"
-    "    catalog: Catalogue to write, with its footprint if it has one.\n\n"
+    "    catalogue: Catalogue to write, with its footprint if it has one.\n\n"
     "Raises:\n"
     "    OSError: If the file could not be written, or is not sif's."},
 
-  {"read_catalog_hdf5", (PyCFunction)pysif_read_catalog_hdf5,
+  {"read_catalogue_hdf5", (PyCFunction)pysif_read_catalogue_hdf5,
     METH_VARARGS | METH_KEYWORDS,
-    "read_catalog_hdf5(filepath)\n"
+    "read_catalogue_hdf5(filepath)\n"
     "--\n\n"
-    "Read /catalog of an HDF5 file, footprint included when present.\n\n"
+    "Read /catalogue of an HDF5 file, footprint included when present.\n\n"
     "Returns:\n"
-    "    Catalog: The catalogue.\n\n"
+    "    Catalogue: The catalogue.\n\n"
     "Raises:\n"
     "    OSError: If the file or the group is missing or malformed.\n"
     "    RuntimeError: If pysif was built without HDF5."},
@@ -536,7 +536,7 @@ static PyMethodDef io_methods[] = {
     "Only the sets the Profiles holds are written; one it does not hold\n"
     "stays in the file as it was. A row count that disagrees with the\n"
     "catalogue in the file is warned about in the log, not refused.\n\n"
-    "The file can hold any subset of catalog, density_profiles,\n"
+    "The file can hold any subset of catalogue, density_profiles,\n"
     "velocity_profiles and size_function, each in its own group; this\n"
     "replaces only its own and creates the file if it is missing. It reads\n"
     "back with h5py without pysif. An existing file sif did not write is\n"
@@ -566,7 +566,7 @@ static PyMethodDef io_methods[] = {
     "Write a size function, measured or modelled, into /size_function.\n\n"
     "The binning goes in as the attribute 'binning' ('ln' or 'linear'),\n"
     "since it decides whether vsf is per unit ln R or per unit R.\n\n"
-    "The file can hold any subset of catalog, density_profiles,\n"
+    "The file can hold any subset of catalogue, density_profiles,\n"
     "velocity_profiles and size_function, each in its own group; this\n"
     "replaces only its own and creates the file if it is missing. It reads\n"
     "back with h5py without pysif. An existing file sif did not write is\n"
@@ -596,7 +596,7 @@ static PyMethodDef io_methods[] = {
     "The file's own header -- how the catalogue was made, which simulation,\n"
     "which snapshot -- the way FITS keywords are. On the root (group None)\n"
     "an entry describes the file and survives every rewrite; on a product\n"
-    "('catalog', 'size_function', ...) it describes that product and goes\n"
+    "('catalogue', 'size_function', ...) it describes that product and goes\n"
     "when the product is rewritten.\n\n"
     "sif's own attributes (n_voids, n_bins, ... and every root name\n"
     "beginning ``sif_``) cannot be set. Without HDF5 the entry is appended to\n"
@@ -654,5 +654,5 @@ static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,
     "it in one HDF5 file, readable with h5py without pysif.",
   .m_size = -1, .m_methods = io_methods};
 
-/* Submodule exporter called from the parent module initialization routing */
+/* Submodule exporter called from the parent module initialisation routing */
 PyObject* py_sif_init_io(void) { return PyModule_Create(&io_module); }

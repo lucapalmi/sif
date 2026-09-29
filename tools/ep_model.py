@@ -142,7 +142,7 @@ def compute_features(radii, S, barrier, dvar):
 
     # Hazard accumulated BEFORE entering each bin. The walk enters at the
     # largest radius (highest index) and works down, so this is the reverse
-    # cumulative sum, excluding the bin itself. It summarizes the whole prior
+    # cumulative sum, excluding the bin itself. It summarises the whole prior
     # history in one number, which is what the surviving population is
     # conditioned on.
     cum_lam = np.concatenate(

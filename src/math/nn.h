@@ -20,7 +20,7 @@
  *
  * The weights are `static const` arrays generated from a trained model (see
  * tools/ep_export_c.py), so they live in .rodata: nothing is allocated,
- * nothing is initialized at startup, and the linker drops a network no
+ * nothing is initialised at startup, and the linker drops a network no
  * translation unit references.
  *
  * Double throughout. The networks this serves have a few hundred parameters
@@ -70,9 +70,9 @@ typedef struct {
 } sif_nn_layer_t;
 
 /**
- * @brief A network, plus the input standardization it was fitted with.
+ * @brief A network, plus the input standardisation it was fitted with.
  *
- * `mu` and `sd` are not decoration: the fit standardized its inputs, so an
+ * `mu` and `sd` are not decoration: the fit standardised its inputs, so an
  * evaluation that skips this is evaluating a different function. They are
  * carried here rather than folded into the first layer's weights so that the
  * C constants can be compared against the Python ones term by term.
@@ -90,7 +90,7 @@ typedef struct {
  * @brief Evaluates the network over a batch of inputs.
  *
  * @param nn Network with all weights non-NULL and consistent dimensions
- * @param x Inputs, row-major, n_rows by nn->n_in, unstandardized
+ * @param x Inputs, row-major, n_rows by nn->n_in, unstandardised
  * @param n_rows Number of inputs; zero is valid and does nothing
  * @param out Outputs, row-major, n_rows by nn->n_out. May not alias `x`.
  *

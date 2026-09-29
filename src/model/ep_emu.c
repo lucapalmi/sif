@@ -246,7 +246,7 @@ static int features(
   /* Hazard accumulated BEFORE entering each bin: the walk enters at the
    * largest radius (highest index) and works down, so this is the reverse
    * cumulative sum, excluding the bin itself. It is the one number that
-   * summarizes the whole prior history, and it is what the surviving
+   * summarises the whole prior history, and it is what the surviving
    * population is conditioned on. */
   double cum = 0.0;
   for (int32_t i = (int32_t)n_bins - 1; i >= 0; i--) {
@@ -415,7 +415,7 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
      * the pattern sif__ep_cholesky avoids: the release build carries
      * -ffast-math, under which the compiler may assume no infinity ever
      * appears and fold the predicate away. A ceiling on the exponent cannot be
-     * optimized out, and at e^40 the hazard already saturates the survival to
+     * optimised out, and at e^40 the hazard already saturates the survival to
      * one -- so anything above it is the same answer, reached honestly. */
     const double c = corr[i] < EP_EMU_CORR_MAX ? corr[i] : EP_EMU_CORR_MAX;
     const double scaled = lam[i] * exp(c);

@@ -17,11 +17,11 @@
 
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/field_io.h"
 #include "sif/measure/profiles.h"
 #include "sif/model/cosmology.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -237,7 +237,7 @@ static void test_conversion(void) {
 
 /* --- void centres back to the sky ---------------------------------------- */
 
-static void test_catalog_to_sky(void) {
+static void test_catalogue_to_sky(void) {
   printf("void centres to the sky\n");
 
   /* Tracers on the sky, taken to positions and back through a catalogue:
@@ -256,14 +256,14 @@ static void test_catalog_to_sky(void) {
   CHECK(sif_field_convert_sky_coordinates(f, &cosmo) == SIF_OK,
     "the conversion to positions failed");
 
-  sif_catalog_t* cat = sif_catalog_alloc(n);
+  sif_catalogue_t* cat = sif_catalogue_alloc(n);
   CHECK(cat && cat->units == SIF_COORDINATES_CARTESIAN,
     "a new catalogue is not Cartesian");
   for (uint64_t i = 0; i < n; i++)
-    (void)sif_catalog_append(cat, f->x[i], f->y[i], f->z[i], 10.0f);
+    (void)sif_catalogue_append(cat, f->x[i], f->y[i], f->z[i], 10.0f);
   sif_field_free(f);
 
-  CHECK(sif_catalog_to_sky(cat, &cosmo) == SIF_OK &&
+  CHECK(sif_catalogue_to_sky(cat, &cosmo) == SIF_OK &&
           cat->units == SIF_COORDINATES_SKY,
     "the conversion to the sky failed");
   double worst_angle = 0.0, worst_z = 0.0;
@@ -282,9 +282,9 @@ static void test_catalog_to_sky(void) {
   /* Once on the sky, what moves or measures around centres refuses it, and
    * so does a second conversion. */
   const sif_real offset[3] = {1, 1, 1};
-  CHECK(sif_catalog_translate(cat, offset) == SIF_ERR_INVALID,
+  CHECK(sif_catalogue_translate(cat, offset) == SIF_ERR_INVALID,
     "translate accepted a sky catalogue");
-  CHECK(sif_catalog_to_sky(cat, &cosmo) == SIF_ERR_INVALID,
+  CHECK(sif_catalogue_to_sky(cat, &cosmo) == SIF_ERR_INVALID,
     "converted a catalogue already on the sky");
   /* A real mesh, so that it is the catalogue being refused. */
   const sif_real px[] = {10, 50, 90}, py[] = {20, 50, 80}, pz[] = {30, 50, 70};
@@ -300,31 +300,31 @@ static void test_catalog_to_sky(void) {
   sif_field_free(tracers);
 
   /* ASCII keeps the flag. */
-  CHECK(sif_catalog_write_ascii("test_cosmology_sky.txt", cat) == SIF_OK,
+  CHECK(sif_catalogue_write_ascii("test_cosmology_sky.txt", cat) == SIF_OK,
     "writing the sky catalogue failed");
-  sif_catalog_t* back = sif_catalog_read_ascii("test_cosmology_sky.txt", NULL);
+  sif_catalogue_t* back = sif_catalogue_read_ascii("test_cosmology_sky.txt", NULL);
   CHECK(back && back->units == SIF_COORDINATES_SKY && back->n_voids == n &&
           back->cz[7] == cat->cz[7],
     "the sky catalogue did not read back on the sky");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
   remove("test_cosmology_sky.txt");
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 
   /* The observer's own position, and refusals before anything changes. */
-  cat = sif_catalog_alloc(2);
-  (void)sif_catalog_append(cat, 0.0f, 0.0f, 0.0f, 1.0f);
-  (void)sif_catalog_append(cat, NAN, 0.0f, 0.0f, 1.0f);
-  CHECK(sif_catalog_to_sky(cat, &cosmo) == SIF_ERR_INVALID &&
+  cat = sif_catalogue_alloc(2);
+  (void)sif_catalogue_append(cat, 0.0f, 0.0f, 0.0f, 1.0f);
+  (void)sif_catalogue_append(cat, NAN, 0.0f, 0.0f, 1.0f);
+  CHECK(sif_catalogue_to_sky(cat, &cosmo) == SIF_ERR_INVALID &&
           cat->units == SIF_COORDINATES_CARTESIAN && cat->cx[0] == 0.0f,
     "a NaN centre was not refused, or the refusal changed the catalogue");
   cat->cx[1] = 1e7f; /* past the horizon of any of these models */
-  CHECK(sif_catalog_to_sky(cat, &cosmo) == SIF_ERR_RANGE,
+  CHECK(sif_catalogue_to_sky(cat, &cosmo) == SIF_ERR_RANGE,
     "a centre past the horizon was not refused as out of range");
   cat->cx[1] = 100.0f;
-  CHECK(sif_catalog_to_sky(cat, &cosmo) == SIF_OK && cat->cz[0] == 0.0f &&
+  CHECK(sif_catalogue_to_sky(cat, &cosmo) == SIF_OK && cat->cz[0] == 0.0f &&
           cat->cx[1] == 0.0f && cat->cy[1] == 0.0f && cat->cz[1] > 0.0f,
     "the observer or a centre along +x did not land where expected");
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 
   free(a);
   free(b);
@@ -392,10 +392,10 @@ int main(void) {
 
   test_distances();
   test_conversion();
-  test_catalog_to_sky();
+  test_catalogue_to_sky();
   test_refusals();
 
-  sif_finalize();
+  sif_finalise();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
   return failures != 0;

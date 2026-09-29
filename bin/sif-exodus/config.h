@@ -21,7 +21,7 @@
  * "exodus.lua: finder.treshold: unknown key (did you mean threshold?)" --
  * and all of them are reported before giving up, so one pass fixes the file.
  *
- * Loading needs nothing initialized and writes nothing through the library's
+ * Loading needs nothing initialised and writes nothing through the library's
  * logger: the configuration is what says how the logger is set up, so its
  * own messages go to stderr directly.
  */

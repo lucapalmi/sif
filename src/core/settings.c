@@ -205,7 +205,7 @@ static int32_t settings_put(const char* key, const char* value) {
 /*
  * Writes the table out through a temporary file and a rename.
  *
- * A job array pointed at one $HOME has every rank finalizing at once, into a
+ * A job array pointed at one $HOME has every rank finalising at once, into a
  * file the others may still be reading. Rename is atomic within a filesystem,
  * so each reader sees one complete table or the other, never a half-written
  * one; the pid in the temporary name keeps the ranks from colliding before
@@ -305,7 +305,7 @@ void sif__settings_init(const char* default_dir) {
       "settings", "loaded runtime config from %s", settings_filepath);
   }
 
-  /* Loading is not a modification: without this the first finalize would
+  /* Loading is not a modification: without this the first finalise would
    * rewrite a file identical to the one just read. */
   settings_modified = false;
 
@@ -330,7 +330,7 @@ void sif__settings_init(const char* default_dir) {
   sif_setting_get("cic_tile_particles", SIF__CIC_TILE_PARTICLES_DEFAULT);
 }
 
-void sif__settings_finalize(void) {
+void sif__settings_finalise(void) {
   settings_save();
 
   free(settings);

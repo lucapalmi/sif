@@ -8,13 +8,13 @@
 
 #include "sif/core/macros.h"
 #include "sif/finder/exodus_finder.h"
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/field_io.h"
 #include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
 #include "sif/io/hdf5_io.h"
 #include "sif/model/cosmology.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -280,50 +280,50 @@ typedef struct {
 } run_facts_t;
 
 /* Record what made the catalogue in its metadata, which every format then
- * writes: attributes of /catalog in HDF5, keywords of the VOIDS table in
+ * writes: attributes of /catalogue in HDF5, keywords of the VOIDS table in
  * FITS, '#key=value' lines in the ASCII header. A value that cannot be
  * recorded -- a path with a double quote in it, say -- is warned about and
  * left out; it is no reason to lose the run. */
-static void describe_catalog(
-  sif_catalog_t* cat, const exodus_params_t* p, const run_facts_t* r) {
-  int s = sif_catalog_meta_string_set(cat, "finder", "exodus");
-  s |= sif_catalog_meta_real_set(cat, "threshold", p->finder.threshold);
-  s |= sif_catalog_meta_real_set(
+static void describe_catalogue(
+  sif_catalogue_t* cat, const exodus_params_t* p, const run_facts_t* r) {
+  int s = sif_catalogue_meta_string_set(cat, "finder", "exodus");
+  s |= sif_catalogue_meta_real_set(cat, "threshold", p->finder.threshold);
+  s |= sif_catalogue_meta_real_set(
     cat, "overlap_fraction", p->finder.overlap_fraction);
-  s |= sif_catalog_meta_real_set(cat, "search_factor", p->finder.search_factor);
-  s |= sif_catalog_meta_int_set(cat, "n_radii", p->finder.n_radii);
-  s |= sif_catalog_meta_real_set(cat, "r_min", r->r_min);
-  s |= sif_catalog_meta_real_set(cat, "r_max", r->r_max);
-  s |= sif_catalog_meta_string_set(
+  s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
+  s |= sif_catalogue_meta_int_set(cat, "n_radii", p->finder.n_radii);
+  s |= sif_catalogue_meta_real_set(cat, "r_min", r->r_min);
+  s |= sif_catalogue_meta_real_set(cat, "r_max", r->r_max);
+  s |= sif_catalogue_meta_string_set(
     cat, "mode", p->mode == EXODUS_MODE_SURVEY ? "survey" : "box");
-  s |= sif_catalog_meta_real_set(cat, "box_length", r->box);
-  s |= sif_catalog_meta_real_set(cat, "mean_separation", r->mps);
-  s |= sif_catalog_meta_int_set(cat, "grid_n_cells", r->grid_cells);
-  s |= sif_catalog_meta_int_set(cat, "mesh_n_cells", r->mesh_cells);
-  s |= sif_catalog_meta_int_set(cat, "n_tracers", (int64_t)r->n_tracers);
-  s |= sif_catalog_meta_int_set(cat, "weighted", r->weighted);
-  s |= sif_catalog_meta_string_set(cat, "input", p->input.path);
-  s |= sif_catalog_meta_string_set(
+  s |= sif_catalogue_meta_real_set(cat, "box_length", r->box);
+  s |= sif_catalogue_meta_real_set(cat, "mean_separation", r->mps);
+  s |= sif_catalogue_meta_int_set(cat, "grid_n_cells", r->grid_cells);
+  s |= sif_catalogue_meta_int_set(cat, "mesh_n_cells", r->mesh_cells);
+  s |= sif_catalogue_meta_int_set(cat, "n_tracers", (int64_t)r->n_tracers);
+  s |= sif_catalogue_meta_int_set(cat, "weighted", r->weighted);
+  s |= sif_catalogue_meta_string_set(cat, "input", p->input.path);
+  s |= sif_catalogue_meta_string_set(
     cat, "input_kind", input_kind_name(p->input.kind));
 
   if (p->mode == EXODUS_MODE_SURVEY) {
-    s |= sif_catalog_meta_string_set(cat, "randoms", p->randoms.path);
-    s |= sif_catalog_meta_string_set(
+    s |= sif_catalogue_meta_string_set(cat, "randoms", p->randoms.path);
+    s |= sif_catalogue_meta_string_set(
       cat, "randoms_kind", input_kind_name(p->randoms.kind));
-    s |= sif_catalog_meta_int_set(cat, "n_randoms", (int64_t)r->n_randoms);
-    s |= sif_catalog_meta_int_set(cat, "randoms_weighted", r->randoms_weighted);
-    s |= sif_catalog_meta_int_set(
+    s |= sif_catalogue_meta_int_set(cat, "n_randoms", (int64_t)r->n_randoms);
+    s |= sif_catalogue_meta_int_set(cat, "randoms_weighted", r->randoms_weighted);
+    s |= sif_catalogue_meta_int_set(
       cat, "random_mesh_n_cells", r->random_mesh_cells);
     s |=
-      sif_catalog_meta_real_set(cat, "footprint_volume", r->footprint_volume);
-    s |= sif_catalog_meta_int_set(cat, "sky_input", r->sky_input);
+      sif_catalogue_meta_real_set(cat, "footprint_volume", r->footprint_volume);
+    s |= sif_catalogue_meta_int_set(cat, "sky_input", r->sky_input);
     if (p->survey.has_cosmology) {
       const sif_cosmology_t* c = &p->survey.cosmology;
-      s |= sif_catalog_meta_real_set(cat, "omega_m", c->omega_m);
-      s |= sif_catalog_meta_real_set(cat, "omega_de", c->omega_de);
-      s |= sif_catalog_meta_real_set(cat, "omega_r", c->omega_r);
-      s |= sif_catalog_meta_real_set(cat, "w0", c->w0);
-      s |= sif_catalog_meta_real_set(cat, "wa", c->wa);
+      s |= sif_catalogue_meta_real_set(cat, "omega_m", c->omega_m);
+      s |= sif_catalogue_meta_real_set(cat, "omega_de", c->omega_de);
+      s |= sif_catalogue_meta_real_set(cat, "omega_r", c->omega_r);
+      s |= sif_catalogue_meta_real_set(cat, "w0", c->w0);
+      s |= sif_catalogue_meta_real_set(cat, "wa", c->wa);
     }
   }
   if (s != SIF_OK)
@@ -334,9 +334,9 @@ static void describe_catalog(
 /* Write the catalogue beside the output, then move it into place. An output
  * that already exists is replaced only by a complete one -- a run that fails
  * or is killed leaves it as it was -- and never merged into: an HDF5 file is
- * rewritten whole, not just its /catalog, and a FITS file likewise. */
+ * rewritten whole, not just its /catalogue, and a FITS file likewise. */
 static int write_output(
-  const exodus_params_t* p, const run_facts_t* r, sif_catalog_t* cat) {
+  const exodus_params_t* p, const run_facts_t* r, sif_catalogue_t* cat) {
 
   const char* path = p->output.path;
   const size_t len = strlen(path) + 32;
@@ -346,13 +346,13 @@ static int write_output(
   snprintf(tmp, len, "%s.tmp.%ld", path, (long)getpid());
 
   int status;
-  describe_catalog(cat, p, r);
+  describe_catalogue(cat, p, r);
   if (p->output.kind == EXODUS_OUTPUT_HDF5) {
-    status = sif_catalog_write_hdf5(tmp, cat);
+    status = sif_catalogue_write_hdf5(tmp, cat);
   } else if (p->output.kind == EXODUS_OUTPUT_FITS) {
-    status = sif_catalog_write_fits(tmp, cat);
+    status = sif_catalogue_write_fits(tmp, cat);
   } else {
-    status = sif_catalog_write_ascii(tmp, cat);
+    status = sif_catalogue_write_ascii(tmp, cat);
   }
 
   if (status == SIF_OK && rename(tmp, path) != 0) {
@@ -394,7 +394,7 @@ int pipeline_box(const exodus_params_t* p) {
   sif_field_t* field = NULL;
   sif_grid_t* grid = NULL;
   sif_chain_mesh_t* mesh = NULL;
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   sif_real* radii = NULL;
   run_facts_t r = {0};
   sif_timer_t t_total, t;
@@ -527,13 +527,13 @@ int pipeline_box(const exodus_params_t* p) {
   if (status != SIF_OK)
     goto done;
   SIF_LOG_INFO(
-    TAG, "catalog: written to %s (%.2f s)", p->output.path, seconds_since(&t));
+    TAG, "catalogue: written to %s (%.2f s)", p->output.path, seconds_since(&t));
 
   SIF_LOG_INFO(TAG, "done in %.2f s", seconds_since(&t_total));
 
 done:
   free(radii);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_chain_mesh_free(mesh);
   sif_grid_free(grid);
   sif_field_free(field);
@@ -867,7 +867,7 @@ int pipeline_survey(const exodus_params_t* p) {
   sif_grid_t* random_grid = NULL;
   sif_chain_mesh_t* data_mesh = NULL;
   sif_chain_mesh_t* random_mesh = NULL;
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   sif_real* radii = NULL;
   run_facts_t r = {0};
   sif_timer_t t_total, t;
@@ -991,22 +991,22 @@ int pipeline_survey(const exodus_params_t* p) {
    * the origin -- and onto the sky, if asked. */
   sif_timer_start(&t);
   const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
-  status = sif_catalog_translate(cat, back);
+  status = sif_catalogue_translate(cat, back);
   if (status == SIF_OK && p->survey.sky)
-    status = sif_catalog_to_sky(cat, &p->survey.cosmology);
+    status = sif_catalogue_to_sky(cat, &p->survey.cosmology);
   if (status != SIF_OK)
     goto done;
   status = write_output(p, &r, cat);
   if (status != SIF_OK)
     goto done;
-  SIF_LOG_INFO(TAG, "catalog: written to %s%s (%.2f s)", p->output.path,
+  SIF_LOG_INFO(TAG, "catalogue: written to %s%s (%.2f s)", p->output.path,
     p->survey.sky ? ", on the sky" : "", seconds_since(&t));
 
   SIF_LOG_INFO(TAG, "done in %.2f s", seconds_since(&t_total));
 
 done:
   free(radii);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);
   sif_grid_free(random_grid);

@@ -45,7 +45,7 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
   for (int i = 0; i < 3; i++) {
     field->min_p[i] = 0.0f;
     field->max_p[i] = 0.0f;
-    field->center[i] = 0.0f;
+    field->centre[i] = 0.0f;
   }
   field->half_span = 0.0f;
 
@@ -407,12 +407,12 @@ int sif_field_refresh_bounds(sif_field_t* field) {
   field->max_p[1] = max_y;
   field->max_p[2] = max_z;
 
-  field->center[0] = (max_x + min_x) * 0.5f;
-  field->center[1] = (max_y + min_y) * 0.5f;
-  field->center[2] = (max_z + min_z) * 0.5f;
+  field->centre[0] = (max_x + min_x) * 0.5f;
+  field->centre[1] = (max_y + min_y) * 0.5f;
+  field->centre[2] = (max_z + min_z) * 0.5f;
 
   /* The bounding *cube*, sized by the widest axis, because the Morton
-   * quantization and the octree both subdivide a cube -- see the note in
+   * quantisation and the octree both subdivide a cube -- see the note in
    * sif_field_sort_morton(). */
   sif_real dx = max_x - min_x;
   sif_real dy = max_y - min_y;
@@ -420,8 +420,8 @@ int sif_field_refresh_bounds(sif_field_t* field) {
   sif_real max_dim = dx > dy ? (dx > dz ? dx : dz) : (dy > dz ? dy : dz);
 
   /* Padded by 0.1%, so the particles at the extremes fall strictly inside the
-   * cube rather than exactly on its face. A point at the face quantizes to the
-   * first index past the grid, which the clamp in sif_field_quantize() would
+   * cube rather than exactly on its face. A point at the face quantises to the
+   * first index past the grid, which the clamp in sif_field_quantise() would
    * fold back onto its neighbour -- putting two distinguishable points in one
    * cell for no reason other than the bound being tight. */
   field->half_span = (max_dim * 0.5f) * 1.001f;
@@ -461,7 +461,7 @@ static inline uint64_t spread_bits_3(uint32_t v) {
 }
 
 /*
- * The Morton (Z-order) code: the three quantized coordinates interleaved bit
+ * The Morton (Z-order) code: the three quantised coordinates interleaved bit
  * by bit, x in the lowest of each triple.
  *
  * Sorting on this orders points by recursive octant -- which is exactly the
@@ -483,7 +483,7 @@ typedef struct {
  *
  * Radix rather than a comparison sort because the key is a fixed-width integer
  * and n runs to hundreds of millions: eight linear passes beat n log n
- * comparisons, and each pass is two loops that parallelize without a
+ * comparisons, and each pass is two loops that parallelise without a
  * reduction.
  *
  * The array is cut into a fixed number of chunks and the histogram is indexed
@@ -600,25 +600,25 @@ int sif_field_sort_morton(sif_field_t* field) {
     return SIF_OK; /* Already sorted! */
   }
 
-  /* Quantization needs bounds that describe the data as it is now. */
+  /* Quantisation needs bounds that describe the data as it is now. */
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
   if (sif_field_refresh_bounds(field) != SIF_OK)
     return SIF_ERR_INVALID;
 
-  /* Quantize against the field's bounding CUBE, not each axis independently.
+  /* Quantise against the field's bounding CUBE, not each axis independently.
    *
-   * A per-axis normalization makes the Morton curve split space differently
+   * A per-axis normalisation makes the Morton curve split space differently
    * from the octree, which subdivides a single cube of side 2 * half_span
-   * around center. When the two disagree, the octants stop being contiguous
+   * around centre. When the two disagree, the octants stop being contiguous
    * along the sorted array and sif_octree_alloc cannot partition. Using the
    * same cube here makes Morton order exactly depth-first octree order. */
   sif_real cube_side = 2.0f * field->half_span;
   if (!(cube_side > 0.0f))
     cube_side = 1.0f; /* every particle coincident: any order will do */
 
-  const sif_real origin_x = field->center[0] - field->half_span;
-  const sif_real origin_y = field->center[1] - field->half_span;
-  const sif_real origin_z = field->center[2] - field->half_span;
+  const sif_real origin_x = field->centre[0] - field->half_span;
+  const sif_real origin_y = field->centre[1] - field->half_span;
+  const sif_real origin_z = field->centre[2] - field->half_span;
   const sif_real inv_side = 1.0f / cube_side;
 
   particle_sort_t* sort_array =
@@ -630,9 +630,9 @@ int sif_field_sort_morton(sif_field_t* field) {
 
 #pragma omp parallel for schedule(static)
   for (uint64_t i = 0; i < field->n_particles; i++) {
-    const uint32_t qx = sif_field_quantize(field->x[i], origin_x, inv_side);
-    const uint32_t qy = sif_field_quantize(field->y[i], origin_y, inv_side);
-    const uint32_t qz = sif_field_quantize(field->z[i], origin_z, inv_side);
+    const uint32_t qx = sif_field_quantise(field->x[i], origin_x, inv_side);
+    const uint32_t qy = sif_field_quantise(field->y[i], origin_y, inv_side);
+    const uint32_t qz = sif_field_quantise(field->z[i], origin_z, inv_side);
 
     sort_array[i].original_index = i;
     sort_array[i].morton_code = morton_3d(qx, qy, qz);
@@ -683,7 +683,7 @@ int sif_field_sort_morton(sif_field_t* field) {
   sif_real* new_vz = new_vel_block ? new_vel_block + (2 * padded_n) : NULL;
 
   /* Apply the sorted permutation to ALL arrays in one parallel pass. This is a
-   * gather through an index array, so it does not vectorize: plain
+   * gather through an index array, so it does not vectorise: plain
    * parallel for. */
 #pragma omp parallel for schedule(static)
   for (uint64_t i = 0; i < field->n_particles; i++) {
@@ -765,7 +765,7 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
   /* The bounds moved with the positions. The Morton order is dropped too,
    * though the particles kept their relative places: each coordinate was
    * rounded on the way, and the octree needs the order to agree with the
-   * quantization exactly, not approximately. The permutation stays -- the
+   * quantisation exactly, not approximately. The permutation stays -- the
    * arrays are still in whatever order a sort left them. */
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
   field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;

@@ -18,7 +18,7 @@
 #define SIF__FINDER_UTILS_H
 
 #include "sif/structures/bitmask.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/cell_linked_list.h"
 #include "sif/structures/grid.h"
 
@@ -110,8 +110,8 @@ typedef struct {
 /**
  * @brief A reusable, self-growing list of candidate cells.
  *
- * Zero-initialize before first use, then hand the same buffer to every scan so
- * the allocation is amortized across radii.
+ * Zero-initialise before first use, then hand the same buffer to every scan so
+ * the allocation is amortised across radii.
  */
 typedef struct {
   sif_candidate_t* items;
@@ -142,7 +142,7 @@ typedef struct {
   uint64_t rejected_overlap; /**< Failed the exact pairwise overlap test. */
   uint64_t rejected_rescale; /**< Radius rescaling did not converge. */
 
-  /* The same two tests again, at the rescaled radius and against a catalog
+  /* The same two tests again, at the rescaled radius and against a catalogue
    * that has moved on since. Only a finder that rescales fills these. */
   uint64_t rejected_proxy_recheck;
   uint64_t rejected_exact;
@@ -183,7 +183,7 @@ uint8_t sif__overlap_quick(const sif_bitmask_t* mask, uint32_t n_cells,
  *
  * @return Non-zero if the candidate overlaps an accepted void.
  */
-uint8_t sif__overlap_exact(const sif_catalog_t* cat, sif_real cx, sif_real cy,
+uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx, sif_real cy,
   sif_real cz, sif_real r, sif_real max_r, sif_real box_length,
   const sif_cell_linked_list_t* cll, uint32_t p2_mask,
   sif_real overlap_fraction);

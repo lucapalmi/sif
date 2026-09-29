@@ -5,9 +5,9 @@
  */
 
 /* Covers the simplified histogram-only VSF: no voids dropped at either edge,
- * correct normalization, both binning modes, and the merge path. */
+ * correct normalisation, both binning modes, and the merge path. */
 #include "sif/measure/size_function.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -25,12 +25,12 @@ static int failures = 0;
 
 #define BOX 100.0f
 
-static sif_catalog_t* make_catalog(uint64_t n, sif_real r_lo, sif_real r_hi) {
-  sif_catalog_t* c = sif_catalog_alloc(n);
+static sif_catalogue_t* make_catalogue(uint64_t n, sif_real r_lo, sif_real r_hi) {
+  sif_catalogue_t* c = sif_catalogue_alloc(n);
   for (uint64_t i = 0; i < n; i++) {
     /* Spread radii evenly so both the first and last land exactly on a bound */
     sif_real r = r_lo + (r_hi - r_lo) * ((sif_real)i / (sif_real)(n - 1));
-    sif_catalog_append(c, 1.0f, 2.0f, 3.0f, r);
+    sif_catalogue_append(c, 1.0f, 2.0f, 3.0f, r);
   }
   return c;
 }
@@ -39,10 +39,10 @@ static void test_no_voids_dropped(const char* label, sif_option bins) {
   printf("%s: every void is binned\n", label);
 
   const uint64_t n = 1000;
-  sif_catalog_t* cat = make_catalog(n, 5.0f, 25.0f);
+  sif_catalogue_t* cat = make_catalogue(n, 5.0f, 25.0f);
 
   sif_size_function_t* vsf =
-    sif_size_function_catalog(cat, BOX, 8, bins, 0.0f, 0.0f);
+    sif_size_function_catalogue(cat, BOX, 8, bins, 0.0f, 0.0f);
   CHECK(vsf != NULL, "computation returned NULL");
 
   if (vsf) {
@@ -68,7 +68,7 @@ static void test_no_voids_dropped(const char* label, sif_option bins) {
     CHECK(fabs((double)vsf->r_edges[vsf->n_bins] - 25.0) < 1e-3,
       "last edge is %g, expected 25", (double)vsf->r_edges[vsf->n_bins]);
 
-    /* Normalization: vsf = counts / (V * bin_width), bin width in r or ln r. */
+    /* Normalisation: vsf = counts / (V * bin_width), bin width in r or ln r. */
     const double vol = (double)BOX * BOX * BOX;
     const int is_ln = (bins & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
     const double lo = is_ln ? log(5.0) : 5.0;
@@ -81,7 +81,7 @@ static void test_no_voids_dropped(const char* label, sif_option bins) {
       if (fabs((double)vsf->vsf[b] - expect) > 1e-9 * (1.0 + fabs(expect)))
         bad_norm++;
     }
-    CHECK(bad_norm == 0, "%d bins with wrong normalization", bad_norm);
+    CHECK(bad_norm == 0, "%d bins with wrong normalisation", bad_norm);
 
     /* Poisson error: err/vsf == 1/sqrt(N) wherever N > 0. */
     int bad_err = 0;
@@ -100,30 +100,30 @@ static void test_no_voids_dropped(const char* label, sif_option bins) {
     sif_size_function_free(vsf);
   }
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   printf("  ok\n");
 }
 
 static void test_guards(void) {
   printf("input guards\n");
 
-  sif_catalog_t* cat = make_catalog(100, 5.0f, 25.0f);
+  sif_catalogue_t* cat = make_catalogue(100, 5.0f, 25.0f);
 
-  CHECK(sif_size_function_catalog(cat, BOX, 0, 0, 0.0f, 0.0f) == NULL,
+  CHECK(sif_size_function_catalogue(cat, BOX, 0, 0, 0.0f, 0.0f) == NULL,
     "n_bins = 0 should be rejected");
-  CHECK(sif_size_function_catalog(cat, -1.0f, 8, 0, 0.0f, 0.0f) == NULL,
+  CHECK(sif_size_function_catalogue(cat, -1.0f, 8, 0, 0.0f, 0.0f) == NULL,
     "a non-positive box_length should be rejected");
-  CHECK(sif_size_function_catalog(NULL, BOX, 8, 0, 0.0f, 0.0f) == NULL,
-    "a NULL catalog should be rejected");
-  sif_catalog_free(cat);
+  CHECK(sif_size_function_catalogue(NULL, BOX, 8, 0, 0.0f, 0.0f) == NULL,
+    "a NULL catalogue should be rejected");
+  sif_catalogue_free(cat);
 
-  /* A catalog where every void has the same radius has no usable range. */
-  sif_catalog_t* flat = sif_catalog_alloc(8);
+  /* A catalogue where every void has the same radius has no usable range. */
+  sif_catalogue_t* flat = sif_catalogue_alloc(8);
   for (int i = 0; i < 8; i++)
-    sif_catalog_append(flat, 0, 0, 0, 7.0f);
-  CHECK(sif_size_function_catalog(flat, BOX, 8, 0, 0.0f, 0.0f) == NULL,
+    sif_catalogue_append(flat, 0, 0, 0, 7.0f);
+  CHECK(sif_size_function_catalogue(flat, BOX, 8, 0, 0.0f, 0.0f) == NULL,
     "a degenerate radius range should be rejected");
-  sif_catalog_free(flat);
+  sif_catalogue_free(flat);
 
   sif_size_function_free(NULL); /* must be quiet and not crash */
   printf("  ok\n");
@@ -132,13 +132,13 @@ static void test_guards(void) {
 static void test_combine(void) {
   printf("combine\n");
 
-  sif_catalog_t* a = make_catalog(500, 5.0f, 15.0f);
-  sif_catalog_t* b = make_catalog(500, 12.0f, 25.0f);
+  sif_catalogue_t* a = make_catalogue(500, 5.0f, 15.0f);
+  sif_catalogue_t* b = make_catalogue(500, 12.0f, 25.0f);
 
   sif_size_function_t* va =
-    sif_size_function_catalog(a, BOX, 10, SIF_VSF_BIN_LN, 0.0f, 0.0f);
+    sif_size_function_catalogue(a, BOX, 10, SIF_VSF_BIN_LN, 0.0f, 0.0f);
   sif_size_function_t* vb =
-    sif_size_function_catalog(b, BOX, 10, SIF_VSF_BIN_LN, 0.0f, 0.0f);
+    sif_size_function_catalogue(b, BOX, 10, SIF_VSF_BIN_LN, 0.0f, 0.0f);
   CHECK(va && vb, "inputs failed to compute");
 
   if (va && vb) {
@@ -163,8 +163,8 @@ static void test_combine(void) {
 
   sif_size_function_free(va);
   sif_size_function_free(vb);
-  sif_catalog_free(a);
-  sif_catalog_free(b);
+  sif_catalogue_free(a);
+  sif_catalogue_free(b);
   printf("  ok\n");
 }
 

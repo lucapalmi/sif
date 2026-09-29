@@ -21,7 +21,7 @@
  * where failing costs nothing: it refuses with SIF_ERR_UNSUPPORTED.
  */
 
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/hdf5_io.h"
 
 #include "io/gadget_internal.h"
@@ -102,17 +102,17 @@ static int dump_profiles(const char* dump, const char* what, uint64_t n_voids,
 
 /* --- writers --- */
 
-int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog) {
-  if (!filepath || !catalog) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalog_write_hdf5");
+int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalogue) {
+  if (!filepath || !catalogue) {
+    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalogue_write_hdf5");
     return SIF_ERR_INVALID;
   }
 
   char dump[4096];
-  if (dump_path(dump, sizeof(dump), filepath, "catalog") != SIF_OK)
+  if (dump_path(dump, sizeof(dump), filepath, "catalogue") != SIF_OK)
     return SIF_ERR_INVALID;
 
-  const int status = sif_catalog_write_ascii(dump, catalog);
+  const int status = sif_catalogue_write_ascii(dump, catalogue);
   if (status == SIF_OK)
     warn_dumped(filepath, dump);
   return status;
@@ -172,7 +172,7 @@ int sif_size_function_write_hdf5(
 
   fprintf(f,
     "# sif size function: n_bins %u, binning %s (vsf per unit %s), options "
-    "%u\n# r_lo r_hi r_center counts vsf err\n",
+    "%u\n# r_lo r_hi r_centre counts vsf err\n",
     vsf->n_bins, linear ? "linear" : "ln", linear ? "R" : "ln R",
     (unsigned)vsf->options);
 
@@ -180,7 +180,7 @@ int sif_size_function_write_hdf5(
     fprintf(f,
       SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL " %" PRIu64
                    " " SIF_PRI_REAL " " SIF_PRI_REAL "\n",
-      vsf->r_edges[b], vsf->r_edges[b + 1], vsf->r_centers[b], vsf->counts[b],
+      vsf->r_edges[b], vsf->r_edges[b + 1], vsf->r_centres[b], vsf->counts[b],
       vsf->vsf[b], vsf->err[b]);
   }
 
@@ -199,7 +199,7 @@ static void refuse(const char* filepath) {
     filepath ? filepath : "(null)");
 }
 
-sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
+sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
   refuse(filepath);
   return NULL;
 }

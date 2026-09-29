@@ -9,7 +9,7 @@ Pilot study for the EP multiplicity emulator.
 
 Question under test: is the ratio between the Monte Carlo first-crossing
 hazard and the up-crossing hazard of Verza+ (2024) eq. (3.15) a smooth, O(1)
-target that local features (nu, gamma^2, y) organize across spectra and
+target that local features (nu, gamma^2, y) organise across spectra and
 barriers?
 
 Runs ~27 first-crossing ensembles at modest n_paths (about 2 minutes on a
@@ -64,7 +64,7 @@ def eh_zero_baryon_pk(shape_gamma, ns=0.96):
     return k.astype(np.float32), (k ** ns * T * T).astype(np.float32)
 
 
-def normalize_sigma8(k, pk, sigma8=0.8):
+def normalise_sigma8(k, pk, sigma8=0.8):
     _, s8, _, _ = model.delta_covariance_pk(k, pk, np.array([8.0], np.float32))
     return (pk * (sigma8 / s8[0]) ** 2).astype(np.float32)
 
@@ -145,7 +145,7 @@ def main():
 
     for sname, build in SPECTRA:
         k, pk = build()
-        pk = normalize_sigma8(k, pk)
+        pk = normalise_sigma8(k, pk)
         radii = radii_for_sigma_range(k, pk)
         cov, sigma, high, dvar = model.delta_covariance_pk(k, pk, radii)
         spectra_data[sname] = (k, pk)

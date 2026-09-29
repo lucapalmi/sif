@@ -153,14 +153,14 @@ static PyObject* sifGrid_to_density_contrast(
   if (self->grid->content == SIF_GRID_DENSITY_CONTRAST) {
     PyErr_SetString(PyExc_ValueError,
       "this grid already holds a density contrast; converting again would "
-      "renormalize by a mean of zero");
+      "renormalise by a mean of zero");
     return NULL;
   }
 
   if (sif_grid_to_density_contrast(self->grid) != SIF_OK) {
     PyErr_SetString(PyExc_ValueError,
       "the grid's mean density is not positive, so there is nothing to "
-      "normalize by: deposit a field onto it with assign_cic() first");
+      "normalise by: deposit a field onto it with assign_cic() first");
     return NULL;
   }
 
@@ -210,14 +210,14 @@ static PyMethodDef sifGrid_methods[] = {
     "Replaces each cell with delta = rho / rho_mean - 1, so the field\n"
     "averages to zero and is bounded below by -1. This is the form the\n"
     "finders and pysif.measure expect.\n\n"
-    "Calling it twice is refused: the second pass would renormalize by a\n"
+    "Calling it twice is refused: the second pass would renormalise by a\n"
     "mean that is now zero."},
   {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */
 PyTypeObject sifGridType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-    "pysif.Grid", /* Updated Namespace and Capitalized */
+    "pysif.Grid", /* Updated Namespace and Capitalised */
   .tp_basicsize = sizeof(sifGridObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifGrid_dealloc,

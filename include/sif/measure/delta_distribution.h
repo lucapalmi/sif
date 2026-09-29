@@ -9,8 +9,8 @@
  * @brief Measuring the one-point PDF of the smoothed density contrast.
  *
  * Smooths the gridded field at each radius in Fourier space and histograms the
- * cell values. Pair it with a phase-randomized surrogate -- same seed, same
- * spectrum, randomized phases -- and the difference between the two PDFs is
+ * cell values. Pair it with a phase-randomised surrogate -- same seed, same
+ * spectrum, randomised phases -- and the difference between the two PDFs is
  * the non-Gaussian information the field carries.
  */
 

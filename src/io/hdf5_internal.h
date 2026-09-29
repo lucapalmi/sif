@@ -33,14 +33,14 @@
 int sif__hdf5_describe(char* buf, size_t len);
 
 /**
- * @brief A metadata call's group, normalized: NULL for the root (NULL, "" or
+ * @brief A metadata call's group, normalised: NULL for the root (NULL, "" or
  * any run of "/"), otherwise the name without its leading slashes.
  */
 const char* sif__hdf5_group(const char* group);
 
 /**
  * @brief Whether @p key names an attribute sif keeps for itself in @p group
- * (already normalized), which the metadata setters refuse. hdf5_common.c,
+ * (already normalised), which the metadata setters refuse. hdf5_common.c,
  * compiled into both builds so both refuse the same keys.
  */
 int sif__hdf5_key_reserved(const char* group, const char* key);

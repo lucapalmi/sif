@@ -9,9 +9,9 @@
  * @brief Cache-line aligned allocation.
  *
  * Every bulk buffer in sif comes from here rather than from malloc. Two
- * reasons: the vectorized loops want their operands aligned, and blocks handed
+ * reasons: the vectorised loops want their operands aligned, and blocks handed
  * to different OpenMP threads must not share a cache line, or the threads
- * serialize on the coherence protocol while appearing to touch separate data.
+ * serialise on the coherence protocol while appearing to touch separate data.
  *
  * Allocations are therefore both aligned to #SIF_CACHE_LINE and rounded *up*
  * to a whole number of cache lines, so two adjacent allocations can never
@@ -39,7 +39,7 @@
 #endif
 
 /**
- * @brief Allocate aligned, uninitialized memory.
+ * @brief Allocate aligned, uninitialised memory.
  *
  * @param size Number of bytes required.
  * @return Pointer to the block, owned by the caller and released with
@@ -48,7 +48,7 @@
 SIF_NODISCARD SIF_ALIGNED_FN void* sif_malloc_aligned(size_t size);
 
 /**
- * @brief Allocate aligned, zero-initialized memory.
+ * @brief Allocate aligned, zero-initialised memory.
  *
  * @param count Number of elements.
  * @param size Size of each element, in bytes.

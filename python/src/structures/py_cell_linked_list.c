@@ -195,7 +195,7 @@ static PyMethodDef sifCellLinkedList_methods[] = {
 
 PyTypeObject sifCellLinkedListType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-    "pysif.CellLinkedList", /* Updated Namespace and Capitalized */
+    "pysif.CellLinkedList", /* Updated Namespace and Capitalised */
   .tp_basicsize = sizeof(sifCellLinkedListObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifCellLinkedList_dealloc,

@@ -6,7 +6,7 @@
 
 #include "py_profiles.h"
 
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_chain_mesh.h"
 #include <numpy/arrayobject.h>
 
@@ -230,16 +230,16 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
   int differential = 0;
   int weighted_velocity = 0;
 
-  static char* kwlist[] = {"catalog", "mesh", "n_bins", "ext",
+  static char* kwlist[] = {"catalogue", "mesh", "n_bins", "ext",
     "compute_velocity", "use_pbc", "differential", "weighted_velocity", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!I|dpppp", kwlist,
-        &sifCatalogType, &cat_obj, &sifChainMeshType, &mesh_obj, &n_bins, &ext,
+        &sifCatalogueType, &cat_obj, &sifChainMeshType, &mesh_obj, &n_bins, &ext,
         &compute_velocity, &use_pbc, &differential, &weighted_velocity)) {
     return NULL;
   }
 
-  const sif_catalog_t* c_cat = ((sifCatalogObject*)cat_obj)->catalog;
+  const sif_catalogue_t* c_cat = ((sifCatalogueObject*)cat_obj)->catalogue;
   const sif_chain_mesh_t* c_mesh = ((sifChainMeshObject*)mesh_obj)->mesh;
 
   /* Checked here as well as in the C call so the message names the mesh the

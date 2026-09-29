@@ -6,7 +6,7 @@
 
 #include "py_finders.h"
 
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_chain_mesh.h"
 #include "structures/py_field.h"
 #include "structures/py_grid.h"
@@ -181,17 +181,17 @@ static PyArrayObject* radii_from_object(PyObject* radii_obj) {
   return radii_arr;
 }
 
-/* A new Catalog owning `cat`, or NULL with an exception set (and `cat`
+/* A new Catalogue owning `cat`, or NULL with an exception set (and `cat`
  * freed). */
-static PyObject* wrap_catalog(sif_catalog_t* cat) {
-  sifCatalogObject* out =
-    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+static PyObject* wrap_catalogue(sif_catalogue_t* cat) {
+  sifCatalogueObject* out =
+    (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
   if (!out) {
-    sif_catalog_free(cat);
+    sif_catalogue_free(cat);
     return PyErr_NoMemory();
   }
 
-  out->catalog = cat;
+  out->catalogue = cat;
   return (PyObject*)out;
 }
 
@@ -245,21 +245,21 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
    *
    * The mesh is borrowed for the duration; mesh_obj is kept alive by the
    * caller's reference for the whole call, so it cannot be collected here. */
-  sif_catalog_t* res_catalog = NULL;
-  Py_BEGIN_ALLOW_THREADS res_catalog =
+  sif_catalogue_t* res_catalogue = NULL;
+  Py_BEGIN_ALLOW_THREADS res_catalogue =
     sif_finder_exodus(c_grid, c_mesh, radii_data, (uint32_t)n_radii,
       (sif_real)threshold, (sif_real)overlap_frac, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
-  if (!res_catalog) {
+  if (!res_catalogue) {
     PyErr_SetString(
       PyExc_RuntimeError, "Exodus finder execution failed. Check system logs.");
     return NULL;
   }
 
-  return wrap_catalog(res_catalog);
+  return wrap_catalogue(res_catalogue);
 }
 
 /* --- Spherical Finder Wrapper --- */
@@ -295,19 +295,19 @@ PyObject* py_sif_finder_spherical(
     options |= SIF_FINDER_CONSUME_GRID;
 
   /* See the note in the exodus wrapper: the GIL is released for the run. */
-  sif_catalog_t* res_catalog = NULL;
-  Py_BEGIN_ALLOW_THREADS res_catalog = sif_finder_spherical(c_grid, radii_data,
+  sif_catalogue_t* res_catalogue = NULL;
+  Py_BEGIN_ALLOW_THREADS res_catalogue = sif_finder_spherical(c_grid, radii_data,
     (uint32_t)n_radii, (sif_real)threshold, (sif_real)overlap_frac, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
-  if (!res_catalog) {
+  if (!res_catalogue) {
     PyErr_SetString(PyExc_RuntimeError, "Spherical finder execution failed.");
     return NULL;
   }
 
-  return wrap_catalog(res_catalog);
+  return wrap_catalogue(res_catalogue);
 }
 
 /* --- Survey Finder Wrapper --- */
@@ -362,7 +362,7 @@ PyObject* py_sif_finder_exodus_survey(
 
   /* See the note in the exodus wrapper: the GIL is released for the run, and
    * the four borrowed objects are kept alive by the caller's references. */
-  sif_catalog_t* res = NULL;
+  sif_catalogue_t* res = NULL;
   Py_BEGIN_ALLOW_THREADS res = sif_finder_exodus_survey(data_grid, random_grid,
     data_mesh, random_mesh, radii_data, (uint32_t)n_radii, (sif_real)threshold,
     (sif_real)overlap_frac, options);
@@ -378,7 +378,7 @@ PyObject* py_sif_finder_exodus_survey(
     return NULL;
   }
 
-  return wrap_catalog(res);
+  return wrap_catalogue(res);
 }
 
 /* --- Survey Box Helper --- */

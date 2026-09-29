@@ -1,9 +1,10 @@
 # Running exodus
 
-This page shows how to run the exodus void finder using **sif**, in
-three ways that do the same thing: a Python script, a C program, and the
-`sif-exodus` command, which runs the whole pipeline from a configuration
-file.
+How to run the exodus void finder
+
+This page contains practical examples that show how to run the exodus void finder, 
+both for simulations and surveys. The same two pipelines are shown in the three languages
+of exodus: Python, C, and the Lua configuration file of the **sif-exodus** program. 
 
 ## exodus for N-body simulations
 
@@ -14,7 +15,7 @@ file.
 import numpy as np
 import pysif
 
-# initialize the library
+# initialise the library
 # log_level 2 (info, the default) prints one line for each rung of
 # the finder; 0 (trace) prints everything the library does, and
 # higher levels print out only warnings and errors
@@ -27,7 +28,7 @@ pysif.init(log_level=2)
 # with this command, we only load the particle positions
 # 'length=' is the unit the snapshot is written in: 'auto' (the
 # default) reads it from an HDF5 snapshot, but a binary one does not
-# record it, so it has to be named: 'kpc' for kpc/h or 'mpc' for Mpc/h. 
+# record it, so it has to be named: 'kpc' for kpc/h or 'mpc' for Mpc/h.
 # positions and box_length always come out in Mpc/h
 # the argument 'fraction=' allows for subsampling ('seed=' makes it
 # reproducible)
@@ -80,7 +81,7 @@ mesh = pysif.ChainMesh(
 # now we can finally run exodus
 # we make it consume the grid because we don't need it anymore
 threshold = -0.7
-catalog = pysif.finders.exodus(
+catalogue = pysif.finders.exodus(
     grid=grid,
     mesh=mesh,
     radii=search_radii,
@@ -88,10 +89,10 @@ catalog = pysif.finders.exodus(
     consume_grid=True
 )
 
-# we finally save the catalog and finalize the library
-pysif.io.write_catalog_ascii(filepath="path/to/voids.txt", catalog=catalog)
+# we finally save the catalogue and finalise the library
+pysif.io.write_catalogue_ascii(filepath="path/to/voids.txt", catalogue=catalogue)
 
-pysif.finalize()
+pysif.finalise()
 ```
 ::::
 
@@ -99,9 +100,9 @@ pysif.finalize()
 ```c
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/gadget_io.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -115,10 +116,10 @@ int main(void) {
   sif_grid_t* grid = NULL;
   sif_real* search_radii = NULL;
   sif_chain_mesh_t* mesh = NULL;
-  sif_catalog_t* catalog = NULL;
+  sif_catalogue_t* catalogue = NULL;
   int status = -1;
 
-  // initialize the library
+  // initialise the library
   // SIF_CONFIG_STANDARD logs at info level, which prints one line for
   // each rung of the finder; SIF_CONFIG_VERBOSE prints everything the
   // library does, SIF_CONFIG_QUIET only warnings and errors
@@ -202,21 +203,21 @@ int main(void) {
   // we make it consume the grid because we don't need it anymore
   const sif_real threshold = -0.7f;
   const sif_real overlap_fraction = 0.0f;
-  catalog = sif_finder_exodus(grid, mesh, search_radii, n_radii, threshold,
+  catalogue = sif_finder_exodus(grid, mesh, search_radii, n_radii, threshold,
     overlap_fraction, SIF_FINDER_CONSUME_GRID);
-  if (!catalog)
+  if (!catalogue)
     goto done;
 
-  // we finally save the catalog and finalize the library
-  status = sif_catalog_write_ascii("path/to/voids.txt", catalog);
+  // we finally save the catalogue and finalise the library
+  status = sif_catalogue_write_ascii("path/to/voids.txt", catalogue);
 
 done:
-  sif_catalog_free(catalog);
+  sif_catalogue_free(catalogue);
   sif_chain_mesh_free(mesh);
   sif_free_aligned(search_radii);
   sif_grid_free(grid);
   sif_field_free(field);
-  sif_finalize();
+  sif_finalise();
   return status == SIF_OK ? 0 : 1;
 }
 ```
@@ -271,25 +272,6 @@ sif-exodus --check exodus.lua
 sif-exodus exodus.lua
 ```
 
-`--check` reads only the headers of the input, and says what the run will
-be -- tracers, box, grid, mesh, radii in Mpc/h, and the memory it needs --
-along with anything that would make it fail, so a mistake in the file
-costs seconds rather than a queued job.
-
-The file is a Lua script, so values can be computed, and `-D name=value`
-passes a string to it from the command line: with `snap = snap or "010"`
-at the top and `path = "path/to/snapdir_" .. snap .. "/snap_" .. snap`,
-`sif-exodus -D snap=042 exodus.lua` runs the same file on another
-snapshot.
-
-`sif-exodus --template box` prints a configuration with every setting and
-its default:
-
-:::{dropdown} The template
-```{literalinclude} ../../bin/sif-exodus/template_box.lua
-:language: lua
-```
-:::
 ::::
 
 :::::
@@ -304,14 +286,14 @@ its default:
 import numpy as np
 import pysif
 
-# initialize the library, as for a simulation
+# initialise the library, as for a simulation
 pysif.init(log_level=2)
 
 # first, load the galaxies and the randoms into two pysif.Field
 # structures, from FITS tables holding right ascension, declination (in
-# degrees) and redshift. Weights are optional and can be computed 
-# on the fly from multiple columns.(simple expressions only).
-# Catalogue that split over several files can be loaded as one. 
+# degrees) and redshift. Weights are optional and can be computed
+# on the fly from multiple columns (simple expressions only).
+# Catalogues that split over several files can be loaded as one.
 # The named arguments ra, dec and z (rather than x, y and z) automatically
 # set the sky coordinates.
 #
@@ -341,10 +323,10 @@ randoms.convert_sky_coordinates(**cosmology)
 # survey needs around it. We use the real datatype to ensure compatibility
 search_radii = np.geomspace(10, 60, 60, dtype=pysif.real)
 
-# we now compute the pad the survey volume in the box, 
-# to ensure the boundary conditions do not apply. 
-# The computed offset and box lengths depend on the survey footprint, 
-# the search radii and the number of cells in the grid
+# we now compute the offset and the box length that pad the survey volume
+# in the box, to ensure the boundary conditions do not apply.
+# They depend on the survey footprint, the search radii and the number of
+# cells in the grid
 n_cells = 512                     # change at will
 offset, box_length = pysif.finders.survey_box(
     randoms=randoms, radii=search_radii, n_cells=n_cells
@@ -355,7 +337,7 @@ data.translate(offset)
 randoms.translate(offset)
 
 # now the grids, one for the galaxies and one for the randoms, with
-# the same number of cells. Unlike for a simulation, 
+# the same number of cells. Unlike for a simulation,
 # they are NOT turned into density contrast
 data_grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 data_grid.assign_cic(field=data)
@@ -363,8 +345,8 @@ data_grid.assign_cic(field=data)
 random_grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 random_grid.assign_cic(field=randoms)
 
-# now the chain meshes, one for each catalogue. The quantity is 
-# computed from the random footprint.
+# now the chain meshes, one for each catalogue. The optimal number of
+# cells is computed from the random footprint.
 max_radius = float(search_radii.max())
 n_cells_data = pysif.finders.suggest_mesh_cells_survey(
     n_particles=data.n_particles, random_grid=random_grid,
@@ -388,7 +370,7 @@ random_mesh = pysif.ChainMesh(
 
 # now we can run exodus
 threshold = -0.7
-catalog = pysif.finders.exodus_survey(
+catalogue = pysif.finders.exodus_survey(
     data_grid=data_grid,
     random_grid=random_grid,
     data_mesh=data_mesh,
@@ -399,18 +381,18 @@ catalog = pysif.finders.exodus_survey(
 )
 
 # move the voids back to the frame of the catalogues
-catalog.translate(-offset)
+catalogue.translate(-offset)
 
 # optionally, we can translate the voids positions in sky coordinates
-catalog.to_sky(**cosmology)
+catalogue.to_sky(**cosmology)
 
-# we finally save the catalog, in FITS format.
+# we finally save the catalogue, in FITS format.
 # we also save some metadata, which every format keeps with it
-catalog.set_metadata("threshold", threshold)
-catalog.set_metadata("omega_m", cosmology["omega_m"])
-pysif.io.write_catalog_fits("path/to/voids.fits", catalog)
+catalogue.set_metadata("threshold", threshold)
+catalogue.set_metadata("omega_m", cosmology["omega_m"])
+pysif.io.write_catalogue_fits("path/to/voids.fits", catalogue)
 
-pysif.finalize()
+pysif.finalise()
 ```
 ::::
 
@@ -421,7 +403,7 @@ pysif.finalize()
 #include "sif/finder/exodus_finder.h"
 #include "sif/io/fits_io.h"
 #include "sif/model/cosmology.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -438,26 +420,24 @@ int main(void) {
   sif_grid_t* random_grid = NULL;
   sif_chain_mesh_t* data_mesh = NULL;
   sif_chain_mesh_t* random_mesh = NULL;
-  sif_catalog_t* catalog = NULL;
+  sif_catalogue_t* catalogue = NULL;
   int status = -1;
 
-  // initialize the library, as for a simulation
+  // initialise the library, as for a simulation
   if (sif_init(SIF_CONFIG_STANDARD) != SIF_OK)
     return 1;
 
   // first, load the galaxies and the randoms into two sif_field_t
   // structures, from FITS tables holding right ascension, declination (in
-  // degrees) and redshift. each part of the field is a column, or an
-  // expression over columns: here the galaxies' weight is the product of
-  // two (weights are optional, for the data and the randoms alike). a
-  // catalogue split over several files -- the two galactic caps here --
-  // reads as one. naming them ra, dec and z (rather than x, y and z) says
-  // they are sky coordinates, not positions
+  // degrees) and redshift. Weights are optional and can be computed
+  // on the fly from multiple columns (simple expressions only).
+  // Catalogues that split over several files can be loaded as one.
+  // The named columns ra, dec and z (rather than x, y and z) automatically
+  // set the sky coordinates.
   //
-  // the redshift cut is the filter, and applies the same way to both
-  // catalogues. the randoms are often many times the galaxies: the
-  // fraction keeps a random share of what passes the cut (the seed after
-  // it makes it reproducible). sif_fits_inspect() lists a file's columns
+  // A cut (e.g. redshifts) can be applied directly when reading. The
+  // arguments after the cut are the subsampling fraction and the
+  // subsampling seed
   const char* cut = "Z > 0.43 && Z < 0.7";
   const char* data_files[] = {
     "path/to/galaxies_NGC.fits", "path/to/galaxies_SGC.fits"};
@@ -476,16 +456,16 @@ int main(void) {
   // exodus works in comoving cartesian coordinates, so we convert both
   // catalogues with the same cosmology: a w0waCDM background, whose
   // curvature is 1 - omega_m - omega_de - omega_r. positions come out in
-  // Mpc/h, with the observer at the origin (the convention of pyrecon)
+  // Mpc/h, with the observer at the origin
   const sif_cosmology_t cosmology = {
     .omega_m = 0.31, .omega_de = 0.69, .omega_r = 0.0, .w0 = -1.0, .wa = 0.0};
   if (sif_field_convert_sky_coordinates(data, &cosmology) != SIF_OK ||
       sif_field_convert_sky_coordinates(randoms, &cosmology) != SIF_OK)
     goto done;
 
-  // the radii: 60 of them, evenly spaced in log (numpy's geomspace). in
-  // a survey they also decide how much empty space the survey needs
-  // around it (see below), so we construct them first
+  // now the search radii: 60 of them, evenly spaced in log (numpy's
+  // geomspace). in a survey they also decide how much empty space the
+  // survey needs around it. we use sif_real to ensure compatibility
   const uint32_t n_radii = 60;
   const double r_min = 10.0, r_max = 60.0;
   search_radii = sif_array_logspace(
@@ -493,11 +473,10 @@ int main(void) {
   if (!search_radii)
     goto done;
 
-  // nothing wraps around in a survey: exodus runs in a box of empty
-  // space around the footprint, wide enough that the smoothing and the
-  // sphere searches never reach its far side. this call works out that
-  // box from the randoms (which define the footprint) for this ladder
-  // and this grid, along with the offset that moves the survey into it.
+  // we now compute the offset and the box length that pad the survey
+  // volume in the box, to ensure the boundary conditions do not apply.
+  // they depend on the survey footprint (defined by the randoms), the
+  // search radii and the number of cells in the grid.
   // SIF_DEFAULT is the search factor the finder will run with
   const uint32_t n_cells = 512; // change at will
   sif_real offset[3], box_length;
@@ -505,15 +484,14 @@ int main(void) {
         SIF_DEFAULT, offset, &box_length) != SIF_OK)
     goto done;
 
-  // move both catalogues into the box, by the same offset
+  // we now apply the offset
   if (sif_field_translate(data, offset) != SIF_OK ||
       sif_field_translate(randoms, offset) != SIF_OK)
     goto done;
 
   // now the grids, one for the galaxies and one for the randoms, with
-  // the same number of cells over the same box, both assigned with the
-  // CiC scheme. unlike for a simulation, they are NOT turned into density
-  // contrasts: exodus compares the two densities itself
+  // the same number of cells. unlike for a simulation, they are NOT
+  // turned into density contrast
   data_grid = sif_grid_alloc(n_cells, box_length);
   random_grid = sif_grid_alloc(n_cells, box_length);
   if (!data_grid || !random_grid ||
@@ -521,9 +499,8 @@ int main(void) {
       sif_grid_assign_cic(random_grid, randoms) != SIF_OK)
     goto done;
 
-  // now the chain meshes, one for each catalogue. in a survey box the
-  // tracers only fill the footprint, so each mesh is sized for the
-  // density there, reading the footprint off the random grid
+  // now the chain meshes, one for each catalogue. the optimal number of
+  // cells is computed from the random footprint
   const uint32_t n_cells_data = sif_finder_suggest_mesh_cells_survey(
     data->n_particles, random_grid, (sif_real)r_max);
   const uint32_t n_cells_randoms = sif_finder_suggest_mesh_cells_survey(
@@ -545,43 +522,34 @@ int main(void) {
   if (!data_mesh || !random_mesh)
     goto done;
 
-  // now we can run exodus. a sphere's density contrast is measured
-  // against the randoms, and every void found is kept, along with the
-  // fraction of its sphere (footprint) and of the shell out to twice its
-  // radius (footprint_shell) that lie inside the survey
+  // now we can run exodus
   const sif_real threshold = -0.7f;
   const sif_real overlap_fraction = 0.0f;
-  catalog = sif_finder_exodus_survey(data_grid, random_grid, data_mesh,
+  catalogue = sif_finder_exodus_survey(data_grid, random_grid, data_mesh,
     random_mesh, search_radii, n_radii, threshold, overlap_fraction,
     SIF_FINDER_CONSUME_GRID);
-  if (!catalog)
+  if (!catalogue)
     goto done;
 
-  // move the voids back to the frame of the catalogues: comoving
-  // cartesian positions, in Mpc/h, with the observer at the origin
+  // move the voids back to the frame of the catalogues
   const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
-  if (sif_catalog_translate(catalog, back) != SIF_OK)
+  if (sif_catalogue_translate(catalogue, back) != SIF_OK)
     goto done;
 
-  // and, to hand them on in the survey's own terms, back to the sky with
-  // the same cosmology: right ascension, declination and redshift. the
-  // radii stay comoving lengths, in Mpc/h
-  if (sif_catalog_to_sky(catalog, &cosmology) != SIF_OK)
+  // optionally, we can translate the voids positions in sky coordinates
+  if (sif_catalogue_to_sky(catalogue, &cosmology) != SIF_OK)
     goto done;
 
-  // we finally save the catalog, footprint columns included, as a FITS
-  // table (RA, DEC, Z, R, ...), with what it was made with in its
-  // metadata, which every format keeps with it, and finalize the library.
-  // sif_catalog_write_hdf5() and sif_catalog_write_ascii() write a sky
-  // catalogue as well
-  status = sif_catalog_meta_real_set(catalog, "threshold", threshold);
+  // we finally save the catalogue, in FITS format.
+  // we also save some metadata, which every format keeps with it
+  status = sif_catalogue_meta_real_set(catalogue, "threshold", threshold);
   if (status == SIF_OK)
-    status = sif_catalog_meta_real_set(catalog, "omega_m", cosmology.omega_m);
+    status = sif_catalogue_meta_real_set(catalogue, "omega_m", cosmology.omega_m);
   if (status == SIF_OK)
-    status = sif_catalog_write_fits("path/to/voids.fits", catalog);
+    status = sif_catalogue_write_fits("path/to/voids.fits", catalogue);
 
 done:
-  sif_catalog_free(catalog);
+  sif_catalogue_free(catalogue);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);
   sif_grid_free(random_grid);
@@ -589,7 +557,7 @@ done:
   sif_free_aligned(search_radii);
   sif_field_free(randoms);
   sif_field_free(data);
-  sif_finalize();
+  sif_finalise();
   return status == SIF_OK ? 0 : 1;
 }
 ```
@@ -640,17 +608,16 @@ finder = {
 output = "path/to/voids.fits"
 ```
 
-`sif-exodus --check survey.lua` shows what it resolves to and how large
-the run will be -- which for a survey means reading the files, since the
-footprint decides the box -- and `sif-exodus survey.lua` runs it.
-`sif-exodus --template survey` prints a configuration with every setting
-and its default:
+Check it, then run it:
 
-:::{dropdown} The template
-```{literalinclude} ../../bin/sif-exodus/template_survey.lua
-:language: lua
+```bash
+sif-exodus --check exodus.lua
 ```
-:::
+
+```bash
+sif-exodus exodus.lua
+```
+
 ::::
 
 :::::

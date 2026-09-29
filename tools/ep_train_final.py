@@ -89,7 +89,7 @@ def score(emu, curves):
     return tuple(np.concatenate(a) for a in (rel, nus, noise, logres))
 
 
-def summarize(rel, nu, noise, logres, label):
+def summarise(rel, nu, noise, logres, label):
     a = np.abs(rel)
     ok = np.isfinite(a)
     r = np.sqrt(np.mean(logres ** 2))
@@ -125,7 +125,7 @@ def cross_validate(curves, pure):
     for key, label in (("pure", "pure SMT (the contract)"),
                        ("all", "all curves")):
         parts = [np.concatenate(s) for s in acc[key]]
-        out[key] = summarize(*parts, label)
+        out[key] = summarise(*parts, label)
     return out["pure"]
 
 
@@ -150,7 +150,7 @@ def main():
     print(f"\n{'=' * 88}\nfinal fit on all {len(curves)} curves\n{'=' * 88}")
     emu = as_emulator(fit(curves), curves)
     emu.accuracy = accuracy
-    summarize(*score(emu, pure), "in-sample, pure SMT")
+    summarise(*score(emu, pure), "in-sample, pure SMT")
 
     print(f"\n  parameters      {emu.n_parameters()}")
     print(f"  architecture    {len(FEATURE_NAMES)} -> "

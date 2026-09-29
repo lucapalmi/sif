@@ -125,7 +125,7 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
 /*
  * Speculation window.
  *
- * A batch is evaluated in parallel against the catalog as it stood when the
+ * A batch is evaluated in parallel against the catalogue as it stood when the
  * batch began, so every void accepted part-way through invalidates the work
  * already done on the candidates behind it. Candidates arrive sorted by depth
  * and the deepest cells cluster inside the same underdensity, so a long window
@@ -143,7 +143,7 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
  * suits every radius.
  *
  * This only changes how candidates are grouped, never the order in which they
- * are committed, so the catalog is identical for any window.
+ * are committed, so the catalogue is identical for any window.
  */
 #define BATCH_MAX 4096u
 
@@ -155,11 +155,11 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
 /* Coarse grid for the void-vs-void overlap index. */
 #define VOID_CLL_CELLS 32
 
-#define CATALOG_INITIAL_CAPACITY 250000
+#define CATALOGUE_INITIAL_CAPACITY 250000
 
 /*
  * Floor on the rescaled radius, as a fraction of the rung that found the void.
- * Fixed, so that a catalog depends only on the grid, the radius ladder and the
+ * Fixed, so that a catalogue depends only on the grid, the radius ladder and the
  * threshold.
  *
  * At 1 it coincides with the detection limit rather than sitting below it. A
@@ -174,7 +174,7 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
  * Rejecting those costs nothing, because the same void meets the next rung
  * down with a crossing radius comfortably inside its own bracket, and gets a
  * centre smoothed at its own scale into the bargain. What it buys is that a
- * radius in the catalog is never one the grid and the tracers disagreed about.
+ * radius in the catalogue is never one the grid and the tracers disagreed about.
  *
  * The enclosed-density condition is the only thing that decides a radius;
  * nothing here or below asks how the tracers inside are arranged.
@@ -190,7 +190,7 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
  * r_search = 200 in a 2250 box that used to be ~10^7 floats -- 38 MiB per
  * thread, allocated in every thread, sorted in full for every candidate.
  *
- * The histogram alone would only localize the answer to a bin, so the exact
+ * The histogram alone would only localise the answer to a bin, so the exact
  * radius still comes from particles: once the walk reaches the bin that holds
  * the crossing, that one bin is re-scanned and sorted. Bins are uniform in
  * d^2, which keeps square roots out of the hot loop entirely, and the template
@@ -210,7 +210,7 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
  * contents of a single bin. */
 #define REFINE_INITIAL_CAPACITY 4096u
 
-/* Distances are computed in tiles so the arithmetic stays vectorizable even
+/* Distances are computed in tiles so the arithmetic stays vectorisable even
  * though the histogram update that follows it cannot be. */
 #define DIST_TILE 64u
 
@@ -247,14 +247,14 @@ SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
 #define RESOLVE_INITIAL 8u
 
 /*
- * A void is localized by the rung that found it: its center is the deepest
+ * A void is localised by the rung that found it: its centre is the deepest
  * cell of the field smoothed at that rung's radius. When a void turns out to
  * be much larger than the rung, the smoothed field is flat across its whole
  * interior and the "deepest cell" is chosen out of noise -- the void is still
  * found, and with about the right radius, but pinned at an arbitrary point
  * inside itself.
  *
- * Nothing about that is visible in the catalog, so it is reported instead.
+ * Nothing about that is visible in the catalogue, so it is reported instead.
  * Beyond this ratio a void was found at a rung more than twice too small,
  * which is only reachable when the ladder-gap guard had to widen the search;
  * a ladder dense enough that every void meets a rung near its own scale never
@@ -280,7 +280,7 @@ typedef struct {
   /* How far down the bins the walk had to reach before the answer turned up,
    * summed over the scans that found one. This is what sizes the refinement
    * window; see RESOLVE_* below. Accumulated per thread and folded in during
-   * the sequential commit, so no synchronization is needed. */
+   * the sequential commit, so no synchronisation is needed. */
   uint64_t span_sum;
   uint64_t span_count;
 } radial_scratch_t;
@@ -384,7 +384,7 @@ typedef struct {
   int32_t* dy;
   int32_t* dz;
   uint8_t* type;
-  /* Squared distance bounds of the cell relative to the query center. Kept so
+  /* Squared distance bounds of the cell relative to the query centre. Kept so
    * the refinement pass can drop every cell that cannot reach into the bin it
    * is resolving, which turns that pass from a sphere scan into a shell scan.
    */
@@ -424,7 +424,7 @@ static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
    * Past that the index stays out of range and becomes a wild offset into
    * cell_offsets, so this is a hard precondition, not a quality concern.
    *
-   * The bound is cell_radius < n_cells rather than <= : the center cell is
+   * The bound is cell_radius < n_cells rather than <= : the centre cell is
    * (int32_t)(cx / cell_length), which reaches n_cells for a cx that rounds up
    * to the box length, and that extra cell is what the strict inequality
    * covers.
@@ -463,7 +463,7 @@ static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
   for (int32_t dx = -cell_radius; dx <= cell_radius; dx++) {
     for (int32_t dy = -cell_radius; dy <= cell_radius; dy++) {
       for (int32_t dz = -cell_radius; dz <= cell_radius; dz++) {
-        /* Nearest and farthest a point in this cell can be from the center. */
+        /* Nearest and farthest a point in this cell can be from the centre. */
         const sif_real min_x =
           (dx == 0) ? 0.0f : (SIF_REAL_ABS((sif_real)dx) - 1.0f) * cell_length;
         const sif_real min_y =
@@ -524,15 +524,15 @@ typedef struct {
   const sif_chain_mesh_t* mesh;
   const mesh_template_t* tpl;
   sif_real cx, cy, cz;
-  int32_t center_ix, center_iy, center_iz;
+  int32_t centre_ix, centre_iy, centre_iz;
   int32_t n_cells;
   sif_real box_length;
 } mesh_query_t;
 
 /*
  * Resolves template entry `i` to its particle range, and to the periodic image
- * of the query center that range has to be measured against. Shifting the
- * center instead of the particles keeps the wrap at one addition per axis.
+ * of the query centre that range has to be measured against. Shifting the
+ * centre instead of the particles keeps the wrap at one addition per axis.
  * `flat` is the cell's index in the mesh, for anything kept per cell.
  *
  * @return 0 if the cell is empty
@@ -544,7 +544,7 @@ static inline int query_cell(const mesh_query_t* q, uint32_t i,
   const int32_t N = q->n_cells;
   const sif_real box_L = q->box_length;
 
-  int32_t ix = q->center_ix + q->tpl->dx[i];
+  int32_t ix = q->centre_ix + q->tpl->dx[i];
   sif_real cx_eff = q->cx;
   if (ix < 0) {
     ix += N;
@@ -554,7 +554,7 @@ static inline int query_cell(const mesh_query_t* q, uint32_t i,
     cx_eff -= box_L;
   }
 
-  int32_t iy = q->center_iy + q->tpl->dy[i];
+  int32_t iy = q->centre_iy + q->tpl->dy[i];
   sif_real cy_eff = q->cy;
   if (iy < 0) {
     iy += N;
@@ -564,7 +564,7 @@ static inline int query_cell(const mesh_query_t* q, uint32_t i,
     cy_eff -= box_L;
   }
 
-  int32_t iz = q->center_iz + q->tpl->dz[i];
+  int32_t iz = q->centre_iz + q->tpl->dz[i];
   sif_real cz_eff = q->cz;
   if (iz < 0) {
     iz += N;
@@ -816,7 +816,7 @@ typedef struct {
  * Record one successful rescaling, as the ratio of the radius it returned to
  * the rung that found the candidate. Every success is counted, including the
  * ones the overlap re-checks go on to reject: what is being described here is
- * the rescaling, not the catalog.
+ * the rescaling, not the catalogue.
  */
 static void rescale_report_add(rescale_report_t* rep, sif_real ratio) {
   if (rep->n_ok == 0 || ratio < rep->ratio_min)
@@ -941,9 +941,9 @@ static SIF_ALWAYS_INLINE sif_real find_exact_radius_impl(
     .cx = cx,
     .cy = cy,
     .cz = cz,
-    .center_ix = (int32_t)(cx * inv_l),
-    .center_iy = (int32_t)(cy * inv_l),
-    .center_iz = (int32_t)(cz * inv_l),
+    .centre_ix = (int32_t)(cx * inv_l),
+    .centre_iy = (int32_t)(cy * inv_l),
+    .centre_iz = (int32_t)(cz * inv_l),
     .n_cells = N,
     .box_length = mesh->box_length,
   };
@@ -1087,7 +1087,7 @@ static SIF_ALWAYS_INLINE sif_real find_exact_radius_impl(
         n_core += p_count;
     } else if (type == CELL_FULLY_SHELL) {
       /* Every particle here is known to be in the annulus, so the only work is
-       * the distance itself. Tiling keeps that part vectorized despite the
+       * the distance itself. Tiling keeps that part vectorised despite the
        * scattered counter update that follows. */
       sif_real tile[DIST_TILE];
 
@@ -1292,7 +1292,7 @@ static SIF_ALWAYS_INLINE sif_real find_exact_radius_impl(
 }
 
 /*
- * The two specializations of find_exact_radius_impl(). The flag is a literal
+ * The two specialisations of find_exact_radius_impl(). The flag is a literal
  * in each, so every branch on it folds away and the unweighted rescaling
  * compiles to the same code it did before weights existed: integer bins, no
  * weight loads, no double accumulators.
@@ -1745,7 +1745,7 @@ typedef struct {
 
 typedef struct {
   sif_real* sorted_radii;
-  sif_catalog_t* cat;
+  sif_catalogue_t* cat;
   sif_bitmask_t* mask;
   sif_cell_linked_list_t* void_cll;
   const sif_chain_mesh_t* mesh; /* borrowed from the caller, never freed */
@@ -1759,12 +1759,12 @@ typedef struct {
   int n_threads;
 
   /*
-   * Largest radius in the catalog so far.
+   * Largest radius in the catalogue so far.
    *
    * sif__overlap_exact() sizes its search box from this, so it has to be the
    * real maximum and not the largest radius on the ladder. Rescaling grows a
    * void out to r_search, about twice the rung it was found at, so the ladder
-   * maximum understates the catalog by up to a factor of two -- and a void
+   * maximum understates the catalogue by up to a factor of two -- and a void
    * whose centre falls outside the search box is never compared against, which
    * lets a genuine overlap through. Overestimating only widens the box.
    */
@@ -1819,8 +1819,8 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   sif_bitmask_free(ctx->mask);
   sif_free_aligned(ctx->sorted_radii);
 
-  /* NULL on the success path: the caller took the catalog. */
-  sif_catalog_free(ctx->cat);
+  /* NULL on the success path: the caller took the catalogue. */
+  sif_catalogue_free(ctx->cat);
 
   ctx->batch_results = NULL;
   ctx->batch_indices = NULL;
@@ -1901,7 +1901,7 @@ static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
   grid->values = NULL;
 
   if (sif__fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
+    SIF_LOG_ERROR(TAG, "failed to initialise the backward FFT");
     return SIF_ERR_ALLOC;
   }
 
@@ -1933,7 +1933,7 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   memcpy(ctx->sorted_radii, radii, n_radii * sizeof(sif_real));
   sort_radii_desc(ctx->sorted_radii, n_radii);
 
-  ctx->cat = sif_catalog_alloc(CATALOG_INITIAL_CAPACITY);
+  ctx->cat = sif_catalogue_alloc(CATALOGUE_INITIAL_CAPACITY);
   if (!ctx->cat)
     return SIF_ERR_ALLOC;
 
@@ -1985,7 +1985,7 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
 
   /* The data grid is already inside its workspace by now. Transform it back,
    * so that ctx_release() hands the caller the grid they gave rather than an
-   * uninitialized buffer. */
+   * uninitialised buffer. */
   if (status != SIF_OK &&
       sif__fft_apply_filter(ctx->fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK)
     grid->values = sif__fft_grid_backward(ctx->fft_ws);
@@ -2086,9 +2086,9 @@ static void survey_void_footprint(const sif_bitmask_t* occupied,
 
 /* Every void's footprint, once the catalogue is final. */
 static int survey_footprint(
-  sif_catalog_t* cat, const sif_bitmask_t* occupied, const sif_grid_t* grid) {
+  sif_catalogue_t* cat, const sif_bitmask_t* occupied, const sif_grid_t* grid) {
 
-  if (sif_catalog_reserve_footprint(cat) != SIF_OK)
+  if (sif_catalogue_reserve_footprint(cat) != SIF_OK)
     return SIF_ERR_ALLOC;
 
 #pragma omp parallel for schedule(dynamic, 16)
@@ -2111,9 +2111,9 @@ static inline mesh_query_t survey_query(const sif_chain_mesh_t* mesh,
     .cx = cx,
     .cy = cy,
     .cz = cz,
-    .center_ix = (int32_t)(cx * inv_l),
-    .center_iy = (int32_t)(cy * inv_l),
-    .center_iz = (int32_t)(cz * inv_l),
+    .centre_ix = (int32_t)(cx * inv_l),
+    .centre_iy = (int32_t)(cy * inv_l),
+    .centre_iz = (int32_t)(cz * inv_l),
     .n_cells = (int32_t)mesh->n_cells,
     .box_length = mesh->box_length,
   };
@@ -2122,7 +2122,7 @@ static inline mesh_query_t survey_query(const sif_chain_mesh_t* mesh,
 static int accept_void(exodus_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
   sif_real cy, sif_real cz, sif_real r) {
 
-  int status = sif_catalog_append(ctx->cat, cx, cy, cz, r);
+  int status = sif_catalogue_append(ctx->cat, cx, cy, cz, r);
   if (status != SIF_OK)
     return status;
 
@@ -2140,7 +2140,7 @@ static int accept_void(exodus_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
     ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask, grid->cell_length);
 
   /* Updated here rather than scanned for later, so every overlap test after
-   * this point sizes its search box against a catalog that includes this
+   * this point sizes its search box against a catalogue that includes this
    * void. */
   if (r > ctx->max_accepted_r)
     ctx->max_accepted_r = r;
@@ -2183,7 +2183,7 @@ static inline int classify_weight(sif_real w) {
  * radius grows, which a negative weight breaks: the skip test would then throw
  * away shells that do hold the crossing, with nothing to show that it had. A
  * NaN or an infinity poisons every sum it enters. Both are refused up front,
- * counted, rather than left to produce a catalog that looks normal.
+ * counted, rather than left to produce a catalogue that looks normal.
  */
 static int check_weights(const sif_chain_mesh_t* mesh) {
   if (!mesh->cell_weights) {
@@ -2219,12 +2219,12 @@ static int check_weights(const sif_chain_mesh_t* mesh) {
 
 /* --- Driver --- */
 
-static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options, sif_grid_t* random_grid,
   const sif_chain_mesh_t* random_mesh);
 
-sif_catalog_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options) {
 
@@ -2347,7 +2347,7 @@ static int survey_check_margin(
   return SIF_OK;
 }
 
-sif_catalog_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
+sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
   const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
   sif_real threshold, sif_real overlap_fraction, sif_option options) {
@@ -2531,7 +2531,7 @@ int sif_finder_exodus_survey_box(const sif_field_t* randoms,
  * random_grid and random_mesh are NULL for a box run, and the box run then
  * takes exactly the path it always has.
  */
-static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options, sif_grid_t* random_grid,
   const sif_chain_mesh_t* random_mesh) {
@@ -2567,7 +2567,7 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       "weighted mesh: total weight %.6g over %" PRIu64 " tracers",
       mesh->total_weight, mesh->n_particles);
 
-  /* The survey's normalization: how much data weight each unit of random
+  /* The survey's normalisation: how much data weight each unit of random
    * weight stands for, and the threshold folded into it. */
   const sif_real survey_alpha =
     survey ? (sif_real)(mesh->total_weight / random_mesh->total_weight) : 0.0f;
@@ -2590,7 +2590,7 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     const sif_real radius = ctx.sorted_radii[i];
     sif_finder_radius_stats_t stats = {0};
 
-    /* Localization quality for this rung, see MISMATCH_RATIO. */
+    /* Localisation quality for this rung, see MISMATCH_RATIO. */
     double ratio_sum = 0.0;
     sif_real ratio_min = 0.0f;
     sif_real ratio_max = 0.0f;
@@ -2638,7 +2638,7 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     /*
      * Consecutive rungs of the radius ladder have to overlap in the void sizes
      * they can return, or sizes in between are reachable at no rung at all and
-     * simply never appear in the catalog.
+     * simply never appear in the catalogue.
      *
      * What a rung reaches is [radius, r_search] in the crossing radius, since
      * detection puts its own floor at the rung (see RMIN_FACTOR). So the
@@ -2722,8 +2722,8 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       if (batch_count == 0)
         break;
 
-      /* Phase 1: evaluate the batch in parallel against the catalog as it
-       * stood when the batch started. Read-only on mask and catalog.
+      /* Phase 1: evaluate the batch in parallel against the catalogue as it
+       * stood when the batch started. Read-only on mask and catalogue.
        *
        * The team size is pinned so that omp_get_thread_num() can never index
        * past the per-thread shell buffers allocated in ctx_init. */
@@ -2826,7 +2826,7 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           continue;
         }
 
-        /* Both overlap tests run again here, because the catalog has moved on
+        /* Both overlap tests run again here, because the catalogue has moved on
          * since the batch was evaluated -- but at the rescaled radius, which
          * is the sphere the candidate is actually claiming. The pole distance
          * phase 1 used belonged to the rung, and the rung is only a lower
@@ -2914,8 +2914,8 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
     rescale_report_log(&rescale);
 
-    /* The same ratio again, but over the voids that survived to the catalog:
-     * that is the population the localization warning below is about. */
+    /* The same ratio again, but over the voids that survived to the catalogue:
+     * that is the population the localisation warning below is about. */
     if (stats.accepted > 0) {
       SIF_LOG_TRACE(TAG,
         "accepted r/R:              min %.2f, mean %.2f, max %.2f  (%" PRIu64
@@ -2946,14 +2946,14 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     SIF_LOG_WARNING(TAG,
       "%" PRIu64 " of %" PRIu64
       " voids (%.1f%%) are more than %.1fx the radius of the rung that found "
-      "them; their centers are localized at that rung's scale, not their own. "
+      "them; their centres are localised at that rung's scale, not their own. "
       "A denser radius ladder would place them better",
       total_mismatched, ctx.cat->n_voids,
       100.0 * (double)total_mismatched / (double)ctx.cat->n_voids,
       (double)MISMATCH_RATIO);
   }
 
-  sif_catalog_trim(ctx.cat);
+  sif_catalogue_trim(ctx.cat);
 
   if (survey && survey_footprint(ctx.cat, ctx.occupied, grid) != SIF_OK) {
     SIF_LOG_ERROR(TAG, "failed to allocate the footprint columns");
@@ -2961,7 +2961,7 @@ static sif_catalog_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     return NULL;
   }
 
-  sif_catalog_t* result = ctx.cat;
+  sif_catalogue_t* result = ctx.cat;
   ctx.cat = NULL; /* ownership passes to the caller */
   ctx_release(&ctx, grid);
 

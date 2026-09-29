@@ -574,7 +574,7 @@ int main(void) {
   test_refusals();
   test_broken();
 
-  sif_finalize();
+  sif_finalise();
 
   if (failures) {
     printf("%d failure(s)\n", failures);

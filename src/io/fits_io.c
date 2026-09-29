@@ -27,7 +27,7 @@
 #include "sif/structures/bitmask.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
-#include "structures/catalog_internal.h"
+#include "structures/catalogue_internal.h"
 #include "structures/results_internal.h"
 
 #include <fitsio.h>
@@ -996,26 +996,26 @@ static void warn_rows(
 /* ------------------------------------------------------------------------ */
 
 /* The catalogue's metadata, as keywords of the current header. */
-static void meta_write(fitsfile* f, const sif_catalog_t* catalog, int* st) {
-  for (uint32_t m = 0; m < sif_catalog_meta_count(catalog) && !*st; m++) {
+static void meta_write(fitsfile* f, const sif_catalogue_t* catalogue, int* st) {
+  for (uint32_t m = 0; m < sif_catalogue_meta_count(catalogue) && !*st; m++) {
     char key[FLEN_KEYWORD + 64];
-    snprintf(key, sizeof key, "%s", sif_catalog_meta_name(catalog, m));
-    switch (sif_catalog_meta_kind(catalog, key)) {
-    case SIF_CATALOG_META_INT: {
-      LONGLONG v = (LONGLONG)sif_catalog_meta_int_get(catalog, key);
+    snprintf(key, sizeof key, "%s", sif_catalogue_meta_name(catalogue, m));
+    switch (sif_catalogue_meta_kind(catalogue, key)) {
+    case SIF_CATALOGUE_META_INT: {
+      LONGLONG v = (LONGLONG)sif_catalogue_meta_int_get(catalogue, key);
       fits_update_key(f, TLONGLONG, key, &v, NULL, st);
       break;
     }
-    case SIF_CATALOG_META_REAL: {
-      double v = sif_catalog_meta_real_get(catalog, key);
+    case SIF_CATALOGUE_META_REAL: {
+      double v = sif_catalogue_meta_real_get(catalogue, key);
       fits_update_key(f, TDOUBLE, key, &v, NULL, st);
       break;
     }
-    case SIF_CATALOG_META_STRING:
+    case SIF_CATALOGUE_META_STRING:
       fits_update_key_longstr(
-        f, key, (char*)sif_catalog_meta_string_get(catalog, key), NULL, st);
+        f, key, (char*)sif_catalogue_meta_string_get(catalogue, key), NULL, st);
       break;
-    case SIF_CATALOG_META_MISSING:
+    case SIF_CATALOGUE_META_MISSING:
       break;
     }
   }
@@ -1023,7 +1023,7 @@ static void meta_write(fitsfile* f, const sif_catalog_t* catalog, int* st) {
 
 /* Every keyword of the current header that is not structure, as the
  * catalogue's metadata: what sif wrote, and whatever anyone added. */
-static void meta_read(fitsfile* f, sif_catalog_t* catalog) {
+static void meta_read(fitsfile* f, sif_catalogue_t* catalogue) {
   int n_keys = 0, st = 0;
   fits_get_hdrspace(f, &n_keys, NULL, &st);
   for (int k = 1; k <= n_keys && !st; k++) {
@@ -1035,7 +1035,7 @@ static void meta_read(fitsfile* f, sif_catalog_t* catalog) {
     for (; name[c] && c < sizeof lower - 1; c++)
       lower[c] = (char)tolower((unsigned char)name[c]);
     lower[c] = '\0';
-    if (sif__catalog_meta_reserved(lower))
+    if (sif__catalogue_meta_reserved(lower))
       continue;
 
     char kind = 0;
@@ -1049,33 +1049,33 @@ static void meta_read(fitsfile* f, sif_catalog_t* catalog) {
       char* text = NULL;
       fits_read_key_longstr(f, name, &text, NULL, &kst);
       if (!kst && text)
-        (void)sif_catalog_meta_string_set(catalog, lower, text);
+        (void)sif_catalogue_meta_string_set(catalogue, lower, text);
       if (text)
         fits_free_memory(text, &kst);
       fits_clear_errmsg();
     } else if (kind == 'L') {
-      (void)sif_catalog_meta_int_set(catalog, lower, value[0] == 'T');
+      (void)sif_catalogue_meta_int_set(catalogue, lower, value[0] == 'T');
     } else if (kind == 'I') {
-      (void)sif_catalog_meta_int_set(catalog, lower, strtoll(value, NULL, 10));
+      (void)sif_catalogue_meta_int_set(catalogue, lower, strtoll(value, NULL, 10));
     } else if (kind == 'F') {
       /* FITS may write the exponent with a D. */
       for (char* d = value; *d; d++)
         if (*d == 'D' || *d == 'd')
           *d = 'E';
-      (void)sif_catalog_meta_real_set(catalog, lower, strtod(value, NULL));
+      (void)sif_catalogue_meta_real_set(catalogue, lower, strtod(value, NULL));
     }
   }
   fits_clear_errmsg();
 }
 
-int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog) {
-  if (!filepath || !catalog) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalog_write_fits");
+int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalogue) {
+  if (!filepath || !catalogue) {
+    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalogue_write_fits");
     return SIF_ERR_INVALID;
   }
 
-  const bool sky = catalog->units == SIF_COORDINATES_SKY;
-  const bool fp = catalog->footprint != NULL;
+  const bool sky = catalogue->units == SIF_COORDINATES_SKY;
+  const bool fp = catalogue->footprint != NULL;
   /* The names the ASCII header gives the columns, as FITS spells them. */
   char* names_cart[] = {"CX", "CY", "CZ", "R", "FOOTPRINT", "FOOTPRINT_SHELL"};
   char* names_sky[] = {"RA", "DEC", "Z", "R", "FOOTPRINT", "FOOTPRINT_SHELL"};
@@ -1085,27 +1085,27 @@ int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog) {
   for (int c = 0; c < 6; c++)
     form[c] = (char*)REAL_FORM;
   const int n_cols = fp ? 6 : 4;
-  sif_real* const cols[6] = {catalog->cx, catalog->cy, catalog->cz,
-    catalog->radii, catalog->footprint, catalog->footprint_shell};
+  sif_real* const cols[6] = {catalogue->cx, catalogue->cy, catalogue->cz,
+    catalogue->radii, catalogue->footprint, catalogue->footprint_shell};
 
   fitsfile* f;
   if (product_open(filepath, &f) != SIF_OK)
     return SIF_ERR_IO;
 
   int st = hdu_remove(f, VOIDS_EXTNAME);
-  fits_create_tbl(f, BINARY_TBL, (LONGLONG)catalog->n_voids, n_cols,
+  fits_create_tbl(f, BINARY_TBL, (LONGLONG)catalogue->n_voids, n_cols,
     sky ? names_sky : names_cart, form, sky ? units_sky : units_cart,
     VOIDS_EXTNAME, &st);
   fits_update_key(f, TSTRING, "COORDS", sky ? "sky" : "cartesian",
     "what the centres are", &st);
-  meta_write(f, catalog, &st);
-  for (int c = 0; c < n_cols && catalog->n_voids > 0; c++)
+  meta_write(f, catalogue, &st);
+  for (int c = 0; c < n_cols && catalogue->n_voids > 0; c++)
     fits_write_col(
-      f, REAL_TYPE, c + 1, 1, 1, (LONGLONG)catalog->n_voids, cols[c], &st);
+      f, REAL_TYPE, c + 1, 1, 1, (LONGLONG)catalogue->n_voids, cols[c], &st);
 
   if (product_close(f, st, filepath) != SIF_OK)
     return SIF_ERR_IO;
-  SIF_LOG_INFO(TAG, "saved %" PRIu64 " voids to %s (FITS%s)", catalog->n_voids,
+  SIF_LOG_INFO(TAG, "saved %" PRIu64 " voids to %s (FITS%s)", catalogue->n_voids,
     filepath, sky ? ", on the sky" : "");
   return SIF_OK;
 }
@@ -1123,9 +1123,9 @@ static int column_of(fitsfile* f, const char* name) {
   return col;
 }
 
-sif_catalog_t* sif_catalog_read_fits(const char* filepath) {
+sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_catalog_read_fits");
+    SIF_LOG_ERROR(TAG, "invalid filepath for sif_catalogue_read_fits");
     return NULL;
   }
 
@@ -1137,7 +1137,7 @@ sif_catalog_t* sif_catalog_read_fits(const char* filepath) {
     return NULL;
   }
 
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   int status = move_to_table(f, filepath, VOIDS_EXTNAME);
   LONGLONG n = 0;
   if (status == SIF_OK) {
@@ -1180,8 +1180,8 @@ sif_catalog_t* sif_catalog_read_fits(const char* filepath) {
   }
 
   if (status == SIF_OK) {
-    cat = sif_catalog_alloc((uint64_t)n);
-    if (!cat || (cols[4] && sif_catalog_reserve_footprint(cat) != SIF_OK))
+    cat = sif_catalogue_alloc((uint64_t)n);
+    if (!cat || (cols[4] && sif_catalogue_reserve_footprint(cat) != SIF_OK))
       status = SIF_ERR_ALLOC;
   }
 
@@ -1208,11 +1208,11 @@ sif_catalog_t* sif_catalog_read_fits(const char* filepath) {
   fits_close_file(f, &close_status);
 
   if (status != SIF_OK) {
-    sif_catalog_free(cat);
+    sif_catalogue_free(cat);
     return NULL;
   }
 
-  /* Filled in directly rather than through sif_catalog_append(). */
+  /* Filled in directly rather than through sif_catalogue_append(). */
   cat->n_voids = (uint64_t)n;
   if (sky)
     cat->units = SIF_COORDINATES_SKY;
@@ -1461,7 +1461,7 @@ int sif_size_function_write_fits(
 
   /* A row per bin: its edges and centre, the count and the size function
    * with its error -- the table a plot reads. */
-  char* ttype[] = {"R_LOW", "R_HIGH", "R_CENTER", "COUNT", "VSF", "ERR"};
+  char* ttype[] = {"R_LOW", "R_HIGH", "R_CENTRE", "COUNT", "VSF", "ERR"};
   char* tform[] = {(char*)REAL_FORM, (char*)REAL_FORM, (char*)REAL_FORM, "1K",
     (char*)REAL_FORM, (char*)REAL_FORM};
   const uint32_t b = vsf->n_bins;
@@ -1489,7 +1489,7 @@ int sif_size_function_write_fits(
   if (b > 0) {
     fits_write_col(f, REAL_TYPE, 1, 1, 1, b, vsf->r_edges, &st);
     fits_write_col(f, REAL_TYPE, 2, 1, 1, b, vsf->r_edges + 1, &st);
-    fits_write_col(f, REAL_TYPE, 3, 1, 1, b, vsf->r_centers, &st);
+    fits_write_col(f, REAL_TYPE, 3, 1, 1, b, vsf->r_centres, &st);
     fits_write_col(f, TULONGLONG, 4, 1, 1, b, vsf->counts, &st);
     fits_write_col(f, REAL_TYPE, 5, 1, 1, b, vsf->vsf, &st);
     fits_write_col(f, REAL_TYPE, 6, 1, 1, b, vsf->err, &st);
@@ -1530,7 +1530,7 @@ sif_size_function_t* sif_size_function_read_fits(const char* filepath) {
     fits_read_col(f, REAL_TYPE, 1, 1, 1, b, NULL, vsf->r_edges, &anynul, &st);
     fits_read_col(f, REAL_TYPE, 2, b, 1, 1, NULL, vsf->r_edges + b, &anynul,
       &st); /* the last upper edge */
-    fits_read_col(f, REAL_TYPE, 3, 1, 1, b, NULL, vsf->r_centers, &anynul, &st);
+    fits_read_col(f, REAL_TYPE, 3, 1, 1, b, NULL, vsf->r_centres, &anynul, &st);
     fits_read_col(f, TULONGLONG, 4, 1, 1, b, NULL, vsf->counts, &anynul, &st);
     fits_read_col(f, REAL_TYPE, 5, 1, 1, b, NULL, vsf->vsf, &anynul, &st);
     fits_read_col(f, REAL_TYPE, 6, 1, 1, b, NULL, vsf->err, &anynul, &st);

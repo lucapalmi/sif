@@ -14,14 +14,13 @@ The library is written in ANSI-C99, with Python bindings available via the
 
 These are the main features of **sif**:
 
-- **exodus:** a spherical void finder for N-body simulations and surveys; fast
-and reliable. 
-- **measuring:** routines to measure the void size function, density and 
-velocity profiles for any void catalogue.
-- **modelling:** routines to compute the 
-[SvdW](https://arxiv.org/abs/astro-ph/0311260), 
-[Vdn](https://arxiv.org/abs/1304.6087) and 
-[excursion-peak](https://arxiv.org/abs/2401.14451) models for void abundances.
+- **exodus:** a spherical void finder for N-body simulations and surveys;
+fast and reliable
+- **measuring:** functions to measure the size function, velocity and density
+profiles for any void catalogue
+- **modelling:** functions to compute the [SvdW](https://arxiv.org/abs/astro-ph/0311260),
+[Vdn](https://arxiv.org/abs/1304.6087) and [excursion-peak](https://arxiv.org/abs/2401.14451)
+models for void abundances
 
 ## Project status
 
@@ -38,7 +37,7 @@ To use the C library, clone and compile the repository. A complete guide to
 the installation is available 
 [here](https://lucapalmi.github.io/sif/installation.html).
 
-## License
+## Licence
 
 Copyright (C) 2026 Luca Palmieri.
 
@@ -50,7 +49,7 @@ sif is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
 without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE. See the GNU General Public License for more details.
 
-The full license text is in [COPYING](COPYING). Every source file carries an
+The full licence text is in [COPYING](COPYING). Every source file carries an
 `SPDX-License-Identifier: GPL-3.0-or-later` tag.
 
 Note that this applies to the Python bindings as well: `pysif` links the same
@@ -70,9 +69,9 @@ is not bundled; it is located at configure time and must be installed
 separately. FFTW is licensed under the GNU General Public License, version 2 or
 later.
 
-**OpenMP** — sif is parallelized with OpenMP and links the runtime provided by
+**OpenMP** — sif is parallelised with OpenMP and links the runtime provided by
 the compiler (LLVM's `libomp` or GCC's `libgomp`) under its
-own license.
+own licence.
 
 **HDF5** — Optionally, sif uses the HDF5 library (<https://www.hdfgroup.org/solutions/hdf5/>)
 for binary I/O. HDF5 is not bundled; it is located at configure time and must be installed

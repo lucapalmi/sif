@@ -56,7 +56,7 @@ int sif__delta_validate_options(sif_option opt) {
       shuffle != SIF_DELTA_SHUFFLE_PHASES &&
       shuffle != SIF_DELTA_SHUFFLE_GAUSSIAN) {
     SIF_LOG_ERROR(
-      SIF__DELTA_TAG, "unrecognized shuffle mode in the options bitmask");
+      SIF__DELTA_TAG, "unrecognised shuffle mode in the options bitmask");
     return SIF_ERR_INVALID;
   }
 
@@ -114,8 +114,8 @@ sif_fft_workspace_t* sif__delta_prepare_spectrum(
   const uint32_t shuffle = opt & SIF__DELTA_SHUFFLE_MASK;
   if (shuffle != SIF_DELTA_SHUFFLE_NONE) {
     const bool resample = (shuffle == SIF_DELTA_SHUFFLE_GAUSSIAN);
-    if (sif__fft_randomize_phases(ws, seed, resample) != SIF_OK) {
-      SIF_LOG_ERROR(SIF__DELTA_TAG, "failed to randomize the phases");
+    if (sif__fft_randomise_phases(ws, seed, resample) != SIF_OK) {
+      SIF_LOG_ERROR(SIF__DELTA_TAG, "failed to randomise the phases");
       sif__fft_workspace_free(ws);
       return NULL;
     }

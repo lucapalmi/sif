@@ -6,9 +6,9 @@
 
 /**
  * @file system.h
- * @brief Library lifetime: initialization, configuration and teardown.
+ * @brief Library lifetime: initialisation, configuration and teardown.
  *
- * sif_init() must be called before any other entry point and sif_finalize()
+ * sif_init() must be called before any other entry point and sif_finalise()
  * after the last one. Between them the library holds process-global state: the
  * logger, the thread ceiling, the FFTW plan cache and the settings table.
  */
@@ -53,14 +53,14 @@ typedef struct {
    * SIF_LOG_LEVEL_* constants. SIF_LOG_LEVEL_TRACE is the verbose mode.
    *
    * @warning The field is always honoured, and SIF_LOG_LEVEL_TRACE is 0 --
-   * so a zero-initialized sif_config_t asks for trace logging, not for the
+   * so a zero-initialised sif_config_t asks for trace logging, not for the
    * default. Set it explicitly, or use one of the presets below.
    */
   uint8_t log_level;
 } sif_config_t;
 
 /**
- * @brief Initialize the library.
+ * @brief Initialise the library.
  *
  * Brings up the logger, the thread ceiling, the settings table and the FFTW
  * plan cache. Calling it a second time logs a warning, keeps the first
@@ -70,7 +70,7 @@ typedef struct {
  * once and copied, so neither the struct nor the sub-structs it points at need
  * to outlive the call, and the library never frees them.
  * @return SIF_OK, or SIF_ERR_ALLOC if the library state or FFTW could not be
- * brought up -- in which case nothing is left initialized, and the call may
+ * brought up -- in which case nothing is left initialised, and the call may
  * be retried.
  *
  * @note Failing to create the cache or wisdom directories is only a warning:
@@ -82,9 +82,9 @@ SIF_NODISCARD int sif_init(sif_config_t* config);
  * @brief Shut the library down, releasing everything sif_init() acquired.
  *
  * Saves the settings table if it changed and tears down the FFTW plan cache.
- * No sif entry point may be called afterwards without initializing again.
+ * No sif entry point may be called afterwards without initialising again.
  */
-void sif_finalize(void);
+void sif_finalise(void);
 
 /**
  * @defgroup config_presets Configuration presets

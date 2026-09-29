@@ -189,7 +189,7 @@ static void test_grid_independence(void) {
     sif_real s8[1];
     double* c = sif_delta_covariance_pk(
       k, pk, N_K, eight, 1, s8, NULL, NULL, SIF_DEFAULT);
-    CHECK(c != NULL && s8[0] > 0.0f, "could not normalize the spectrum");
+    CHECK(c != NULL && s8[0] > 0.0f, "could not normalise the spectrum");
     if (c) {
       const double scale = (0.8 / (double)s8[0]) * (0.8 / (double)s8[0]);
       for (uint32_t i = 0; i < N_K; i++)
@@ -442,7 +442,7 @@ int main(void) {
   test_domain();
   test_guards();
 
-  sif_finalize();
+  sif_finalise();
 
   if (failures) {
     printf("\n%d check(s) failed\n", failures);

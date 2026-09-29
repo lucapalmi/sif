@@ -41,11 +41,11 @@ SIF_NODISCARD sif_size_function_t* sif__size_function_alloc(uint32_t n_bins);
  * container is complete and plottable rather than because the model
  * integrated over them.
  *
- * @param centers n entries, strictly positive
+ * @param centres n entries, strictly positive
  * @param n Number of centres, at least 2
  * @param edges Output, n + 1 entries
  */
-void sif__edges_from_centers(
-  const sif_real* centers, uint32_t n, sif_real* edges);
+void sif__edges_from_centres(
+  const sif_real* centres, uint32_t n, sif_real* edges);
 
 #endif /* SIF__STRUCTURES_RESULTS_INTERNAL_H */

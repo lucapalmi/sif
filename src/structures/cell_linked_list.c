@@ -26,7 +26,7 @@
 #define CLL_MAX_CAPACITY ((uint64_t)INT32_MAX)
 
 /*
- * Maps one physical coordinate onto a cell index, honoring the boundary
+ * Maps one physical coordinate onto a cell index, honouring the boundary
  * convention the list was created with.
  *
  * The two conventions differ in what they do with a coordinate outside the
@@ -114,7 +114,7 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
   memset(cll->head, 0xFF, cll->total_cells * sizeof(int32_t));
 
   SIF_LOG_TRACE("cell_linked_list",
-    "initialized with capacity %" PRIu64 " (%s boundaries)", cll->capacity,
+    "initialised with capacity %" PRIu64 " (%s boundaries)", cll->capacity,
     cll->periodic ? "periodic" : "open");
 
   return cll;

@@ -23,7 +23,7 @@
 #include "io/py_io.h"
 
 #include "measure/py_profiles.h"
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_field.h"
 #include "structures/py_size_function.h"
 
@@ -247,19 +247,19 @@ PyObject* pysif_inspect_fits(PyObject* self, PyObject* args, PyObject* kwds) {
 
 /* --- catalogues --- */
 
-PyObject* pysif_write_catalog_fits(
+PyObject* pysif_write_catalogue_fits(
   PyObject* self, PyObject* args, PyObject* kwds) {
   (void)self;
   PyObject* path_obj = NULL;
   PyObject* cat_obj;
-  static char* kwlist[] = {"filepath", "catalog", NULL};
+  static char* kwlist[] = {"filepath", "catalogue", NULL};
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist,
-        PyUnicode_FSConverter, &path_obj, &sifCatalogType, &cat_obj))
+        PyUnicode_FSConverter, &path_obj, &sifCatalogueType, &cat_obj))
     return NULL;
 
   const char* path = PyBytes_AS_STRING(path_obj);
   const int status =
-    sif_catalog_write_fits(path, ((sifCatalogObject*)cat_obj)->catalog);
+    sif_catalogue_write_fits(path, ((sifCatalogueObject*)cat_obj)->catalogue);
   if (status != SIF_OK) {
     PyErr_Format(
       PyExc_OSError, "failed to write %s; see the log for the reason", path);
@@ -270,7 +270,7 @@ PyObject* pysif_write_catalog_fits(
   Py_RETURN_NONE;
 }
 
-PyObject* pysif_read_catalog_fits(
+PyObject* pysif_read_catalogue_fits(
   PyObject* self, PyObject* args, PyObject* kwds) {
   (void)self;
   PyObject* path_obj = NULL;
@@ -282,18 +282,18 @@ PyObject* pysif_read_catalog_fits(
   const char* path = PyBytes_AS_STRING(path_obj);
   PyObject* result = NULL;
   if (py_sif_require_file(path) == 0) {
-    sif_catalog_t* cat = sif_catalog_read_fits(path);
+    sif_catalogue_t* cat = sif_catalogue_read_fits(path);
     if (!cat) {
       PyErr_Format(PyExc_ValueError,
         "cannot read %s as a void catalogue; see the log for the reason", path);
     } else {
-      sifCatalogObject* obj =
-        (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+      sifCatalogueObject* obj =
+        (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
       if (!obj) {
-        sif_catalog_free(cat);
+        sif_catalogue_free(cat);
         PyErr_NoMemory();
       } else {
-        obj->catalog = cat;
+        obj->catalogue = cat;
         result = (PyObject*)obj;
       }
     }
@@ -553,7 +553,7 @@ PyObject* pysif_inspect_fits(PyObject* self, PyObject* args, PyObject* kwds) {
   return no_fits();
 }
 
-PyObject* pysif_write_catalog_fits(
+PyObject* pysif_write_catalogue_fits(
   PyObject* self, PyObject* args, PyObject* kwds) {
   (void)self;
   (void)args;
@@ -561,7 +561,7 @@ PyObject* pysif_write_catalog_fits(
   return no_fits();
 }
 
-PyObject* pysif_read_catalog_fits(
+PyObject* pysif_read_catalogue_fits(
   PyObject* self, PyObject* args, PyObject* kwds) {
   (void)self;
   (void)args;

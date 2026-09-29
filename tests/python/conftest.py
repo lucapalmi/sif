@@ -30,7 +30,7 @@ pysif.init(skip_tuning=True,
 
 
 def pytest_unconfigure(config):
-    pysif.finalize()
+    pysif.finalise()
 
 
 def _has_hdf5():

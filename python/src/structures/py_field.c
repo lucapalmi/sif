@@ -562,7 +562,7 @@ static PyMethodDef sifField_methods[] = {
     "Shift every position by offset, in place.\n\n"
     "What moves a survey into the box pysif.finders.survey_box() chose for\n"
     "it: data and randoms both, by the same offset. The voids found there\n"
-    "come back out with Catalog.translate(-offset).\n\n"
+    "come back out with Catalogue.translate(-offset).\n\n"
     "Args:\n"
     "    offset: Three numbers, added to x, y and z."},
   {"sort_morton", (PyCFunction)sifField_sort_morton, METH_NOARGS,
@@ -584,7 +584,7 @@ static PyMethodDef sifField_methods[] = {
 /* --- Type Object --- */
 PyTypeObject sifFieldType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-    "pysif.Field", /* Updated Namespace and Capitalized */
+    "pysif.Field", /* Updated Namespace and Capitalised */
   .tp_basicsize = sizeof(sifFieldObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifField_dealloc,

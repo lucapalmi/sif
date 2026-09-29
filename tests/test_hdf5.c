@@ -17,10 +17,10 @@
  * requested path, never at it, and every reader refuses.
  */
 #include "sif/core/system.h"
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/hdf5_io.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/field.h"
 #include "sif/structures/size_function.h"
 
@@ -60,7 +60,7 @@ static int file_exists(const char* p) {
 }
 
 static void remove_all(void) {
-  const char* suffixes[] = {"", ".catalog.txt", ".density_profiles.txt",
+  const char* suffixes[] = {"", ".catalogue.txt", ".density_profiles.txt",
     ".velocity_profiles.txt", ".size_function.txt", ".attributes.txt"};
   char p[256];
   for (size_t i = 0; i < sizeof(suffixes) / sizeof(*suffixes); i++) {
@@ -71,15 +71,15 @@ static void remove_all(void) {
 
 /* --- fixtures: values that need most of the mantissa to survive --- */
 
-static sif_catalog_t* make_catalog(uint64_t n, int footprint) {
-  sif_catalog_t* cat = sif_catalog_alloc(n ? n : 1);
+static sif_catalogue_t* make_catalogue(uint64_t n, int footprint) {
+  sif_catalogue_t* cat = sif_catalogue_alloc(n ? n : 1);
   for (uint64_t i = 0; i < n; i++) {
-    sif_catalog_append(cat, (sif_real)(1234.5678901234 + 0.1 * (double)i),
+    sif_catalogue_append(cat, (sif_real)(1234.5678901234 + 0.1 * (double)i),
       (sif_real)(0.1234567890123 * (double)(i + 1)),
       (sif_real)(9.87654321e-3 * (double)i), (sif_real)(3.14159265 + i));
   }
   if (footprint) {
-    sif_catalog_reserve_footprint(cat);
+    sif_catalogue_reserve_footprint(cat);
     for (uint64_t i = 0; i < n; i++) {
       cat->footprint[i] = (sif_real)(1.0 / (double)(i + 1));
       cat->footprint_shell[i] = (sif_real)(0.5 / (double)(i + 1));
@@ -116,7 +116,7 @@ static sif_size_function_t* make_vsf(void) {
   for (uint32_t b = 0; b <= N_BINS; b++)
     f->r_edges[b] = (sif_real)(5.0 + 5.0 * b);
   for (uint32_t b = 0; b < N_BINS; b++) {
-    f->r_centers[b] = (sif_real)(7.5 + 5.0 * b);
+    f->r_centres[b] = (sif_real)(7.5 + 5.0 * b);
     f->counts[b] = (uint64_t)1 << (20 + b); /* past 32 bits by the end */
     f->vsf[b] = (sif_real)(1.23456789e-5 / (double)(b + 1));
     f->err[b] = (sif_real)(2.3456789e-7 / (double)(b + 1));
@@ -126,7 +126,7 @@ static sif_size_function_t* make_vsf(void) {
 
 /* --- comparisons, bit for bit --- */
 
-static int same_catalog(const sif_catalog_t* a, const sif_catalog_t* b) {
+static int same_catalogue(const sif_catalogue_t* a, const sif_catalogue_t* b) {
   if (!a || !b || a->n_voids != b->n_voids)
     return 0;
   if ((a->footprint == NULL) != (b->footprint == NULL))
@@ -304,19 +304,19 @@ static void test_round_trips(void) {
   remove_all();
 
   /* Every product in one file, then every one read back. */
-  sif_catalog_t* cat = make_catalog(N_VOIDS, 1);
+  sif_catalogue_t* cat = make_catalogue(N_VOIDS, 1);
   sif_density_profiles_t* dens = make_density(N_VOIDS);
   sif_velocity_profiles_t* vel = make_velocity(N_VOIDS);
   sif_size_function_t* vsf = make_vsf();
 
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
   CHECK(sif_profiles_write_hdf5(PATH, dens, vel) == SIF_OK,
     "profiles write failed");
   CHECK(sif_size_function_write_hdf5(PATH, vsf) == SIF_OK,
     "size function write failed");
 
-  sif_catalog_t* cat2 = sif_catalog_read_hdf5(PATH);
-  CHECK(same_catalog(cat, cat2), "the catalogue did not round-trip");
+  sif_catalogue_t* cat2 = sif_catalogue_read_hdf5(PATH);
+  CHECK(same_catalogue(cat, cat2), "the catalogue did not round-trip");
 
   sif_density_profiles_t* dens2 = NULL;
   sif_velocity_profiles_t* vel2 = NULL;
@@ -336,7 +336,7 @@ static void test_round_trips(void) {
   CHECK(vsf2 && vsf2->n_bins == N_BINS && vsf2->options == vsf->options &&
           vsf2->r_min == vsf->r_min && vsf2->r_max == vsf->r_max &&
           same_reals(vsf->r_edges, vsf2->r_edges, N_BINS + 1) &&
-          same_reals(vsf->r_centers, vsf2->r_centers, N_BINS) &&
+          same_reals(vsf->r_centres, vsf2->r_centres, N_BINS) &&
           memcmp(vsf->counts, vsf2->counts, N_BINS * sizeof(uint64_t)) == 0 &&
           same_reals(vsf->vsf, vsf2->vsf, N_BINS) &&
           same_reals(vsf->err, vsf2->err, N_BINS),
@@ -354,45 +354,45 @@ static void test_round_trips(void) {
 
   CHECK(cat2 && cat2->units == SIF_COORDINATES_CARTESIAN,
     "a Cartesian catalogue came back on the sky");
-  sif_catalog_free(cat2);
+  sif_catalogue_free(cat2);
 
-  /* Metadata go with the catalogue as attributes of /catalog, and an
+  /* Metadata go with the catalogue as attributes of /catalogue, and an
    * attribute anyone adds there afterwards comes back as metadata too. */
-  sif_catalog_meta_string_set(cat, "finder", "exodus");
-  sif_catalog_meta_real_set(cat, "threshold", -0.7);
-  sif_catalog_meta_int_set(cat, "n_tracers", 123456789012LL);
+  sif_catalogue_meta_string_set(cat, "finder", "exodus");
+  sif_catalogue_meta_real_set(cat, "threshold", -0.7);
+  sif_catalogue_meta_int_set(cat, "n_tracers", 123456789012LL);
   CHECK(
-    sif_catalog_write_hdf5(PATH, cat) == SIF_OK &&
-      sif_hdf5_set_attr_string(PATH, "catalog", "Note", "by hand") == SIF_OK,
+    sif_catalogue_write_hdf5(PATH, cat) == SIF_OK &&
+      sif_hdf5_set_attr_string(PATH, "catalogue", "Note", "by hand") == SIF_OK,
     "writing a catalogue with metadata failed");
-  cat2 = sif_catalog_read_hdf5(PATH);
-  CHECK(cat2 && sif_catalog_meta_count(cat2) == 4 &&
-          strcmp(sif_catalog_meta_string_get(cat2, "finder"), "exodus") == 0 &&
-          sif_catalog_meta_real_get(cat2, "threshold") == -0.7 &&
-          sif_catalog_meta_int_get(cat2, "n_tracers") == 123456789012LL &&
-          strcmp(sif_catalog_meta_string_get(cat2, "note"), "by hand") == 0,
+  cat2 = sif_catalogue_read_hdf5(PATH);
+  CHECK(cat2 && sif_catalogue_meta_count(cat2) == 4 &&
+          strcmp(sif_catalogue_meta_string_get(cat2, "finder"), "exodus") == 0 &&
+          sif_catalogue_meta_real_get(cat2, "threshold") == -0.7 &&
+          sif_catalogue_meta_int_get(cat2, "n_tracers") == 123456789012LL &&
+          strcmp(sif_catalogue_meta_string_get(cat2, "note"), "by hand") == 0,
     "the metadata did not survive HDF5");
-  sif_catalog_free(cat2);
-  sif_catalog_meta_remove(cat, "finder");
-  sif_catalog_meta_remove(cat, "threshold");
-  sif_catalog_meta_remove(cat, "n_tracers");
+  sif_catalogue_free(cat2);
+  sif_catalogue_meta_remove(cat, "finder");
+  sif_catalogue_meta_remove(cat, "threshold");
+  sif_catalogue_meta_remove(cat, "n_tracers");
 
   /* A sky catalogue says so, and reads back on the sky; the attribute that
    * says it is the library's. */
   cat->units = SIF_COORDINATES_SKY;
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK,
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK,
     "writing a sky catalogue failed");
-  cat2 = sif_catalog_read_hdf5(PATH);
-  CHECK(cat2 && cat2->units == SIF_COORDINATES_SKY && same_catalog(cat, cat2),
+  cat2 = sif_catalogue_read_hdf5(PATH);
+  CHECK(cat2 && cat2->units == SIF_COORDINATES_SKY && same_catalogue(cat, cat2),
     "a sky catalogue did not round-trip on the sky");
-  CHECK(sif_hdf5_set_attr_string(PATH, "catalog", "coordinates", "cartesian") ==
+  CHECK(sif_hdf5_set_attr_string(PATH, "catalogue", "coordinates", "cartesian") ==
           SIF_ERR_INVALID,
     "the coordinates attribute could be overwritten");
   cat->units = SIF_COORDINATES_CARTESIAN;
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK,
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK,
     "rewriting the catalogue failed");
 
-  sif_catalog_free(cat2);
+  sif_catalogue_free(cat2);
   sif_density_profiles_free(dens2);
   sif_density_profiles_free(dens3);
   sif_velocity_profiles_free(vel2);
@@ -400,16 +400,16 @@ static void test_round_trips(void) {
 
   /* An empty catalogue is a catalogue. */
   remove_all();
-  sif_catalog_t* empty = make_catalog(0, 0);
-  CHECK(sif_catalog_write_hdf5(PATH, empty) == SIF_OK,
+  sif_catalogue_t* empty = make_catalogue(0, 0);
+  CHECK(sif_catalogue_write_hdf5(PATH, empty) == SIF_OK,
     "writing an empty catalogue failed");
-  sif_catalog_t* empty2 = sif_catalog_read_hdf5(PATH);
+  sif_catalogue_t* empty2 = sif_catalogue_read_hdf5(PATH);
   CHECK(empty2 && empty2->n_voids == 0 && !empty2->footprint,
     "an empty catalogue did not round-trip");
-  sif_catalog_free(empty);
-  sif_catalog_free(empty2);
+  sif_catalogue_free(empty);
+  sif_catalogue_free(empty2);
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
   sif_size_function_free(vsf);
@@ -424,8 +424,8 @@ static void test_groups(void) {
   sif_size_function_t* vsf = make_vsf();
   CHECK(sif_size_function_write_hdf5(PATH, vsf) == SIF_OK,
     "a size function should be writable on its own");
-  sif_catalog_t* none = sif_catalog_read_hdf5(PATH);
-  CHECK(none == NULL, "a file without /catalog should not read as one");
+  sif_catalogue_t* none = sif_catalogue_read_hdf5(PATH);
+  CHECK(none == NULL, "a file without /catalogue should not read as one");
 
   int has_d = -1, has_v = -1;
   CHECK(sif_profiles_read_header_hdf5(PATH, &has_d, &has_v) == SIF_OK &&
@@ -440,20 +440,20 @@ static void test_groups(void) {
   /* Products written against one catalogue survive its rewrite -- including
    * a rewrite with a different number of voids, which is warned about and
    * written anyway. */
-  sif_catalog_t* cat = make_catalog(N_VOIDS, 1);
+  sif_catalogue_t* cat = make_catalogue(N_VOIDS, 1);
   sif_density_profiles_t* dens = make_density(N_VOIDS);
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
   CHECK(sif_profiles_write_hdf5(PATH, dens, NULL) == SIF_OK,
     "density write failed");
 
-  sif_catalog_t* smaller = make_catalog(N_VOIDS - 5, 0);
-  CHECK(sif_catalog_write_hdf5(PATH, smaller) == SIF_OK,
+  sif_catalogue_t* smaller = make_catalogue(N_VOIDS - 5, 0);
+  CHECK(sif_catalogue_write_hdf5(PATH, smaller) == SIF_OK,
     "a catalogue disagreeing with the profiles should still be written");
 
-  sif_catalog_t* back = sif_catalog_read_hdf5(PATH);
-  CHECK(same_catalog(smaller, back),
+  sif_catalogue_t* back = sif_catalogue_read_hdf5(PATH);
+  CHECK(same_catalogue(smaller, back),
     "the rewritten catalogue should replace the old one, footprint and all");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   sif_density_profiles_t* dens2 = NULL;
   CHECK(sif_profiles_read_hdf5(PATH, &dens2, NULL) == SIF_OK && dens2 &&
@@ -479,8 +479,8 @@ static void test_groups(void) {
   CHECK(sif_profiles_write_hdf5(PATH, NULL, NULL) == SIF_ERR_INVALID,
     "writing no profiles at all should be SIF_ERR_INVALID");
 
-  sif_catalog_free(cat);
-  sif_catalog_free(smaller);
+  sif_catalogue_free(cat);
+  sif_catalogue_free(smaller);
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
   sif_size_function_free(vsf);
@@ -489,14 +489,14 @@ static void test_groups(void) {
 
 static void test_foreign_files(void) {
   printf("files sif did not write\n");
-  sif_catalog_t* cat = make_catalog(4, 0);
+  sif_catalogue_t* cat = make_catalogue(4, 0);
 
   /* Text: never truncated to make room. */
   remove_all();
   FILE* f = fopen(PATH, "w");
   fputs("somebody's notes\n", f);
   fclose(f);
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_ERR_IO,
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_ERR_IO,
     "a text file should be refused, not overwritten");
   char line[64] = {0};
   f = fopen(PATH, "r");
@@ -505,30 +505,30 @@ static void test_foreign_files(void) {
     "the refused text file was modified");
   if (f)
     fclose(f);
-  CHECK(sif_catalog_read_hdf5(PATH) == NULL, "text should not read");
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL, "text should not read");
 
   /* Someone else's HDF5. */
   remove_all();
   write_foreign_hdf5(PATH);
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_ERR_IO,
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_ERR_IO,
     "an HDF5 file sif did not write should be refused");
-  CHECK(sif_catalog_read_hdf5(PATH) == NULL,
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL,
     "an HDF5 file sif did not write should not read");
 
   /* A layout newer than this build: refused rather than half-understood. */
   remove_all();
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
   set_format_version(PATH, 99);
-  CHECK(sif_catalog_read_hdf5(PATH) == NULL,
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL,
     "a newer format version should not read");
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_ERR_IO,
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_ERR_IO,
     "a newer format version should not be written into");
 
-  CHECK(sif_catalog_write_hdf5(NULL, cat) == SIF_ERR_INVALID &&
-          sif_catalog_write_hdf5(PATH, NULL) == SIF_ERR_INVALID,
+  CHECK(sif_catalogue_write_hdf5(NULL, cat) == SIF_ERR_INVALID &&
+          sif_catalogue_write_hdf5(PATH, NULL) == SIF_ERR_INVALID,
     "NULL arguments should be SIF_ERR_INVALID");
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   remove_all();
   printf("  ok\n");
 }
@@ -595,29 +595,29 @@ static void test_metadata(void) {
     "every root name beginning sif_ should be refused");
 
   /* A product is described once it exists, and not before. */
-  CHECK(sif_hdf5_set_attr_real(PATH, "catalog", "threshold", -0.7) ==
+  CHECK(sif_hdf5_set_attr_real(PATH, "catalogue", "threshold", -0.7) ==
           SIF_ERR_INVALID,
     "describing a product that is not there should be refused");
 
-  sif_catalog_t* cat = make_catalog(5, 0);
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  sif_catalogue_t* cat = make_catalogue(5, 0);
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
   CHECK(
-    sif_hdf5_set_attr_real(PATH, "catalog", "threshold", -0.7) == SIF_OK &&
-      sif_hdf5_set_attr_string(PATH, "/catalog", "finder", "exodus") == SIF_OK,
+    sif_hdf5_set_attr_real(PATH, "catalogue", "threshold", -0.7) == SIF_OK &&
+      sif_hdf5_set_attr_string(PATH, "/catalogue", "finder", "exodus") == SIF_OK,
     "describing the catalogue failed");
   CHECK(
-    sif_hdf5_set_attr_int(PATH, "catalog", "n_voids", 99) == SIF_ERR_INVALID,
+    sif_hdf5_set_attr_int(PATH, "catalogue", "n_voids", 99) == SIF_ERR_INVALID,
     "a product's own attribute should be refused");
-  CHECK(sif_hdf5_get_attr_real(PATH, "catalog", "threshold", &d) == SIF_OK &&
+  CHECK(sif_hdf5_get_attr_real(PATH, "catalogue", "threshold", &d) == SIF_OK &&
           d == -0.7,
     "catalogue metadata did not round-trip");
 
   /* Rewriting the catalogue drops what described the old one; the file's own
    * description stays. */
   CHECK(
-    sif_catalog_write_hdf5(PATH, cat) == SIF_OK, "catalogue rewrite failed");
+    sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue rewrite failed");
   CHECK(
-    sif_hdf5_attr_kind(PATH, "catalog", "threshold", &kind) == SIF_ERR_INVALID,
+    sif_hdf5_attr_kind(PATH, "catalogue", "threshold", &kind) == SIF_ERR_INVALID,
     "a rewritten catalogue should not keep the old one's metadata");
   CHECK(sif_hdf5_get_attr_int(PATH, NULL, "snapshot", &i) == SIF_OK && i == 4,
     "root metadata should survive a product rewrite");
@@ -628,7 +628,7 @@ static void test_metadata(void) {
           kind == SIF_HDF5_ATTR_STRING,
     "an entry should be replaceable by one of another kind");
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   remove_all();
   printf("  ok\n");
 }
@@ -650,12 +650,12 @@ static void test_fallback(void) {
   printf("no HDF5: writers dump, readers refuse\n");
   remove_all();
 
-  sif_catalog_t* cat = make_catalog(N_VOIDS, 1);
+  sif_catalogue_t* cat = make_catalogue(N_VOIDS, 1);
   sif_density_profiles_t* dens = make_density(N_VOIDS);
   sif_velocity_profiles_t* vel = make_velocity(N_VOIDS);
   sif_size_function_t* vsf = make_vsf();
 
-  CHECK(sif_catalog_write_hdf5(PATH, cat) == SIF_OK &&
+  CHECK(sif_catalogue_write_hdf5(PATH, cat) == SIF_OK &&
           sif_profiles_write_hdf5(PATH, dens, vel) == SIF_OK &&
           sif_size_function_write_hdf5(PATH, vsf) == SIF_OK,
     "a writer should succeed by falling back to text");
@@ -665,11 +665,11 @@ static void test_fallback(void) {
 
   /* The catalogue dump is an ordinary sif ASCII catalogue. */
   char p[256];
-  snprintf(p, sizeof(p), "%s.catalog.txt", PATH);
-  sif_catalog_t* back = sif_catalog_read_ascii(p, NULL);
-  CHECK(same_catalog(cat, back),
+  snprintf(p, sizeof(p), "%s.catalogue.txt", PATH);
+  sif_catalogue_t* back = sif_catalogue_read_ascii(p, NULL);
+  CHECK(same_catalogue(cat, back),
     "the catalogue dump should read back as the catalogue");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   /* The others: a comment header, then one line per row. */
   snprintf(p, sizeof(p), "%s.density_profiles.txt", PATH);
@@ -682,7 +682,7 @@ static void test_fallback(void) {
   CHECK(count_lines(p) == 2 + N_BINS, "size function dump has %ld lines",
     count_lines(p));
 
-  CHECK(sif_catalog_read_hdf5(PATH) == NULL, "a read should refuse");
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL, "a read should refuse");
   CHECK(sif_size_function_read_hdf5(PATH) == NULL, "a read should refuse");
   int has_d = -1;
   CHECK(
@@ -698,11 +698,11 @@ static void test_fallback(void) {
   /* Metadata is kept in a dump of its own, with the same keys refused. */
   CHECK(
     sif_hdf5_set_attr_string(PATH, NULL, "simulation", "Quijote") == SIF_OK &&
-      sif_hdf5_set_attr_real(PATH, "catalog", "threshold", -0.7) == SIF_OK &&
+      sif_hdf5_set_attr_real(PATH, "catalogue", "threshold", -0.7) == SIF_OK &&
       sif_hdf5_set_attr_int(PATH, NULL, "snapshot", 4) == SIF_OK,
     "a metadata setter should succeed by falling back to text");
   CHECK(
-    sif_hdf5_set_attr_int(PATH, "catalog", "n_voids", 3) == SIF_ERR_INVALID &&
+    sif_hdf5_set_attr_int(PATH, "catalogue", "n_voids", 3) == SIF_ERR_INVALID &&
       sif_hdf5_set_attr_int(PATH, NULL, "sif_format", 3) == SIF_ERR_INVALID,
     "the keys refused with HDF5 should be refused without it");
   snprintf(p, sizeof(p), "%s.attributes.txt", PATH);
@@ -713,7 +713,7 @@ static void test_fallback(void) {
     sif_hdf5_get_attr_int(PATH, NULL, "snapshot", &i) == SIF_ERR_UNSUPPORTED,
     "a metadata read should be SIF_ERR_UNSUPPORTED");
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
   sif_size_function_free(vsf);
@@ -740,7 +740,7 @@ int main(void) {
 #endif
 
   (void)file_exists;
-  sif_finalize();
+  sif_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

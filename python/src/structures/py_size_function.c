@@ -5,7 +5,7 @@
  */
 
 #include "py_size_function.h"
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include <numpy/arrayobject.h>
 
 static void sifSizeFunction_dealloc(PyObject* self_obj) {
@@ -72,15 +72,15 @@ static PyObject* sifSizeFunction_get_r_edges(
   return array;
 }
 
-static PyObject* sifSizeFunction_get_r_centers(
+static PyObject* sifSizeFunction_get_r_centres(
   PyObject* self_obj, void* closure) {
   sifSizeFunctionObject* self = (sifSizeFunctionObject*)self_obj;
-  if (!self->vsf || !self->vsf->r_centers)
+  if (!self->vsf || !self->vsf->r_centres)
     Py_RETURN_NONE;
 
   npy_intp dims[1] = {self->vsf->n_bins};
   PyObject* array =
-    PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, self->vsf->r_centers);
+    PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, self->vsf->r_centres);
   if (!array)
     return NULL;
 
@@ -146,7 +146,7 @@ static PyGetSetDef sifSizeFunction_getset[] = {
   {"r_min", sifSizeFunction_get_r_min, NULL, "Min radius", NULL},
   {"r_max", sifSizeFunction_get_r_max, NULL, "Max radius", NULL},
   {"r_edges", sifSizeFunction_get_r_edges, NULL, "1D array of bin edges", NULL},
-  {"r_centers", sifSizeFunction_get_r_centers, NULL, "1D array of bin centers",
+  {"r_centres", sifSizeFunction_get_r_centres, NULL, "1D array of bin centres",
     NULL},
   {"counts", sifSizeFunction_get_counts, NULL, "1D array of counts", NULL},
   {"vsf", sifSizeFunction_get_vsf, NULL, "1D array of VSF values", NULL},
@@ -163,7 +163,7 @@ PyTypeObject sifSizeFunctionType = {
   .tp_doc = "SizeFunction()\n"
             "--\n\n"
             "A void size function: number density of voids per radius bin.\n\n"
-            "Returned by pysif.measure.size_function_catalog() and by the\n"
+            "Returned by pysif.measure.size_function_catalogue() and by the\n"
             "models in pysif.model. One container serves both, so a\n"
             "measurement and a prediction can be compared directly -- but\n"
             "counts and err are meaningful only for a measurement, and are\n"

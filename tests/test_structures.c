@@ -7,7 +7,7 @@
 /* Smoke test for the four reworked data structures. */
 #include "sif/finder/spherical_finder.h"
 #include "sif/structures/bitmask.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/cell_linked_list.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
@@ -72,11 +72,11 @@ static void test_bitmask_atomic(void) {
   printf("  ok\n");
 }
 
-/* --- catalog: arena growth, trim, zero-capacity --- */
-static void test_catalog(void) {
-  printf("catalog\n");
+/* --- catalogue: arena growth, trim, zero-capacity --- */
+static void test_catalogue(void) {
+  printf("catalogue\n");
 
-  sif_catalog_t* cat = sif_catalog_alloc(4);
+  sif_catalogue_t* cat = sif_catalogue_alloc(4);
   CHECK(cat != NULL, "alloc returned NULL");
   if (!cat)
     return;
@@ -84,7 +84,7 @@ static void test_catalog(void) {
   /* Force several reallocations and check nothing is corrupted. */
   const uint64_t n = (uint64_t)SIF_TEST_SCALE(10000);
   for (uint64_t i = 0; i < n; i++) {
-    int st = sif_catalog_append(cat, (sif_real)i, (sif_real)(2 * i),
+    int st = sif_catalogue_append(cat, (sif_real)i, (sif_real)(2 * i),
       (sif_real)(3 * i), (sif_real)(i + 1));
     CHECK(
       st == SIF_OK, "append %llu failed with %d", (unsigned long long)i, st);
@@ -110,25 +110,25 @@ static void test_catalog(void) {
   CHECK(cap_before > n, "capacity %llu should exceed n_voids before trim",
     (unsigned long long)cap_before);
 
-  CHECK(sif_catalog_trim(cat) == SIF_OK, "trim failed");
+  CHECK(sif_catalogue_trim(cat) == SIF_OK, "trim failed");
   CHECK(cat->capacity == n, "trim left capacity %llu, expected %llu",
     (unsigned long long)cat->capacity, (unsigned long long)n);
   CHECK(cat->n_voids == n, "trim changed n_voids");
   CHECK(cat->cx[n - 1] == (sif_real)(n - 1), "trim corrupted the last entry");
-  CHECK(sif_catalog_trim(cat) == SIF_OK, "second trim should be a no-op");
+  CHECK(sif_catalogue_trim(cat) == SIF_OK, "second trim should be a no-op");
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 
-  /* An empty catalog is a legitimate result: it must still allocate and trim.
+  /* An empty catalogue is a legitimate result: it must still allocate and trim.
    */
-  sif_catalog_t* empty = sif_catalog_alloc(0);
+  sif_catalogue_t* empty = sif_catalogue_alloc(0);
   CHECK(empty != NULL, "alloc(0) returned NULL");
   if (empty) {
     CHECK(empty->capacity >= 1, "alloc(0) left an unusable capacity");
-    CHECK(sif_catalog_trim(empty) == SIF_OK, "trim of an empty catalog failed");
-    CHECK(sif_catalog_append(empty, 1, 2, 3, 4) == SIF_OK,
-      "append to an alloc(0) catalog failed");
-    sif_catalog_free(empty);
+    CHECK(sif_catalogue_trim(empty) == SIF_OK, "trim of an empty catalogue failed");
+    CHECK(sif_catalogue_append(empty, 1, 2, 3, 4) == SIF_OK,
+      "append to an alloc(0) catalogue failed");
+    sif_catalogue_free(empty);
   }
 
   /*
@@ -137,27 +137,27 @@ static void test_catalog(void) {
    * and a trim with the values they were given, beside the voids they belong
    * to.
    */
-  sif_catalog_t* fp = sif_catalog_alloc(2);
+  sif_catalogue_t* fp = sif_catalogue_alloc(2);
   CHECK(fp && fp->footprint == NULL && fp->footprint_shell == NULL,
     "a new catalogue should carry no footprint columns");
   if (fp) {
-    sif_catalog_append(fp, 1, 1, 1, 1);
-    CHECK(sif_catalog_reserve_footprint(fp) == SIF_OK &&
+    sif_catalogue_append(fp, 1, 1, 1, 1);
+    CHECK(sif_catalogue_reserve_footprint(fp) == SIF_OK &&
             fp->footprint != NULL && fp->footprint_shell != NULL,
       "reserving the footprint columns failed");
-    CHECK(sif_catalog_reserve_footprint(fp) == SIF_OK,
+    CHECK(sif_catalogue_reserve_footprint(fp) == SIF_OK,
       "reserving them twice should be a no-op");
-    CHECK(fp->footprint[0] == SIF_CATALOG_FOOTPRINT_UNKNOWN &&
-            fp->footprint_shell[0] == SIF_CATALOG_FOOTPRINT_UNKNOWN,
+    CHECK(fp->footprint[0] == SIF_CATALOGUE_FOOTPRINT_UNKNOWN &&
+            fp->footprint_shell[0] == SIF_CATALOGUE_FOOTPRINT_UNKNOWN,
       "a void already present should start as unknown");
 
     const uint64_t m = 1000;
     for (uint64_t i = 1; i < m; i++) {
-      sif_catalog_append(fp, (sif_real)i, 0, 0, 1);
+      sif_catalogue_append(fp, (sif_real)i, 0, 0, 1);
       fp->footprint[i] = (sif_real)i / (sif_real)m;
       fp->footprint_shell[i] = (sif_real)i / (sif_real)(2 * m);
     }
-    CHECK(sif_catalog_trim(fp) == SIF_OK, "trim with footprint columns failed");
+    CHECK(sif_catalogue_trim(fp) == SIF_OK, "trim with footprint columns failed");
 
     int bad = 0;
     for (uint64_t i = 1; i < m; i++) {
@@ -169,33 +169,33 @@ static void test_catalog(void) {
     CHECK(
       bad == 0, "%d footprint entries lost their void across regrowth", bad);
 
-    sif_catalog_append(fp, 0, 0, 0, 1);
-    CHECK(fp->footprint[m] == SIF_CATALOG_FOOTPRINT_UNKNOWN,
+    sif_catalogue_append(fp, 0, 0, 0, 1);
+    CHECK(fp->footprint[m] == SIF_CATALOGUE_FOOTPRINT_UNKNOWN,
       "a void appended afterwards should read as unknown");
-    sif_catalog_free(fp);
+    sif_catalogue_free(fp);
   }
-  CHECK(sif_catalog_reserve_footprint(NULL) == SIF_ERR_INVALID,
+  CHECK(sif_catalogue_reserve_footprint(NULL) == SIF_ERR_INVALID,
     "reserve_footprint(NULL) should report SIF_ERR_INVALID");
 
   /* Translation moves centres, and nothing else. */
-  sif_catalog_t* tr = sif_catalog_alloc(2);
+  sif_catalogue_t* tr = sif_catalogue_alloc(2);
   if (tr) {
-    sif_catalog_append(tr, 1.0f, 2.0f, 3.0f, 4.0f);
-    sif_catalog_append(tr, -1.0f, 0.5f, 10.0f, 2.0f);
+    sif_catalogue_append(tr, 1.0f, 2.0f, 3.0f, 4.0f);
+    sif_catalogue_append(tr, -1.0f, 0.5f, 10.0f, 2.0f);
     const sif_real off[3] = {100.0f, -0.5f, 0.25f};
-    CHECK(sif_catalog_translate(tr, off) == SIF_OK, "translate failed");
+    CHECK(sif_catalogue_translate(tr, off) == SIF_OK, "translate failed");
     CHECK(tr->cx[0] == 101.0f && tr->cy[0] == 1.5f && tr->cz[0] == 3.25f &&
             tr->radii[0] == 4.0f && tr->cx[1] == 99.0f && tr->cy[1] == 0.0f &&
             tr->cz[1] == 10.25f && tr->radii[1] == 2.0f,
       "translate moved the wrong things");
-    CHECK(sif_catalog_translate(NULL, off) == SIF_ERR_INVALID,
+    CHECK(sif_catalogue_translate(NULL, off) == SIF_ERR_INVALID,
       "translate(NULL) should report SIF_ERR_INVALID");
-    sif_catalog_free(tr);
+    sif_catalogue_free(tr);
   }
 
-  CHECK(sif_catalog_append(NULL, 0, 0, 0, 0) == SIF_ERR_INVALID,
+  CHECK(sif_catalogue_append(NULL, 0, 0, 0, 0) == SIF_ERR_INVALID,
     "append(NULL) should report SIF_ERR_INVALID");
-  sif_catalog_free(NULL); /* must not crash */
+  sif_catalogue_free(NULL); /* must not crash */
   printf("  ok\n");
 }
 
@@ -356,7 +356,7 @@ static void test_chain_mesh(void) {
    * SIF_MESH_DROP_INDICES releases the map *after* it has been sorted on, so
    * the claim worth testing is not that the array is gone -- it is that the
    * mesh underneath is the same one. If the flag ever turned into "skip
-   * building it", the canonicalization would lose its key and these two
+   * building it", the canonicalisation would lose its key and these two
    * orderings would drift apart.
    */
   sif_chain_mesh_t* kept = sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT);
@@ -398,7 +398,7 @@ static void test_chain_mesh(void) {
 
   /*
    * The consuming constructor must be indistinguishable from the copying one.
-   * It bins the same particles into the same cells and canonicalizes on the
+   * It bins the same particles into the same cells and canonicalises on the
    * same key, so the only thing that may differ is where the storage came
    * from -- and if the deferred permutation is wrong, the positions land in
    * the wrong slots and this catches it immediately.
@@ -553,7 +553,7 @@ static void test_chain_mesh(void) {
  * an entry point that needs the library does without it: fail with its own
  * status. It used to end the process, taking a Python interpreter with it.
  */
-static void test_uninitialized(void) {
+static void test_uninitialised(void) {
   printf("entry points before sif_init\n");
 
   sif_grid_t* g = sif_grid_alloc(16, 100.0f);
@@ -564,19 +564,19 @@ static void test_uninitialized(void) {
     g->content = SIF_GRID_DENSITY_CONTRAST;
 
     const sif_real radii[] = {20.0f, 15.0f};
-    sif_catalog_t* cat = sif_finder_spherical(g, radii, 2, -0.2f, 0.0f, 0);
+    sif_catalogue_t* cat = sif_finder_spherical(g, radii, 2, -0.2f, 0.0f, 0);
     CHECK(cat == NULL,
       "a finder run before sif_init() should fail, not return a catalogue");
-    sif_catalog_free(cat);
+    sif_catalogue_free(cat);
     sif_grid_free(g);
   }
   printf("  ok\n");
 }
 
 int main(void) {
-  test_uninitialized();
+  test_uninitialised();
   test_bitmask_atomic();
-  test_catalog();
+  test_catalogue();
   test_cll();
   test_chain_mesh();
 

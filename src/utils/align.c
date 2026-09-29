@@ -16,7 +16,7 @@
  * Rounding the size matters as much as aligning the address: an aligned start
  * alone still lets the tail of one block share a line with the head of the
  * next, and two OpenMP threads writing into those two blocks would then
- * serialize on the coherence protocol while appearing to touch separate data.
+ * serialise on the coherence protocol while appearing to touch separate data.
  *
  * Returns 0 if the rounding would wrap. Callers treat that as failure -- a
  * wrapped count asks the allocator for a handful of bytes and gets a block the

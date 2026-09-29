@@ -120,7 +120,7 @@ int sif_field_write(
  *
  * What an entry says is up to the reader -- a FITS column or expression, an
  * HDF5 dataset -- and is documented there. Built with designated
- * initializers, so the part each one fills is written next to it and an
+ * initialisers, so the part each one fills is written next to it and an
  * entry left out is NULL:
  *
  * @code
@@ -154,6 +154,10 @@ typedef struct {
  * @defgroup field_format Column formats
  * @brief How a file's columns map onto a field, for the ASCII and the binary
  * readers alike.
+ *
+ * .. _field-format:
+ *
+ * .. rubric:: Column formats
  *
  * A format names the columns in order:
  *

@@ -92,7 +92,7 @@ void sif_velocity_profiles_free(sif_velocity_profiles_t* profs) {
 /*
  * Everything that has to hold before anything is allocated.
  */
-static int validate_inputs(const sif_catalog_t* cat,
+static int validate_inputs(const sif_catalogue_t* cat,
   const sif_chain_mesh_t* mesh, uint32_t n_bins,
   const sif_density_profiles_t* const* out_dens,
   const sif_velocity_profiles_t* const* out_vel) {
@@ -104,7 +104,7 @@ static int validate_inputs(const sif_catalog_t* cat,
 
   /* The mean density divides every profile, and it is the mesh that supplies
    * both the tracer count and the volume it spreads over. An empty mesh, or
-   * one that cannot name its box, has no mean density to normalize by. */
+   * one that cannot name its box, has no mean density to normalise by. */
   if (!mesh || mesh->n_particles == 0 || !(mesh->box_length > (sif_real)0.0)) {
     SIF_LOG_ERROR("profiles", "invalid or empty chain mesh");
     return SIF_ERR_INVALID;
@@ -133,7 +133,7 @@ static int validate_inputs(const sif_catalog_t* cat,
 }
 
 /*
- * Mean tracer density of the box, which normalizes every density profile.
+ * Mean tracer density of the box, which normalises every density profile.
  *
  * The mesh summed its own weights when it was built, so this is arithmetic
  * rather than a pass over the tracers -- which matters when several catalogues
@@ -193,9 +193,9 @@ static inline void bin_cell_run(const bin_ctx_t* ctx, uint64_t p_start,
   const uint32_t n_bins = ctx->n_bins;
 
   /* NO simd pragma here: `bin` below is data-dependent, so the accumulations
-   * are a scatter. Asserting the loop is dependence-free let the vectorizer
+   * are a scatter. Asserting the loop is dependence-free let the vectoriser
    * drop updates whenever two lanes landed in the same bin, biasing every
-   * profile low by up to ~20% in dense bins. The compiler still vectorizes the
+   * profile low by up to ~20% in dense bins. The compiler still vectorises the
    * distance arithmetic on its own. */
   for (uint64_t p = p_start; p < p_end; p++) {
     sif_real dx = mx[p] - cx;
@@ -349,7 +349,7 @@ static void fill_edges(sif_real* r_edges, sif_real* bin_vols, uint32_t n_bins,
 
 /* --- estimator --- */
 
-int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
+int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
   sif_real ext, uint32_t n_bins, sif_option opt,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
 
@@ -361,7 +361,7 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   if (cat->units != SIF_COORDINATES_CARTESIAN) {
     SIF_LOG_ERROR("profiles",
       "the catalogue holds sky coordinates; profiles are measured around "
-      "Cartesian centres, before sif_catalog_to_sky()");
+      "Cartesian centres, before sif_catalogue_to_sky()");
     return SIF_ERR_INVALID;
   }
 
@@ -483,7 +483,7 @@ int sif_profiles(const sif_catalog_t* cat, const sif_chain_mesh_t* mesh,
   }
 
 /* The flags are literals in each expansion, so the compiler builds one
- * specialized loop per combination rather than testing them per tracer. */
+ * specialised loop per combination rather than testing them per tracer. */
 #define SIF_BIN_CELL(wrap, dens, vel, wgt, vel_w)                              \
   bin_cell_run(&ctx, p_start, p_end, wrap ? cx : ecx, wrap ? cy : ecy,         \
     wrap ? cz : ecz, r_max_sq, inv_bin, local_mass, local_vrad, local_count,   \

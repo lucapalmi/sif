@@ -16,12 +16,12 @@
 
 #include "sif/core/macros.h"
 #include "sif/core/system.h"
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/field_io.h"
 #include "sif/io/grid_io.h"
 #include "sif/io/profiles_io.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -208,24 +208,24 @@ static void test_grid_roundtrip(void) {
   sif_grid_free(grid);
 }
 
-static void test_catalog_roundtrip(void) {
+static void test_catalogue_roundtrip(void) {
   printf("catalogue round trip\n");
 
-  sif_catalog_t* cat = sif_catalog_alloc(8);
-  CHECK(cat != NULL, "catalog allocation failed");
+  sif_catalogue_t* cat = sif_catalogue_alloc(8);
+  CHECK(cat != NULL, "catalogue allocation failed");
   if (!cat)
     return;
 
   /* Values chosen to need most of the mantissa: a six-decimal writer loses
    * them, which is what SIF_PRI_REAL exists to prevent. */
-  sif_catalog_append(cat, (sif_real)1234.5678901234, (sif_real)0.1234567890123,
+  sif_catalogue_append(cat, (sif_real)1234.5678901234, (sif_real)0.1234567890123,
     (sif_real)9.87654321e-7, (sif_real)3.14159265358979);
-  sif_catalog_append(cat, (sif_real)-0.0009765625, (sif_real)65536.03125,
+  sif_catalogue_append(cat, (sif_real)-0.0009765625, (sif_real)65536.03125,
     (sif_real)1e-8, (sif_real)0.5);
 
-  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
+  CHECK(sif_catalogue_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
 
-  sif_catalog_t* back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  sif_catalogue_t* back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back != NULL, "read returned NULL");
   if (back) {
     CHECK(back->n_voids == cat->n_voids, "read %llu voids, expected %llu",
@@ -240,22 +240,22 @@ static void test_catalog_roundtrip(void) {
     CHECK(exact, "text round trip lost precision");
     CHECK(back->footprint == NULL,
       "a catalogue written without a footprint should read back without one");
-    sif_catalog_free(back);
+    sif_catalogue_free(back);
   }
 
-  CHECK(sif_catalog_write_ascii(CAT_PATH, NULL) == SIF_ERR_INVALID,
+  CHECK(sif_catalogue_write_ascii(CAT_PATH, NULL) == SIF_ERR_INVALID,
     "a NULL catalogue should be SIF_ERR_INVALID");
 
   /* With a footprint: two more columns, back bit for bit. */
-  CHECK(sif_catalog_reserve_footprint(cat) == SIF_OK, "reserve failed");
+  CHECK(sif_catalogue_reserve_footprint(cat) == SIF_OK, "reserve failed");
   cat->footprint[0] = (sif_real)0.123456789;
   cat->footprint_shell[0] = (sif_real)1.0;
   cat->footprint[1] = (sif_real)0.0;
-  cat->footprint_shell[1] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
+  cat->footprint_shell[1] = SIF_CATALOGUE_FOOTPRINT_UNKNOWN;
 
-  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK,
+  CHECK(sif_catalogue_write_ascii(CAT_PATH, cat) == SIF_OK,
     "write with footprint failed");
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back && back->footprint && back->footprint_shell,
     "the footprint columns did not come back");
   if (back && back->footprint) {
@@ -267,7 +267,7 @@ static void test_catalog_roundtrip(void) {
     }
     CHECK(exact, "the footprint round trip lost precision");
   }
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   /* Rows that disagree about their columns are a malformed file, not a
    * catalogue with a hole in it. Blank lines, as the old reader allowed, are
@@ -277,32 +277,32 @@ static void test_catalog_roundtrip(void) {
     fputs("2\n1 2 3 4 0.5 0.25\n\n5 6 7 8\n", f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back == NULL, "rows of four and six columns should be refused");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   f = fopen(CAT_PATH, "w");
   if (f) {
     fputs("2\n\n1 2 3 4\n  \n5 6 7 8\n", f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back && back->n_voids == 2 && back->footprint == NULL &&
           back->radii[1] == (sif_real)8,
     "a four-column file with blank lines should read as before");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   f = fopen(CAT_PATH, "w");
   if (f) {
     fputs("3\n1 2 3 4\n5 6 7 8\n", f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back == NULL, "a file shorter than its count should be refused");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   /* The header sif writes: the count, then the names. */
-  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
+  CHECK(sif_catalogue_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
   f = fopen(CAT_PATH, "r");
   char l1[64] = "", l2[128] = "";
   if (f) {
@@ -323,12 +323,12 @@ static void test_catalog_roundtrip(void) {
       f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back && back->n_voids == 3 && back->cx[0] == 1 && back->cy[1] == 6 &&
           back->cz[2] == 11 && back->radii[2] == 12 && !back->footprint &&
           back->units == SIF_COORDINATES_CARTESIAN,
     "named columns in another order were not placed by name");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   /* Sky names give a sky catalogue; radius is an alias of r. */
   f = fopen(CAT_PATH, "w");
@@ -336,11 +336,11 @@ static void test_catalog_roundtrip(void) {
     fputs("#n = 1\n#ra dec z radius\n10 -5 0.5 20\n", f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back && back->units == SIF_COORDINATES_SKY && back->cz[0] == 0.5f &&
           back->radii[0] == 20,
     "a catalogue named ra dec z did not read on the sky");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   const char* const bad[] = {
     "#n=1\n#ra cy z r\n1 2 3 4\n",       /* sky and Cartesian mixed */
@@ -354,46 +354,46 @@ static void test_catalog_roundtrip(void) {
       fputs(bad[i], f);
       fclose(f);
     }
-    back = sif_catalog_read_ascii(CAT_PATH, NULL);
+    back = sif_catalogue_read_ascii(CAT_PATH, NULL);
     CHECK(back == NULL, "malformed file %zu read", i);
-    sif_catalog_free(back);
+    sif_catalogue_free(back);
   }
 
-  sif_catalog_t* empty = sif_catalog_alloc(1);
-  CHECK(sif_catalog_write_ascii(CAT_PATH, empty) == SIF_OK,
+  sif_catalogue_t* empty = sif_catalogue_alloc(1);
+  CHECK(sif_catalogue_write_ascii(CAT_PATH, empty) == SIF_OK,
     "writing an empty catalogue failed");
-  back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back && back->n_voids == 0, "an empty catalogue did not read back");
-  sif_catalog_free(back);
-  sif_catalog_free(empty);
+  sif_catalogue_free(back);
+  sif_catalogue_free(empty);
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 }
 
 /* A catalogue written by another finder, placed by a column format. */
-static void test_catalog_format(void) {
+static void test_catalogue_format(void) {
   printf("catalogue column formats\n");
 
   /* An ID first, a volume between centre and radius, names nobody reads, a
    * text column past the radius, and commas. */
   FILE* f = fopen(CAT_PATH, "w");
   if (f) {
-    fputs("# ID x_center y_center z_center volume R_eff type\n"
+    fputs("# ID x_centre y_centre z_centre volume R_eff type\n"
           "7, 1.5, 2.5, 3.5, 900, 12, main\n"
           "8, 4.5, 5.5, 6.5, 100, 6, sub\n",
       f);
     fclose(f);
   }
-  sif_catalog_t* back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  sif_catalogue_t* back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(back == NULL, "an unnamed foreign layout read without a format");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
-  back = sif_catalog_read_ascii(CAT_PATH, "* x y z * r");
+  back = sif_catalogue_read_ascii(CAT_PATH, "* x y z * r");
   CHECK(back && back->n_voids == 2 && back->cx[0] == 1.5f &&
           back->cz[1] == 6.5f && back->radii[0] == 12 && back->radii[1] == 6 &&
           back->units == SIF_COORDINATES_CARTESIAN && !back->footprint,
     "a format did not place the columns");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   /* The format wins over the names in the file, and reads the sky. */
   f = fopen(CAT_PATH, "w");
@@ -401,15 +401,15 @@ static void test_catalog_format(void) {
     fputs("#n=1\n#cx cy cz r\n20 -5 0.3 11\n", f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, "radecz,r");
+  back = sif_catalogue_read_ascii(CAT_PATH, "radecz,r");
   CHECK(back && back->units == SIF_COORDINATES_SKY && back->cx[0] == 20 &&
           back->cy[0] == -5 && back->radii[0] == 11,
     "a sky format was not applied");
-  sif_catalog_free(back);
-  back = sif_catalog_read_ascii(CAT_PATH, "r cx cy cz");
+  sif_catalogue_free(back);
+  back = sif_catalogue_read_ascii(CAT_PATH, "r cx cy cz");
   CHECK(back && back->radii[0] == 20 && back->cx[0] == -5,
     "a format in another order was not applied");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 
   const char* const bad_formats[] = {
     "x y z",      /* no radius */
@@ -420,9 +420,9 @@ static void test_catalog_format(void) {
     "x y z *8 r", /* widths are binary */
   };
   for (size_t i = 0; i < sizeof(bad_formats) / sizeof(bad_formats[0]); i++) {
-    back = sif_catalog_read_ascii(CAT_PATH, bad_formats[i]);
+    back = sif_catalogue_read_ascii(CAT_PATH, bad_formats[i]);
     CHECK(back == NULL, "bad format '%s' accepted", bad_formats[i]);
-    sif_catalog_free(back);
+    sif_catalogue_free(back);
   }
 
   /* A column the format reads has to be a number; a skipped one need not. */
@@ -431,74 +431,74 @@ static void test_catalog_format(void) {
     fputs("a 1 2 3 4\n", f);
     fclose(f);
   }
-  back = sif_catalog_read_ascii(CAT_PATH, "* x y z r");
+  back = sif_catalogue_read_ascii(CAT_PATH, "* x y z r");
   CHECK(back && back->radii[0] == 4, "a text column that is skipped failed");
-  sif_catalog_free(back);
-  back = sif_catalog_read_ascii(CAT_PATH, "x y z r");
+  sif_catalogue_free(back);
+  back = sif_catalogue_read_ascii(CAT_PATH, "x y z r");
   CHECK(back == NULL, "a text column that is read was accepted");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
 }
 
 /* The metadata a catalogue carries, and the text format's keeping of it. */
-static void test_catalog_metadata(void) {
+static void test_catalogue_metadata(void) {
   printf("catalogue metadata\n");
 
-  sif_catalog_t* cat = sif_catalog_alloc(2);
-  sif_catalog_append(cat, 1, 2, 3, 4);
-  CHECK(sif_catalog_meta_count(cat) == 0, "a new catalogue has metadata");
+  sif_catalogue_t* cat = sif_catalogue_alloc(2);
+  sif_catalogue_append(cat, 1, 2, 3, 4);
+  CHECK(sif_catalogue_meta_count(cat) == 0, "a new catalogue has metadata");
 
   CHECK(
-    sif_catalog_meta_string_set(cat, "Finder", "exodus") == SIF_OK &&
-      sif_catalog_meta_real_set(cat, "threshold", -0.7) == SIF_OK &&
-      sif_catalog_meta_int_set(cat, "n_tracers", 123456789012LL) == SIF_OK &&
-      sif_catalog_meta_string_set(cat, "label", "10") == SIF_OK,
+    sif_catalogue_meta_string_set(cat, "Finder", "exodus") == SIF_OK &&
+      sif_catalogue_meta_real_set(cat, "threshold", -0.7) == SIF_OK &&
+      sif_catalogue_meta_int_set(cat, "n_tracers", 123456789012LL) == SIF_OK &&
+      sif_catalogue_meta_string_set(cat, "label", "10") == SIF_OK,
     "setting metadata failed");
-  CHECK(sif_catalog_meta_kind(cat, "FINDER") == SIF_CATALOG_META_STRING &&
-          strcmp(sif_catalog_meta_name(cat, 0), "finder") == 0,
+  CHECK(sif_catalogue_meta_kind(cat, "FINDER") == SIF_CATALOGUE_META_STRING &&
+          strcmp(sif_catalogue_meta_name(cat, 0), "finder") == 0,
     "keys are not case-insensitive and kept in lower case");
-  CHECK(sif_catalog_meta_real_get(cat, "n_tracers") == 123456789012.0 &&
-          sif_catalog_meta_int_get(cat, "threshold") == 0 &&
-          sif_catalog_meta_string_get(cat, "threshold") == NULL,
+  CHECK(sif_catalogue_meta_real_get(cat, "n_tracers") == 123456789012.0 &&
+          sif_catalogue_meta_int_get(cat, "threshold") == 0 &&
+          sif_catalogue_meta_string_get(cat, "threshold") == NULL,
     "a getter read a value of another kind");
 
   /* Setting again replaces, whatever the kind, and keeps the order. */
-  CHECK(sif_catalog_meta_int_set(cat, "label", 7) == SIF_OK &&
-          sif_catalog_meta_count(cat) == 4 &&
-          strcmp(sif_catalog_meta_name(cat, 3), "label") == 0 &&
-          sif_catalog_meta_int_get(cat, "label") == 7,
+  CHECK(sif_catalogue_meta_int_set(cat, "label", 7) == SIF_OK &&
+          sif_catalogue_meta_count(cat) == 4 &&
+          strcmp(sif_catalogue_meta_name(cat, 3), "label") == 0 &&
+          sif_catalogue_meta_int_get(cat, "label") == 7,
     "setting a key again did not replace it in place");
-  CHECK(sif_catalog_meta_remove(cat, "label") == SIF_OK &&
-          sif_catalog_meta_count(cat) == 3 &&
-          sif_catalog_meta_remove(cat, "label") == SIF_OK,
+  CHECK(sif_catalogue_meta_remove(cat, "label") == SIF_OK &&
+          sif_catalogue_meta_count(cat) == 3 &&
+          sif_catalogue_meta_remove(cat, "label") == SIF_OK,
     "removing a key failed");
 
   const char* const refused[] = {"n", "n_voids", "coordinates", "NAXIS2",
     "ttype3", "comment", "2fast", "has space", ""};
   for (size_t i = 0; i < sizeof(refused) / sizeof(*refused); i++)
-    CHECK(sif_catalog_meta_int_set(cat, refused[i], 1) == SIF_ERR_INVALID,
+    CHECK(sif_catalogue_meta_int_set(cat, refused[i], 1) == SIF_ERR_INVALID,
       "the key \"%s\" was accepted", refused[i]);
   CHECK(
-    sif_catalog_meta_string_set(cat, "bad", "a \"quote\"") == SIF_ERR_INVALID &&
-      sif_catalog_meta_real_set(cat, "bad", NAN) == SIF_ERR_INVALID,
+    sif_catalogue_meta_string_set(cat, "bad", "a \"quote\"") == SIF_ERR_INVALID &&
+      sif_catalogue_meta_real_set(cat, "bad", NAN) == SIF_ERR_INVALID,
     "a value no format keeps was accepted");
 
   /* Through the text format: every kind, "10" still a string. */
-  CHECK(sif_catalog_meta_string_set(cat, "label", "10") == SIF_OK &&
-          sif_catalog_meta_string_set(cat, "input", "a/b c.fits") == SIF_OK,
+  CHECK(sif_catalogue_meta_string_set(cat, "label", "10") == SIF_OK &&
+          sif_catalogue_meta_string_set(cat, "input", "a/b c.fits") == SIF_OK,
     "setting strings failed");
-  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
-  sif_catalog_t* back = sif_catalog_read_ascii(CAT_PATH, NULL);
+  CHECK(sif_catalogue_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
+  sif_catalogue_t* back = sif_catalogue_read_ascii(CAT_PATH, NULL);
   CHECK(
-    back && sif_catalog_meta_count(back) == 5 &&
-      strcmp(sif_catalog_meta_string_get(back, "finder"), "exodus") == 0 &&
-      sif_catalog_meta_real_get(back, "threshold") == -0.7 &&
-      sif_catalog_meta_int_get(back, "n_tracers") == 123456789012LL &&
-      sif_catalog_meta_kind(back, "label") == SIF_CATALOG_META_STRING &&
-      strcmp(sif_catalog_meta_string_get(back, "input"), "a/b c.fits") == 0 &&
+    back && sif_catalogue_meta_count(back) == 5 &&
+      strcmp(sif_catalogue_meta_string_get(back, "finder"), "exodus") == 0 &&
+      sif_catalogue_meta_real_get(back, "threshold") == -0.7 &&
+      sif_catalogue_meta_int_get(back, "n_tracers") == 123456789012LL &&
+      sif_catalogue_meta_kind(back, "label") == SIF_CATALOGUE_META_STRING &&
+      strcmp(sif_catalogue_meta_string_get(back, "input"), "a/b c.fits") == 0 &&
       back->n_voids == 1 && back->radii[0] == 4,
     "the metadata did not survive the text format");
-  sif_catalog_free(back);
-  sif_catalog_free(cat);
+  sif_catalogue_free(back);
+  sif_catalogue_free(cat);
 }
 
 static void test_profiles_roundtrip(void) {
@@ -523,12 +523,12 @@ static void test_profiles_roundtrip(void) {
     f->vz[i] = (sif_real)((double)i * 0.125);
   }
 
-  sif_catalog_t* cat = sif_catalog_alloc(4);
-  sif_catalog_append(
+  sif_catalogue_t* cat = sif_catalogue_alloc(4);
+  sif_catalogue_append(
     cat, (sif_real)50.0, (sif_real)50.0, (sif_real)50.0, (sif_real)8.0);
-  sif_catalog_append(
+  sif_catalogue_append(
     cat, (sif_real)12.5, (sif_real)77.25, (sif_real)3.125, (sif_real)5.5);
-  sif_catalog_append(cat, (sif_real)0.0009765625, (sif_real)65.03125,
+  sif_catalogue_append(cat, (sif_real)0.0009765625, (sif_real)65.03125,
     (sif_real)99.5, (sif_real)6.25);
 
   sif_chain_mesh_t* mesh =
@@ -546,7 +546,7 @@ static void test_profiles_roundtrip(void) {
     CHECK(sif_profiles_write_ascii(PROF_PATH, dens, vel, cat) == SIF_OK,
       "write failed");
 
-    sif_catalog_t* cat_back = NULL;
+    sif_catalogue_t* cat_back = NULL;
     sif_density_profiles_t* dens_back = NULL;
     sif_velocity_profiles_t* vel_back = NULL;
 
@@ -584,7 +584,7 @@ static void test_profiles_roundtrip(void) {
       CHECK(exact, "text round trip lost precision");
     }
 
-    sif_catalog_free(cat_back);
+    sif_catalogue_free(cat_back);
     sif_density_profiles_free(dens_back);
     sif_velocity_profiles_free(vel_back);
 
@@ -650,12 +650,12 @@ static void test_profiles_roundtrip(void) {
 
     /* A catalogue of a different length labels every row with the wrong
      * void. */
-    sif_catalog_t* short_cat = sif_catalog_alloc(2);
-    sif_catalog_append(short_cat, 1.0f, 2.0f, 3.0f, 4.0f);
+    sif_catalogue_t* short_cat = sif_catalogue_alloc(2);
+    sif_catalogue_append(short_cat, 1.0f, 2.0f, 3.0f, 4.0f);
     CHECK(sif_profiles_write_ascii(PROF_PATH, dens, vel, short_cat) ==
             SIF_ERR_INVALID,
       "a catalogue of the wrong length should be SIF_ERR_INVALID");
-    sif_catalog_free(short_cat);
+    sif_catalogue_free(short_cat);
 
     CHECK(
       sif_profiles_write_ascii(PROF_PATH, NULL, NULL, cat) == SIF_ERR_INVALID,
@@ -680,20 +680,20 @@ static void test_profiles_roundtrip(void) {
       head[1], head[2], head[3], head[4], head[5]);
 
     /* A catalogue on the sky says so, and comes back on the sky. */
-    sif_catalog_t* sky = sif_catalog_alloc(cat->n_voids);
+    sif_catalogue_t* sky = sif_catalogue_alloc(cat->n_voids);
     for (uint64_t i = 0; i < cat->n_voids; i++)
-      sif_catalog_append(
+      sif_catalogue_append(
         sky, cat->cx[i], cat->cy[i], cat->cz[i], cat->radii[i]);
     sky->units = SIF_COORDINATES_SKY;
-    sif_catalog_t* sky_back = NULL;
+    sif_catalogue_t* sky_back = NULL;
     CHECK(sif_profiles_write_ascii(PROF_HALF_PATH, dens, NULL, sky) == SIF_OK &&
             sif_profiles_read_ascii(PROF_HALF_PATH, &sky_back, NULL, NULL) ==
               SIF_OK &&
             sky_back && sky_back->units == SIF_COORDINATES_SKY &&
             sky_back->cx[0] == sky->cx[0],
       "profiles of a sky catalogue did not come back on the sky");
-    sif_catalog_free(sky_back);
-    sif_catalog_free(sky);
+    sif_catalogue_free(sky_back);
+    sif_catalogue_free(sky);
   }
 
   /* A file from before the header: the shape line, the edges line, rows. */
@@ -702,7 +702,7 @@ static void test_profiles_roundtrip(void) {
     fputs("2 2 2.0 1 0 1\n0 1 2\n1 2 3 4 0.5 0.25\n5 6 7 8 -0.5 1.5\n", old);
     fclose(old);
   }
-  sif_catalog_t* old_cat = NULL;
+  sif_catalogue_t* old_cat = NULL;
   sif_density_profiles_t* old_dens = NULL;
   CHECK(sif_profiles_read_ascii(PROF_HALF_PATH, &old_cat, &old_dens, NULL) ==
             SIF_OK &&
@@ -711,7 +711,7 @@ static void test_profiles_roundtrip(void) {
           sif_density_profiles_get(old_dens, 1)[1] == 1.5f &&
           old_cat->units == SIF_COORDINATES_CARTESIAN,
     "a profile file from before the header did not read as before");
-  sif_catalog_free(old_cat);
+  sif_catalogue_free(old_cat);
   sif_density_profiles_free(old_dens);
 
   /* A header naming columns sif does not write is refused. */
@@ -730,7 +730,7 @@ static void test_profiles_roundtrip(void) {
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
   sif_chain_mesh_free(mesh);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_field_free(f);
 }
 
@@ -847,7 +847,7 @@ static void test_ascii_field_rejections(void) {
     return;
 
   /* A format that names nothing would consume every line and write nothing,
-   * leaving a field of uninitialized memory that reads as loaded. */
+   * leaving a field of uninitialised memory that reads as loaded. */
   CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "", ' ', 0) == SIF_ERR_INVALID,
     "an empty format should be SIF_ERR_INVALID");
   CHECK(
@@ -1199,9 +1199,9 @@ int main(void) {
   test_field_roundtrip();
   test_field_corruption();
   test_grid_roundtrip();
-  test_catalog_roundtrip();
-  test_catalog_format();
-  test_catalog_metadata();
+  test_catalogue_roundtrip();
+  test_catalogue_format();
+  test_catalogue_metadata();
   test_profiles_roundtrip();
   test_ascii_field();
   test_ascii_field_rejections();
@@ -1216,7 +1216,7 @@ int main(void) {
   remove(PROF_PATH);
   remove(PROF_HALF_PATH);
 
-  sif_finalize();
+  sif_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

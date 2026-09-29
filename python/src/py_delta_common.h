@@ -20,7 +20,7 @@
 /*
  * @brief Maps the shuffle/window strings onto the options bitmask.
  *
- * @return 0, or -1 with a Python exception set on an unrecognized name.
+ * @return 0, or -1 with a Python exception set on an unrecognised name.
  */
 static inline int py_sif_delta_parse_options(const char* shuffle,
   const char* window, int keep_cic_window, sif_option* out) {

@@ -144,13 +144,13 @@ int main(int argc, char** argv) {
                      ? config.run.log_level
                      : SIF_LOG_LEVEL_WARNING};
     if (survey && sif_init(&check_lib) != SIF_OK) {
-      fputs("sif-exodus: could not initialize the library\n", stderr);
+      fputs("sif-exodus: could not initialise the library\n", stderr);
       config_free(&config);
       return 1;
     }
     const int ok = config_check(&config, config_path, true);
     if (survey)
-      sif_finalize();
+      sif_finalise();
     fputs(config.resolved, stdout);
     fflush(stdout);
     config_free(&config);
@@ -165,7 +165,7 @@ int main(int argc, char** argv) {
   sif_config_t lib = {
     .fft_config = &fft, .omp_config = &omp, .log_level = config.run.log_level};
   if (sif_init(&lib) != SIF_OK) {
-    fputs("sif-exodus: could not initialize the library\n", stderr);
+    fputs("sif-exodus: could not initialise the library\n", stderr);
     config_free(&config);
     return 1;
   }
@@ -173,7 +173,7 @@ int main(int argc, char** argv) {
   /* The same check as --check, before anything is read: what it finds wrong
    * would stop the run later anyway, after the expensive part. */
   if (config_check(&config, config_path, false) != 0) {
-    sif_finalize();
+    sif_finalise();
     config_free(&config);
     return 2;
   }
@@ -182,7 +182,7 @@ int main(int argc, char** argv) {
                        ? pipeline_survey(&config.params)
                        : pipeline_box(&config.params);
 
-  sif_finalize();
+  sif_finalise();
   config_free(&config);
   return status == SIF_OK ? 0 : 1;
 }

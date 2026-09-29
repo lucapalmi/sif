@@ -34,7 +34,7 @@ static int shapes_agree(
 
 int sif_profiles_write_ascii(const char* filepath,
   const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel,
-  const sif_catalog_t* cat) {
+  const sif_catalogue_t* cat) {
 
   if ((!dens && !vel) || !cat || !filepath) {
     SIF_LOG_ERROR("io",
@@ -375,7 +375,7 @@ int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
 /* the rows                                                                  */
 /* ------------------------------------------------------------------------ */
 
-int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
+int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
 
   if (!filepath) {
@@ -408,7 +408,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
   const uint32_t n_bins = h.n_bins;
 
   int status = SIF_ERR_INVALID;
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   sif_density_profiles_t* dens = NULL;
   sif_velocity_profiles_t* vel = NULL;
 
@@ -422,7 +422,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
 
   status = SIF_ERR_ALLOC;
   if (out_cat) {
-    cat = sif_catalog_alloc(n_voids);
+    cat = sif_catalogue_alloc(n_voids);
     if (!cat) {
       SIF_LOG_ERROR("io", "OOM allocating the catalogue for %s", filepath);
       goto fail;
@@ -516,7 +516,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalog_t** out_cat,
   }
 
   if (cat) {
-    /* Filled in directly rather than through sif_catalog_append(), so the size
+    /* Filled in directly rather than through sif_catalogue_append(), so the size
      * has to be set by hand. */
     cat->n_voids = n_voids;
     *out_cat = cat;
@@ -537,7 +537,7 @@ fail:
   /* Nothing built here survives a failure -- a half-read set the caller cannot
    * tell from a complete one is worse than none at all. The outputs are
    * already NULL from the top of the call. */
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_density_profiles_free(dens);
   sif_velocity_profiles_free(vel);
   free(h.edges);

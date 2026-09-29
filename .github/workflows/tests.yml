@@ -78,9 +78,13 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libfftw3-dev libhdf5-dev
+            libfftw3-dev libhdf5-dev libcfitsio-dev
+      # FITS=ON rather than AUTO: the smoke test reads a FITS file, and AUTO
+      # without cfitsio builds a pysif that only fails once it gets there.
       - name: Build and install pysif
-        run: pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON
+        run: |
+          pip install . -C cmake.define.SIF_HDF5_SUPPORT=ON \
+            -C cmake.define.SIF_FITS_SUPPORT=ON
       - name: Smoke test
         run: |
           pip install h5py

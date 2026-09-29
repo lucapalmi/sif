@@ -33,7 +33,7 @@ typedef struct {
   const char* const* keys;
 } reserved_t;
 
-static const char* const CATALOG_KEYS[] = {"n_voids", "coordinates", NULL};
+static const char* const CATALOGUE_KEYS[] = {"n_voids", "coordinates", NULL};
 static const char* const DENSITY_KEYS[] = {
   "n_voids", "n_bins", "ext", "differential", NULL};
 static const char* const VELOCITY_KEYS[] = {"n_voids", "n_bins", "ext", NULL};
@@ -41,7 +41,7 @@ static const char* const VSF_KEYS[] = {
   "n_bins", "r_min", "r_max", "options", "binning", NULL};
 
 static const reserved_t RESERVED[] = {
-  {"catalog", CATALOG_KEYS},
+  {"catalogue", CATALOGUE_KEYS},
   {"density_profiles", DENSITY_KEYS},
   {"velocity_profiles", VELOCITY_KEYS},
   {"size_function", VSF_KEYS},

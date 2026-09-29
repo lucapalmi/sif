@@ -199,7 +199,7 @@ static PyMethodDef sifChainMesh_methods[] = {{NULL, NULL, 0, NULL}};
 
 PyTypeObject sifChainMeshType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-    "pysif.ChainMesh", /* Updated Namespace and Capitalized */
+    "pysif.ChainMesh", /* Updated Namespace and Capitalised */
   .tp_basicsize = sizeof(sifChainMeshObject),
   .tp_itemsize = 0,
   .tp_dealloc = sifChainMesh_dealloc,

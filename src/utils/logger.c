@@ -26,7 +26,7 @@
 static const char* level_strings[] = {
   "TRACE", "DEBUG", "INFO", "WARNING", "ERROR"};
 
-static const char* level_colors[] = {
+static const char* level_colours[] = {
   ANSI_GREY,    /* TRACE   */
   ANSI_MAGENTA, /* DEBUG   */
   ANSI_BLUE,    /* INFO    */
@@ -49,7 +49,7 @@ static const char* level_colors[] = {
 static int stdout_is_tty = -1;
 static int stderr_is_tty = -1;
 
-static int use_color_for(FILE* out) {
+static int use_colour_for(FILE* out) {
   int* cached = (out == stderr) ? &stderr_is_tty : &stdout_is_tty;
   if (*cached < 0)
     *cached = isatty(fileno(out)) ? 1 : 0;
@@ -77,11 +77,11 @@ void sif__log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
   /* Diagnostics go to stderr so a run whose stdout is a data pipe stays
    * parseable, and so warnings survive being redirected away. */
   FILE* out = (level >= SIF_LOG_LEVEL_WARNING) ? stderr : stdout;
-  const int use_color = use_color_for(out);
+  const int use_colour = use_colour_for(out);
 
-  fprintf(out, "%s[%s]%s %s%s:%s ", use_color ? level_colors[level] : "",
-    level_strings[level], use_color ? ANSI_RESET : "",
-    use_color ? ANSI_BOLD_WHITE : "", tag, use_color ? ANSI_RESET : "");
+  fprintf(out, "%s[%s]%s %s%s:%s ", use_colour ? level_colours[level] : "",
+    level_strings[level], use_colour ? ANSI_RESET : "",
+    use_colour ? ANSI_BOLD_WHITE : "", tag, use_colour ? ANSI_RESET : "");
 
   va_list args;
   va_start(args, fmt);

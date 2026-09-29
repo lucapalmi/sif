@@ -22,7 +22,7 @@
 
 #define TAG "ep"
 
-/* Relative jitter added to the diagonal before factorizing, so a marginally
+/* Relative jitter added to the diagonal before factorising, so a marginally
  * rank-deficient radius grid does not fail on its last pivot. Far below the
  * precision at which the covariance is meaningful. */
 #define EP_JITTER 1e-12
@@ -215,7 +215,7 @@ static int validate(const sif_real* radii, uint32_t n_radii, const double* cov,
     }
   }
 
-  /* Positive semi-definiteness is left to the factorization, which reports
+  /* Positive semi-definiteness is left to the factorisation, which reports
    * the offending scale. */
 
   return SIF_OK;

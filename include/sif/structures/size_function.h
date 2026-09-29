@@ -25,7 +25,7 @@
 /**
  * @brief A void size function, measured or modelled.
  *
- * Produced either by binning a catalogue (sif_size_function_catalog()) or by a
+ * Produced either by binning a catalogue (sif_size_function_catalogue()) or by a
  * model; released with sif_size_function_free().
  */
 typedef struct {
@@ -44,13 +44,13 @@ typedef struct {
   /** n_bins + 1 bin edges. */
   sif_real* r_edges;
   /** n_bins bin centres. */
-  sif_real* r_centers;
+  sif_real* r_centres;
 
   /** Raw void count per bin. Zero for a model, which is evaluated pointwise
    * and never counts anything.
    */
   uint64_t* counts;
-  /** Normalized number density per bin: the size function itself. */
+  /** Normalised number density per bin: the size function itself. */
   sif_real* vsf;
   /** Poisson error on #vsf, from #counts. Zero for a model. */
   sif_real* err;
@@ -71,7 +71,7 @@ typedef struct {
 void sif_size_function_free(sif_size_function_t* vsf);
 
 /**
- * @brief The normalized number density in one bin.
+ * @brief The normalised number density in one bin.
  *
  * @param vsf The size function.
  * @param bin_idx Bin to read; must be below sif_size_function_t::n_bins.

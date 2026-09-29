@@ -55,19 +55,19 @@ cat = pysif.finders.exodus(grid, mesh, radii, -0.7, 0.0)
 assert cat.n_voids >= 3, f"expected the three planted voids, found {cat.n_voids}"
 
 path = os.path.join(tempfile.mkdtemp(), "wheel.h5")
-pysif.io.write_catalog_hdf5(path, cat)
+pysif.io.write_catalogue_hdf5(path, cat)
 pysif.io.set_hdf5_attr(path, "origin", "wheel test")
-back = pysif.io.read_catalog_hdf5(path)
+back = pysif.io.read_catalogue_hdf5(path)
 assert np.array_equal(back.radii, cat.radii)
 assert pysif.io.get_hdf5_attr(path, "origin") == "wheel test"
 
 with h5py.File(path, "r+") as f:
     assert f.attrs["sif_format"] == "sif"
-    radii_data = f["catalog/radii"][...]
-    del f["catalog/radii"]
-    f["catalog"].create_dataset("radii", data=radii_data, compression="gzip")
+    radii_data = f["catalogue/radii"][...]
+    del f["catalogue/radii"]
+    f["catalogue"].create_dataset("radii", data=radii_data, compression="gzip")
 
-back = pysif.io.read_catalog_hdf5(path)
+back = pysif.io.read_catalogue_hdf5(path)
 assert np.array_equal(back.radii, cat.radii), "compressed dataset read wrong"
 
 # cfitsio: the committed fixture, plain and compressed.

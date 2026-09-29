@@ -7,7 +7,7 @@
 # Training-set generation for the excursion-set multiplicity emulator.
 #
 # One array task per cosmology; every barrier of that cosmology runs inside the
-# task, so the covariance is factorized once and a failed task costs one
+# task, so the covariance is factorised once and a failed task costs one
 # cosmology rather than a slice of all of them.
 #
 # Throttled to 16 concurrent tasks (%16) to match the queue limit. With 64

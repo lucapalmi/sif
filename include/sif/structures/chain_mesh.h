@@ -65,7 +65,7 @@ typedef struct {
   /**
    * Sum of #weights, or #n_particles when the mesh carries none -- either way,
    * what the box's mean density divides by. Summed once at construction, in
-   * double whatever sif_real is, so a measurement normalized to the box mean
+   * double whatever sif_real is, so a measurement normalised to the box mean
    * does not pay for a pass over the weights per call.
    */
   double total_weight;

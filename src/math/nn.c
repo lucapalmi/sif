@@ -38,7 +38,7 @@ static int validate(const sif_nn_t* nn, const double* x, double* out) {
 
   if (!nn->mu || !nn->sd) {
     SIF_LOG_ERROR(TAG,
-      "the input standardization is missing; a network evaluated without the "
+      "the input standardisation is missing; a network evaluated without the "
       "mean and scale it was fitted with is a different function");
     return SIF_ERR_INVALID;
   }
@@ -56,7 +56,7 @@ static int validate(const sif_nn_t* nn, const double* x, double* out) {
   for (uint32_t i = 0; i < nn->n_in; i++) {
     if (nn->sd[i] == 0.0) {
       SIF_LOG_ERROR(TAG,
-        "input %u has zero scale; the standardization is "
+        "input %u has zero scale; the standardisation is "
         "degenerate and the network cannot be evaluated",
         i);
       return SIF_ERR_INVALID;
@@ -102,7 +102,7 @@ static int validate(const sif_nn_t* nn, const double* x, double* out) {
  * The accumulation runs (row, input, output) rather than (row, output, input),
  * which turns the innermost loop into a unit-stride multiply-add over the
  * output width instead of a dot product with a reduction. Both do the same
- * arithmetic, but only this one vectorizes without the compiler having to
+ * arithmetic, but only this one vectorises without the compiler having to
  * reassociate anything, so the answer does not depend on how aggressively it
  * decided to.
  *
@@ -162,7 +162,7 @@ int sif__nn_eval(
     const uint32_t rows =
       (n_rows - base < SIF__NN_BLOCK) ? (n_rows - base) : SIF__NN_BLOCK;
 
-    /* Standardize into the first buffer. The fit saw (x - mu) / sd, so this is
+    /* Standardise into the first buffer. The fit saw (x - mu) / sd, so this is
      * part of the model rather than a convenience. */
     for (uint32_t r = 0; r < rows; r++) {
       const double* xr = x + (size_t)(base + r) * n_in;

@@ -99,7 +99,7 @@ SIF_NODISCARD sif_real* sif_ep_barrier_smt(const sif_real* sigma, uint32_t n,
  * packed lower triangle in the ascending order of radii: S(i, j) at
  * SIF_COV_INDEX(i, j) for j <= i. Must be symmetric positive semi-definite
  * with a strictly positive diagonal. Double rather than sif_real: a
- * single-precision factorization of a realistic radius grid reaches a
+ * single-precision factorisation of a realistic radius grid reaches a
  * non-positive pivot and fails.
  * @param barrier n_radii barrier heights, in the ascending order of radii
  * @param n_paths Number of walks, strictly positive
@@ -108,7 +108,7 @@ SIF_NODISCARD sif_real* sif_ep_barrier_smt(const sif_real* sigma, uint32_t n,
  *
  * @return Newly allocated array of n_radii counts in the ascending order of
  * radii, released with sif_free_aligned, or NULL on invalid input or a failed
- * factorization.
+ * factorisation.
  */
 SIF_NODISCARD uint64_t* sif_ep_first_crossing_counts(const sif_real* radii,
   uint32_t n_radii, const double* cov, const sif_real* barrier,
@@ -141,7 +141,7 @@ SIF_NODISCARD uint64_t* sif_ep_first_crossing_counts(const sif_real* radii,
  * sif_ep_first_crossing_counts.
  *
  * @return Newly allocated array of n_radii - 1 values, released with
- * sif_free_aligned, or NULL on invalid input or a failed factorization.
+ * sif_free_aligned, or NULL on invalid input or a failed factorisation.
  */
 SIF_NODISCARD sif_real* sif_ep_multiplicity_function(const sif_real* radii,
   uint32_t n_radii, const double* cov, const sif_real* barrier,

@@ -44,7 +44,7 @@ typedef struct {
 /**
  * @brief Allocates a factor for n rows, zero-filled.
  *
- * The zero fill is load-bearing: the factorization writes only up to each
+ * The zero fill is load-bearing: the factorisation writes only up to each
  * row's diagonal and relies on the allocation to have zeroed the padding.
  *
  * @return SIF_OK, or SIF_ERR_ALLOC with the struct left safe to free.
@@ -54,11 +54,11 @@ int sif__ep_factor_init(sif_ep_factor_t* f, uint32_t n);
 void sif__ep_factor_free(sif_ep_factor_t* f);
 
 /**
- * @brief Factorizes a packed covariance into walk order.
+ * @brief Factorises a packed covariance into walk order.
  *
  * Doubles as the test that the covariance is positive semi-definite.
  *
- * @param f Factor, already initialized for n rows
+ * @param f Factor, already initialised for n rows
  * @param cov Packed lower triangle in ASCENDING radius order
  * @param radii n radii, ascending, used only to name a scale in a diagnostic
  * @param n Number of radii

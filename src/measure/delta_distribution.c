@@ -120,7 +120,7 @@ sif_delta_distribution_t* sif_delta_distribution_grid(const sif_grid_t* grid,
     (opt & SIF__DELTA_SHUFFLE_MASK) == SIF_DELTA_SHUFFLE_NONE
       ? "field as measured"
     : (opt & SIF__DELTA_SHUFFLE_MASK) == SIF_DELTA_SHUFFLE_PHASES
-      ? "phase-randomized surrogate"
+      ? "phase-randomised surrogate"
       : "Gaussian surrogate");
 
   sif_fft_workspace_t* ws = sif__delta_prepare_spectrum(grid, seed, opt);
@@ -132,7 +132,7 @@ sif_delta_distribution_t* sif_delta_distribution_grid(const sif_grid_t* grid,
   sif_system_state_t* state = sif__system_state();
   if (!state ||
       sif__fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
+    SIF_LOG_ERROR(TAG, "failed to initialise the backward FFT");
     goto fail;
   }
 

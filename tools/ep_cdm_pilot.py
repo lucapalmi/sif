@@ -10,13 +10,13 @@ CDM-only pilot ensemble for the EP hazard-ratio correction.
 The first pilot spanned spectral families to map the correction's shape. This
 one stays inside the domain the emulator will actually be used in -- CAMB
 spectra over a realistic parameter box, including massive neutrinos and
-redshift -- so that generalization can be tested the way it will be used.
+redshift -- so that generalisation can be tested the way it will be used.
 
 The cosmologies are sampled to fill the box, and the analysis that follows
 holds out CONTIGUOUS REGIONS of it (high neutrino mass, high redshift, low
 matter density). On a manifold this thin, holding out one scattered cosmology
 at a time measures interpolation between near-duplicates and reports it as
-generalization.
+generalisation.
 
 Usage:  python tools/ep_cdm_pilot.py [output_dir]
 """

@@ -10,10 +10,10 @@
 #include "sif/core/settings.h"
 #include "sif/core/system.h"
 
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_field.h"
 
-/* --- Submodule Initialization Hooks --- */
+/* --- Submodule Initialisation Hooks --- */
 extern int py_sif_register_types(PyObject* module);
 extern PyObject* py_sif_init_io(void);
 extern PyObject* py_sif_init_measure(void);
@@ -49,7 +49,7 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
    * the interpreter survives a failed init and can say why. */
   if (sif_init(&config) != SIF_OK) {
     PyErr_SetString(PyExc_MemoryError,
-      "sif could not initialize: the library state or FFTW could not be "
+      "sif could not initialise: the library state or FFTW could not be "
       "allocated");
     return NULL;
   }
@@ -57,8 +57,8 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
   Py_RETURN_NONE;
 }
 
-static PyObject* py_sif_finalize(PyObject* module, PyObject* args) {
-  sif_finalize();
+static PyObject* py_sif_finalise(PyObject* module, PyObject* args) {
+  sif_finalise();
   Py_RETURN_NONE;
 }
 
@@ -116,8 +116,8 @@ static PyMethodDef sif_module_methods[] = {
     "        to start, slower to transform; worth setting for short runs.\n"
     "    log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none.\n"
     "        0 is the verbose mode: everything, timings included."},
-  {"finalize", (PyCFunction)py_sif_finalize, METH_NOARGS,
-    "finalize()\n"
+  {"finalise", (PyCFunction)py_sif_finalise, METH_NOARGS,
+    "finalise()\n"
     "--\n\n"
     "Shut the library down, releasing everything init() acquired.\n\n"
     "Saves the settings table if it changed and tears down the FFTW plan\n"
@@ -153,19 +153,19 @@ static PyMethodDef sif_module_methods[] = {
     "        missing, x or y is given with ra or dec, or the velocities are\n"
     "        given in part.\n"
     "    MemoryError: If the field's buffers could not be allocated."},
-  {"catalog_from_numpy", (PyCFunction)pysif_catalog_from_numpy,
+  {"catalogue_from_numpy", (PyCFunction)pysif_catalogue_from_numpy,
     METH_VARARGS | METH_KEYWORDS,
-    "catalog_from_numpy(cx=None, cy=None, cz=None, r=None, *, ra=None, "
+    "catalogue_from_numpy(cx=None, cy=None, cz=None, r=None, *, ra=None, "
     "dec=None, z=None, footprint=None, footprint_shell=None)\n"
     "--\n\n"
-    "A new Catalog, with its voids copied out of NumPy arrays: a catalogue\n"
+    "A new Catalogue, with its voids copied out of NumPy arrays: a catalogue\n"
     "from another finder, or one cut down by hand.\n\n"
     "The names say what the centres are, as for field_from_numpy(): cx, cy\n"
     "and cz for Cartesian centres, or ra, dec and z -- right ascension and\n"
     "declination in degrees, and redshift -- for a catalogue on the sky:\n\n"
-    "    box = pysif.catalog_from_numpy(cx, cy, cz, r)\n"
-    "    sky = pysif.catalog_from_numpy(ra=ra, dec=dec, z=z, r=r)\n\n"
-    "Catalog.to_numpy() is the way back.\n\n"
+    "    box = pysif.catalogue_from_numpy(cx, cy, cz, r)\n"
+    "    sky = pysif.catalogue_from_numpy(ra=ra, dec=dec, z=z, r=r)\n\n"
+    "Catalogue.to_numpy() is the way back.\n\n"
     "Args:\n"
     "    cx, cy, cz: Cartesian centres, one entry per void.\n"
     "    r: Radii.\n"
@@ -173,7 +173,7 @@ static PyMethodDef sif_module_methods[] = {
     "    footprint, footprint_shell: The footprint columns, both or "
     "neither.\n\n"
     "Returns:\n"
-    "    Catalog: The new catalogue.\n\n"
+    "    Catalogue: The new catalogue.\n\n"
     "Raises:\n"
     "    ValueError: If the arrays disagree in length, a column is missing,\n"
     "        or Cartesian and sky names are mixed."},
@@ -211,7 +211,7 @@ static struct PyModuleDef sif_module = {
 };
 
 PyMODINIT_FUNC PyInit__pysif(void) {
-  /* CRITICAL: Initialize NumPy C-API */
+  /* CRITICAL: Initialise NumPy C-API */
   import_array();
 
   /* 1. Create the Main Module */

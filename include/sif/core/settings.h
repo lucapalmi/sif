@@ -9,11 +9,11 @@
  * @brief Persistent key/value runtime settings.
  *
  * The table is process-global, populated by sif_init() from the settings file
- * and written back on sif_finalize() if anything changed. Values may reference
+ * and written back on sif_finalise() if anything changed. Values may reference
  * environment variables (`$HOME`, `${USER}`), which are expanded on write and
  * stored alongside the raw text.
  *
- * @warning The table is not synchronized. Reads are safe once the settings are
+ * @warning The table is not synchronised. Reads are safe once the settings are
  * populated, but calling sif_setting_set() concurrently with any other access
  * is a data race -- and so is sif_setting_get() with a fallback, which writes
  * the fallback into the table when the key is absent.
@@ -63,7 +63,7 @@
  * @brief Set a runtime setting, creating it if absent and overwriting if not.
  *
  * The value takes effect immediately and the table is flagged for saving at
- * finalization. Environment references in @p value are expanded now, not at
+ * finalisation. Environment references in @p value are expanded now, not at
  * read time, so a later change to the environment is not picked up.
  *
  * Keys are truncated at 63 characters, values at 255, with a warning.

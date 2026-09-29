@@ -45,7 +45,7 @@ sif_fft_manager_t* sif__fft_manager_init(
   /* Zero is FFTW's failure, and planning with threads after it is not
    * something FFTW promises to survive. */
   if (!real_fftw_init_threads()) {
-    SIF_LOG_ERROR("fft_manager", "FFTW could not initialize its threads");
+    SIF_LOG_ERROR("fft_manager", "FFTW could not initialise its threads");
     free(mgr->wisdom_dir);
     free(mgr);
     return NULL;
@@ -54,7 +54,7 @@ sif_fft_manager_t* sif__fft_manager_init(
   return mgr;
 }
 
-void sif__fft_manager_finalize(sif_fft_manager_t* mgr) {
+void sif__fft_manager_finalise(sif_fft_manager_t* mgr) {
   if (!mgr)
     return;
 
@@ -62,8 +62,8 @@ void sif__fft_manager_finalize(sif_fft_manager_t* mgr) {
 
   /* NOTE: this tears down FFTW state process-wide, not just sif's. Anything
    * else in the same process using FFTW loses its plans and accumulated
-   * wisdom. Acceptable while sif owns FFTW initialization, but it is the
-   * reason sif_finalize must not be called from a library context. */
+   * wisdom. Acceptable while sif owns FFTW initialisation, but it is the
+   * reason sif_finalise must not be called from a library context. */
   real_fftw_cleanup_threads();
   real_fftw_cleanup();
   free(mgr);
@@ -484,7 +484,7 @@ static sif_real* fft_build_filter_lut(
 #pragma omp parallel for schedule(static)
   for (uint32_t k2 = 0; k2 <= max_k2; k2++) {
     if (k2 == 0) {
-      /* W(0) = 1 for any normalized window: the k = 0 mode is the mean, which
+      /* W(0) = 1 for any normalised window: the k = 0 mode is the mean, which
        * smoothing must leave alone. */
       lut[k2] = (sif_real)1.0;
     } else if (filter == SIF__FILTER_TOP_HAT) {
@@ -514,7 +514,7 @@ int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
 
   if (!ws || !ws->delta_k_cpy) {
     SIF_LOG_ERROR(
-      "fft_context", "the backward stage must be initialized before filtering");
+      "fft_context", "the backward stage must be initialised before filtering");
     return SIF_ERR_INVALID;
   }
 
@@ -598,7 +598,7 @@ int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
 
 sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
   if (!ws || !ws->backward_plan || !ws->delta_k_cpy) {
-    SIF_LOG_ERROR("fft_context", "the backward stage is not initialized");
+    SIF_LOG_ERROR("fft_context", "the backward stage is not initialised");
     return NULL;
   }
 
@@ -615,7 +615,7 @@ sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
   /* An in-place r2c/c2r pair always pads the last dimension, so n_padded > n
    * unconditionally and the rows have to be compacted.
    *
-   * The compaction cannot be parallelized row-wise: row r writes into
+   * The compaction cannot be parallelised row-wise: row r writes into
    * [r*n, (r+1)*n) while row r-1 reads from [(r-1)*n_padded, +n), and those
    * overlap. Sequentially it is safe because the write cursor never overtakes
    * the read cursor. So compact serially with memmove (bandwidth-bound, no
@@ -723,7 +723,7 @@ int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
   return SIF_OK;
 }
 
-/* --- Phase randomization --- */
+/* --- Phase randomisation --- */
 
 /*
  * Per-mode seeding. Drawing from a sequential stream would make the result
@@ -767,11 +767,11 @@ static inline sif_real fft_amp_real(
   return (sif_real)(a * sqrt(-2.0 * log(u1)) * cos(2.0 * SIF_PI * u2));
 }
 
-int sif__fft_randomize_phases(
+int sif__fft_randomise_phases(
   sif_fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes) {
 
   if (!ws || !ws->delta_k) {
-    SIF_LOG_ERROR("fft_context", "no spectrum to randomize");
+    SIF_LOG_ERROR("fft_context", "no spectrum to randomise");
     return SIF_ERR_INVALID;
   }
 
@@ -874,7 +874,7 @@ int sif__fft_randomize_phases(
     }
   }
 
-  SIF_LOG_TRACE("fft_context", "phases randomized (%s amplitudes)",
+  SIF_LOG_TRACE("fft_context", "phases randomised (%s amplitudes)",
     resample_amplitudes ? "resampled" : "preserved");
   return SIF_OK;
 }
@@ -1018,7 +1018,7 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
     const double raw = sum * norm;
 
     /* Poisson noise contributes a flat |delta_k|^2 = N^6 / n_tracers to every
-     * mode, so after the 1/N^6 normalization the subtraction is simply the
+     * mode, so after the 1/N^6 normalisation the subtraction is simply the
      * window sum over n_tracers. Left out of `raw` so that high_k_fraction
      * still describes where the measured power actually sits.
      *

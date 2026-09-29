@@ -15,7 +15,7 @@
 
 #define Py_MODULE_HEAD_UNIFIED
 #include "structures/py_bitmask.h"
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_cell_linked_list.h"
 #include "structures/py_chain_mesh.h"
 #include "structures/py_delta_distribution.h"
@@ -34,7 +34,7 @@ static const struct {
   PyTypeObject* type;
 } SIF_PY_TYPES[] = {
   {"Bitmask", &sifBitmaskType},
-  {"Catalog", &sifCatalogType},
+  {"Catalogue", &sifCatalogueType},
   {"CellLinkedList", &sifCellLinkedListType},
   {"ChainMesh", &sifChainMeshType},
   {"DeltaDistribution", &sifDeltaDistributionType},

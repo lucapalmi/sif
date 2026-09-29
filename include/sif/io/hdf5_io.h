@@ -15,8 +15,8 @@
  *
  * @code
  * /                     sif_format = "sif", sif_format_version, sif_version
- * /catalog              n_voids, coordinates ("cartesian" or "sky");
- *                       centers (N, 3), its columns named by its
+ * /catalogue              n_voids, coordinates ("cartesian" or "sky");
+ *                       centres (N, 3), its columns named by its
  *                       attribute columns ("cx cy cz" or "ra dec z");
  *                       radii (N); footprint and footprint_shell (N)
  *                       when present
@@ -24,7 +24,7 @@
  *                       r_edges (n_bins + 1), profiles (N, n_bins)
  * /velocity_profiles    n_voids, n_bins, ext; r_edges, v_rad (N, n_bins)
  * /size_function        n_bins, r_min, r_max, binning ("ln" or "linear"),
- *                       options; r_edges, r_centers, counts, vsf, err
+ *                       options; r_edges, r_centres, counts, vsf, err
  * @endcode
  *
  * Scalars describing a product are attributes of its group, so the file says
@@ -57,40 +57,40 @@
 #include "sif/core/macros.h"
 #include "sif/io/field_io.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/size_function.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 /**
- * @brief Write the catalogue into `/catalog`, replacing it if the file has
+ * @brief Write the catalogue into `/catalogue`, replacing it if the file has
  * one.
  *
  * The footprint columns are written when the catalogue carries them, and an
  * old footprint is removed when it does not, so the group always matches the
  * catalogue just written. The `coordinates` attribute says what the centres
- * are: for a sky catalogue (sif_catalog_to_sky()) each row of `centers` is
+ * are: for a sky catalogue (sif_catalogue_to_sky()) each row of `centres` is
  * right ascension, declination and redshift.
  *
  * @param filepath The file, created if missing.
- * @param catalog Catalogue to write.
+ * @param catalogue Catalogue to write.
  * @return SIF_OK; SIF_ERR_INVALID on a NULL argument; SIF_ERR_IO if the file
  * could not be written, or exists and is not a sif HDF5 file.
  */
-int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog);
+int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalogue);
 
 /**
- * @brief Read `/catalog`, footprint included when the file has one, and
+ * @brief Read `/catalogue`, footprint included when the file has one, and
  * Cartesian or on the sky as the file says -- Cartesian for a file that does
  * not say, written before catalogues could be anything else.
  *
  * @param filepath The file.
  * @return The catalogue, owned by the caller and released with
- * sif_catalog_free(); NULL if the file, or the group, is missing or malformed,
+ * sif_catalogue_free(); NULL if the file, or the group, is missing or malformed,
  * or this build has no HDF5.
  */
-SIF_NODISCARD sif_catalog_t* sif_catalog_read_hdf5(const char* filepath);
+SIF_NODISCARD sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath);
 
 /**
  * @brief Write stacked profiles into `/density_profiles` and
@@ -103,7 +103,7 @@ SIF_NODISCARD sif_catalog_t* sif_catalog_read_hdf5(const char* filepath);
  * @param dens Density profiles, or NULL.
  * @param vel Velocity profiles, or NULL.
  * @return SIF_OK; SIF_ERR_INVALID if both are NULL; SIF_ERR_IO as for
- * sif_catalog_write_hdf5().
+ * sif_catalogue_write_hdf5().
  */
 int sif_profiles_write_hdf5(const char* filepath,
   const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel);
@@ -149,7 +149,7 @@ SIF_NODISCARD int sif_profiles_read_hdf5(const char* filepath,
  * @param filepath The file, created if missing.
  * @param vsf Size function to write, measured or modelled.
  * @return SIF_OK; SIF_ERR_INVALID on a NULL argument; SIF_ERR_IO as for
- * sif_catalog_write_hdf5().
+ * sif_catalogue_write_hdf5().
  */
 int sif_size_function_write_hdf5(
   const char* filepath, const sif_size_function_t* vsf);
@@ -220,7 +220,7 @@ SIF_NODISCARD sif_field_t* sif_field_read_hdf5(const char* const* paths,
  * What the arrays cannot say -- how the catalogue was made, which simulation
  * it came from, what the run was for -- as attributes, the way a FITS header
  * carries keywords. On the root (`group` NULL, "" or "/") they describe the
- * file and stay put whatever is rewritten. On a product's group ("catalog",
+ * file and stay put whatever is rewritten. On a product's group ("catalogue",
  * "size_function", ...) they describe that product, and go with it when it is
  * rewritten: a new catalogue is not described by the old one's threshold.
  *

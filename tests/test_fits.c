@@ -14,7 +14,7 @@
  */
 #include "sif/core/system.h"
 #include "sif/io/fits_io.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/size_function.h"
 
 #include "measure/profiles_internal.h"
@@ -63,7 +63,7 @@ static bool zbad_is_null(long i) { return i % 1000 == 7; }
  * Every column is a closed form of the row's index in the whole catalogue, so
  * the catalogue split over several files reads back as the same rows. A name
  * ending in .gz makes cfitsio write the file compressed. */
-static int write_catalog(const char* path, long first, long n) {
+static int write_catalogue(const char* path, long first, long n) {
   fitsfile* f;
   int st = 0;
   remove(path);
@@ -161,9 +161,9 @@ static int write_stranger(const char* path) {
 #  define SPLIT 100003L
 
 static int write_fixtures(void) {
-  return write_catalog(FIXTURE, 0, N_ROWS) || write_catalog(PART_A, 0, SPLIT) ||
-         write_catalog(PART_B, SPLIT, N_ROWS - SPLIT) ||
-         write_catalog(GZIPPED, 0, N_ROWS) || write_stranger(STRANGER);
+  return write_catalogue(FIXTURE, 0, N_ROWS) || write_catalogue(PART_A, 0, SPLIT) ||
+         write_catalogue(PART_B, SPLIT, N_ROWS - SPLIT) ||
+         write_catalogue(GZIPPED, 0, N_ROWS) || write_stranger(STRANGER);
 }
 
 static void remove_fixtures(void) {
@@ -518,9 +518,9 @@ static void test_summary(void) {
     "a NULL stream accepted");
 }
 
-#  define CAT_PATH "test_fits_catalog.fits"
+#  define CAT_PATH "test_fits_catalogue.fits"
 
-static bool same_catalog(const sif_catalog_t* a, const sif_catalog_t* b) {
+static bool same_catalogue(const sif_catalogue_t* a, const sif_catalogue_t* b) {
   if (!a || !b || a->n_voids != b->n_voids || a->units != b->units ||
       !a->footprint != !b->footprint)
     return false;
@@ -533,19 +533,19 @@ static bool same_catalog(const sif_catalog_t* a, const sif_catalog_t* b) {
              memcmp(a->footprint_shell, b->footprint_shell, bytes) == 0));
 }
 
-static void test_catalogs(void) {
+static void test_catalogues(void) {
   printf("catalogues\n");
 
-  sif_catalog_t* cat = sif_catalog_alloc(4);
+  sif_catalogue_t* cat = sif_catalogue_alloc(4);
   for (int i = 0; i < 1000; i++)
-    (void)sif_catalog_append(cat, (sif_real)(0.5 * i), (sif_real)(-0.25 * i),
+    (void)sif_catalogue_append(cat, (sif_real)(0.5 * i), (sif_real)(-0.25 * i),
       (sif_real)(1000.0 - i), (sif_real)(5.0 + 0.01 * i));
 
   /* Cartesian, without a footprint. */
-  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK, "write failed");
-  sif_catalog_t* back = sif_catalog_read_fits(CAT_PATH);
-  CHECK(same_catalog(cat, back), "a Cartesian catalogue did not round-trip");
-  sif_catalog_free(back);
+  CHECK(sif_catalogue_write_fits(CAT_PATH, cat) == SIF_OK, "write failed");
+  sif_catalogue_t* back = sif_catalogue_read_fits(CAT_PATH);
+  CHECK(same_catalogue(cat, back), "a Cartesian catalogue did not round-trip");
+  sif_catalogue_free(back);
 
   static char text[4096];
   CHECK(summary_of(CAT_PATH, text, sizeof text) && strstr(text, "[1] VOIDS") &&
@@ -553,47 +553,47 @@ static void test_catalogs(void) {
     "the Cartesian table is not laid out as documented:\n%s", text);
 
   /* On the sky, with a footprint: RA and DEC columns, and the flag back. */
-  CHECK(sif_catalog_reserve_footprint(cat) == SIF_OK, "footprint failed");
+  CHECK(sif_catalogue_reserve_footprint(cat) == SIF_OK, "footprint failed");
   for (uint64_t i = 0; i < cat->n_voids; i++) {
     cat->footprint[i] = (sif_real)(i % 10) / 10;
     cat->footprint_shell[i] = (sif_real)(i % 7) / 7;
   }
-  CHECK(sif_catalog_to_sky(cat, SIF_COSMOLOGY_FLAT_LCDM(0.31)) == SIF_OK,
+  CHECK(sif_catalogue_to_sky(cat, SIF_COSMOLOGY_FLAT_LCDM(0.31)) == SIF_OK,
     "the conversion failed");
-  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK, "sky write failed");
-  back = sif_catalog_read_fits(CAT_PATH);
-  CHECK(same_catalog(cat, back),
+  CHECK(sif_catalogue_write_fits(CAT_PATH, cat) == SIF_OK, "sky write failed");
+  back = sif_catalogue_read_fits(CAT_PATH);
+  CHECK(same_catalogue(cat, back),
     "a sky catalogue with a footprint did not round-trip");
-  sif_catalog_free(back);
+  sif_catalogue_free(back);
   CHECK(summary_of(CAT_PATH, text, sizeof text) && strstr(text, "RA ") &&
           strstr(text, "FOOTPRINT_SHELL") && strstr(text, "deg"),
     "the sky table is not laid out as documented:\n%s", text);
   char coords[16];
   sif_fits_get_key_string(CAT_PATH, "VOIDS", "COORDS", coords, sizeof coords);
   CHECK(strcmp(coords, "sky") == 0, "COORDS says \"%s\"", coords);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 
   /* An empty catalogue is a catalogue. */
-  cat = sif_catalog_alloc(1);
-  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK, "empty write failed");
-  back = sif_catalog_read_fits(CAT_PATH);
+  cat = sif_catalogue_alloc(1);
+  CHECK(sif_catalogue_write_fits(CAT_PATH, cat) == SIF_OK, "empty write failed");
+  back = sif_catalogue_read_fits(CAT_PATH);
   CHECK(back && back->n_voids == 0, "an empty catalogue did not round-trip");
-  sif_catalog_free(back);
-  sif_catalog_free(cat);
+  sif_catalogue_free(back);
+  sif_catalogue_free(cat);
 
   /* A table that is not a catalogue. */
-  CHECK(!sif_catalog_read_fits(FIXTURE), "the galaxy table read as voids");
-  CHECK(!sif_catalog_read_fits("test_fits_no_such_file.fits"),
+  CHECK(!sif_catalogue_read_fits(FIXTURE), "the galaxy table read as voids");
+  CHECK(!sif_catalogue_read_fits("test_fits_no_such_file.fits"),
     "a missing file read as a catalogue");
 }
 
 static void test_keywords(void) {
   printf("header keywords\n");
 
-  sif_catalog_t* cat = sif_catalog_alloc(1);
-  (void)sif_catalog_append(cat, 1, 2, 3, 4);
-  (void)sif_catalog_write_fits(CAT_PATH, cat);
-  sif_catalog_free(cat);
+  sif_catalogue_t* cat = sif_catalogue_alloc(1);
+  (void)sif_catalogue_append(cat, 1, 2, 3, 4);
+  (void)sif_catalogue_write_fits(CAT_PATH, cat);
+  sif_catalogue_free(cat);
 
   /* Each kind, in the primary header by default, a long name as HIERARCH,
    * and a string longer than a card. */
@@ -665,15 +665,15 @@ static void test_products(void) {
   remove(CAT_PATH);
 
   enum { N = 37, NB = 12 };
-  sif_catalog_t* cat = sif_catalog_alloc(N);
+  sif_catalogue_t* cat = sif_catalogue_alloc(N);
   for (int i = 0; i < N; i++)
-    (void)sif_catalog_append(cat, (sif_real)(1234.5678901234 + 0.1 * i),
+    (void)sif_catalogue_append(cat, (sif_real)(1234.5678901234 + 0.1 * i),
       (sif_real)(0.1234567890123 * (i + 1)), (sif_real)(9.87654321e-3 * i),
       (sif_real)(3.14159265 + i));
-  sif_catalog_meta_string_set(cat, "finder", "exodus");
-  sif_catalog_meta_real_set(cat, "search_factor", 1.5);
-  sif_catalog_meta_int_set(cat, "n_tracers", 123456789012LL);
-  sif_catalog_meta_string_set(cat, "input",
+  sif_catalogue_meta_string_set(cat, "finder", "exodus");
+  sif_catalogue_meta_real_set(cat, "search_factor", 1.5);
+  sif_catalogue_meta_int_set(cat, "n_tracers", 123456789012LL);
+  sif_catalogue_meta_string_set(cat, "input",
     "a/very/long/path/to/some/file/that/goes/on/and/on/past/sixty/eight/"
     "characters/tracers.fits");
 
@@ -696,29 +696,29 @@ static void test_products(void) {
   for (uint32_t b = 0; b <= NB; b++)
     f->r_edges[b] = (sif_real)(5.0 + 5.0 * b);
   for (uint32_t b = 0; b < NB; b++) {
-    f->r_centers[b] = (sif_real)(7.5 + 5.0 * b);
+    f->r_centres[b] = (sif_real)(7.5 + 5.0 * b);
     f->counts[b] = (uint64_t)1 << (20 + b);
     f->vsf[b] = (sif_real)(1.23456789e-5 / (b + 1));
     f->err[b] = (sif_real)(2.3456789e-7 / (b + 1));
   }
 
   /* Every product into one file. */
-  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK &&
+  CHECK(sif_catalogue_write_fits(CAT_PATH, cat) == SIF_OK &&
           sif_profiles_write_fits(CAT_PATH, d, v) == SIF_OK &&
           sif_size_function_write_fits(CAT_PATH, f) == SIF_OK,
     "writing the products failed");
 
-  sif_catalog_t* cat2 = sif_catalog_read_fits(CAT_PATH);
+  sif_catalogue_t* cat2 = sif_catalogue_read_fits(CAT_PATH);
   CHECK(cat2 && cat2->n_voids == N &&
           memcmp(cat2->radii, cat->radii, N * sizeof(sif_real)) == 0 &&
-          sif_catalog_meta_count(cat2) == 4 &&
-          strcmp(sif_catalog_meta_string_get(cat2, "finder"), "exodus") == 0 &&
-          sif_catalog_meta_real_get(cat2, "search_factor") == 1.5 &&
-          sif_catalog_meta_int_get(cat2, "n_tracers") == 123456789012LL &&
-          strcmp(sif_catalog_meta_string_get(cat2, "input"),
-            sif_catalog_meta_string_get(cat, "input")) == 0,
+          sif_catalogue_meta_count(cat2) == 4 &&
+          strcmp(sif_catalogue_meta_string_get(cat2, "finder"), "exodus") == 0 &&
+          sif_catalogue_meta_real_get(cat2, "search_factor") == 1.5 &&
+          sif_catalogue_meta_int_get(cat2, "n_tracers") == 123456789012LL &&
+          strcmp(sif_catalogue_meta_string_get(cat2, "input"),
+            sif_catalogue_meta_string_get(cat, "input")) == 0,
     "the catalogue or its metadata did not survive FITS");
-  sif_catalog_free(cat2);
+  sif_catalogue_free(cat2);
 
   int has_d = -1, has_v = -1;
   CHECK(sif_profiles_read_header_fits(CAT_PATH, &has_d, &has_v) == SIF_OK &&
@@ -741,7 +741,7 @@ static void test_products(void) {
   CHECK(f2 && f2->n_bins == NB && f2->options == f->options &&
           f2->r_min == f->r_min && f2->r_max == f->r_max &&
           memcmp(f2->r_edges, f->r_edges, (NB + 1) * sizeof(sif_real)) == 0 &&
-          memcmp(f2->r_centers, f->r_centers, NB * sizeof(sif_real)) == 0 &&
+          memcmp(f2->r_centres, f->r_centres, NB * sizeof(sif_real)) == 0 &&
           memcmp(f2->counts, f->counts, NB * sizeof(uint64_t)) == 0 &&
           memcmp(f2->vsf, f->vsf, NB * sizeof(sif_real)) == 0 &&
           memcmp(f2->err, f->err, NB * sizeof(sif_real)) == 0,
@@ -749,14 +749,14 @@ static void test_products(void) {
   sif_size_function_free(f2);
 
   /* Rewriting the catalogue replaces it, and keeps what was measured. */
-  sif_catalog_meta_remove(cat, "input");
-  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK,
+  sif_catalogue_meta_remove(cat, "input");
+  CHECK(sif_catalogue_write_fits(CAT_PATH, cat) == SIF_OK,
     "rewriting the catalogue failed");
-  cat2 = sif_catalog_read_fits(CAT_PATH);
-  CHECK(cat2 && sif_catalog_meta_count(cat2) == 3 &&
-          sif_catalog_meta_kind(cat2, "input") == SIF_CATALOG_META_MISSING,
+  cat2 = sif_catalogue_read_fits(CAT_PATH);
+  CHECK(cat2 && sif_catalogue_meta_count(cat2) == 3 &&
+          sif_catalogue_meta_kind(cat2, "input") == SIF_CATALOGUE_META_MISSING,
     "the old catalogue's metadata outlived it");
-  sif_catalog_free(cat2);
+  sif_catalogue_free(cat2);
   d2 = NULL;
   CHECK(sif_profiles_read_fits(CAT_PATH, &d2, NULL) == SIF_OK && d2,
     "rewriting the catalogue lost the profiles");
@@ -768,19 +768,19 @@ static void test_products(void) {
   /* Asked for what the file does not hold, or into a file that is not
    * sif's. */
   remove(CAT_PATH);
-  CHECK(sif_catalog_write_fits(CAT_PATH, cat) == SIF_OK,
+  CHECK(sif_catalogue_write_fits(CAT_PATH, cat) == SIF_OK,
     "writing the catalogue alone failed");
   v2 = NULL;
   CHECK(sif_profiles_read_fits(CAT_PATH, NULL, &v2) == SIF_ERR_INVALID && !v2,
     "a set the file does not hold was not refused");
   CHECK(!sif_size_function_read_fits(CAT_PATH),
     "a size function the file does not hold was read");
-  CHECK(sif_catalog_write_fits(FIXTURE, cat) == SIF_ERR_IO &&
+  CHECK(sif_catalogue_write_fits(FIXTURE, cat) == SIF_ERR_IO &&
           sif_profiles_write_fits(FIXTURE, d, NULL) == SIF_ERR_IO,
     "a FITS file sif did not write was written into");
 
   remove(CAT_PATH);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_density_profiles_free(d);
   sif_velocity_profiles_free(v);
   sif_size_function_free(f);
@@ -807,7 +807,7 @@ int main(void) {
   test_several_files();
   test_vectors_and_gzip();
   test_summary();
-  test_catalogs();
+  test_catalogues();
   test_keywords();
   test_products();
   remove_fixtures();
@@ -820,17 +820,17 @@ int main(void) {
   sif_field_free(fl);
   CHECK(sif_fits_inspect(FIXTURE) == SIF_ERR_UNSUPPORTED,
     "inspecting did not refuse as unsupported");
-  sif_catalog_t* cat = sif_catalog_alloc(1);
-  CHECK(sif_catalog_write_fits("test_fits_catalog.fits", cat) ==
+  sif_catalogue_t* cat = sif_catalogue_alloc(1);
+  CHECK(sif_catalogue_write_fits("test_fits_catalogue.fits", cat) ==
             SIF_ERR_UNSUPPORTED &&
-          !sif_catalog_read_fits("test_fits_catalog.fits") &&
+          !sif_catalogue_read_fits("test_fits_catalogue.fits") &&
           sif_fits_get_key_real(FIXTURE, NULL, "X") == 0.0 &&
           sif_fits_set_key_int(FIXTURE, NULL, "X", 1) == SIF_ERR_UNSUPPORTED,
     "the catalogue and keyword functions did not refuse");
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 #endif
 
-  sif_finalize();
+  sif_finalise();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
   return failures != 0;

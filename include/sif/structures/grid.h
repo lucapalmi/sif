@@ -26,7 +26,7 @@
  *
  * The same array means different things at different points in the pipeline,
  * and mixing them up is a physics error that produces numbers rather than a
- * diagnostic -- normalizing an already-normalized field, or measuring moments
+ * diagnostic -- normalising an already-normalised field, or measuring moments
  * of a grid that still holds densities. The grid therefore records which it is.
  */
 typedef enum {
@@ -39,7 +39,7 @@ typedef enum {
    * cell volume on its way out. Summing the cells therefore gives the total
    * weight divided by the cell volume, not the total weight; multiply by
    * `cell_length^3` to recover it. The distinction cancels in
-   * sif_grid_to_density_contrast(), which normalizes by the mean, and matters
+   * sif_grid_to_density_contrast(), which normalises by the mean, and matters
    * only to code reading these values directly.
    */
   SIF_GRID_DENSITY,
@@ -85,7 +85,7 @@ typedef struct {
 } sif_grid_t;
 
 /**
- * @brief Allocate a zero-initialized cubic grid.
+ * @brief Allocate a zero-initialised cubic grid.
  *
  * @param n_cells Cells per side; the grid holds n_cells^3 of them. Must be
  * non-zero.

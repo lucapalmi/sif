@@ -10,7 +10,7 @@
  * systematically low. */
 #include "sif/core/system.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 
@@ -61,15 +61,15 @@ int main(void) {
   sif_field_t* f = sif_field_alloc(N_P);
   sif_field_assign_positions(f, x, y, z);
 
-  /* One void at the box center, and a second one placed so that its search
+  /* One void at the box centre, and a second one placed so that its search
    * sphere reaches past the box face on a coarse mesh -- which is where a
    * cell walk that wraps naively visits the same cell twice. */
   const sif_real vx = 50.0f, vy = 50.0f, vz = 50.0f, vr = 10.0f;
   const sif_real ext = 3.0f;
 
-  sif_catalog_t* cat = sif_catalog_alloc(4);
-  sif_catalog_append(cat, vx, vy, vz, vr);
-  sif_catalog_append(cat, 20.0f, 20.0f, 20.0f, vr);
+  sif_catalogue_t* cat = sif_catalogue_alloc(4);
+  sif_catalogue_append(cat, vx, vy, vz, vr);
+  sif_catalogue_append(cat, 20.0f, 20.0f, 20.0f, vr);
 
   /* The estimator takes the mesh, not the field: it is the caller who decides
    * the resolution, and any of them has to give the same profile. */
@@ -417,7 +417,7 @@ int main(void) {
   sif_chain_mesh_free(mesh);
   sif_chain_mesh_free(mesh_v);
   sif_chain_mesh_free(mesh_w);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_field_free(f);
   sif_field_free(fv);
   sif_field_free(fw);
@@ -428,6 +428,6 @@ int main(void) {
   free(vel_y);
   free(vel_z);
   free(wgt);
-  sif_finalize();
+  sif_finalise();
   return failures != 0;
 }

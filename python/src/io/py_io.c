@@ -10,11 +10,11 @@
 
 #include "measure/py_profiles.h"
 #include "sif/io/profiles_io.h"
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_field.h"
 #include "structures/py_grid.h"
 
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 #include "sif/io/field_io.h"
 #include "sif/io/grid_io.h"
 
@@ -431,33 +431,33 @@ PyObject* pysif_read_field_binary(
   return (PyObject*)obj;
 }
 
-PyObject* pysif_write_catalog_ascii(
+PyObject* pysif_write_catalogue_ascii(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* cat_obj;
 
-  static char* kwlist[] = {"filepath", "catalog", NULL};
+  static char* kwlist[] = {"filepath", "catalogue", NULL};
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifCatalogType, &cat_obj)) {
+        args, kwds, "sO!", kwlist, &filepath, &sifCatalogueType, &cat_obj)) {
     return NULL;
   }
 
-  sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
+  sifCatalogueObject* cat = (sifCatalogueObject*)cat_obj;
 
   int status = 0;
   Py_BEGIN_ALLOW_THREADS status =
-    sif_catalog_write_ascii(filepath, cat->catalog);
+    sif_catalogue_write_ascii(filepath, cat->catalogue);
   Py_END_ALLOW_THREADS
 
     if (status != 0) {
     return PyErr_Format(
-      PyExc_IOError, "Failed to write ASCII catalog to %s", filepath);
+      PyExc_IOError, "Failed to write ASCII catalogue to %s", filepath);
   }
 
   Py_RETURN_NONE;
 }
 
-PyObject* pysif_read_catalog_ascii(
+PyObject* pysif_read_catalogue_ascii(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* format = NULL;
@@ -468,9 +468,9 @@ PyObject* pysif_read_catalog_ascii(
     return NULL;
   }
 
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
 
-  Py_BEGIN_ALLOW_THREADS cat = sif_catalog_read_ascii(filepath, format);
+  Py_BEGIN_ALLOW_THREADS cat = sif_catalogue_read_ascii(filepath, format);
   Py_END_ALLOW_THREADS
 
     if (!cat) {
@@ -479,17 +479,17 @@ PyObject* pysif_read_catalog_ascii(
         "cannot read %s with format '%s'; see the log for the reason", filepath,
         format);
     return PyErr_Format(
-      PyExc_IOError, "Failed to read ASCII catalog from %s", filepath);
+      PyExc_IOError, "Failed to read ASCII catalogue from %s", filepath);
   }
 
-  sifCatalogObject* obj =
-    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+  sifCatalogueObject* obj =
+    (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
   if (!obj) {
-    sif_catalog_free(cat);
+    sif_catalogue_free(cat);
     return PyErr_NoMemory();
   }
 
-  obj->catalog = cat;
+  obj->catalogue = cat;
   return (PyObject*)obj;
 }
 PyObject* pysif_write_profiles_ascii(
@@ -498,14 +498,14 @@ PyObject* pysif_write_profiles_ascii(
   PyObject* prof_obj;
   PyObject* cat_obj;
 
-  static char* kwlist[] = {"filepath", "profiles", "catalog", NULL};
+  static char* kwlist[] = {"filepath", "profiles", "catalogue", NULL};
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO!O!", kwlist, &filepath,
-        &sifProfilesType, &prof_obj, &sifCatalogType, &cat_obj)) {
+        &sifProfilesType, &prof_obj, &sifCatalogueType, &cat_obj)) {
     return NULL;
   }
 
   sifProfilesObject* prof = (sifProfilesObject*)prof_obj;
-  sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
+  sifCatalogueObject* cat = (sifCatalogueObject*)cat_obj;
 
   if (!prof->dens && !prof->vel) {
     PyErr_SetString(
@@ -515,7 +515,7 @@ PyObject* pysif_write_profiles_ascii(
 
   int status = 0;
   Py_BEGIN_ALLOW_THREADS status =
-    sif_profiles_write_ascii(filepath, prof->dens, prof->vel, cat->catalog);
+    sif_profiles_write_ascii(filepath, prof->dens, prof->vel, cat->catalogue);
   Py_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
@@ -544,7 +544,7 @@ PyObject* pysif_read_profiles_ascii(
       PyExc_IOError, "Failed to read profiles from %s", filepath);
   }
 
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   sif_density_profiles_t* dens = NULL;
   sif_velocity_profiles_t* vel = NULL;
   int status = SIF_OK;
@@ -560,13 +560,13 @@ PyObject* pysif_read_profiles_ascii(
 
   sifProfilesObject* prof =
     (sifProfilesObject*)sifProfilesType.tp_alloc(&sifProfilesType, 0);
-  sifCatalogObject* cat_obj =
-    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+  sifCatalogueObject* cat_obj =
+    (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
 
   if (!prof || !cat_obj) {
     Py_XDECREF(prof);
     Py_XDECREF(cat_obj);
-    sif_catalog_free(cat);
+    sif_catalogue_free(cat);
     sif_density_profiles_free(dens);
     sif_velocity_profiles_free(vel);
     return PyErr_NoMemory();
@@ -574,7 +574,7 @@ PyObject* pysif_read_profiles_ascii(
 
   prof->dens = dens;
   prof->vel = vel;
-  cat_obj->catalog = cat;
+  cat_obj->catalogue = cat;
 
   return Py_BuildValue("NN", (PyObject*)prof, (PyObject*)cat_obj);
 }

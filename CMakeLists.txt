@@ -43,7 +43,7 @@ set(CMAKE_C_FLAGS_DEBUG "-g -O2 -Wall -Wextra -fno-omit-frame-pointer")
 # off for a binary meant to be shipped (a Python wheel), and on a cluster
 # whose login nodes differ from its compute nodes -- there, name the target
 # instead: -DSIF_NATIVE_ARCH=OFF -DCMAKE_C_FLAGS="-march=znver3".
-option(SIF_NATIVE_ARCH "Optimize for the build machine's CPU (-march=native)" ON)
+option(SIF_NATIVE_ARCH "Optimise for the build machine's CPU (-march=native)" ON)
 if(SIF_NATIVE_ARCH)
   string(APPEND CMAKE_C_FLAGS_RELEASE " -march=native")
   message(STATUS "CPU tuning: native (SIF_NATIVE_ARCH=ON)")
@@ -51,7 +51,7 @@ else()
   message(STATUS "CPU tuning: generic, plus whatever CMAKE_C_FLAGS names")
 endif()
 
-option(SIF_VECTORIZATION_REPORT "Enable compiler vectorization reports" OFF)
+option(SIF_VECTORISATION_REPORT "Enable compiler vectorisation reports" OFF)
 
 # Build the tests when sif is the project being built, but not when it is
 # pulled in as a subdirectory, nor when pip is building the Python extension.
@@ -264,7 +264,7 @@ set(SIF_WITH_FITS ${SIF_WITH_FITS} CACHE INTERNAL "sif was built with cfitsio")
 set(SOURCES
   # data structures
     src/structures/grid.c
-    src/structures/catalog.c
+    src/structures/catalogue.c
     src/structures/chain_mesh.c
     src/structures/tessellation.c
     src/structures/cell_linked_list.c
@@ -298,7 +298,7 @@ set(SOURCES
 
   # io -- the HDF5 half is added below, one file or the other
     src/io/core_io.c
-    src/io/catalog_io.c
+    src/io/catalogue_io.c
     src/io/profiles_io.c
     src/io/field_io.c
     src/io/gadget_io.c
@@ -411,7 +411,7 @@ target_link_libraries(sif PRIVATE
     $<$<BOOL:${OpenMP_C_FOUND}>:OpenMP::OpenMP_C>
 )
 
-if(SIF_VECTORIZATION_REPORT)
+if(SIF_VECTORISATION_REPORT)
   if(CMAKE_C_COMPILER_ID MATCHES "Clang")
     target_compile_options(sif PRIVATE -Rpass=loop-vectorize -Rpass-missed=loop-vectorize -Rpass-analysis=loop-vectorize)
   elseif(CMAKE_C_COMPILER_ID STREQUAL "GNU")

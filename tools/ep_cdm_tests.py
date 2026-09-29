@@ -157,7 +157,7 @@ def evaluate(m, test, feats):
                  (log_res, rel_f, nus, g2s, noise))
 
 
-def summarize(log_res, rel_f, label, width=26):
+def summarise(log_res, rel_f, label, width=26):
     rf = np.abs(rel_f[np.isfinite(rel_f)])
     return (f"{label:<{width}} {np.sqrt(np.mean(log_res ** 2)):>11.4f} "
             f"{np.median(rf):>11.4f} {np.percentile(rf, 95):>12.4f}")
@@ -181,7 +181,7 @@ def test_a(curves):
             lr, rf, *_ = evaluate(fit(tr, feats), te, feats)
             L.append(lr)
             R.append(rf)
-        print(summarize(np.concatenate(L), np.concatenate(R), name))
+        print(summarise(np.concatenate(L), np.concatenate(R), name))
 
     ns = np.concatenate([c["rel_err"][clean_mask(c)] for c in curves])
     print(f"\n  Monte Carlo noise floor: median {np.median(ns):.4f}, "
@@ -206,7 +206,7 @@ def test_b(curves):
         lr, rf, *_ = evaluate(fit(tr, feats), te, feats)
         L.append(lr)
         R.append(rf)
-    print(summarize(np.concatenate(L), np.concatenate(R),
+    print(summarise(np.concatenate(L), np.concatenate(R),
                     "one cosmology at a time"))
 
     # contiguous regions of the box
@@ -225,7 +225,7 @@ def test_b(curves):
             print(f"{label:<26}  (empty)")
             continue
         lr, rf, *_ = evaluate(fit(tr, feats), te, feats)
-        print(summarize(lr, rf, f"{label} [{n_held}]"))
+        print(summarise(lr, rf, f"{label} [{n_held}]"))
 
 
 def test_c(cdm_curves, pilot_curves):
@@ -247,13 +247,13 @@ def test_c(cdm_curves, pilot_curves):
         te = [c for c in pilot_curves if c["family"] == fam]
         lr, rf, nus, g2s, ns = evaluate(m, te, feats)
         frac_out = np.mean((g2s < lo) | (g2s > hi))
-        row = summarize(lr, rf, fam)
+        row = summarise(lr, rf, fam)
         print(f"{row}  {g2s.min():>7.4f}-{g2s.max():<7.4f} "
               f"{100 * frac_out:>7.1f}%")
 
     # and on its own training domain, for reference
     lr, rf, *_ = evaluate(m, cdm_curves, feats)
-    print(f"\n{summarize(lr, rf, 'CDM itself (in-sample)')}")
+    print(f"\n{summarise(lr, rf, 'CDM itself (in-sample)')}")
 
 
 def main():

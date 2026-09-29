@@ -55,7 +55,7 @@
 #include "sif/core/macros.h"
 #include "sif/io/field_io.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/field.h"
 #include "sif/structures/size_function.h"
 
@@ -148,7 +148,7 @@ int sif_fits_inspect(const char* path);
  * [.] DENSITY_PROFILES  a row per void, DENSITY[n_bins]; N_BINS, EXT,
  *                       DIFFERENTIAL, EDGE0 ... EDGE<n_bins>
  * [.] VELOCITY_PROFILES the same, V_RAD[n_bins]
- * [.] SIZE_FUNCTION     a row per bin: R_LOW, R_HIGH, R_CENTER, COUNT, VSF,
+ * [.] SIZE_FUNCTION     a row per bin: R_LOW, R_HIGH, R_CENTRE, COUNT, VSF,
  *                       ERR; N_BINS, R_MIN, R_MAX, OPTIONS, BINNING
  * @endcode
  *
@@ -168,23 +168,23 @@ int sif_fits_inspect(const char* path);
  * The columns follow what the catalogue holds, with the names the ASCII
  * format gives them: CX, CY, CZ and R for Cartesian centres; RA and DEC (in
  * degrees), Z (the redshift) and R (comoving, Mpc/h) for a catalogue on the
- * sky (sif_catalog_to_sky()). The footprint columns, FOOTPRINT and
+ * sky (sif_catalogue_to_sky()). The footprint columns, FOOTPRINT and
  * FOOTPRINT_SHELL, follow when the catalogue carries them. Values are written
  * at the precision sif was built with, and the table's COORDS keyword says
- * "cartesian" or "sky". The catalogue's metadata (the catalog_meta group)
+ * "cartesian" or "sky". The catalogue's metadata (the catalogue_meta group)
  * are keywords of the same header, and travel with it.
  *
  * @param filepath The file: created if missing, its VOIDS table replaced if
  * it has one.
- * @param catalog Catalogue to write.
+ * @param catalogue Catalogue to write.
  * @return SIF_OK; SIF_ERR_INVALID on a NULL argument; SIF_ERR_IO if the file
  * could not be written, or is a FITS file sif did not write;
  * SIF_ERR_UNSUPPORTED in a build without cfitsio.
  */
-int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog);
+int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalogue);
 
 /**
- * @brief Read a catalogue written by sif_catalog_write_fits(), or any table
+ * @brief Read a catalogue written by sif_catalogue_write_fits(), or any table
  * named VOIDS with the same columns.
  *
  * The centres' column names say what they are: RA, DEC and Z give a
@@ -195,9 +195,9 @@ int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog);
  *
  * @param filepath The file.
  * @return The catalogue, owned by the caller and released with
- * sif_catalog_free(); NULL on failure, with the reason in the log.
+ * sif_catalogue_free(); NULL on failure, with the reason in the log.
  */
-SIF_NODISCARD sif_catalog_t* sif_catalog_read_fits(const char* filepath);
+SIF_NODISCARD sif_catalogue_t* sif_catalogue_read_fits(const char* filepath);
 
 /**
  * @brief Write stacked profiles into DENSITY_PROFILES and VELOCITY_PROFILES.
@@ -207,7 +207,7 @@ SIF_NODISCARD sif_catalog_t* sif_catalog_read_fits(const char* filepath);
  * bins.
  *
  * @return SIF_OK; SIF_ERR_INVALID if both are NULL, or for a set of too many
- * bins; SIF_ERR_IO as for sif_catalog_write_fits().
+ * bins; SIF_ERR_IO as for sif_catalogue_write_fits().
  */
 int sif_profiles_write_fits(const char* filepath,
   const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel);
@@ -231,7 +231,7 @@ SIF_NODISCARD int sif_profiles_read_fits(const char* filepath,
 /**
  * @brief Write a size function into SIZE_FUNCTION, replacing it if the file
  * has one.
- * @return As sif_catalog_write_fits().
+ * @return As sif_catalogue_write_fits().
  */
 int sif_size_function_write_fits(
   const char* filepath, const sif_size_function_t* vsf);

@@ -275,7 +275,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
         "%" PRIu64 " of %" PRIu64
         " tracers (%.2f%%) caught no sample; their volume reads zero and "
         "their weight is missing from the samples, which shifts every density "
-        "normalized to it. Raise samples_per_tracer above %u",
+        "normalised to it. Raise samples_per_tracer above %u",
         n_empty, n_tracers, 100.0 * missing, samples_per_tracer);
     } else {
       SIF_LOG_INFO("tessellation",

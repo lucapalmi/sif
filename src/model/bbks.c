@@ -11,8 +11,8 @@
  *
  * The number density of maxima depends on the field only through its spectral
  * moments, which is what makes it the natural prediction to hold a
- * phase-randomized surrogate against: everything BBKS knows about a field
- * survives phase randomization, so any disagreement with a directly counted
+ * phase-randomised surrogate against: everything BBKS knows about a field
+ * survives phase randomisation, so any disagreement with a directly counted
  * catalogue is phase information.
  */
 
@@ -546,8 +546,8 @@ sif_size_function_t* sif_size_function_bbks(
   out->r_min = moments->radii[0];
   out->r_max = moments->radii[n - 1];
 
-  memcpy(out->r_centers, moments->radii, (size_t)n * sizeof(sif_real));
-  sif__edges_from_centers(moments->radii, n, out->r_edges);
+  memcpy(out->r_centres, moments->radii, (size_t)n * sizeof(sif_real));
+  sif__edges_from_centres(moments->radii, n, out->r_edges);
 
   /*
    * Differentiated as C * dlnC/dlnR rather than by differencing C directly.

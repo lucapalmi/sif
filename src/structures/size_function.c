@@ -35,15 +35,15 @@ sif_size_function_t* sif__size_function_alloc(uint32_t n_bins) {
 
   /* Plain malloc/calloc, not the aligned allocator the bulk arrays use: these
    * are a handful of values per bin, read once at the end of a run and never
-   * in a vectorized loop, so a cache-line-aligned arena would buy nothing and
+   * in a vectorised loop, so a cache-line-aligned arena would buy nothing and
    * cost a second free convention in the public API. */
   vsf->r_edges = malloc(((size_t)n_bins + 1) * sizeof(sif_real));
-  vsf->r_centers = malloc((size_t)n_bins * sizeof(sif_real));
+  vsf->r_centres = malloc((size_t)n_bins * sizeof(sif_real));
   vsf->counts = calloc(n_bins, sizeof(uint64_t));
   vsf->vsf = calloc(n_bins, sizeof(sif_real));
   vsf->err = calloc(n_bins, sizeof(sif_real));
 
-  if (!vsf->r_edges || !vsf->r_centers || !vsf->counts || !vsf->vsf ||
+  if (!vsf->r_edges || !vsf->r_centres || !vsf->counts || !vsf->vsf ||
       !vsf->err) {
     SIF_LOG_ERROR("size_function", "failed to allocate the VSF arrays");
     sif_size_function_free(vsf);
@@ -58,15 +58,15 @@ void sif_size_function_free(sif_size_function_t* vsf) {
     return;
 
   free(vsf->r_edges);
-  free(vsf->r_centers);
+  free(vsf->r_centres);
   free(vsf->counts);
   free(vsf->vsf);
   free(vsf->err);
   free(vsf);
 }
 
-void sif__edges_from_centers(
-  const sif_real* centers, uint32_t n, sif_real* edges) {
+void sif__edges_from_centres(
+  const sif_real* centres, uint32_t n, sif_real* edges) {
 
   if (n == 0)
     return;
@@ -77,17 +77,17 @@ void sif__edges_from_centers(
    * around the point -- enough for the container to be complete and plottable,
    * which is all these edges are for. */
   if (n == 1) {
-    edges[0] = (sif_real)((double)centers[0] / 1.1);
-    edges[1] = (sif_real)((double)centers[0] * 1.1);
+    edges[0] = (sif_real)((double)centres[0] / 1.1);
+    edges[1] = (sif_real)((double)centres[0] * 1.1);
     return;
   }
 
   for (uint32_t i = 1; i < n; i++)
-    edges[i] = (sif_real)sqrt((double)centers[i - 1] * (double)centers[i]);
+    edges[i] = (sif_real)sqrt((double)centres[i - 1] * (double)centres[i]);
 
   /* Extrapolate the outer two, which reproduces the exact midpoints when the
    * radii are geometrically spaced. */
-  edges[0] = (sif_real)((double)centers[0] * centers[0] / (double)edges[1]);
+  edges[0] = (sif_real)((double)centres[0] * centres[0] / (double)edges[1]);
   edges[n] =
-    (sif_real)((double)centers[n - 1] * centers[n - 1] / (double)edges[n - 1]);
+    (sif_real)((double)centres[n - 1] * centres[n - 1] / (double)edges[n - 1]);
 }

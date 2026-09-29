@@ -5,7 +5,7 @@
  */
 
 /**
- * @file catalog_io.h
+ * @file catalogue_io.h
  * @brief Reading and writing void catalogues, in plain text.
  *
  * Text rather than binary: a catalogue is small next to the field it came
@@ -21,22 +21,22 @@
  * @endcode
  *
  * The first line is the void count; the second names the columns. A
- * catalogue on the sky (sif_catalog_to_sky()) names them `ra dec z r`. The
+ * catalogue on the sky (sif_catalogue_to_sky()) names them `ra dec z r`. The
  * footprint columns (see sif_finder_exodus_survey()) are there only when the
  * catalogue carries a footprint.
  */
 
-#ifndef SIF_IO_CATALOG_IO_H
-#define SIF_IO_CATALOG_IO_H
+#ifndef SIF_IO_CATALOGUE_IO_H
+#define SIF_IO_CATALOGUE_IO_H
 
 #include "sif/core/macros.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 
 /**
  * @brief Write a catalogue to a text file.
  *
  * @param filepath Path to the output file, truncated if it exists.
- * @param catalog Catalogue to write.
+ * @param catalogue Catalogue to write.
  * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO if the
  * file could not be written.
  *
@@ -44,10 +44,10 @@
  * significant digits to recover the stored sif_real exactly, so a catalogue
  * survives a write/read round trip unchanged.
  */
-int sif_catalog_write_ascii(const char* filepath, const sif_catalog_t* catalog);
+int sif_catalogue_write_ascii(const char* filepath, const sif_catalogue_t* catalogue);
 
 /**
- * @brief Read a catalogue written by sif_catalog_write_ascii().
+ * @brief Read a catalogue written by sif_catalogue_write_ascii().
  *
  * Lines starting with `#` are comments, wherever they are. Among those before
  * the first row, `n=N` gives the count, which sizes the catalogue up front;
@@ -62,13 +62,13 @@ int sif_catalog_write_ascii(const char* filepath, const sif_catalog_t* catalog);
  * more and no fewer.
  *
  * A catalogue another finder wrote is read with a format, which places the
- * columns itself, in the language of the field readers (see the
- * @ref field_format "column formats"): `x y z` (or `cx cy cz`) or `ra dec z`
+ * columns itself, in the language of the field readers (see
+ * :ref:`column formats <field-format>`): `x y z` (or `cx cy cz`) or `ra dec z`
  * for the centre, `r` for the radius, and `*` for a column not read. For a
  * file whose rows are an ID, the centre, a volume and then the radius:
  *
  * @code
- * sif_catalog_t* cat = sif_catalog_read_ascii("voids.txt", "* x y z * r");
+ * sif_catalogue_t* cat = sif_catalogue_read_ascii("voids.txt", "* x y z * r");
  * @endcode
  *
  * Column names in the file are then ignored; comments, `n=` and metadata are
@@ -78,9 +78,9 @@ int sif_catalog_write_ascii(const char* filepath, const sif_catalog_t* catalog);
  * @param filepath Path to the input file.
  * @param fmt The columns, or NULL to take them from the file as above.
  * @return The catalogue, owned by the caller and released with
- * sif_catalog_free(). NULL on failure.
+ * sif_catalogue_free(). NULL on failure.
  */
-SIF_NODISCARD sif_catalog_t* sif_catalog_read_ascii(
+SIF_NODISCARD sif_catalogue_t* sif_catalogue_read_ascii(
   const char* filepath, const char* fmt);
 
-#endif /* SIF_IO_CATALOG_IO_H */
+#endif /* SIF_IO_CATALOGUE_IO_H */

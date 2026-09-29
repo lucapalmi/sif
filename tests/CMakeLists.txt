@@ -19,14 +19,14 @@ file(MAKE_DIRECTORY "${SIF_TEST_HOME}")
 
 set(SIF_TESTS
   test_utils        # allocation, arrays, crc32, prng, sort
-  test_structures   # bitmask, catalog, cell linked list, chain mesh
+  test_structures   # bitmask, catalogue, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
   test_io           # .xfield/.xgrid round trips, checksums, ASCII and raw binary
   test_octree       # build integrity + nearest neighbour vs brute force
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count
   test_tessellation # sampled Voronoi volumes, and the profiles they give
-  test_vsf          # void size function binning, normalization, merging
+  test_vsf          # void size function binning, normalisation, merging
   test_delta_stats  # Fourier delta PDF, spectral moments, phase shuffle
   test_vsf_models   # SvdW / Vdn size functions and the sigma slope
   test_ep           # correlated walks, Cholesky, first-crossing multiplicity

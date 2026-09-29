@@ -105,7 +105,7 @@ static sif_chain_mesh_t* chain_mesh_new(
   /* Never optional at construction. The mesh reorders particles, so an index
    * into it means nothing to a caller holding the field -- the map back is the
    * only way a query result can be used, and answering queries is what the
-   * structure is for. More than that, it is what the canonicalization sorts
+   * structure is for. More than that, it is what the canonicalisation sorts
    * on, so a mesh cannot even be built deterministically without it.
    * SIF_MESH_DROP_INDICES releases it after that sort, not instead of it. */
   mesh->original_indices = sif_malloc_aligned(n_particles * sizeof(uint64_t));
@@ -122,7 +122,7 @@ static sif_chain_mesh_t* chain_mesh_new(
   return mesh;
 }
 
-/* Releases the index map once it has served as the canonicalization key; see
+/* Releases the index map once it has served as the canonicalisation key; see
  * SIF_MESH_DROP_INDICES. */
 static void chain_mesh_apply_options(sif_chain_mesh_t* mesh, sif_option opt) {
   if (!(opt & SIF_MESH_DROP_INDICES))
@@ -188,7 +188,7 @@ sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells, sif_real box_length,
     return NULL;
   }
 
-  /* chain_mesh_create() has canonicalized by now, so the sort key has done its
+  /* chain_mesh_create() has canonicalised by now, so the sort key has done its
    * job and the mesh is in its final order either way. Dropping it here rather
    * than never allocating it is the whole point: the order this mesh is in is
    * the one the key produced. */
@@ -382,7 +382,7 @@ static int chain_mesh_canon_cmp(const void* a, const void* b) {
   return (ka > kb) - (ka < kb);
 }
 
-static void chain_mesh_canonicalize(sif_chain_mesh_t* mesh) {
+static void chain_mesh_canonicalise(sif_chain_mesh_t* mesh) {
   const uint64_t n_c = mesh->total_cells;
 
 #pragma omp parallel
@@ -576,7 +576,7 @@ static int chain_mesh_permute_payloads(sif_chain_mesh_t* mesh) {
 
 /*
  * Total weight the mesh holds, summed once here so that everything downstream
- * that needs a mean density -- which is every measurement normalized to the
+ * that needs a mean density -- which is every measurement normalised to the
  * box -- gets it for free rather than walking the weights again per call.
  *
  * Accumulated in double however sif_real is configured. At float precision a
@@ -771,7 +771,7 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
       "canonical ordering skipped; cell contents are in scatter order and two "
       "identical runs may order a cell differently");
   else
-    chain_mesh_canonicalize(mesh);
+    chain_mesh_canonicalise(mesh);
 
   if (chain_mesh_sum_weights(mesh) != SIF_OK)
     return SIF_ERR_ALLOC;

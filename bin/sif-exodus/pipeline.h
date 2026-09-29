@@ -13,7 +13,7 @@
  *   grid     CIC-deposit them, turn the grid into a density contrast
  *   mesh     bin them into a chain mesh, which takes the field's storage over
  *   finder   sif_finder_exodus() over the grid and the mesh
- *   catalog  write it, with what made it
+ *   catalogue  write it, with what made it
  *
  * On a survey, pipeline_survey(), with randoms in place of the box mean:
  *
@@ -24,14 +24,14 @@
  *   grids    CIC-deposit each, left as densities
  *   meshes   one each, sized for the density inside the footprint
  *   finder   sif_finder_exodus_survey()
- *   catalog  move the voids back out of the box -- and onto the sky, if
+ *   catalogue  move the voids back out of the box -- and onto the sky, if
  *            asked -- and write it, with what made it
  *
  * main.c chooses between them by exodus_params_t::mode.
  *
  * Everything the run needs is in exodus_params_t, which says nothing about
  * where it came from: the configuration file fills it, the pipeline only
- * reads it. The library has to be initialized before pipeline_box(); the
+ * reads it. The library has to be initialised before pipeline_box(); the
  * thread count, log level and FFT tuning are the caller's to apply, since
  * they are sif_init()'s arguments and not the pipeline's.
  */
@@ -76,13 +76,13 @@ typedef enum {
 
 /* The format the catalogue is written in. */
 typedef enum {
-  /* /catalog in an HDF5 file, with the run's parameters as attributes. In a
+  /* /catalogue in an HDF5 file, with the run's parameters as attributes. In a
    * build without HDF5 the library writes text next to the path instead. */
   EXODUS_OUTPUT_HDF5,
-  /* sif_catalog_write_ascii(): the voids, the run's parameters as
+  /* sif_catalogue_write_ascii(): the voids, the run's parameters as
    * '#key=value' header lines. */
   EXODUS_OUTPUT_ASCII,
-  /* sif_catalog_write_fits(): a VOIDS table, with the run's parameters as
+  /* sif_catalogue_write_fits(): a VOIDS table, with the run's parameters as
    * its keywords. */
   EXODUS_OUTPUT_FITS
 } exodus_output_kind_t;
@@ -274,7 +274,7 @@ typedef struct {
   uint64_t peak_bytes;
 } survey_plan_t;
 
-/* Work out `plan`, with the library initialized. Returns SIF_OK, or the
+/* Work out `plan`, with the library initialised. Returns SIF_OK, or the
  * status of what failed, already logged. */
 SIF_NODISCARD int pipeline_survey_plan(
   const exodus_params_t* params, survey_plan_t* plan);

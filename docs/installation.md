@@ -52,9 +52,9 @@ The library is compiled through CMake. These are the available options
 
 - **SIF_FFTW_THREADING:** set the FFTW multi-threading backend to use, either the OpenMP runtime or the pthreads runtime. By default, the backend is set to OpenMP. If you use LLVM-clang (`brew install llvm`) on macOS, the FFTW OpenMP runtime may cause crashes and/or wrong results (unless properly configured); in this scenario, it is suggested to use the pthreads runtime with `-DSIF_FFTW_THREADING=threads`. Options **(omp|threads)**, default **omp**.
 
-- **SIF_HDF5_SUPPORT:** activates the HDF5 integration. By default, HDF5 is used only if it's available as a CMake package and is a serial build (no MPI). Options **(AUTO|ON|OFF)**, default **AUTO**.
+- **SIF_HDF5_SUPPORT:** activates the [HDF5](https://support.hdfgroup.org/documentation/hdf5/latest/_intro_h_d_f5.html) integration. By default, HDF5 is used only if it's available as a CMake package and is a serial build (no MPI). Options **(AUTO|ON|OFF)**, default **AUTO**.
 
-- **SIF_FITS_SUPPORT:** activates the FITS input (survey catalogues and their randoms), through [cfitsio](https://heasarc.gsfc.nasa.gov/fitsio/). cfitsio is looked for with pkg-config and in the usual places; `-DCFITSIO_ROOT=...` points at an install elsewhere. Options **(AUTO|ON|OFF)**, default **AUTO**.
+- **SIF_FITS_SUPPORT:** activates the FITS format integration through [cfitsio](https://heasarc.gsfc.nasa.gov/fitsio/). cfitsio is looked for with pkg-config and in the usual places; `-DCFITSIO_ROOT=...` points at an install elsewhere. Options **(AUTO|ON|OFF)**, default **AUTO**.
 
 - **SIF_NATIVE_ARCH:** activates the `-march=native` compile flag in Release builds. If the compiled binary is going to be used on machines with different architectures, this option should be turned off. Options **(ON|OFF)**, default **ON**.
 
@@ -96,7 +96,7 @@ pip install . -C cmake.define.OpenMP_ROOT=$(brew --prefix libomp)
 
 :::{admonition} HPC cluster usage
 :class: tip
-A build from source records where it found FFTW, HDF5 and the OpenMP runtime, so `import pysif` and the command-line programs work without the modules loaded and without setting `LD_LIBRARY_PATH`. The modules only have to be loaded while `pip install .` runs. If the modules are later upgraded or removed, rebuild. This is the **SIF_RECORD_RPATH** option, **ON** by default; turn it off (`-C cmake.define.SIF_RECORD_RPATH=OFF`) only when building a wheel to distribute.
+A build from source records where it found FFTW, HDF5 and the OpenMP runtime, so `import pysif` and the command-line programs work without having to load the modules. They only have to be loaded while `pip install .` runs. If the modules are later upgraded or removed, rebuild.
 :::
 
 ::::

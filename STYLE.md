@@ -57,7 +57,7 @@ sif_<domain>_<thing>[_<qualifier>]
 ```
 
 **`domain`** is the concrete thing the function belongs to — a data structure
-(`field`, `grid`, `octree`, `catalog`, `chain_mesh`, `bitmask`), a formalism
+(`field`, `grid`, `octree`, `catalogue`, `chain_mesh`, `bitmask`), a formalism
 (`bbks`, `ep`, `svdw`), or a subsystem (`finder`, `profiles`, `io`,
 `prng`, `timer`). It is *not* the directory: the header lives in
 `include/sif/structures/field.h`, but the domain is `field`, not
@@ -77,7 +77,7 @@ names *the input it works from* or *which variant this is* — never the
 operation:
 
 ```c
-sif_size_function_catalog     /* built from a catalog       */
+sif_size_function_catalogue     /* built from a catalogue       */
 sif_delta_moments_pk          /* built from a power spectrum */
 sif_chain_mesh_find_nearest_pbc   /* periodic variant        */
 sif_bitmask_set_atomic            /* atomic variant          */
@@ -110,7 +110,7 @@ Verbs are not banned; redundant ones are.
   `build_`, `calculate_`, `get_` (on a pure query) and `do_` add nothing:
   `sif_build_tessellation_delaunay` → `sif_tessellation_delaunay`.
 - **A function that mutates state, or performs an action with an effect, keeps
-  its verb.** `sif_catalog_append`, `sif_field_sort_morton`,
+  its verb.** `sif_catalogue_append`, `sif_field_sort_morton`,
   `sif_field_wrap_periodic`, `sif_bitmask_set`, `sif_grid_write`.
 
 Established verbs to prefer over synonyms, so the same idea always has the same
@@ -368,7 +368,7 @@ using the standard syntax `/**`:
  * what it costs, which paper the expression comes from. Only if there is
  * something to say and not too long (no wall of text).
  *
- * @param origin Low corner of the bounding cube (center - half_span)
+ * @param origin Low corner of the bounding cube (centre - half_span)
  * @param inv_side 1 / (2 * half_span)
  * @return SIF_OK, or a negative SIF_ERR_* code
  */
@@ -397,7 +397,7 @@ is almost always the choice between them rather than any single value.
  * @defgroup delta_shuffle Surrogate field generation
  * @brief How the surrogate field for a PDF comparison is generated.
  *
- * PHASES keeps every |delta_k| and randomizes only the phase, so the realized
+ * PHASES keeps every |delta_k| and randomises only the phase, so the realised
  * P(k) is bit-for-bit the input's and any change in the PDF is attributable to
  * phase information alone. GAUSSIAN additionally resamples the amplitudes.
  * @{
@@ -455,8 +455,8 @@ same reason it must never carry a side effect.
 ## 6. Portability
 
 **A function that takes no arguments is declared `(void)`, never `()`.** In C
-the empty parameter list means *unspecified*, not *none*, so `sif_finalize()`
-would accept `sif_finalize(1, 2, 3)` without a diagnostic.
+the empty parameter list means *unspecified*, not *none*, so `sif_finalise()`
+would accept `sif_finalise(1, 2, 3)` without a diagnostic.
 
 C99, no compiler extensions outside `macros.h`. Anything compiler-specific
 (`__attribute__`, builtins, pragmas) is wrapped in a `SIF_*` macro there with a

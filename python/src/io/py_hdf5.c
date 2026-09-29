@@ -19,7 +19,7 @@
 #include "io/py_io.h"
 
 #include "measure/py_profiles.h"
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_field.h"
 #include "structures/py_size_function.h"
 
@@ -72,22 +72,22 @@ static PyObject* write_status(int status, const char* filepath) {
 
 /* --- catalogue --- */
 
-PyObject* pysif_write_catalog_hdf5(
+PyObject* pysif_write_catalogue_hdf5(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* cat_obj;
-  static char* kwlist[] = {"filepath", "catalog", NULL};
+  static char* kwlist[] = {"filepath", "catalogue", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifCatalogType, &cat_obj))
+        args, kwds, "sO!", kwlist, &filepath, &sifCatalogueType, &cat_obj))
     return NULL;
 
   return write_status(
-    sif_catalog_write_hdf5(filepath, ((sifCatalogObject*)cat_obj)->catalog),
+    sif_catalogue_write_hdf5(filepath, ((sifCatalogueObject*)cat_obj)->catalogue),
     filepath);
 }
 
-PyObject* pysif_read_catalog_hdf5(
+PyObject* pysif_read_catalogue_hdf5(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
@@ -95,17 +95,17 @@ PyObject* pysif_read_catalog_hdf5(
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
     return NULL;
 
-  sif_catalog_t* cat = sif_catalog_read_hdf5(filepath);
+  sif_catalogue_t* cat = sif_catalogue_read_hdf5(filepath);
   if (!cat)
     return read_error(filepath);
 
-  sifCatalogObject* obj =
-    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+  sifCatalogueObject* obj =
+    (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
   if (!obj) {
-    sif_catalog_free(cat);
+    sif_catalogue_free(cat);
     return PyErr_NoMemory();
   }
-  obj->catalog = cat;
+  obj->catalogue = cat;
   return (PyObject*)obj;
 }
 

@@ -25,7 +25,7 @@
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/grid.h"
 
 /**
@@ -53,7 +53,7 @@
  * window is divided back out before the first smoothing so that the top-hat is
  * the only window applied. Pass SIF_FINDER_KEEP_CIC_WINDOW for a grid that was
  * filled some other way.
- * @return Newly allocated catalogue, released with sif_catalog_free(), or NULL
+ * @return Newly allocated catalogue, released with sif_catalogue_free(), or NULL
  * on invalid input or failure.
  *
  * @warning `grid->values` is reassigned during the run: the original buffer is
@@ -61,7 +61,7 @@
  * handed back at the end. The contents are restored, the pointer is not, so a
  * pointer cached from before the call dangles afterwards.
  */
-SIF_NODISCARD sif_catalog_t* sif_finder_spherical(sif_grid_t* grid,
+SIF_NODISCARD sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option opt);
 

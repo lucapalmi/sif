@@ -51,8 +51,8 @@ static void check_tree_integrity(const sif_octree_t* tree,
         continue;
       }
       seen[p]++;
-      /* A small tolerance: child centers are recomputed by repeated halving. */
-      /* Slack only for the accumulated halving in the recomputed centers;
+      /* A small tolerance: child centres are recomputed by repeated halving. */
+      /* Slack only for the accumulated halving in the recomputed centres;
        * the partition itself is exact, so this must not need to be large. */
       const sif_real eps = hs * 1e-3f + 1e-4f;
       if (fabsf(field->x[p] - cx) > hs + eps ||
@@ -99,8 +99,8 @@ static void run(const char* label, sif_real sx, sif_real sy, sif_real sz,
    *    that leaf's cube. */
   uint8_t* seen = calloc(n_p, 1);
   int bad_containment = 0;
-  check_tree_integrity(tree, f, 0, tree->root_center[0], tree->root_center[1],
-    tree->root_center[2], tree->root_half_span, seen, &bad_containment);
+  check_tree_integrity(tree, f, 0, tree->root_centre[0], tree->root_centre[1],
+    tree->root_centre[2], tree->root_half_span, seen, &bad_containment);
 
   uint64_t missing = 0, duplicated = 0;
   for (uint64_t i = 0; i < n_p; i++) {

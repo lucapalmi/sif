@@ -24,7 +24,7 @@
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 
 /**
@@ -132,7 +132,7 @@ static inline const sif_real* sif_velocity_profiles_get(
 /**
  * @brief Stack radial profiles by binning the mesh's tracers around each void.
  *
- * Densities come out normalized to the box mean, so a profile approaches 1
+ * Densities come out normalised to the box mean, so a profile approaches 1
  * far from the void centre.
  *
  * Either output may be omitted, and only what is asked for is computed --
@@ -183,7 +183,7 @@ static inline const sif_real* sif_velocity_profiles_get(
  * allocated before a later step failed. A caller may therefore check either
  * the status or the pointers.
  */
-SIF_NODISCARD int sif_profiles(const sif_catalog_t* cat,
+SIF_NODISCARD int sif_profiles(const sif_catalogue_t* cat,
   const sif_chain_mesh_t* mesh, sif_real ext, uint32_t n_bins, sif_option opt,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel);
 

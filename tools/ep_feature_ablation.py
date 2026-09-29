@@ -75,7 +75,7 @@ def load_curves(path):
             S_mid = 0.5 * (S_full[:-1] + S_full[1:])
 
             # Local logarithmic slope of nu in the walk's own time. y already
-            # carries dB/dS, but normalized by the slope scatter; this is the
+            # carries dB/dS, but normalised by the slope scatter; this is the
             # bare shape, and the two are not the same number.
             dlnnu_dlnS = np.gradient(np.log(nu), np.log(S_mid), edge_order=2)
 

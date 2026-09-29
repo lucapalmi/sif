@@ -59,7 +59,7 @@ typedef struct {
   uint32_t count;
 
   /** Centre of the root cube, from the field. */
-  sif_real root_center[3];
+  sif_real root_centre[3];
   /** Half-side of the root cube. */
   sif_real root_half_span;
 } sif_octree_t;

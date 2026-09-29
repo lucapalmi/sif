@@ -7,13 +7,13 @@
 #include "py_size_function.h"
 
 #include "sif/measure/size_function.h"
-#include "structures/py_catalog.h"
+#include "structures/py_catalogue.h"
 #include "structures/py_size_function.h"
 #include <numpy/arrayobject.h>
 
 /* --- Functional API Implementation --- */
 
-PyObject* py_sif_size_function_catalog(
+PyObject* py_sif_size_function_catalogue(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* cat_obj;
   double box_length;
@@ -23,10 +23,10 @@ PyObject* py_sif_size_function_catalog(
   double r_max = 0.0;
 
   static char* kwlist[] = {
-    "catalog", "box_length", "n_bins", "bins", "r_min", "r_max", NULL};
+    "catalogue", "box_length", "n_bins", "bins", "r_min", "r_max", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!dI|sdd", kwlist,
-        &sifCatalogType, &cat_obj, &box_length, &n_bins, &bin_str, &r_min,
+        &sifCatalogueType, &cat_obj, &box_length, &n_bins, &bin_str, &r_min,
         &r_max)) {
     return NULL;
   }
@@ -41,10 +41,10 @@ PyObject* py_sif_size_function_catalog(
     return NULL;
   }
 
-  sifCatalogObject* cat = (sifCatalogObject*)cat_obj;
+  sifCatalogueObject* cat = (sifCatalogueObject*)cat_obj;
 
   sif_size_function_t* tmp = NULL;
-  Py_BEGIN_ALLOW_THREADS tmp = sif_size_function_catalog(cat->catalog,
+  Py_BEGIN_ALLOW_THREADS tmp = sif_size_function_catalogue(cat->catalogue,
     (sif_real)box_length, n_bins, options, (sif_real)r_min, (sif_real)r_max);
   Py_END_ALLOW_THREADS
 

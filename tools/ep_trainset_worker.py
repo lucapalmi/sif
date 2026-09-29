@@ -8,7 +8,7 @@
 One SLURM array task: every barrier of a single cosmology.
 
 The cosmology is fixed per task so that the covariance -- which the walk needs
-factorized anyway -- is computed once and reused across all of that
+factorised anyway -- is computed once and reused across all of that
 cosmology's barriers, and so that a failed task loses one cosmology rather
 than a slice of all of them.
 

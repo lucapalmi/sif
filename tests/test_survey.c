@@ -18,7 +18,7 @@
  */
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -176,7 +176,7 @@ static void release(tracers_t* t) {
 }
 
 /* The void nearest a hole, or -1. */
-static int64_t nearest(const sif_catalog_t* cat, const hole_t* h, double* d) {
+static int64_t nearest(const sif_catalogue_t* cat, const hole_t* h, double* d) {
   int64_t best = -1;
   double best_d = 1e300;
   for (uint64_t i = 0; i < cat->n_voids; i++) {
@@ -218,7 +218,7 @@ static void run_case(const char* label, int selection) {
   memcpy(data_before, data.grid->values, cells * sizeof(sif_real));
   memcpy(rand_before, rand.grid->values, cells * sizeof(sif_real));
 
-  sif_catalog_t* cat = sif_finder_exodus_survey(data.grid, rand.grid, data.mesh,
+  sif_catalogue_t* cat = sif_finder_exodus_survey(data.grid, rand.grid, data.mesh,
     rand.mesh, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
 
   CHECK(cat != NULL, "%s: the survey finder returned NULL", label);
@@ -296,7 +296,7 @@ static void run_case(const char* label, int selection) {
     "%s: grids not restored (worst drift %.3g of %.3g, %.3g of %.3g)", label,
     worst_d, scale_d, worst_r, scale_r);
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   free(data_before);
   free(rand_before);
   release(&data);
@@ -315,7 +315,7 @@ static void run_case(const char* label, int selection) {
  * by exactly 4 and every sum the finder compares by a power of two, so the
  * weighted run has to reproduce the unweighted one bit for bit -- footprint
  * included. That is what says the weights reach the grid stage, the
- * normalization and both histograms, and that nothing was left counting.
+ * normalisation and both histograms, and that nothing was left counting.
  */
 static void run_weights(void) {
   printf("weights\n");
@@ -331,7 +331,7 @@ static void run_weights(void) {
   draw(dx, dy, dz, N_DATA, 1, 1, 0.0f);
   draw(rx, ry, rz, N_RANDOMS, 1, 0, 0.0f);
 
-  sif_catalog_t* cat[2] = {NULL, NULL};
+  sif_catalogue_t* cat[2] = {NULL, NULL};
   for (int weighted = 0; weighted < 2; weighted++) {
     tracers_t data = build_weighted(dx, dy, dz, N_DATA, weighted ? 2.0f : 0.0f);
     tracers_t rand =
@@ -363,8 +363,8 @@ static void run_weights(void) {
       differ);
   }
 
-  sif_catalog_free(cat[0]);
-  sif_catalog_free(cat[1]);
+  sif_catalogue_free(cat[0]);
+  sif_catalogue_free(cat[1]);
   free(dx);
   free(dy);
   free(dz);
@@ -378,7 +378,7 @@ static void run_weights(void) {
  * The workflow a caller actually runs: a survey in its own frame, nowhere near
  * a box, placed by sif_finder_exodus_survey_box(), moved in with
  * sif_field_translate(), and its voids moved back with
- * sif_catalog_translate(). They have to come out where the holes are in the
+ * sif_catalogue_translate(). They have to come out where the holes are in the
  * caller's frame.
  */
 static void run_workflow(void) {
@@ -470,14 +470,14 @@ static void run_workflow(void) {
   sif_field_free(fd);
   sif_field_free(fr);
 
-  sif_catalog_t* cat = sif_finder_exodus_survey(
+  sif_catalogue_t* cat = sif_finder_exodus_survey(
     gd, gr, md, mr, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
   CHECK(cat != NULL, "the finder refused the box the helper chose");
 
   if (cat) {
     const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
     CHECK(
-      sif_catalog_translate(cat, back) == SIF_OK, "translating back failed");
+      sif_catalogue_translate(cat, back) == SIF_OK, "translating back failed");
 
     const double cell = (double)box / N_GRID;
     for (int h = 0; h < N_INNER; h++) {
@@ -496,7 +496,7 @@ static void run_workflow(void) {
     }
   }
 
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_chain_mesh_free(md);
   sif_chain_mesh_free(mr);
   sif_grid_free(gd);
@@ -577,6 +577,6 @@ int main(void) {
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
 
-  sif_finalize();
+  sif_finalise();
   return failures != 0;
 }

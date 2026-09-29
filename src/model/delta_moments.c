@@ -6,7 +6,7 @@
 
 /*
  * Spectral moments evaluated from a model power spectrum: the continuum
- * counterpart of the grid estimator in measure/. No box, no realization, no
+ * counterpart of the grid estimator in measure/. No box, no realisation, no
  * cosmic variance -- and no FFT, which is why this side of the split carries
  * its own window rather than borrowing the filter machinery.
  */
@@ -269,7 +269,7 @@ sif_real* sif_delta_sigma_slope_pk(const sif_real* k, const sif_real* pk,
    * dln(sigma)/dln(R) = (1/2) dln(sigma^2)/dln(R), and differentiating
    * W^2(kR) under the integral gives 2 W W' (kR). The 1/2 and the 2 cancel,
    * as does the 1/(2 pi^2), leaving a ratio of two integrals over the same
-   * measure -- which is why this needs no separate normalization.
+   * measure -- which is why this needs no separate normalisation.
    */
 #pragma omp parallel for schedule(static)
   for (uint32_t r = 0; r < n_radii; r++) {

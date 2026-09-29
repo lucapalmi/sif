@@ -9,7 +9,7 @@
  * @brief Access to the process-global system state. Private to the library.
  *
  * The state itself lives in system.c and is created by sif_init(). Everything
- * here assumes the library has been initialized.
+ * here assumes the library has been initialised.
  */
 
 #ifndef SIF__CORE_SYSTEM_INTERNAL_H
@@ -26,7 +26,7 @@ typedef struct {
   uint8_t level;
 } sif_logger_state_t;
 
-/** @brief Everything the library holds between init and finalize. */
+/** @brief Everything the library holds between init and finalise. */
 typedef struct {
   sif_logger_state_t logger;
 
@@ -34,7 +34,7 @@ typedef struct {
    *  which may be lower than the one requested. */
   uint32_t max_threads;
 
-  /** Never NULL in an initialized library: sif_init() fails rather than come
+  /** Never NULL in an initialised library: sif_init() fails rather than come
    *  up without FFTW. */
   sif_fft_manager_t* fft_mgr;
 
@@ -43,7 +43,7 @@ typedef struct {
 
 /**
  * @brief The system state, or NULL -- with an error saying so -- if the
- * library is not initialized.
+ * library is not initialised.
  *
  * For call sites that cannot do anything useful without it, which is most of
  * them; they fail with their own status on NULL. It used to end the process
@@ -53,7 +53,7 @@ typedef struct {
 sif_system_state_t* sif__system_state(void);
 
 /**
- * @brief The system state, or NULL if the library is not initialized.
+ * @brief The system state, or NULL if the library is not initialised.
  *
  * For the few call sites that must be able to run either way -- the logger
  * itself, and teardown paths.
@@ -73,7 +73,7 @@ int sif__system_thread_num(void);
 
 /**
  * @defgroup settings_lifetime Settings table lifetime
- * @brief Called by sif_init() and sif_finalize() only.
+ * @brief Called by sif_init() and sif_finalise() only.
  * @{
  */
 
@@ -81,7 +81,7 @@ int sif__system_thread_num(void);
  * @brief Load the settings table, and seed it with the library's defaults.
  *
  * Missing or unreadable files are not an error: the table is simply the
- * defaults, and the first sif__settings_finalize() writes it out.
+ * defaults, and the first sif__settings_finalise() writes it out.
  *
  * @param default_dir Existing directory holding the `config` file. Also the
  * root the default cache and wisdom paths are derived from when there is no
@@ -90,7 +90,7 @@ int sif__system_thread_num(void);
 void sif__settings_init(const char* default_dir);
 
 /** @brief Write the table back if it changed, then release it. */
-void sif__settings_finalize(void);
+void sif__settings_finalise(void);
 
 /** @} */
 

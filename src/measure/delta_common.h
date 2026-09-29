@@ -61,7 +61,7 @@ int sif__delta_validate_options(sif_option opt);
  * the same seed -- once from each estimator -- yields the identical surrogate,
  * which is what lets the PDF and the moments describe the same field.
  *
- * The backward stage is *not* initialized: a caller that only needs the
+ * The backward stage is *not* initialised: a caller that only needs the
  * moments never pays for it.
  *
  * @return The workspace, owned by the caller, or NULL on failure.

@@ -4,7 +4,7 @@
  * This file is part of sif. See COPYING for the full license text.
  */
 
-#include "py_catalog.h"
+#include "py_catalogue.h"
 
 #include "model/py_model.h"
 
@@ -14,16 +14,16 @@
 
 /* --- Lifecycle Methods --- */
 
-static void sifCatalog_dealloc(PyObject* self_obj) {
-  sifCatalogObject* self = (sifCatalogObject*)self_obj;
-  if (self->catalog != NULL) {
-    sif_catalog_free(self->catalog);
-    self->catalog = NULL;
+static void sifCatalogue_dealloc(PyObject* self_obj) {
+  sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
+  if (self->catalogue != NULL) {
+    sif_catalogue_free(self->catalogue);
+    self->catalogue = NULL;
   }
   Py_TYPE(self)->tp_free(self_obj);
 }
 
-static int sifCatalog_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
+static int sifCatalogue_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
   uint64_t initial_capacity = 1024; // Sensible default
 
   static char* kwlist[] = {"capacity", NULL};
@@ -32,23 +32,23 @@ static int sifCatalog_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
     return -1;
   }
 
-  sif_catalog_t* tmp = sif_catalog_alloc(initial_capacity);
+  sif_catalogue_t* tmp = sif_catalogue_alloc(initial_capacity);
   if (!tmp) {
-    PyErr_SetString(PyExc_MemoryError, "Failed to allocate sif.catalog");
+    PyErr_SetString(PyExc_MemoryError, "Failed to allocate sif.catalogue");
     return -1;
   }
 
-  sifCatalogObject* self = (sifCatalogObject*)self_obj;
-  self->catalog = tmp;
+  sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
+  self->catalogue = tmp;
   return 0;
 }
 
 /* --- Properties (Getters) --- */
 
-static PyObject* sifCatalog_get_centers(PyObject* self_obj, void* closure) {
-  sifCatalogObject* self = (sifCatalogObject*)self_obj;
+static PyObject* sifCatalogue_get_centres(PyObject* self_obj, void* closure) {
+  sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
 
-  npy_intp dims[2] = {self->catalog->n_voids, 3};
+  npy_intp dims[2] = {self->catalogue->n_voids, 3};
   PyObject* array = PyArray_SimpleNew(2, dims, NPY_REAL_T);
   if (!array)
     return NULL;
@@ -56,27 +56,27 @@ static PyObject* sifCatalog_get_centers(PyObject* self_obj, void* closure) {
   sif_real* data = (sif_real*)PyArray_DATA((PyArrayObject*)array);
 
   /* Interleave the C Struct-of-Arrays into a Python Nx3 array */
-  for (uint64_t i = 0; i < self->catalog->n_voids; i++) {
-    data[i * 3 + 0] = self->catalog->cx[i];
-    data[i * 3 + 1] = self->catalog->cy[i];
-    data[i * 3 + 2] = self->catalog->cz[i];
+  for (uint64_t i = 0; i < self->catalogue->n_voids; i++) {
+    data[i * 3 + 0] = self->catalogue->cx[i];
+    data[i * 3 + 1] = self->catalogue->cy[i];
+    data[i * 3 + 2] = self->catalogue->cz[i];
   }
 
   return array;
 }
 
-static PyObject* sifCatalog_get_radii(PyObject* self_obj, void* closure) {
-  sifCatalogObject* self = (sifCatalogObject*)self_obj;
+static PyObject* sifCatalogue_get_radii(PyObject* self_obj, void* closure) {
+  sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
 
-  npy_intp dims[1] = {self->catalog->n_voids};
+  npy_intp dims[1] = {self->catalogue->n_voids};
 
   /* Create an array referencing the underlying C memory (Zero-Copy) */
   PyObject* array =
-    PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, self->catalog->radii);
+    PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, self->catalogue->radii);
   if (!array)
     return NULL;
 
-  /* Tie the lifecycle of the array to the catalog object */
+  /* Tie the lifecycle of the array to the catalogue object */
   Py_INCREF(self_obj);
   PyArray_SetBaseObject((PyArrayObject*)array, self_obj);
 
@@ -88,12 +88,12 @@ static PyObject* sifCatalog_get_radii(PyObject* self_obj, void* closure) {
  * none. Safe as a view: nothing reachable from Python grows a catalogue, so
  * the buffer cannot move under it.
  */
-static PyObject* catalog_optional_column(PyObject* self_obj, sif_real* col) {
-  sifCatalogObject* self = (sifCatalogObject*)self_obj;
+static PyObject* catalogue_optional_column(PyObject* self_obj, sif_real* col) {
+  sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
   if (!col)
     Py_RETURN_NONE;
 
-  npy_intp dims[1] = {self->catalog->n_voids};
+  npy_intp dims[1] = {self->catalogue->n_voids};
   PyObject* array = PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, col);
   if (!array)
     return NULL;
@@ -103,48 +103,48 @@ static PyObject* catalog_optional_column(PyObject* self_obj, sif_real* col) {
   return array;
 }
 
-static PyObject* sifCatalog_get_footprint(PyObject* self_obj, void* closure) {
-  return catalog_optional_column(
-    self_obj, ((sifCatalogObject*)self_obj)->catalog->footprint);
+static PyObject* sifCatalogue_get_footprint(PyObject* self_obj, void* closure) {
+  return catalogue_optional_column(
+    self_obj, ((sifCatalogueObject*)self_obj)->catalogue->footprint);
 }
 
-static PyObject* sifCatalog_get_footprint_shell(
+static PyObject* sifCatalogue_get_footprint_shell(
   PyObject* self_obj, void* closure) {
-  return catalog_optional_column(
-    self_obj, ((sifCatalogObject*)self_obj)->catalog->footprint_shell);
+  return catalogue_optional_column(
+    self_obj, ((sifCatalogueObject*)self_obj)->catalogue->footprint_shell);
 }
 
-static PyObject* sifCatalog_get_n_voids(PyObject* self_obj, void* closure) {
-  sifCatalogObject* self = (sifCatalogObject*)self_obj;
-  return PyLong_FromUnsignedLongLong(self->catalog->n_voids);
+static PyObject* sifCatalogue_get_n_voids(PyObject* self_obj, void* closure) {
+  sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
+  return PyLong_FromUnsignedLongLong(self->catalogue->n_voids);
 }
 
-static PyObject* sifCatalog_get_units(PyObject* self_obj, void* closure) {
+static PyObject* sifCatalogue_get_units(PyObject* self_obj, void* closure) {
   (void)closure;
   return PyUnicode_FromString(
-    ((sifCatalogObject*)self_obj)->catalog->units == SIF_COORDINATES_SKY
+    ((sifCatalogueObject*)self_obj)->catalogue->units == SIF_COORDINATES_SKY
       ? "sky"
       : "cartesian");
 }
 
 /* The catalogue's metadata, as a new dict in the order keys were set. */
-static PyObject* sifCatalog_get_metadata(PyObject* self_obj, void* closure) {
+static PyObject* sifCatalogue_get_metadata(PyObject* self_obj, void* closure) {
   (void)closure;
-  const sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  const sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
   PyObject* dict = PyDict_New();
-  for (uint32_t m = 0; dict && m < sif_catalog_meta_count(cat); m++) {
-    const char* key = sif_catalog_meta_name(cat, m);
+  for (uint32_t m = 0; dict && m < sif_catalogue_meta_count(cat); m++) {
+    const char* key = sif_catalogue_meta_name(cat, m);
     PyObject* value = NULL;
-    switch (sif_catalog_meta_kind(cat, key)) {
-    case SIF_CATALOG_META_INT:
+    switch (sif_catalogue_meta_kind(cat, key)) {
+    case SIF_CATALOGUE_META_INT:
       value =
-        PyLong_FromLongLong((long long)sif_catalog_meta_int_get(cat, key));
+        PyLong_FromLongLong((long long)sif_catalogue_meta_int_get(cat, key));
       break;
-    case SIF_CATALOG_META_REAL:
-      value = PyFloat_FromDouble(sif_catalog_meta_real_get(cat, key));
+    case SIF_CATALOGUE_META_REAL:
+      value = PyFloat_FromDouble(sif_catalogue_meta_real_get(cat, key));
       break;
-    case SIF_CATALOG_META_STRING:
-      value = PyUnicode_FromString(sif_catalog_meta_string_get(cat, key));
+    case SIF_CATALOGUE_META_STRING:
+      value = PyUnicode_FromString(sif_catalogue_meta_string_get(cat, key));
       break;
     default:
       value = Py_NewRef(Py_None);
@@ -159,29 +159,29 @@ static PyObject* sifCatalog_get_metadata(PyObject* self_obj, void* closure) {
   return dict;
 }
 
-static PyGetSetDef sifCatalog_getset[] = {
-  {"metadata", sifCatalog_get_metadata, NULL,
+static PyGetSetDef sifCatalogue_getset[] = {
+  {"metadata", sifCatalogue_get_metadata, NULL,
     "dict: the named values describing the catalogue -- the finder and its\n"
     "settings, the cosmology, anything set with set_metadata() -- a copy.\n"
     "Every writer records them and every reader gives them back: '#key=value'\n"
-    "lines in text, attributes of /catalog in HDF5, keywords of VOIDS in\n"
+    "lines in text, attributes of /catalogue in HDF5, keywords of VOIDS in\n"
     "FITS. Keys are in lower case.",
     NULL},
-  {"units", sifCatalog_get_units, NULL,
+  {"units", sifCatalogue_get_units, NULL,
     "What the centres are: 'cartesian', as a finder gives them, or 'sky' --\n"
     "right ascension, declination (degrees) and redshift -- after to_sky().",
     NULL},
-  {"centers", sifCatalog_get_centers, NULL,
-    "Nx3 NumPy array of void centers (x, y, z)", NULL},
-  {"radii", sifCatalog_get_radii, NULL, "1D NumPy array of void radii", NULL},
-  {"n_voids", sifCatalog_get_n_voids, NULL,
-    "The number of voids in the catalog", NULL},
-  {"footprint", sifCatalog_get_footprint, NULL,
+  {"centres", sifCatalogue_get_centres, NULL,
+    "Nx3 NumPy array of void centres (x, y, z)", NULL},
+  {"radii", sifCatalogue_get_radii, NULL, "1D NumPy array of void radii", NULL},
+  {"n_voids", sifCatalogue_get_n_voids, NULL,
+    "The number of voids in the catalogue", NULL},
+  {"footprint", sifCatalogue_get_footprint, NULL,
     "1D NumPy array: the fraction of each void's sphere inside the survey\n"
     "footprint, or None for a catalogue with no footprint (a periodic box).\n"
     "-1 marks a void nobody measured it for.",
     NULL},
-  {"footprint_shell", sifCatalog_get_footprint_shell, NULL,
+  {"footprint_shell", sifCatalogue_get_footprint_shell, NULL,
     "1D NumPy array: the same fraction over the shell between one and two\n"
     "radii, or None with footprint.",
     NULL},
@@ -213,7 +213,7 @@ static int column(
   return 0;
 }
 
-PyObject* pysif_catalog_from_numpy(
+PyObject* pysif_catalogue_from_numpy(
   PyObject* module, PyObject* args, PyObject* kwds) {
   (void)module;
   PyObject *cx = Py_None, *cy = Py_None, *cz = Py_None, *r = Py_None;
@@ -251,7 +251,7 @@ PyObject* pysif_catalog_from_numpy(
   static const char* const cart_names[] = {"cx", "cy", "cz"};
   static const char* const sky_names[] = {"ra", "dec", "z"};
   PyArrayObject* cols[N_COLS] = {NULL};
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   PyObject* result = NULL;
 
   if (column(c[0], sky ? sky_names[0] : cart_names[0], -1, &cols[X]) < 0)
@@ -264,8 +264,8 @@ PyObject* pysif_catalog_from_numpy(
       column(fps, "footprint_shell", n, &cols[FPS]) < 0)
     goto done;
 
-  cat = sif_catalog_alloc((uint64_t)n);
-  if (!cat || (cols[FP] && sif_catalog_reserve_footprint(cat) != SIF_OK)) {
+  cat = sif_catalogue_alloc((uint64_t)n);
+  if (!cat || (cols[FP] && sif_catalogue_reserve_footprint(cat) != SIF_OK)) {
     PyErr_NoMemory();
     goto done;
   }
@@ -284,26 +284,26 @@ PyObject* pysif_catalog_from_numpy(
   if (sky)
     cat->units = SIF_COORDINATES_SKY;
 
-  sifCatalogObject* obj =
-    (sifCatalogObject*)sifCatalogType.tp_alloc(&sifCatalogType, 0);
+  sifCatalogueObject* obj =
+    (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
   if (!obj) {
     PyErr_NoMemory();
     goto done;
   }
-  obj->catalog = cat;
+  obj->catalogue = cat;
   cat = NULL;
   result = (PyObject*)obj;
 
 done:
   for (int k = 0; k < N_COLS; k++)
     Py_XDECREF(cols[k]);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   return result;
 }
 
-static PyObject* sifCatalog_to_numpy(PyObject* self_obj, PyObject* unused) {
+static PyObject* sifCatalogue_to_numpy(PyObject* self_obj, PyObject* unused) {
   (void)unused;
-  const sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  const sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
   const bool sky = cat->units == SIF_COORDINATES_SKY;
   const char* names[6] = {sky ? "ra" : "cx", sky ? "dec" : "cy",
     sky ? "z" : "cz", "r", "footprint", "footprint_shell"};
@@ -345,7 +345,7 @@ static PyObject* sifCatalog_to_numpy(PyObject* self_obj, PyObject* unused) {
 
 /* --- Methods --- */
 
-static PyObject* sifCatalog_translate(
+static PyObject* sifCatalogue_translate(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   double ox, oy, oz;
   static char* kwlist[] = {"offset", NULL};
@@ -354,7 +354,7 @@ static PyObject* sifCatalog_translate(
     return NULL;
 
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
-  if (sif_catalog_translate(((sifCatalogObject*)self_obj)->catalog, offset) !=
+  if (sif_catalogue_translate(((sifCatalogueObject*)self_obj)->catalogue, offset) !=
       SIF_OK) {
     PyErr_SetString(PyExc_ValueError,
       "cannot translate: the catalogue holds sky coordinates");
@@ -363,7 +363,7 @@ static PyObject* sifCatalog_translate(
   Py_RETURN_NONE;
 }
 
-static PyObject* sifCatalog_to_sky(
+static PyObject* sifCatalogue_to_sky(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   double omega_m;
   PyObject* omega_de = Py_None;
@@ -378,14 +378,14 @@ static PyObject* sifCatalog_to_sky(
   if (py_sif_cosmology_from(omega_m, omega_de, omega_r, w0, wa, &cosmo) < 0)
     return NULL;
 
-  sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
   if (cat->units != SIF_COORDINATES_CARTESIAN) {
     PyErr_SetString(PyExc_ValueError, "the catalogue is already on the sky");
     return NULL;
   }
 
   int status;
-  Py_BEGIN_ALLOW_THREADS status = sif_catalog_to_sky(cat, &cosmo);
+  Py_BEGIN_ALLOW_THREADS status = sif_catalogue_to_sky(cat, &cosmo);
   Py_END_ALLOW_THREADS
 
     switch (status) {
@@ -407,30 +407,30 @@ static PyObject* sifCatalog_to_sky(
   }
 }
 
-static PyObject* sifCatalog_set_metadata(
+static PyObject* sifCatalogue_set_metadata(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   const char* key;
   PyObject* value;
   static char* kwlist[] = {"key", "value", NULL};
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO", kwlist, &key, &value))
     return NULL;
-  sif_catalog_t* cat = ((sifCatalogObject*)self_obj)->catalog;
+  sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
 
   int status;
   if (value == Py_None) {
-    status = sif_catalog_meta_remove(cat, key);
+    status = sif_catalogue_meta_remove(cat, key);
   } else if (PyLong_Check(value)) { /* bool included, as 1 or 0 */
     const long long v = PyLong_AsLongLong(value);
     if (v == -1 && PyErr_Occurred())
       return NULL;
-    status = sif_catalog_meta_int_set(cat, key, (int64_t)v);
+    status = sif_catalogue_meta_int_set(cat, key, (int64_t)v);
   } else if (PyFloat_Check(value)) {
-    status = sif_catalog_meta_real_set(cat, key, PyFloat_AS_DOUBLE(value));
+    status = sif_catalogue_meta_real_set(cat, key, PyFloat_AS_DOUBLE(value));
   } else if (PyUnicode_Check(value)) {
     const char* v = PyUnicode_AsUTF8(value);
     if (!v)
       return NULL;
-    status = sif_catalog_meta_string_set(cat, key, v);
+    status = sif_catalogue_meta_string_set(cat, key, v);
   } else {
     PyErr_SetString(
       PyExc_TypeError, "value must be an int, a float, a str or None");
@@ -447,8 +447,8 @@ static PyObject* sifCatalog_set_metadata(
   Py_RETURN_NONE;
 }
 
-static PyMethodDef sifCatalog_methods[] = {
-  {"set_metadata", (PyCFunction)sifCatalog_set_metadata,
+static PyMethodDef sifCatalogue_methods[] = {
+  {"set_metadata", (PyCFunction)sifCatalogue_set_metadata,
     METH_VARARGS | METH_KEYWORDS,
     "set_metadata(key, value)\n"
     "--\n\n"
@@ -459,7 +459,7 @@ static PyMethodDef sifCatalog_methods[] = {
     "Keys are matched without regard to case, as FITS keywords are.\n\n"
     "Raises:\n"
     "    ValueError: For a key or a value no format can keep."},
-  {"to_numpy", (PyCFunction)sifCatalog_to_numpy, METH_NOARGS,
+  {"to_numpy", (PyCFunction)sifCatalogue_to_numpy, METH_NOARGS,
     "to_numpy()\n"
     "--\n\n"
     "The catalogue as one NumPy structured array, a copy: a record per\n"
@@ -467,7 +467,7 @@ static PyMethodDef sifCatalog_methods[] = {
     "(or ra, dec, z, r on the sky), and footprint, footprint_shell when the\n"
     "catalogue has them. pandas.DataFrame(cat.to_numpy()) and\n"
     "astropy.table.Table(cat.to_numpy()) take it as it is."},
-  {"translate", (PyCFunction)sifCatalog_translate, METH_VARARGS | METH_KEYWORDS,
+  {"translate", (PyCFunction)sifCatalogue_translate, METH_VARARGS | METH_KEYWORDS,
     "translate(offset)\n"
     "--\n\n"
     "Shift every void centre by offset, in place.\n\n"
@@ -478,7 +478,7 @@ static PyMethodDef sifCatalog_methods[] = {
     "    offset: Three numbers, added to x, y and z.\n\n"
     "Raises:\n"
     "    ValueError: For a catalogue on the sky."},
-  {"to_sky", (PyCFunction)sifCatalog_to_sky, METH_VARARGS | METH_KEYWORDS,
+  {"to_sky", (PyCFunction)sifCatalogue_to_sky, METH_VARARGS | METH_KEYWORDS,
     "to_sky(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, wa=0.0)\n"
     "--\n\n"
     "Turn the void centres into sky coordinates, in place.\n\n"
@@ -501,25 +501,25 @@ static PyMethodDef sifCatalog_methods[] = {
 
 /* --- Type Object --- */
 
-PyTypeObject sifCatalogType = {
+PyTypeObject sifCatalogueType = {
   PyVarObject_HEAD_INIT(NULL, 0).tp_name =
-    "pysif.Catalog", /* Updated Namespace and Capitalized */
-  .tp_basicsize = sizeof(sifCatalogObject),
+    "pysif.Catalogue", /* Updated Namespace and Capitalised */
+  .tp_basicsize = sizeof(sifCatalogueObject),
   .tp_itemsize = 0,
-  .tp_dealloc = sifCatalog_dealloc,
+  .tp_dealloc = sifCatalogue_dealloc,
   .tp_flags = Py_TPFLAGS_DEFAULT,
-  .tp_doc = "Catalog(capacity=0)\n"
+  .tp_doc = "Catalogue(capacity=0)\n"
             "--\n\n"
             "A list of voids: centre and radius, one entry each.\n\n"
             "What a finder produces and what pysif.measure consumes. Read one\n"
-            "back with pysif.io.read_catalog_ascii(). A catalogue from\n"
+            "back with pysif.io.read_catalogue_ascii(). A catalogue from\n"
             "finders.exodus_survey() also carries footprint and\n"
             "footprint_shell.\n\n"
             "Args:\n"
             "    capacity: Voids to make room for up front; it grows as\n"
             "        needed.",
-  .tp_methods = sifCatalog_methods,
-  .tp_getset = sifCatalog_getset,
-  .tp_init = sifCatalog_init,
+  .tp_methods = sifCatalogue_methods,
+  .tp_getset = sifCatalogue_getset,
+  .tp_init = sifCatalogue_init,
   .tp_new = PyType_GenericNew,
 };

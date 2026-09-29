@@ -50,12 +50,12 @@ int sif_fits_print_summary(const char* path, FILE* stream) {
 
 int sif_fits_inspect(const char* path) { return refuse(path); }
 
-int sif_catalog_write_fits(const char* filepath, const sif_catalog_t* catalog) {
-  (void)catalog;
+int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalogue) {
+  (void)catalogue;
   return refuse(filepath);
 }
 
-sif_catalog_t* sif_catalog_read_fits(const char* filepath) {
+sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
   refuse(filepath);
   return NULL;
 }

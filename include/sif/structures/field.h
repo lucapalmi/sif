@@ -58,7 +58,7 @@
 #define SIF_MORTON_BITS 21
 
 /**
- * @brief Quantize one coordinate onto the field's bounding-cube grid.
+ * @brief Quantise one coordinate onto the field's bounding-cube grid.
  *
  * Bit (SIF_MORTON_BITS - 1 - d) of the result answers "is this point in the
  * upper half at subdivision level d". Everything that subdivides space the way
@@ -67,12 +67,12 @@
  * equivalent float comparison independently is what used to put particles in
  * the wrong octree cell.
  *
- * @param p Coordinate to quantize.
- * @param origin The low corner of the bounding cube (center - half_span).
+ * @param p Coordinate to quantise.
+ * @param origin The low corner of the bounding cube (centre - half_span).
  * @param inv_side 1 / (2 * half_span).
- * @return The quantized coordinate, clamped to the cube.
+ * @return The quantised coordinate, clamped to the cube.
  */
-static inline uint32_t sif_field_quantize(
+static inline uint32_t sif_field_quantise(
   sif_real p, sif_real origin, sif_real inv_side) {
 
   const sif_real t = (p - origin) * inv_side;
@@ -116,7 +116,7 @@ typedef struct {
   /** Upper corner of the bounding box. */
   sif_real max_p[3];
   /** Centre of the bounding cube. */
-  sif_real center[3];
+  sif_real centre[3];
   /** Half-side of the bounding cube. */
   sif_real half_span;
 
@@ -269,13 +269,13 @@ int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
  *
  * What moves a survey into the box sif_finder_exodus_survey_box() chose for
  * it: data and randoms both, by the same offset. The catalogue found there is
- * moved back with sif_catalog_translate() and the negated offset.
+ * moved back with sif_catalogue_translate() and the negated offset.
  *
  * @param field The field, modified in place.
  * @param offset Added to x, y and z respectively.
  * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field.
  *
- * @note Invalidates the bounds and the Morton order, whose quantization the
+ * @note Invalidates the bounds and the Morton order, whose quantisation the
  * rounding of every coordinate can disturb. Keeps the permutation of a
  * previous sort, which still describes the arrays, so velocities and weights
  * assigned afterwards still land on their own particles.
@@ -297,7 +297,7 @@ int sif_field_refresh_bounds(sif_field_t* field);
  * @brief Ensure the field has a valid bounding box, computing it if needed.
  *
  * Idempotent and quiet: safe to call from anything that reads
- * sif_field_t::min_p, ::max_p, ::center or ::half_span.
+ * sif_field_t::min_p, ::max_p, ::centre or ::half_span.
  *
  * @return SIF_OK if the bounds are valid on return, an error code otherwise.
  */

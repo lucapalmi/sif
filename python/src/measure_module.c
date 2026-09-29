@@ -10,9 +10,9 @@
 #include "measure/py_size_function.h"
 
 static PyMethodDef measure_methods[] = {
-  {"size_function_catalog", (PyCFunction)py_sif_size_function_catalog,
+  {"size_function_catalogue", (PyCFunction)py_sif_size_function_catalogue,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_catalog(catalog, box_length, n_bins, bins='ln', "
+    "size_function_catalogue(catalogue, box_length, n_bins, bins='ln', "
     "r_min=0.0, r_max=0.0)\n"
     "--\n\n"
     "Bin a catalogue into a void size function.\n\n"
@@ -21,7 +21,7 @@ static PyMethodDef measure_methods[] = {
     "comparable. The raw counts are kept, and the Poisson error follows\n"
     "from them.\n\n"
     "Args:\n"
-    "    catalog: Catalogue to bin.\n"
+    "    catalogue: Catalogue to bin.\n"
     "    box_length: Physical side length, which sets the volume.\n"
     "    n_bins: Radial bins.\n"
     "    bins: 'ln' for bins uniform in ln R, 'linear' for uniform in R.\n"
@@ -50,16 +50,16 @@ static PyMethodDef measure_methods[] = {
     "    SizeFunction: The merged size function."},
 
   {"profiles", (PyCFunction)py_sif_profiles, METH_VARARGS | METH_KEYWORDS,
-    "profiles(catalog, mesh, n_bins, ext=5.0, compute_velocity=False, "
+    "profiles(catalogue, mesh, n_bins, ext=5.0, compute_velocity=False, "
     "use_pbc=True, differential=False, weighted_velocity=False)\n"
     "--\n\n"
     "Stack radial density and velocity profiles around voids.\n\n"
     "Radii are scaled by each void's own radius, so profiles of\n"
-    "different-sized voids stack directly. Densities are normalized to the\n"
+    "different-sized voids stack directly. Densities are normalised to the\n"
     "box mean, so a profile approaches 1 far from the centre. On a mesh\n"
     "whose field carried weights the densities are weighted ones.\n\n"
     "Args:\n"
-    "    catalog: Voids to profile.\n"
+    "    catalogue: Voids to profile.\n"
     "    mesh: ChainMesh of the tracers, which also supplies the box length\n"
     "        and the mean density -- so it has to hold the whole sample, not\n"
     "        a subset. Size it with profiles_suggest_mesh_cells(), or reuse\n"
@@ -108,7 +108,7 @@ static PyMethodDef measure_methods[] = {
     "--\n\n"
     "Measure the one-point PDF of the smoothed density contrast.\n\n"
     "Pass shuffle='phases' or 'gaussian' to measure the same field with its\n"
-    "Fourier phases randomized: that preserves the power spectrum and\n"
+    "Fourier phases randomised: that preserves the power spectrum and\n"
     "destroys everything above it, so the difference between the two PDFs\n"
     "is the non-Gaussian information the field carries.\n\n"
     "The same seed and grid size give the identical surrogate here and in\n"
@@ -159,14 +159,14 @@ static PyMethodDef measure_methods[] = {
 static struct PyModuleDef measure_module = {PyModuleDef_HEAD_INIT,
   .m_name = "pysif.measure",
   .m_doc = "Measurements taken from data.\n\n"
-           "Size functions and profiles from a Catalog, and the statistics\n"
+           "Size functions and profiles from a Catalogue, and the statistics\n"
            "of the density field itself -- its one-point PDF and its spectral\n"
            "moments -- from a Grid. The counterparts that predict the same\n"
            "quantities from theory are in pysif.model, and deliberately\n"
            "return the same containers so the two can be compared.",
   .m_size = -1, .m_methods = measure_methods};
 
-/* Submodule exporter called from the parent module initialization routing */
+/* Submodule exporter called from the parent module initialisation routing */
 PyObject* py_sif_init_measure(void) {
   if (PyType_Ready(&sifProfilesType) < 0)
     return NULL;

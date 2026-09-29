@@ -14,7 +14,7 @@ would throw away most of what the long runs bought. And this is the definition
 the C implementation has to reproduce bit for bit, so it is worth having it in
 one readable place with no library between the equations and the weights.
 
-Architecture: standardize, two tanh layers, linear output. Small on purpose --
+Architecture: standardise, two tanh layers, linear output. Small on purpose --
 three smooth inputs and a target that is nearly one-dimensional in nu do not
 need capacity, and every parameter here becomes a constant in the C source.
 

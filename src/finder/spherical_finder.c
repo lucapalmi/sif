@@ -29,9 +29,9 @@ SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
 /* Coarse grid for the void-vs-void overlap index. */
 #define VOID_CLL_CELLS 32
 
-/* Initial catalog capacity. It grows on demand, this only avoids the first
+/* Initial catalogue capacity. It grows on demand, this only avoids the first
  * few reallocations on a typical run. */
-#define CATALOG_INITIAL_CAPACITY 250000
+#define CATALOGUE_INITIAL_CAPACITY 250000
 
 /*
  * Everything the finder owns for the duration of a run. Grouping it lets a
@@ -39,7 +39,7 @@ SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
  */
 typedef struct {
   sif_real* sorted_radii;
-  sif_catalog_t* cat;
+  sif_catalogue_t* cat;
   sif_bitmask_t* mask;
   sif_cell_linked_list_t* cll;
   sif_fft_workspace_t* fft_ws;
@@ -66,8 +66,8 @@ static void ctx_release(spherical_ctx_t* ctx, sif_grid_t* grid) {
   sif_bitmask_free(ctx->mask);
   sif_free_aligned(ctx->sorted_radii);
 
-  /* NULL on the success path: the caller took the catalog. */
-  sif_catalog_free(ctx->cat);
+  /* NULL on the success path: the caller took the catalogue. */
+  sif_catalogue_free(ctx->cat);
 
   ctx->cll = NULL;
   ctx->mask = NULL;
@@ -88,7 +88,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
   memcpy(ctx->sorted_radii, radii, n_radii * sizeof(sif_real));
   sort_radii_desc(ctx->sorted_radii, n_radii);
 
-  ctx->cat = sif_catalog_alloc(CATALOG_INITIAL_CAPACITY);
+  ctx->cat = sif_catalogue_alloc(CATALOGUE_INITIAL_CAPACITY);
   if (!ctx->cat)
     return SIF_ERR_ALLOC;
 
@@ -132,7 +132,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
   grid->values = NULL;
 
   if (sif__fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to initialize the backward FFT");
+    SIF_LOG_ERROR(TAG, "failed to initialise the backward FFT");
     return SIF_ERR_ALLOC;
   }
 
@@ -145,7 +145,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
 static int accept_void(spherical_ctx_t* ctx, const sif_grid_t* grid,
   sif_real cx, sif_real cy, sif_real cz, sif_real r) {
 
-  int status = sif_catalog_append(ctx->cat, cx, cy, cz, r);
+  int status = sif_catalogue_append(ctx->cat, cx, cy, cz, r);
   if (status != SIF_OK)
     return status;
 
@@ -164,7 +164,7 @@ static int accept_void(spherical_ctx_t* ctx, const sif_grid_t* grid,
   return SIF_OK;
 }
 
-sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
+sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
   uint32_t n_radii, sif_real threshold, sif_real overlap_fraction,
   sif_option options) {
 
@@ -267,9 +267,9 @@ sif_catalog_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
     }
   }
 
-  sif_catalog_trim(ctx.cat);
+  sif_catalogue_trim(ctx.cat);
 
-  sif_catalog_t* result = ctx.cat;
+  sif_catalogue_t* result = ctx.cat;
   ctx.cat = NULL; /* ownership passes to the caller */
   ctx_release(&ctx, grid);
 

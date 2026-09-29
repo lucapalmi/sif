@@ -12,7 +12,7 @@
  * The walk takes its covariance as an input, which is what lets every check on
  * it run against a hand-built matrix with an exact closed-form answer: no
  * quadrature enters those tests, so a failure there is a bug in the walk, the
- * factorization or the binning, never a disagreement about an integral.
+ * factorisation or the binning, never a disagreement about an integral.
  *
  * The covariance itself is checked separately, and mostly against properties
  * that hold whatever the quadrature: its diagonal against the independently
@@ -202,7 +202,7 @@ static double* model_covariance(
 }
 
 /*
- * The factorization is the piece with the most invariants worth asserting
+ * The factorisation is the piece with the most invariants worth asserting
  * directly, and the one whose failures would otherwise reach us as a quietly
  * mis-shaped histogram.
  */
@@ -219,7 +219,7 @@ static void test_cholesky(void) {
   sif_ep_factor_t f;
   CHECK(sif__ep_factor_init(&f, n) == SIF_OK, "factor allocation failed");
   CHECK(sif__ep_cholesky(&f, cov, radii, n) == SIF_OK,
-    "factorization of a positive definite covariance failed");
+    "factorisation of a positive definite covariance failed");
 
   /* Offsets describe the buffer they index. */
   int monotone = 1;
@@ -278,7 +278,7 @@ static void test_cholesky(void) {
   printf("  n = %u, worst reconstruction error %.3e\n", n, worst);
 
   /*
-   * A rank-one covariance must still factorize: that is what the jitter is
+   * A rank-one covariance must still factorise: that is what the jitter is
    * for, and the degenerate walk it produces is a physically meaningful limit
    * rather than an error.
    */
@@ -297,7 +297,7 @@ static void test_cholesky(void) {
   }
 
   /*
-   * An indefinite covariance must be reported rather than factorized. A
+   * An indefinite covariance must be reported rather than factorised. A
    * correlation above one is beyond anything the jitter can or should paper
    * over.
    */
@@ -309,7 +309,7 @@ static void test_cholesky(void) {
     sif_ep_factor_t g;
     sif__ep_factor_init(&g, 2);
     CHECK(sif__ep_cholesky(&g, bad, two_radii, 2) == SIF_ERR_RANGE,
-      "an indefinite covariance was accepted by the factorization");
+      "an indefinite covariance was accepted by the factorisation");
     sif__ep_factor_free(&g);
   }
 
@@ -821,7 +821,7 @@ static void test_guards(void) {
   }
 
   {
-    /* Indefinite: a correlation above one. Rejected by the factorization
+    /* Indefinite: a correlation above one. Rejected by the factorisation
      * rather than by validation, so this exercises that path end to end. */
     double* bad = model_covariance(radii, n, -0.5, 1.5);
     bad[SIF_COV_INDEX(1, 0)] *= 50.0;
@@ -1053,14 +1053,14 @@ static void test_covariance_properties(void) {
       worst_cs, worst_ss, expect);
 
     /*
-     * And it must factorize. The Gram accumulation makes it positive
+     * And it must factorise. The Gram accumulation makes it positive
      * semi-definite by construction, so this is not a hope but an assertion
      * that the construction is what it claims to be.
      */
     sif_ep_factor_t f;
     sif__ep_factor_init(&f, n);
     CHECK(sif__ep_cholesky(&f, a, radii, n) == SIF_OK,
-      "a covariance built from a positive P(k) failed to factorize");
+      "a covariance built from a positive P(k) failed to factorise");
     sif__ep_factor_free(&f);
   }
 
@@ -1626,7 +1626,7 @@ static void test_upcrossing_baseline(void) {
      * the single available pair. The value is asserted rather than merely the
      * determinism, because a buffer left as the allocator returned it is often
      * reproducible -- freshly mapped pages are zero -- and a test that only
-     * compared two runs would pass on uninitialized memory.
+     * compared two runs would pass on uninitialised memory.
      */
     sif_ep_features_t g;
     CHECK(sif__ep_features_init(&g, 2) == SIF_OK, "small init failed");
@@ -1756,7 +1756,7 @@ int main(void) {
   test_pipeline();
   test_upcrossing_baseline();
 
-  sif_finalize();
+  sif_finalise();
 
   if (failures) {
     printf("\n%d check(s) failed\n", failures);

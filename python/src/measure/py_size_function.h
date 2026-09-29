@@ -9,7 +9,7 @@
 
 #include "py_common.h"
 
-PyObject* py_sif_size_function_catalog(
+PyObject* py_sif_size_function_catalogue(
   PyObject* self, PyObject* args, PyObject* kwds);
 
 PyObject* py_sif_size_function_combine(

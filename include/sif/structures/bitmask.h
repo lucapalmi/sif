@@ -63,7 +63,7 @@ void sif_bitmask_clear_all(sif_bitmask_t* mask);
 /**
  * @brief Count the set bits.
  *
- * Parallelized across words with a population count per word, so it costs a
+ * Parallelised across words with a population count per word, so it costs a
  * pass over the storage rather than over the bits.
  *
  * @param mask Mask to count.

@@ -94,7 +94,7 @@ typedef uint32_t sif_option;
  *
  * 1.5 is the default because it is comfortably above any ladder anyone runs
  * (a 50% step) while costing 2.4 r^3 against 7. Raise it for a coarse ladder,
- * or to 2.0 to reproduce older catalogs bit for bit.
+ * or to 2.0 to reproduce older catalogues bit for bit.
  * @{
  */
 #define SIF_FINDER_SEARCH_1_50 (0u << 12) /**< Default. */
@@ -260,13 +260,13 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * @defgroup opt_delta_shuffle Surrogate field generation
  * @brief How the surrogate field for a PDF comparison is generated.
  *
- * PHASES keeps every `|delta_k|` and randomizes only the phase, so the realized
+ * PHASES keeps every `|delta_k|` and randomises only the phase, so the realised
  * P(k) is bit-for-bit the input's and any change in the PDF is attributable to
  * phase information alone. GAUSSIAN additionally resamples the amplitudes from
  * the Rayleigh distribution implied by `|delta_k|`, which is the
  * correct
  * surrogate when the comparison is against a Gaussian random field *ensemble*
- * rather than against this one realization.
+ * rather than against this one realisation.
  * @{
  */
 #define SIF_DELTA_SHUFFLE_NONE     (0u << 8)
@@ -372,7 +372,7 @@ typedef double sif_real;
 
 typedef float sif_real;
 #  define SIF_REAL_MAX_VAL          FLT_MAX
-#  define SIF_REAL_MIN_VAL          FLT_MIN /* smallest positive normalized */
+#  define SIF_REAL_MIN_VAL          FLT_MIN /* smallest positive normalised */
 #  define SIF_REAL_ABS(x)           fabsf(x)
 #  define SIF_REAL_CEIL(x)          ceilf(x)
 #  define SIF_REAL_FLOOR(x)         floorf(x)
@@ -449,7 +449,7 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 /** @brief Hint that a function sits on a hot path. */
 #  define SIF_HOT_LOOP __attribute__((hot))
 /** @brief Inline even where the compiler would rather not: for a body that
- * takes a compile-time flag and has to be specialized on it at every call. */
+ * takes a compile-time flag and has to be specialised on it at every call. */
 #  define SIF_ALWAYS_INLINE inline __attribute__((always_inline))
 /** @brief Align an object on a cache line. */
 #  define SIF_ALIGN_T __attribute__((aligned(SIF_CACHE_LINE)))
@@ -570,7 +570,7 @@ static inline uint32_t sif__ctz_u32(uint32_t x) {
  * update matters, not its order relative to any other memory operation.
  *
  * SIF_HAS_ATOMIC_BUILTINS is 0 where the compiler provides no such builtins,
- * and callers must serialize the update themselves.
+ * and callers must serialise the update themselves.
  * @{
  */
 #if defined(__GNUC__) || defined(__clang__)

@@ -33,11 +33,11 @@
 
 /**
  * @brief What a set of positions is: a field's tracers (sif_field_t::units)
- * or a catalogue's void centres (sif_catalog_t::units).
+ * or a catalogue's void centres (sif_catalogue_t::units).
  *
  * The two systems a cosmology converts between, and the reason it does:
  * sif_field_convert_sky_coordinates() takes a survey from the sky into the
- * Cartesian frame the finders work in, and sif_catalog_to_sky() takes the
+ * Cartesian frame the finders work in, and sif_catalogue_to_sky() takes the
  * voids found back out.
  */
 typedef enum {

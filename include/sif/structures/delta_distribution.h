@@ -11,7 +11,7 @@
  *
  * Where the spectral moments summarise the field by its variance and its
  * derivatives, this keeps the whole one-point distribution -- which is where
- * the non-Gaussian information lives, and so what a phase-randomized surrogate
+ * the non-Gaussian information lives, and so what a phase-randomised surrogate
  * is compared against.
  */
 

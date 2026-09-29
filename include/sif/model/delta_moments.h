@@ -100,7 +100,7 @@ SIF_NODISCARD sif_real* sif_delta_sigma_slope_pk(const sif_real* k,
  *
  * @note Accumulated as a Gram product, S = A A^T, so the result is positive
  * semi-definite by construction for any non-negative P(k) -- the property
- * anything factorizing this matrix depends on.
+ * anything factorising this matrix depends on.
  *
  * @param k Wavenumbers, strictly positive and strictly increasing
  * @param pk Power spectrum sampled at k, non-negative at every point. Stricter
@@ -149,7 +149,7 @@ SIF_NODISCARD sif_real* sif_delta_sigma_slope_pk(const sif_real* k,
  *
  * @return Newly allocated packed lower triangle of SIF_COV_SIZE(n_radii)
  * doubles, S(i, j) at SIF_COV_INDEX(i, j) for j <= i. Double rather than
- * sif_real, since a single-precision factorization of a realistic radius grid
+ * sif_real, since a single-precision factorisation of a realistic radius grid
  * reaches a non-positive pivot and fails. Released with sif_free_aligned, or
  * NULL on invalid input.
  */

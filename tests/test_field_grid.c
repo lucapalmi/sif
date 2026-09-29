@@ -639,7 +639,7 @@ static void test_grid_content_tag(void) {
   CHECK(g->content == SIF_GRID_DENSITY_CONTRAST,
     "conversion should retag the grid");
 
-  /* The second call must refuse rather than renormalize a field whose mean is
+  /* The second call must refuse rather than renormalise a field whose mean is
    * now zero. Snapshot first so we can prove nothing was touched. */
   sif_real* before = malloc((size_t)g->total_cells * sizeof(sif_real));
   memcpy(before, g->values, (size_t)g->total_cells * sizeof(sif_real));
@@ -670,7 +670,7 @@ static void test_grid_content_tag(void) {
 int main(void) {
   /* Needed by the cache test and nothing else here: the grid cache is driven
    * through the settings table, which does not exist until the library is
-   * initialized -- so without this sif_setting_set() is a silent no-op and
+   * initialised -- so without this sif_setting_set() is a silent no-op and
    * the cache test passes without ever enabling the cache. */
   if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
     printf("FAIL: sif_init\n");
@@ -688,7 +688,7 @@ int main(void) {
   test_wrap_periodic();
   test_grid_content_tag();
 
-  sif_finalize();
+  sif_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

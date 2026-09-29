@@ -264,7 +264,7 @@ sif_real sif_array_min(const sif_real* arr, uint64_t size) {
      * builds where the comparison does behave.
      *
      * SIF_REAL_MAX_VAL rather than an infinity, for the same reason: the
-     * optimizer is entitled to assume infinities are absent too. */
+     * optimiser is entitled to assume infinities are absent too. */
     sif_real best = SIF_REAL_MAX_VAL;
     for (uint64_t i = lo; i < hi; i++)
       if (arr[i] < best)

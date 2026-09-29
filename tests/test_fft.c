@@ -57,7 +57,7 @@ static void test_roundtrip(uint32_t n) {
   sif_grid_t* grid = sif_grid_alloc(n, 100.0f);
   CHECK(grid != NULL, "grid alloc failed");
   if (!grid) {
-    sif__fft_manager_finalize(mgr);
+    sif__fft_manager_finalise(mgr);
     return;
   }
 
@@ -120,7 +120,7 @@ static void test_roundtrip(uint32_t n) {
 
   free(reference);
   sif_grid_free(grid);
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
   printf("  ok\n");
 }
 
@@ -168,7 +168,7 @@ static void test_tophat_preserves_constant(uint32_t n) {
   }
 
   sif_grid_free(grid);
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
   printf("  ok\n");
 }
 
@@ -195,7 +195,7 @@ static void test_tuned_plan_roundtrip(uint32_t n) {
   sif_grid_t* grid = sif_grid_alloc(n, 100.0f);
   CHECK(grid != NULL, "grid alloc failed");
   if (!grid) {
-    sif__fft_manager_finalize(mgr);
+    sif__fft_manager_finalise(mgr);
     return;
   }
 
@@ -251,7 +251,7 @@ static void test_tuned_plan_roundtrip(uint32_t n) {
 
   free(reference);
   sif_grid_free(grid);
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
   printf("  ok\n");
 }
 
@@ -300,7 +300,7 @@ static void test_tuning_cap_and_wisdom(void) {
     sif__fft_workspace_free(ws);
     sif_grid_free(g);
   }
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
 
   FILE* f = fopen(expected, "rb");
   CHECK(f == NULL, "an untuned run must not export wisdom to %s", expected);
@@ -338,7 +338,7 @@ static void test_tuning_cap_and_wisdom(void) {
     sif__fft_workspace_free(ws);
     sif_grid_free(g);
   }
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
 
   f = fopen(expected, "rb");
   CHECK(f != NULL, "a tuned run should have exported wisdom to %s", expected);
@@ -364,7 +364,7 @@ static void test_tuning_cap_and_wisdom(void) {
     sif__fft_workspace_free(ws);
     sif_grid_free(g);
   }
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
 
   const long size_two = file_size(expected);
   CHECK(size_two > size_one,
@@ -375,7 +375,7 @@ static void test_tuning_cap_and_wisdom(void) {
   /* Still a valid file after all that rewriting -- a truncated one is worse
    * than none, since FFTW refuses it and every later run silently estimates.
    *
-   * init_threads first: the manager finalize above ran fftw_cleanup(), which
+   * init_threads first: the manager finalise above ran fftw_cleanup(), which
    * resets the planner, and an import into a torn-down planner fails whatever
    * the file says. The library never hits that -- it loads from
    * workspace_alloc, after a manager exists -- but the test would. */
@@ -395,9 +395,9 @@ static void test_tuning_cap_and_wisdom(void) {
       "a malformed ceiling should fall back to the default, not to 0");
     sif__fft_workspace_free(ws);
   }
-  sif__fft_manager_finalize(mgr);
+  sif__fft_manager_finalise(mgr);
 
-  sif__settings_finalize();
+  sif__settings_finalise();
 
   remove(expected);
   {

@@ -422,7 +422,7 @@ static void test_timer(void) {
   sif_timer_t t;
   sif_timer_start(&t);
 
-  /* Something the optimizer cannot discard, so the interval is real. */
+  /* Something the optimiser cannot discard, so the interval is real. */
   volatile double spin = 0.0;
   for (int i = 0; i < 2000000; i++)
     spin += (double)i;
@@ -459,7 +459,7 @@ int main(void) {
   test_sort();
   test_timer();
 
-  sif_finalize();
+  sif_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

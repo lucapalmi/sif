@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/size_function.h"
 
 /**
@@ -41,8 +41,8 @@
  * @return Newly allocated size function, released with
  * sif_size_function_free(), or NULL on invalid input or failure.
  */
-SIF_NODISCARD sif_size_function_t* sif_size_function_catalog(
-  const sif_catalog_t* cat, sif_real box_length, uint32_t n_bins,
+SIF_NODISCARD sif_size_function_t* sif_size_function_catalogue(
+  const sif_catalogue_t* cat, sif_real box_length, uint32_t n_bins,
   sif_option opt, sif_real r_min_in, sif_real r_max_in);
 
 /**

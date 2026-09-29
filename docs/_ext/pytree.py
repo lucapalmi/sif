@@ -10,8 +10,8 @@ generated at build time so adding a submodule adds a page, and there is
 nothing to keep in step by hand.
 
 The root module (``pysif``) gets its own page for the library lifecycle
-functions (``init``, ``finalize``, ``set_setting``, ``get_setting``) and the
-data-structure types (``Field``, ``Grid``, ``Catalog``, ...) that live at the
+functions (``init``, ``finalise``, ``set_setting``, ``get_setting``) and the
+data-structure types (``Field``, ``Grid``, ``Catalogue``, ...) that live at the
 package level.
 """
 
@@ -92,7 +92,7 @@ def generate(app):
             "```\n",
         )
 
-    # The root page documents pysif itself: init/finalize + the types.
+    # The root page documents pysif itself: init/finalise + the types.
     stale.discard("pysif.md")
     _write(
         py_root / "pysif.md",
@@ -117,7 +117,7 @@ def generate(app):
         f"{GENERATED_NOTE}\n"
         "# Python API Reference\n\n"
         "Auto-generated from the ``pysif`` module docstrings.\n\n"
-        "The data structures -- ``Field``, ``Grid``, ``Catalog`` and the rest "
+        "The data structures -- ``Field``, ``Grid``, ``Catalogue`` and the rest "
         "-- live at the package root (``pysif.Field``), and the operations on "
         "them are grouped into submodules.\n\n"
         "```{toctree}\n"

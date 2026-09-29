@@ -7,7 +7,7 @@
 /* Validates the Fourier-space delta PDF estimator and the phase-shuffle
  * surrogate. The load-bearing check is that sigma(R) computed from the
  * spectrum agrees with the variance measured on the real-space field: that
- * single equality pins down the filter normalization, the Parseval factors,
+ * single equality pins down the filter normalisation, the Parseval factors,
  * and -- for a shuffled spectrum -- the Hermitian symmetry, which otherwise
  * fails silently by quietly dropping power in the c2r transform. */
 #include "core/system_internal.h"
@@ -98,7 +98,7 @@ static void smooth_pass(
  *
  * White noise smoothed into a broadband, near-Gaussian field, then passed
  * through exp(). Two properties matter here and neither is incidental: the
- * field is *broadband*, so a phase-randomized surrogate has enough modes to be
+ * field is *broadband*, so a phase-randomised surrogate has enough modes to be
  * driven Gaussian by the central limit theorem, and it is *asymmetric*, so it
  * carries the skewness the surrogate is supposed to destroy. An odd
  * perturbation of a symmetric field (say s + s^3) would have neither.
@@ -126,7 +126,7 @@ static void fill_field(sif_real* d, uint32_t n, sif_real box_length) {
 
   free(tmp);
 
-  /* Standardize the Gaussian field before exponentiating. */
+  /* Standardise the Gaussian field before exponentiating. */
   double mean = 0.0;
   for (uint64_t i = 0; i < total; i++)
     mean += (double)d[i];
@@ -191,7 +191,7 @@ static inline int32_t kvec(uint32_t i, uint32_t n) {
  * The Nyquist component of a first derivative has to be dropped. Multiplying a
  * self-conjugate mode by i turns a real value into an imaginary one, which is
  * not Hermitian-consistent, and c2r would silently discard it anyway. This is
- * exactly the discretization ambiguity that makes the gradient check agree
+ * exactly the discretisation ambiguity that makes the gradient check agree
  * only up to the Nyquist-plane power -- negligible for a well-smoothed field,
  * which is the point.
  */
@@ -260,7 +260,7 @@ static void test_moments_match_field(
   uint32_t n, sif_option shuffle, const char* label) {
   printf("k-space vs real-space moments, n=%u (%s)\n", n, label);
 
-  /* The library owns the FFTW manager: sif__fft_manager_finalize tears FFTW
+  /* The library owns the FFTW manager: sif__fft_manager_finalise tears FFTW
    * down process-wide, so a test must never create and destroy one of its own.
    */
   sif_fft_manager_t* mgr = sif__system_state()->fft_mgr;
@@ -285,10 +285,10 @@ static void test_moments_match_field(
 
   if (shuffle == SIF_DELTA_SHUFFLE_PHASES) {
     CHECK(
-      sif__fft_randomize_phases(ws, 1234, false) == SIF_OK, "shuffle failed");
+      sif__fft_randomise_phases(ws, 1234, false) == SIF_OK, "shuffle failed");
   } else if (shuffle == SIF_DELTA_SHUFFLE_GAUSSIAN) {
     CHECK(
-      sif__fft_randomize_phases(ws, 1234, true) == SIF_OK, "shuffle failed");
+      sif__fft_randomise_phases(ws, 1234, true) == SIF_OK, "shuffle failed");
   }
 
   CHECK(sif__fft_workspace_init_backward(ws, mgr) == SIF_OK,
@@ -354,7 +354,7 @@ static void test_moments_match_field(
 }
 
 /*
- * Phase randomization must preserve the power spectrum exactly in PHASES mode.
+ * Phase randomisation must preserve the power spectrum exactly in PHASES mode.
  * Checked mode by mode on |delta_k|, which also catches the redundant planes
  * getting their amplitudes rewritten by the conjugate assignment.
  */
@@ -400,7 +400,7 @@ static void test_shuffle_preserves_power(uint32_t n) {
       power += before[i] * before[i];
     const double rms = sqrt(power / (double)complex_cells);
 
-    CHECK(sif__fft_randomize_phases(ws, 99, false) == SIF_OK, "shuffle failed");
+    CHECK(sif__fft_randomise_phases(ws, 99, false) == SIF_OK, "shuffle failed");
 
     uint64_t bad = 0, moved = 0;
     double power_after = 0.0;
@@ -436,7 +436,7 @@ static void test_shuffle_preserves_power(uint32_t n) {
   sif_grid_free(grid);
 }
 
-/* End-to-end through the public API, including the normalization convention. */
+/* End-to-end through the public API, including the normalisation convention. */
 static void test_stats_api(uint32_t n) {
   printf("delta stats end to end, n=%u\n", n);
 
@@ -449,7 +449,7 @@ static void test_stats_api(uint32_t n) {
 
   const sif_real radii[3] = {20.0f, 30.0f, 45.0f};
   /* Wide enough that the lognormal tail does not clip: the estimator counts
-   * every cell in the normalization but only histograms the ones in range, so
+   * every cell in the normalisation but only histograms the ones in range, so
    * a clipped tail shows up as an integral below one and a depressed sigma. */
   const sif_real bounds[2] = {-8.0f, 64.0f};
   const uint32_t n_bins = 720;
@@ -709,11 +709,11 @@ static void test_radius_guards(uint32_t n) {
  * The theory integral and the field sum are the same quantity evaluated two
  * ways: sigma_j^2 = (1/2pi^2) integral dk k^(2j+2) P(k) W^2, versus the same
  * sum over the discrete modes of the box with P(k) replaced by the measured
- * |delta_k|^2. Feeding the *measured* band power of a realization back into
+ * |delta_k|^2. Feeding the *measured* band power of a realisation back into
  * the theory route must therefore reproduce the field route, up to the
  * binning of the spectrum and the discreteness of the low-k modes.
  *
- * This is the check that pins the from_pk normalization -- the 1/2pi^2, the
+ * This is the check that pins the from_pk normalisation -- the 1/2pi^2, the
  * k^(2j+2) rather than k^(2j), and the log-k quadrature -- against the
  * already-validated field estimator.
  */
@@ -819,7 +819,7 @@ static void test_pk_matches_field(uint32_t n) {
              * hits sigma_0 hardest and sigma_2 least, since higher orders
              * weight the well-populated high-k shells. This bound is therefore
              * loose on purpose -- test_pk_analytic is what pins the
-             * normalization; this one only confirms the two routes agree about
+             * normalisation; this one only confirms the two routes agree about
              * what they are computing. */
             CHECK(rel < 0.30,
               "sigma_%u at R=%g: field %g vs P(k) %g (rel %.3e)", j,
@@ -845,7 +845,7 @@ static void test_pk_matches_field(uint32_t n) {
 }
 
 /*
- * Pins the from_pk normalization against a closed form. For a power-law
+ * Pins the from_pk normalisation against a closed form. For a power-law
  * P(k) = A k^n and a Gaussian window, W^2 = exp(-k^2 R^2) and
  *
  *   sigma_j^2 = (A / 4 pi^2) R^-(2j+3+n) Gamma((2j+3+n) / 2)
@@ -1006,7 +1006,7 @@ static void test_bbks_g_asymptote(void) {
  * The number density scales as 1/R_star^3 exactly, and its integral over nu is
  * the total density of maxima -- which for a Gaussian field depends on the
  * field only through R_star, not through gamma. Testing that the integral is
- * gamma-independent exercises the whole normalization of the fitted G at once:
+ * gamma-independent exercises the whole normalisation of the fitted G at once:
  * a wrong coefficient in the fit would break it, since gamma enters G in five
  * different places.
  */
@@ -1211,7 +1211,7 @@ static void test_bbks_g_exact_vs_fit(void) {
  * using integral_a^inf nu exp(-nu^2/2) = exp(-a^2/2) and
  * integral_a^inf nu^3 exp(-nu^2/2) = (a^2 + 2) exp(-a^2/2). Rewritten in terms
  * of sigma_1, sigma_2 and R this is Wu (2020) eq. (21), derived there by a
- * different route, so agreement checks the normalization against the paper
+ * different route, so agreement checks the normalisation against the paper
  * rather than against itself.
  */
 static void test_bbks_cumulative(sif_option mode, const char* label) {
@@ -1549,17 +1549,17 @@ static void test_bbks_size_function(sif_option mode, const char* label) {
         "r_min / r_max do not match the radius range");
 
       for (uint32_t r = 0; r < n_r; r++) {
-        CHECK(per_ln->r_centers[r] == radii[r],
-          "r_centers[%u] is %g, expected %g", r, (double)per_ln->r_centers[r],
+        CHECK(per_ln->r_centres[r] == radii[r],
+          "r_centres[%u] is %g, expected %g", r, (double)per_ln->r_centres[r],
           (double)radii[r]);
       }
 
       /* Reconstructed edges must bracket their centres and stay ordered. */
       for (uint32_t r = 0; r < n_r; r++) {
-        CHECK(per_ln->r_edges[r] < per_ln->r_centers[r] &&
-                per_ln->r_centers[r] < per_ln->r_edges[r + 1],
+        CHECK(per_ln->r_edges[r] < per_ln->r_centres[r] &&
+                per_ln->r_centres[r] < per_ln->r_edges[r + 1],
           "bin %u: centre %g is not inside [%g, %g]", r,
-          (double)per_ln->r_centers[r], (double)per_ln->r_edges[r],
+          (double)per_ln->r_centres[r], (double)per_ln->r_edges[r],
           (double)per_ln->r_edges[r + 1]);
       }
 
@@ -1673,7 +1673,7 @@ int main(void) {
   test_bbks_size_function(SIF_BBKS_G_FITTED, "fitted");
   test_bbks_size_function(SIF_BBKS_G_EXACT, "exact");
 
-  sif_finalize();
+  sif_finalise();
 
   if (failures) {
     printf("\n%d check(s) failed\n", failures);

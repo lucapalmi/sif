@@ -231,7 +231,7 @@ static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
   }
 
   /* Strictly increasing, not merely positive: r_min, r_max and the bin edges
-   * below are all read off the ends of this array, and sif__edges_from_centers
+   * below are all read off the ends of this array, and sif__edges_from_centres
    * builds an edge grid that assumes it. sif_size_function_bbks() enforces the
    * same thing before it differentiates. */
   for (uint32_t i = 0; i < n_radii; i++) {
@@ -297,8 +297,8 @@ static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
   out->options = opt;
   out->r_min = radii[0];
   out->r_max = radii[n_radii - 1];
-  memcpy(out->r_centers, radii, (size_t)n_radii * sizeof(sif_real));
-  sif__edges_from_centers(radii, n_radii, out->r_edges);
+  memcpy(out->r_centres, radii, (size_t)n_radii * sizeof(sif_real));
+  sif__edges_from_centres(radii, n_radii, out->r_edges);
 
   const bool per_radius = (opt & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR;
   const double four_thirds_pi = 4.0 / 3.0 * SIF_PI;

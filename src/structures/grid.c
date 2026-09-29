@@ -75,7 +75,7 @@ sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length) {
     return NULL;
   }
 
-  SIF_LOG_TRACE("grid", "cubic grid initialized");
+  SIF_LOG_TRACE("grid", "cubic grid initialised");
   return grid;
 }
 
@@ -101,7 +101,7 @@ void sif_grid_free(sif_grid_t* grid) {
  *
  * Space is cut into slabs along x, one per thread, and every particle is
  * routed to the slab its cell falls in. A thread then owns its slab outright
- * and writes it with no synchronization at all. What crosses a boundary is
+ * and writes it with no synchronisation at all. What crosses a boundary is
  * the +1 cell of a deposit sitting in the last plane, which is why each slab
  * carries one extra plane -- the ghost -- that is folded into the neighbour
  * afterwards.
@@ -332,7 +332,7 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
   memset(counts, 0, (size_t)n_chunks * n_slabs * sizeof(uint64_t));
 
 /* pass 1: how many particles each (chunk, slab) pair owns. Each chunk writes
- * its own row, so the counts need no synchronization. */
+ * its own row, so the counts need no synchronisation. */
 #pragma omp parallel for schedule(static, 1)
   for (int c = 0; c < n_chunks; c++) {
     uint64_t start = tile_lo + (uint64_t)c * chunk_size;
@@ -363,7 +363,7 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
   }
 
 /* pass 3: scatter the particle indices into their slab's run. Each chunk
- * advances only its own offsets, so again no synchronization -- and the order
+ * advances only its own offsets, so again no synchronisation -- and the order
  * within a slab is the order the chunks were laid out in, not the order the
  * threads happened to finish.
  *
@@ -627,7 +627,7 @@ typedef struct {
   uint64_t b;
 } grid_key_t;
 
-/* One round of the splitmix64 finalizer, which is what utils/random.h already
+/* One round of the splitmix64 finaliser, which is what utils/random.h already
  * uses to decorrelate a seed. Cheap, and good enough to avalanche a float. */
 static inline uint64_t grid_mix(uint64_t h, uint64_t v) {
   h ^= v;
@@ -674,7 +674,7 @@ static inline uint64_t grid_real_bits(sif_real v) {
  * another changes the key even if the multiset of values does not.
  *
  * Exactly n elements are read, never the allocation's padding -- the field's
- * arrays are padded to a cache line and that padding is uninitialized, so
+ * arrays are padded to a cache line and that padding is uninitialised, so
  * hashing it would make the key differ between two runs on identical data.
  */
 static void key_fold_array(grid_key_t* key, const sif_real* a, uint64_t n) {
@@ -865,7 +865,7 @@ int sif_grid_to_density_contrast(sif_grid_t* grid) {
 
   if (!(rho_mean > 0.0)) {
     SIF_LOG_ERROR("grid",
-      "mean density is %g, cannot normalize to an overdensity field", rho_mean);
+      "mean density is %g, cannot normalise to an overdensity field", rho_mean);
     return SIF_ERR_RANGE;
   }
 

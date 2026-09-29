@@ -5,10 +5,10 @@
 
 """sif: cosmic void finding and analysis.
 
-Call init() before anything else and finalize() when done.
+Call init() before anything else and finalise() when done.
 
 The data structures live here in the package root -- Field, Grid,
-Catalog and the rest -- and the operations on them are grouped
+Catalogue and the rest -- and the operations on them are grouped
 into submodules: io for reading and writing, finders for void
 identification, measure for measurements taken from data, and
 model for theoretical predictions.

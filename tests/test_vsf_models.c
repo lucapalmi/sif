@@ -108,7 +108,7 @@ static void test_sigma_slope_closed_form(void) {
  * 0.03, and exp(-delta_v^2 / 2 sigma^2) then underflows single precision at
  * every radius.
  */
-static void normalize(sif_real* k, sif_real* pk, double target) {
+static void normalise(sif_real* k, sif_real* pk, double target) {
   const sif_real eight[1] = {8.0f};
   sif_delta_moments_t* m =
     sif_delta_moments_pk(k, pk, N_K, eight, 1, 0, SIF_DELTA_FILTER_TOP_HAT);
@@ -316,7 +316,7 @@ static void test_svdw_vdn_ratio(void) {
   sif_real* k = malloc(N_K * sizeof(sif_real));
   sif_real* pk = malloc(N_K * sizeof(sif_real));
   power_law(k, pk, -2.0);
-  normalize(k, pk, 0.8);
+  normalise(k, pk, 0.8);
 
   const uint32_t n_r = 30;
   sif_real* radii = malloc(n_r * sizeof(sif_real));
@@ -436,7 +436,7 @@ int main(void) {
   test_multiplicity_continuity();
   test_svdw_vdn_ratio();
 
-  sif_finalize();
+  sif_finalise();
 
   if (failures) {
     printf("\n%d check(s) failed\n", failures);

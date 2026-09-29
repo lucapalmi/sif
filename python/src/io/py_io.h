@@ -20,9 +20,9 @@ PyObject* pysif_read_field_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_read_field_binary(
   PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_write_catalog_ascii(
+PyObject* pysif_write_catalogue_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_read_catalog_ascii(
+PyObject* pysif_read_catalogue_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_write_profiles_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
@@ -30,9 +30,9 @@ PyObject* pysif_read_profiles_ascii(
   PyObject* self, PyObject* args, PyObject* kwds);
 
 /* The HDF5 catalogue file (py_hdf5.c) */
-PyObject* pysif_write_catalog_hdf5(
+PyObject* pysif_write_catalogue_hdf5(
   PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_read_catalog_hdf5(
+PyObject* pysif_read_catalogue_hdf5(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_write_profiles_hdf5(
   PyObject* self, PyObject* args, PyObject* kwds);
@@ -54,9 +54,9 @@ PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds);
 /* FITS catalogues (py_fits.c) */
 PyObject* pysif_read_fits(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_inspect_fits(PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_write_catalog_fits(
+PyObject* pysif_write_catalogue_fits(
   PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* pysif_read_catalog_fits(
+PyObject* pysif_read_catalogue_fits(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_fits_key(PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds);

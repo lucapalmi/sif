@@ -13,7 +13,7 @@
 #include <string.h>
 
 #define OCTREE_LEAF_NODE UINT32_MAX
-/* Past SIF_MORTON_BITS levels the quantized coordinates are identical, so
+/* Past SIF_MORTON_BITS levels the quantised coordinates are identical, so
  * there is nothing left to split on. */
 #define OCTREE_MAX_DEPTH SIF_MORTON_BITS
 
@@ -115,9 +115,9 @@ sif_octree_t* sif_octree_alloc(sif_field_t* field, uint32_t max_per_leaf) {
 
   tree->capacity = capacity;
 
-  tree->root_center[0] = field->center[0];
-  tree->root_center[1] = field->center[1];
-  tree->root_center[2] = field->center[2];
+  tree->root_centre[0] = field->centre[0];
+  tree->root_centre[1] = field->centre[1];
+  tree->root_centre[2] = field->centre[2];
   tree->root_half_span = field->half_span;
 
   tree->count = 1;
@@ -126,8 +126,8 @@ sif_octree_t* sif_octree_alloc(sif_field_t* field, uint32_t max_per_leaf) {
   tree->nodes[0].p_counting = (uint32_t)field->n_particles;
   tree->nodes[0].padding = 0;
 
-  octree_subdivide(tree, 0, field, tree->root_center[0], tree->root_center[1],
-    tree->root_center[2], tree->root_half_span, max_per_leaf, 0);
+  octree_subdivide(tree, 0, field, tree->root_centre[0], tree->root_centre[1],
+    tree->root_centre[2], tree->root_half_span, max_per_leaf, 0);
 
   return tree;
 }
@@ -144,7 +144,7 @@ void sif_octree_free(sif_octree_t* tree) {
  * Splits one node into eight children.
  *
  * cx/cy/cz/half_span describe the node's cube and are only used to hand the
- * children their geometry; the partition itself is driven by the quantized
+ * children their geometry; the partition itself is driven by the quantised
  * Morton coordinates so it agrees exactly with the sorted particle order.
  */
 static void octree_subdivide(sif_octree_t* tree, uint32_t node_idx,
@@ -158,11 +158,11 @@ static void octree_subdivide(sif_octree_t* tree, uint32_t node_idx,
 
   /* Safety net. The partition below relies on the particles being grouped by
    * octant along the array, which sif_field_sort_morton guarantees because it
-   * quantizes against this same bounding cube. Two coincident particles can
+   * quantises against this same bounding cube. Two coincident particles can
    * still never be separated, so the depth cap stops the recursion rather than
    * letting it run away. */
   if (depth >= OCTREE_MAX_DEPTH) {
-    /* Everything left in this node shares the same quantized cell, i.e. the
+    /* Everything left in this node shares the same quantised cell, i.e. the
      * points are coincident to within side/2^21. Nothing can separate them. */
     SIF_LOG_TRACE("octree",
       "reached the Morton resolution limit with %u coincident particles",
@@ -206,7 +206,7 @@ static void octree_subdivide(sif_octree_t* tree, uint32_t node_idx,
   tree->nodes[node_idx].first_child = first_child_idx;
   tree->count += 8;
 
-  /* Initialize the 8 children as empty leaves */
+  /* Initialise the 8 children as empty leaves */
   for (int i = 0; i < 8; i++) {
     tree->nodes[first_child_idx + i].first_child = OCTREE_LEAF_NODE;
     tree->nodes[first_child_idx + i].p_start = 0;
@@ -226,19 +226,19 @@ static void octree_subdivide(sif_octree_t* tree, uint32_t node_idx,
    * arrive in. */
   uint32_t counts[8] = {0};
 
-  /* Classify by the SAME quantization the Morton sort used, not by a float
-   * comparison against a recomputed center. The two only agree to within
+  /* Classify by the SAME quantisation the Morton sort used, not by a float
+   * comparison against a recomputed centre. The two only agree to within
    * rounding, and a disagreement puts a particle in a sibling's range. */
-  const sif_real origin_x = tree->root_center[0] - tree->root_half_span;
-  const sif_real origin_y = tree->root_center[1] - tree->root_half_span;
-  const sif_real origin_z = tree->root_center[2] - tree->root_half_span;
+  const sif_real origin_x = tree->root_centre[0] - tree->root_half_span;
+  const sif_real origin_y = tree->root_centre[1] - tree->root_half_span;
+  const sif_real origin_z = tree->root_centre[2] - tree->root_half_span;
   const sif_real inv_side = 1.0f / (2.0f * tree->root_half_span);
   const uint32_t bit = SIF_MORTON_BITS - 1u - depth;
 
   for (uint32_t i = start_idx; i < end_idx; i++) {
-    const uint32_t qx = sif_field_quantize(field->x[i], origin_x, inv_side);
-    const uint32_t qy = sif_field_quantize(field->y[i], origin_y, inv_side);
-    const uint32_t qz = sif_field_quantize(field->z[i], origin_z, inv_side);
+    const uint32_t qx = sif_field_quantise(field->x[i], origin_x, inv_side);
+    const uint32_t qy = sif_field_quantise(field->y[i], origin_y, inv_side);
+    const uint32_t qz = sif_field_quantise(field->z[i], origin_z, inv_side);
 
     const uint8_t octant =
       (uint8_t)((((qx >> bit) & 1u) << 0) | (((qy >> bit) & 1u) << 1) |
@@ -335,9 +335,9 @@ uint64_t sif_octree_find_nearest(const sif_octree_t* tree,
   int32_t sp = 0;
 
   stack[sp].node_idx = 0;
-  stack[sp].cx = tree->root_center[0];
-  stack[sp].cy = tree->root_center[1];
-  stack[sp].cz = tree->root_center[2];
+  stack[sp].cx = tree->root_centre[0];
+  stack[sp].cy = tree->root_centre[1];
+  stack[sp].cz = tree->root_centre[2];
   stack[sp].half_span = tree->root_half_span;
   sp++;
 
@@ -378,7 +378,7 @@ uint64_t sif_octree_find_nearest(const sif_octree_t* tree,
     /*
      * Push the octant holding the query point last so it is popped first.
      *
-     * Order is the whole of the optimization. Descending into the octant that
+     * Order is the whole of the optimisation. Descending into the octant that
      * contains the query finds a real neighbour almost immediately, and every
      * box test afterwards is against that tight bound rather than against
      * infinity -- which is what lets the far siblings be rejected outright
@@ -445,8 +445,8 @@ uint64_t sif_octree_search_radius(const sif_octree_t* tree,
   octree_stack_t stack[OCTREE_STACK_CAP];
   int top = 0;
 
-  stack[top++] = (octree_stack_t){0, tree->root_center[0], tree->root_center[1],
-    tree->root_center[2], tree->root_half_span};
+  stack[top++] = (octree_stack_t){0, tree->root_centre[0], tree->root_centre[1],
+    tree->root_centre[2], tree->root_half_span};
 
   while (top > 0) {
     octree_stack_t curr = stack[--top];
@@ -508,8 +508,8 @@ uint64_t sif_octree_search_box(const sif_octree_t* tree,
   octree_stack_t stack[OCTREE_STACK_CAP];
   int top = 0;
 
-  stack[top++] = (octree_stack_t){0, tree->root_center[0], tree->root_center[1],
-    tree->root_center[2], tree->root_half_span};
+  stack[top++] = (octree_stack_t){0, tree->root_centre[0], tree->root_centre[1],
+    tree->root_centre[2], tree->root_half_span};
 
   while (top > 0) {
     octree_stack_t curr = stack[--top];

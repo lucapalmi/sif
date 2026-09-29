@@ -15,7 +15,7 @@
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/finder/spherical_finder.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -101,9 +101,9 @@ static void make_field(sif_real* x, sif_real* y, sif_real* z) {
 
 /*
  * Each recovered void must sit on a distinct injected hole. The finder snaps
- * centers to grid cells, so allow a couple of cells of slack.
+ * centres to grid cells, so allow a couple of cells of slack.
  */
-static void check_catalog(const char* label, const sif_catalog_t* cat,
+static void check_catalogue(const char* label, const sif_catalogue_t* cat,
   sif_real r_lo_factor, sif_real r_hi_factor) {
 
   CHECK(cat != NULL, "%s: finder returned NULL", label);
@@ -174,7 +174,7 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     sif_real* before = malloc((size_t)g->total_cells * sizeof(sif_real));
     memcpy(before, g->values, (size_t)g->total_cells * sizeof(sif_real));
 
-    sif_catalog_t* cat =
+    sif_catalogue_t* cat =
       sif_finder_spherical(g, radii, n_radii, -0.7f, overlap, opts);
     /* Fixed radii: the finder can only report one of the requested sizes, so
      * it lands on the rung nearest the hole rather than on the hole itself.
@@ -182,8 +182,8 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
      * reads as -(p/R)^3, so it still clears a threshold t while
      * R <= p * |t|^(-1/3), which at -0.7 is 1.13 p. The upper factor allows
      * that plus a little for the grid. */
-    check_catalog("spherical", cat, 0.55f, 1.15f);
-    sif_catalog_free(cat);
+    check_catalogue("spherical", cat, 0.55f, 1.15f);
+    sif_catalogue_free(cat);
 
     if (!(opts & SIF_FINDER_CONSUME_GRID)) {
       /* Round trip through the FFT, so exact equality is not on offer. */
@@ -219,12 +219,12 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
     CHECK(mesh != NULL, "chain mesh construction failed");
     sif_field_free(f);
 
-    sif_catalog_t* cat =
+    sif_catalogue_t* cat =
       sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, overlap, opts);
     /* Rescaling grows the void until the enclosed density crosses the
      * threshold, which overshoots the geometric hole edge somewhat. */
-    check_catalog("exodus   ", cat, 0.9f, 1.5f);
-    sif_catalog_free(cat);
+    check_catalogue("exodus   ", cat, 0.9f, 1.5f);
+    sif_catalogue_free(cat);
 
     sif_chain_mesh_free(mesh);
     sif_grid_free(g);
@@ -255,7 +255,7 @@ static sif_field_t* weighted_field(
 
 /* The grid from one set of weights and the mesh from another, so that the
  * finder's own refusal can be tested with a grid that is fine. */
-static sif_catalog_t* exodus_on_split(const sif_real* x, const sif_real* y,
+static sif_catalogue_t* exodus_on_split(const sif_real* x, const sif_real* y,
   const sif_real* z, const sif_real* grid_w, const sif_real* mesh_w) {
 
   sif_field_t* fg = weighted_field(x, y, z, grid_w);
@@ -269,7 +269,7 @@ static sif_catalog_t* exodus_on_split(const sif_real* x, const sif_real* y,
     sif_chain_mesh_alloc(MESH_CELLS, BOX, fm, SIF_MESH_DROP_INDICES);
   sif_field_free(fm);
 
-  sif_catalog_t* cat =
+  sif_catalogue_t* cat =
     mesh ? sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f, 0) : NULL;
 
   sif_chain_mesh_free(mesh);
@@ -277,14 +277,14 @@ static sif_catalog_t* exodus_on_split(const sif_real* x, const sif_real* y,
   return cat;
 }
 
-static sif_catalog_t* exodus_on(
+static sif_catalogue_t* exodus_on(
   const sif_real* x, const sif_real* y, const sif_real* z, const sif_real* w) {
   return exodus_on_split(x, y, z, w, w);
 }
 
 /* Bit for bit: same voids, same order, same centres and radii. */
-static void check_same_catalog(
-  const char* label, const sif_catalog_t* got, const sif_catalog_t* ref) {
+static void check_same_catalogue(
+  const char* label, const sif_catalogue_t* got, const sif_catalogue_t* ref) {
 
   CHECK(got && ref, "%s: a run returned NULL", label);
   if (!got || !ref)
@@ -316,29 +316,29 @@ static void run_weighted_cases(void) {
 
 #if !SIF_TEST_INSTRUMENTED
   /*
-   * A uniform weight has to change nothing. The density is normalized to the
+   * A uniform weight has to change nothing. The density is normalised to the
    * mean weight, so a constant factor cancels -- and with a power of two it
    * cancels exactly, in every sum and every comparison, so the catalogue has
    * to come back bit for bit. A weight of 1 checks the weighted path against
    * the unweighted one; a weight of 4 checks that nothing in either half of
-   * the finder forgot to normalize.
+   * the finder forgot to normalise.
    */
   make_field(x, y, z);
-  sif_catalog_t* ref = exodus_on(x, y, z, NULL);
+  sif_catalogue_t* ref = exodus_on(x, y, z, NULL);
 
   for (uint64_t i = 0; i < N_P; i++)
     w[i] = 1.0f;
-  sif_catalog_t* ones = exodus_on(x, y, z, w);
-  check_same_catalog("weights = 1", ones, ref);
+  sif_catalogue_t* ones = exodus_on(x, y, z, w);
+  check_same_catalogue("weights = 1", ones, ref);
 
   for (uint64_t i = 0; i < N_P; i++)
     w[i] = 4.0f;
-  sif_catalog_t* fours = exodus_on(x, y, z, w);
-  check_same_catalog("weights = 4", fours, ref);
+  sif_catalogue_t* fours = exodus_on(x, y, z, w);
+  check_same_catalogue("weights = 4", fours, ref);
 
-  sif_catalog_free(ref);
-  sif_catalog_free(ones);
-  sif_catalog_free(fours);
+  sif_catalogue_free(ref);
+  sif_catalogue_free(ones);
+  sif_catalogue_free(fours);
 #endif
 
   /*
@@ -360,18 +360,18 @@ static void run_weighted_cases(void) {
     w[i] = inside_a_hole(px, py, pz) ? 0.0f : 1.0f;
   }
 
-  sif_catalog_t* cat = exodus_on(x, y, z, w);
-  check_catalog("weight-only voids", cat, 0.9f, 1.5f);
-  sif_catalog_free(cat);
+  sif_catalogue_t* cat = exodus_on(x, y, z, w);
+  check_catalogue("weight-only voids", cat, 0.9f, 1.5f);
+  sif_catalogue_free(cat);
 
   /* The walk can only rule shells out while the enclosed weight grows with
    * the radius, so anything that breaks that is refused rather than run. */
   w[N_P / 2] = -1.0f;
   cat = exodus_on(x, y, z, w);
   CHECK(cat == NULL, "a negative weight should be refused");
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
 
-  /* A NaN is refused twice over. The grid cannot be normalized, since its
+  /* A NaN is refused twice over. The grid cannot be normalised, since its
    * mean is NaN -- and the finder, handed a grid built from clean weights,
    * still refuses the mesh that carries it. */
   sif_real* clean = malloc(N_P * sizeof(sif_real));
@@ -383,13 +383,13 @@ static void run_weighted_cases(void) {
   sif_grid_t* gnan = sif_grid_alloc(N_GRID, BOX);
   CHECK(sif_grid_assign_cic(gnan, fnan) == SIF_OK, "CIC assignment failed");
   CHECK(sif_grid_to_density_contrast(gnan) == SIF_ERR_RANGE,
-    "a grid holding a NaN should not normalize");
+    "a grid holding a NaN should not normalise");
   sif_grid_free(gnan);
   sif_field_free(fnan);
 
   cat = exodus_on_split(x, y, z, clean, w);
   CHECK(cat == NULL, "a NaN weight should be refused");
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   free(clean);
 
   free(x);
@@ -423,6 +423,6 @@ int main(void) {
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
 
-  sif_finalize();
+  sif_finalise();
   return failures != 0;
 }

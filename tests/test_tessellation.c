@@ -18,7 +18,7 @@
 #include "sif/core/macros.h"
 #include "sif/core/system.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -234,8 +234,8 @@ int main(void) {
   const uint32_t n_bins = 12;
   const sif_real ext = 1.5f;
 
-  sif_catalog_t* cat = sif_catalog_alloc(2);
-  sif_catalog_append(
+  sif_catalogue_t* cat = sif_catalogue_alloc(2);
+  sif_catalogue_append(
     cat, (sif_real)0.0, (sif_real)0.0, (sif_real)0.0, (sif_real)20.0);
 
   sif_density_profiles_t* counted = NULL;
@@ -544,11 +544,11 @@ int main(void) {
   sif_chain_mesh_free(smesh);
   sif_density_profiles_free(counted);
   sif_density_profiles_free(sampled);
-  sif_catalog_free(cat);
+  sif_catalogue_free(cat);
   sif_tessellation_free(tess);
   sif_chain_mesh_free(mesh);
   sif_field_free(f);
-  sif_finalize();
+  sif_finalise();
 
   return failures ? 1 : 0;
 }

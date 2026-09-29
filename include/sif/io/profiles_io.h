@@ -26,7 +26,7 @@
  *
  * The rows are plain numbers, so `numpy.loadtxt(path)` reads them as they
  * are, one row per void. The last header line names every column: the
- * centres are `ra dec z` for a catalogue on the sky (sif_catalog_to_sky()),
+ * centres are `ra dec z` for a catalogue on the sky (sif_catalogue_to_sky()),
  * and either profile block is absent when the file was written without it.
  * Bin edges are in units of each void's own radius, which is the axis the
  * profiles are binned on; multiply by the radius in the row for physical
@@ -45,7 +45,7 @@
 
 #include "sif/core/macros.h"
 #include "sif/measure/profiles.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 
 /**
  * @brief Write one or both profile sets to a text file.
@@ -70,7 +70,7 @@
  */
 int sif_profiles_write_ascii(const char* filepath,
   const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel,
-  const sif_catalog_t* cat);
+  const sif_catalogue_t* cat);
 
 /**
  * @brief Read the header of a profile file, without the rows.
@@ -120,7 +120,7 @@ SIF_NODISCARD int sif_profiles_read_header_ascii(const char* filepath,
  * built before a later row failed to parse.
  */
 SIF_NODISCARD int sif_profiles_read_ascii(const char* filepath,
-  sif_catalog_t** out_cat, sif_density_profiles_t** out_dens,
+  sif_catalogue_t** out_cat, sif_density_profiles_t** out_dens,
   sif_velocity_profiles_t** out_vel);
 
 #endif /* SIF_IO_PROFILES_IO_H */

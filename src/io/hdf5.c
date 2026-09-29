@@ -23,7 +23,7 @@
 #include "measure/profiles_internal.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
-#include "structures/catalog_internal.h"
+#include "structures/catalogue_internal.h"
 #include "structures/results_internal.h"
 
 #include <hdf5.h>
@@ -45,7 +45,7 @@
 #define SIF_H5_FORMAT         "sif"
 #define SIF_H5_FORMAT_VERSION 1u
 
-#define G_CATALOG  "catalog"
+#define G_CATALOGUE  "catalogue"
 #define G_DENSITY  "density_profiles"
 #define G_VELOCITY "velocity_profiles"
 #define G_VSF      "size_function"
@@ -325,7 +325,7 @@ done:
  * The (N, 3) centres, one column at a time from the catalogue's own x, y and
  * z arrays, so neither direction needs an interleaved copy of the catalogue.
  */
-static int centers_io(
+static int centres_io(
   hid_t dset, sif_real* const cols[3], uint64_t n, int writing) {
 
   if (n == 0)
@@ -501,25 +501,25 @@ static void warn_rows(hid_t file, const char* path, const char* group,
 static sif_hdf5_attr_kind_t attr_kind_of(hid_t attr);
 
 /* The catalogue's metadata, as attributes of its group. */
-static int meta_write(hid_t group, const sif_catalog_t* catalog) {
-  for (uint32_t m = 0; m < sif_catalog_meta_count(catalog); m++) {
-    const char* key = sif_catalog_meta_name(catalog, m);
+static int meta_write(hid_t group, const sif_catalogue_t* catalogue) {
+  for (uint32_t m = 0; m < sif_catalogue_meta_count(catalogue); m++) {
+    const char* key = sif_catalogue_meta_name(catalogue, m);
     int status = SIF_OK;
-    switch (sif_catalog_meta_kind(catalog, key)) {
-    case SIF_CATALOG_META_INT: {
-      const int64_t v = sif_catalog_meta_int_get(catalog, key);
+    switch (sif_catalogue_meta_kind(catalogue, key)) {
+    case SIF_CATALOGUE_META_INT: {
+      const int64_t v = sif_catalogue_meta_int_get(catalogue, key);
       status = attr_write(group, key, H5T_STD_I64LE, H5T_NATIVE_INT64, &v);
       break;
     }
-    case SIF_CATALOG_META_REAL:
+    case SIF_CATALOGUE_META_REAL:
       status =
-        attr_write_f64(group, key, sif_catalog_meta_real_get(catalog, key));
+        attr_write_f64(group, key, sif_catalogue_meta_real_get(catalogue, key));
       break;
-    case SIF_CATALOG_META_STRING:
+    case SIF_CATALOGUE_META_STRING:
       status =
-        attr_write_str(group, key, sif_catalog_meta_string_get(catalog, key));
+        attr_write_str(group, key, sif_catalogue_meta_string_get(catalogue, key));
       break;
-    case SIF_CATALOG_META_MISSING:
+    case SIF_CATALOGUE_META_MISSING:
       break;
     }
     if (status != SIF_OK)
@@ -532,7 +532,7 @@ static int meta_write(hid_t group, const sif_catalog_t* catalog) {
  * metadata -- what sif wrote, and what anyone added with
  * sif_hdf5_set_attr_string() and its kin. One whose name is no metadata key,
  * or whose value is not a scalar, is left in the file and not read. */
-static int meta_read(hid_t group, sif_catalog_t* catalog) {
+static int meta_read(hid_t group, sif_catalogue_t* catalogue) {
   H5O_info2_t info;
   if (H5Oget_info3(group, &info, H5O_INFO_NUM_ATTRS) < 0)
     return SIF_ERR_IO;
@@ -550,22 +550,22 @@ static int meta_read(hid_t group, sif_catalog_t* catalog) {
     lower[sizeof lower - 1] = '\0';
 
     if (len > 0 && len < (ssize_t)sizeof name &&
-        !sif__catalog_meta_reserved(lower)) {
+        !sif__catalogue_meta_reserved(lower)) {
       int64_t iv;
       double dv;
       char text[4096];
       switch (attr_kind_of(attr)) {
       case SIF_HDF5_ATTR_INT:
         if (H5Aread(attr, H5T_NATIVE_INT64, &iv) >= 0)
-          (void)sif_catalog_meta_int_set(catalog, name, iv);
+          (void)sif_catalogue_meta_int_set(catalogue, name, iv);
         break;
       case SIF_HDF5_ATTR_REAL:
         if (H5Aread(attr, H5T_NATIVE_DOUBLE, &dv) >= 0)
-          (void)sif_catalog_meta_real_set(catalog, name, dv);
+          (void)sif_catalogue_meta_real_set(catalogue, name, dv);
         break;
       case SIF_HDF5_ATTR_STRING:
         if (attr_read_str(group, name, text, sizeof text) == SIF_OK)
-          (void)sif_catalog_meta_string_set(catalog, name, text);
+          (void)sif_catalogue_meta_string_set(catalogue, name, text);
         break;
       default:
         break;
@@ -576,9 +576,9 @@ static int meta_read(hid_t group, sif_catalog_t* catalog) {
   return SIF_OK;
 }
 
-int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog) {
-  if (!filepath || !catalog) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalog_write_hdf5");
+int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalogue) {
+  if (!filepath || !catalogue) {
+    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalogue_write_hdf5");
     return SIF_ERR_INVALID;
   }
 
@@ -592,51 +592,51 @@ int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog) {
   if (file < 0)
     goto done;
 
-  group = group_replace(file, G_CATALOG);
+  group = group_replace(file, G_CATALOGUE);
   if (group < 0)
     goto fail;
 
-  const uint64_t n = catalog->n_voids;
+  const uint64_t n = catalogue->n_voids;
   const hsize_t dims_c[2] = {n, 3};
   const hsize_t dims_1[1] = {n};
 
   space = H5Screate_simple(2, dims_c, NULL);
-  dset = space >= 0 ? H5Dcreate2(group, "centers", real_file_type(), space,
+  dset = space >= 0 ? H5Dcreate2(group, "centres", real_file_type(), space,
                         H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT)
                     : H5I_INVALID_HID;
-  sif_real* const cols[3] = {catalog->cx, catalog->cy, catalog->cz};
+  sif_real* const cols[3] = {catalogue->cx, catalogue->cy, catalogue->cz};
 
-  /* The three columns of centers are otherwise unnamed: say which is
+  /* The three columns of centres are otherwise unnamed: say which is
    * which, as the other formats do in their headers. */
-  if (dset < 0 || centers_io(dset, cols, n, 1) != SIF_OK ||
+  if (dset < 0 || centres_io(dset, cols, n, 1) != SIF_OK ||
       attr_write_str(dset, "columns",
-        catalog->units == SIF_COORDINATES_SKY ? "ra dec z" : "cx cy cz") !=
+        catalogue->units == SIF_COORDINATES_SKY ? "ra dec z" : "cx cy cz") !=
         SIF_OK ||
       dataset_write(group, "radii", 1, dims_1, real_file_type(),
-        real_mem_type(), catalog->radii) != SIF_OK ||
+        real_mem_type(), catalogue->radii) != SIF_OK ||
       attr_write_u64(group, "n_voids", n) != SIF_OK ||
       attr_write_str(group, "coordinates",
-        catalog->units == SIF_COORDINATES_SKY ? "sky" : "cartesian") !=
+        catalogue->units == SIF_COORDINATES_SKY ? "sky" : "cartesian") !=
         SIF_OK ||
-      meta_write(group, catalog) != SIF_OK)
+      meta_write(group, catalogue) != SIF_OK)
     goto fail;
 
-  if (catalog->footprint &&
+  if (catalogue->footprint &&
       (dataset_write(group, "footprint", 1, dims_1, real_file_type(),
-         real_mem_type(), catalog->footprint) != SIF_OK ||
+         real_mem_type(), catalogue->footprint) != SIF_OK ||
         dataset_write(group, "footprint_shell", 1, dims_1, real_file_type(),
-          real_mem_type(), catalog->footprint_shell) != SIF_OK))
+          real_mem_type(), catalogue->footprint_shell) != SIF_OK))
     goto fail;
 
-  warn_rows(file, filepath, G_DENSITY, n, G_CATALOG);
-  warn_rows(file, filepath, G_VELOCITY, n, G_CATALOG);
+  warn_rows(file, filepath, G_DENSITY, n, G_CATALOGUE);
+  warn_rows(file, filepath, G_VELOCITY, n, G_CATALOGUE);
 
   status = SIF_OK;
   SIF_LOG_INFO(TAG, "saved %" PRIu64 " voids to %s", n, filepath);
   goto done;
 
 fail:
-  SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_CATALOG, filepath);
+  SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_CATALOGUE, filepath);
 
 done:
   close_id(dset);
@@ -647,26 +647,26 @@ done:
   return status;
 }
 
-sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
+sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_catalog_read_hdf5");
+    SIF_LOG_ERROR(TAG, "invalid filepath for sif_catalogue_read_hdf5");
     return NULL;
   }
 
   h5_quiet_t quiet;
   quiet_begin(&quiet);
 
-  sif_catalog_t* cat = NULL;
+  sif_catalogue_t* cat = NULL;
   hid_t file = open_for_read(filepath);
   hid_t group =
-    file >= 0 ? group_open(file, G_CATALOG, filepath) : H5I_INVALID_HID;
+    file >= 0 ? group_open(file, G_CATALOGUE, filepath) : H5I_INVALID_HID;
   hid_t dset = H5I_INVALID_HID;
   uint64_t n = 0;
 
   if (group < 0 || attr_read(group, "n_voids", H5T_NATIVE_UINT64, &n) != SIF_OK)
     goto fail;
 
-  cat = sif_catalog_alloc(n);
+  cat = sif_catalogue_alloc(n);
   if (!cat)
     goto fail;
 
@@ -676,9 +676,9 @@ sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
 
   /* The centres are read by column, so their shape is checked here rather
    * than by dataset_read(). */
-  if (!link_exists(group, "centers"))
+  if (!link_exists(group, "centres"))
     goto fail;
-  dset = H5Dopen2(group, "centers", H5P_DEFAULT);
+  dset = H5Dopen2(group, "centres", H5P_DEFAULT);
   {
     hid_t space = dset >= 0 ? H5Dget_space(dset) : H5I_INVALID_HID;
     hsize_t dims[2] = {0, 0};
@@ -687,17 +687,17 @@ sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
                      dims[0] == dims_c[0] && dims[1] == dims_c[1];
     close_id(space);
     if (!good) {
-      SIF_LOG_ERROR(TAG, "/%s/centers is not (n_voids, 3)", G_CATALOG);
+      SIF_LOG_ERROR(TAG, "/%s/centres is not (n_voids, 3)", G_CATALOGUE);
       goto fail;
     }
   }
 
-  if (centers_io(dset, cols, n, 0) != SIF_OK ||
+  if (centres_io(dset, cols, n, 0) != SIF_OK ||
       dataset_read(group, "radii", 1, dims_1, real_mem_type(), cat->radii) !=
         SIF_OK)
     goto fail;
 
-  /* Filled in directly rather than through sif_catalog_append(). */
+  /* Filled in directly rather than through sif_catalogue_append(). */
   cat->n_voids = n;
 
   /* A file written before the attribute existed holds Cartesian centres,
@@ -707,7 +707,7 @@ sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
     if (strcmp(coords, "sky") == 0) {
       cat->units = SIF_COORDINATES_SKY;
     } else if (strcmp(coords, "cartesian") != 0) {
-      SIF_LOG_ERROR(TAG, "/%s says its centres are \"%s\"", G_CATALOG, coords);
+      SIF_LOG_ERROR(TAG, "/%s says its centres are \"%s\"", G_CATALOGUE, coords);
       goto fail;
     }
   }
@@ -716,7 +716,7 @@ sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
     goto fail;
 
   if (link_exists(group, "footprint")) {
-    if (sif_catalog_reserve_footprint(cat) != SIF_OK ||
+    if (sif_catalogue_reserve_footprint(cat) != SIF_OK ||
         dataset_read(group, "footprint", 1, dims_1, real_mem_type(),
           cat->footprint) != SIF_OK ||
         dataset_read(group, "footprint_shell", 1, dims_1, real_mem_type(),
@@ -732,8 +732,8 @@ sif_catalog_t* sif_catalog_read_hdf5(const char* filepath) {
   return cat;
 
 fail:
-  SIF_LOG_ERROR(TAG, "failed to read /%s from %s", G_CATALOG, filepath);
-  sif_catalog_free(cat);
+  SIF_LOG_ERROR(TAG, "failed to read /%s from %s", G_CATALOGUE, filepath);
+  sif_catalogue_free(cat);
   close_id(dset);
   close_id(group);
   close_id(file);
@@ -802,7 +802,7 @@ int sif_profiles_write_hdf5(const char* filepath,
       SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_DENSITY, filepath);
       goto done;
     }
-    warn_rows(file, filepath, G_CATALOG, dens->n_voids, G_DENSITY);
+    warn_rows(file, filepath, G_CATALOGUE, dens->n_voids, G_DENSITY);
   }
 
   if (vel) {
@@ -811,7 +811,7 @@ int sif_profiles_write_hdf5(const char* filepath,
       SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_VELOCITY, filepath);
       goto done;
     }
-    warn_rows(file, filepath, G_CATALOG, vel->n_voids, G_VELOCITY);
+    warn_rows(file, filepath, G_CATALOGUE, vel->n_voids, G_VELOCITY);
   }
 
   status = SIF_OK;
@@ -1014,8 +1014,8 @@ int sif_size_function_write_hdf5(
       attr_write_str(g, "binning", binning) == SIF_OK &&
       dataset_write(g, "r_edges", 1, dims_e, real_file_type(), real_mem_type(),
         vsf->r_edges) == SIF_OK &&
-      dataset_write(g, "r_centers", 1, dims_b, real_file_type(),
-        real_mem_type(), vsf->r_centers) == SIF_OK &&
+      dataset_write(g, "r_centres", 1, dims_b, real_file_type(),
+        real_mem_type(), vsf->r_centres) == SIF_OK &&
       dataset_write(g, "counts", 1, dims_b, H5T_STD_U64LE, H5T_NATIVE_UINT64,
         vsf->counts) == SIF_OK &&
       dataset_write(g, "vsf", 1, dims_b, real_file_type(), real_mem_type(),
@@ -1074,7 +1074,7 @@ sif_size_function_t* sif_size_function_read_hdf5(const char* filepath) {
   if (dataset_read(g, "r_edges", 1, dims_e, real_mem_type(), vsf->r_edges) !=
         SIF_OK ||
       dataset_read(
-        g, "r_centers", 1, dims_b, real_mem_type(), vsf->r_centers) != SIF_OK ||
+        g, "r_centres", 1, dims_b, real_mem_type(), vsf->r_centres) != SIF_OK ||
       dataset_read(g, "counts", 1, dims_b, H5T_NATIVE_UINT64, vsf->counts) !=
         SIF_OK ||
       dataset_read(g, "vsf", 1, dims_b, real_mem_type(), vsf->vsf) != SIF_OK ||

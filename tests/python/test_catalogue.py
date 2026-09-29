@@ -3,7 +3,7 @@
 #
 # This file is part of sif. See COPYING for the full license text.
 
-"""pysif.catalog_from_numpy, Catalog.to_numpy and the catalogue's metadata,
+"""pysif.catalogue_from_numpy, Catalogue.to_numpy and the catalogue's metadata,
 through the text and HDF5 formats (FITS in test_fits.py).
 
 The formats themselves are tested in C (tests/test_io.c, tests/test_hdf5.c).
@@ -22,19 +22,19 @@ CX, CY, CZ = (rng.random(N) * 100 for _ in range(3))
 R = 5 + 10 * rng.random(N)
 
 
-def catalog():
-    return pysif.catalog_from_numpy(CX, CY, CZ, R)
+def catalogue():
+    return pysif.catalogue_from_numpy(CX, CY, CZ, R)
 
 
 def test_from_and_to_numpy():
-    cat = catalog()
+    cat = catalogue()
     assert cat.n_voids == N and cat.units == "cartesian"
     rec = cat.to_numpy()
     assert rec.dtype.names == ("cx", "cy", "cz", "r")
     for name, want in zip(rec.dtype.names, (CX, CY, CZ, R)):
         np.testing.assert_array_equal(rec[name], want.astype(pysif.real))
 
-    sky = pysif.catalog_from_numpy(ra=CX, dec=CY - 50, z=CZ / 100, r=R,
+    sky = pysif.catalogue_from_numpy(ra=CX, dec=CY - 50, z=CZ / 100, r=R,
                                    footprint=np.ones(N), footprint_shell=np.ones(N))
     assert sky.units == "sky"
     assert sky.to_numpy().dtype.names == ("ra", "dec", "z", "r", "footprint",
@@ -49,11 +49,11 @@ def test_from_and_to_numpy():
 ])
 def test_from_numpy_refusals(kwargs, error):
     with pytest.raises(error):
-        pysif.catalog_from_numpy(**kwargs)
+        pysif.catalogue_from_numpy(**kwargs)
 
 
 def test_metadata():
-    cat = catalog()
+    cat = catalogue()
     assert cat.metadata == {}
     cat.set_metadata("Finder", "exodus")
     cat.set_metadata("threshold", -0.7)
@@ -72,7 +72,7 @@ def test_metadata():
 
 
 def with_metadata():
-    cat = catalog()
+    cat = catalogue()
     cat.set_metadata("finder", "exodus")
     cat.set_metadata("threshold", -0.7)
     cat.set_metadata("n_tracers", 2**40)
@@ -83,8 +83,8 @@ def with_metadata():
 def test_metadata_through_text(tmp_path):
     cat = with_metadata()
     path = tmp_path / "voids.txt"
-    pysif.io.write_catalog_ascii(str(path), cat)
-    assert pysif.io.read_catalog_ascii(str(path)).metadata == cat.metadata
+    pysif.io.write_catalogue_ascii(str(path), cat)
+    assert pysif.io.read_catalogue_ascii(str(path)).metadata == cat.metadata
     # The rows are plain numbers, the header comments.
     assert np.loadtxt(path).shape == (N, 4)
 
@@ -93,8 +93,8 @@ def test_metadata_through_text(tmp_path):
 def test_metadata_through_hdf5(tmp_path):
     cat = with_metadata()
     path = str(tmp_path / "voids.h5")
-    pysif.io.write_catalog_hdf5(path, cat)
-    back = pysif.io.read_catalog_hdf5(path)
+    pysif.io.write_catalogue_hdf5(path, cat)
+    back = pysif.io.read_catalogue_hdf5(path)
     assert back.metadata == cat.metadata
     np.testing.assert_array_equal(back.to_numpy(), cat.to_numpy())
 
@@ -102,14 +102,14 @@ def test_metadata_through_hdf5(tmp_path):
 def test_foreign_text_catalogue(tmp_path):
     # Another finder's layout: an ID, the centre, a volume, the radius, a tag.
     path = tmp_path / "other.txt"
-    path.write_text("# ID x_center y_center z_center volume R_eff type\n"
+    path.write_text("# ID x_centre y_centre z_centre volume R_eff type\n"
                     "7 1.5 2.5 3.5 900 12 main\n"
                     "8 4.5 5.5 6.5 100 6 sub\n")
-    cat = pysif.io.read_catalog_ascii(str(path), format="* x y z * r")
+    cat = pysif.io.read_catalogue_ascii(str(path), format="* x y z * r")
     np.testing.assert_array_equal(cat.to_numpy()["r"], [12, 6])
     np.testing.assert_array_equal(cat.to_numpy()["cz"], [3.5, 6.5])
 
     with pytest.raises(OSError):
-        pysif.io.read_catalog_ascii(str(path))
+        pysif.io.read_catalogue_ascii(str(path))
     with pytest.raises(OSError):
-        pysif.io.read_catalog_ascii(str(path), format="x y z")
+        pysif.io.read_catalogue_ascii(str(path), format="x y z")

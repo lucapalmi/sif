@@ -232,7 +232,7 @@ SIF_HOT_LOOP SIF_PURE_FUNCTION uint8_t sif__overlap_quick(
   return 0;
 }
 
-SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalog_t* cat, sif_real cx,
+SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx,
   sif_real cy, sif_real cz, sif_real r, sif_real max_r, sif_real box_length,
   const sif_cell_linked_list_t* cll, uint32_t p2_mask,
   sif_real overlap_fraction) {
@@ -347,9 +347,9 @@ SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
   const sif_real half_box = box_length * 0.5f;
 
   const int32_t cell_radius = (int32_t)(r_true * inv_cell_length) + 1;
-  const int32_t center_ix = (int32_t)(cx * inv_cell_length);
-  const int32_t center_iy = (int32_t)(cy * inv_cell_length);
-  const int32_t center_iz = (int32_t)(cz * inv_cell_length);
+  const int32_t centre_ix = (int32_t)(cx * inv_cell_length);
+  const int32_t centre_iy = (int32_t)(cy * inv_cell_length);
+  const int32_t centre_iz = (int32_t)(cz * inv_cell_length);
 
   const int32_t span = 2 * cell_radius + 1;
 
@@ -358,7 +358,7 @@ SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
    * on the schedule. */
 #pragma omp parallel for schedule(static) if (span > 24)
   for (int32_t dx = -cell_radius; dx <= cell_radius; dx++) {
-    const int32_t global_x = center_ix + dx;
+    const int32_t global_x = centre_ix + dx;
     const sif_real px = (sif_real)global_x * cell_length;
     sif_real dist_x = SIF_REAL_ABS(px - cx);
     dist_x = (dist_x > half_box) ? box_length - dist_x : dist_x;
@@ -370,7 +370,7 @@ SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
     const uint32_t wrap_x = sif__wrap_pbc(global_x, n_cells, p2_mask);
 
     for (int32_t dy = -cell_radius; dy <= cell_radius; dy++) {
-      const int32_t global_y = center_iy + dy;
+      const int32_t global_y = centre_iy + dy;
       const sif_real py = (sif_real)global_y * cell_length;
       sif_real dist_y = SIF_REAL_ABS(py - cy);
       dist_y = (dist_y > half_box) ? box_length - dist_y : dist_y;
@@ -382,7 +382,7 @@ SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
       const uint32_t wrap_y = sif__wrap_pbc(global_y, n_cells, p2_mask);
 
       for (int32_t dz = -cell_radius; dz <= cell_radius; dz++) {
-        const int32_t global_z = center_iz + dz;
+        const int32_t global_z = centre_iz + dz;
         const sif_real pz = (sif_real)global_z * cell_length;
         sif_real dist_z = SIF_REAL_ABS(pz - cz);
         dist_z = (dist_z > half_box) ? box_length - dist_z : dist_z;

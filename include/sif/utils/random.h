@@ -10,7 +10,7 @@
  *
  * Header-only and state-passing: there is no global generator, so each thread
  * or task holds its own sif_prng_state_t and draws from it without
- * synchronization. Seed the states from distinct seeds -- the SplitMix64
+ * synchronisation. Seed the states from distinct seeds -- the SplitMix64
  * expansion below decorrelates even adjacent ones.
  *
  * @note xoshiro256+ is fast and statistically sound for simulation, but it is
@@ -57,7 +57,7 @@ static inline uint64_t sif__rotl(uint64_t x, int k) {
 /**
  * @brief Seed a generator state.
  *
- * @param state State to initialize.
+ * @param state State to initialise.
  * @param seed Any 64-bit value, including 0; it is expanded through
  * SplitMix64 into the 256 bits xoshiro needs.
  */

@@ -26,7 +26,7 @@
 #include <stdint.h>
 
 #include "sif/core/macros.h"
-#include "sif/structures/catalog.h"
+#include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
@@ -78,11 +78,11 @@
  * the only window applied. Pass SIF_FINDER_KEEP_CIC_WINDOW for a grid that was
  * filled some other way.
  *
- * @return Newly allocated catalogue, released with sif_catalog_free(), or
+ * @return Newly allocated catalogue, released with sif_catalogue_free(), or
  * NULL on invalid input -- a negative or non-finite weight included -- or
  * failure.
  */
-SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
   sif_real threshold, sif_real overlap_fraction, sif_option opt);
 
@@ -121,8 +121,8 @@ SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
  * contrast against the box mean, so a sphere that straddles an edge is
  * measured against the part of it that was observed.
  *
- * **Every void found is kept**, with its sif_catalog_t::footprint and
- * sif_catalog_t::footprint_shell: the fraction of its sphere, and of the
+ * **Every void found is kept**, with its sif_catalogue_t::footprint and
+ * sif_catalogue_t::footprint_shell: the fraction of its sphere, and of the
  * shell out to twice its radius, that lies in observed cells. A void cut by
  * the edge is still a void of the observed volume; the fractions say how far
  * to trust it.
@@ -143,10 +143,10 @@ SIF_NODISCARD sif_catalog_t* sif_finder_exodus(sif_grid_t* grid,
  * SIF_FINDER_KEEP_CIC_WINDOW and SIF_FINDER_SEARCH_*.
  *
  * @return Newly allocated catalogue, with its footprint columns, released
- * with sif_catalog_free(); NULL on invalid input, a survey too close to the
+ * with sif_catalogue_free(); NULL on invalid input, a survey too close to the
  * box faces, or failure.
  */
-SIF_NODISCARD sif_catalog_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
   const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
   sif_real threshold, sif_real overlap_fraction, sif_option opt);
@@ -170,9 +170,9 @@ SIF_NODISCARD sif_catalog_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  * sif_field_translate(data, offset);
  * sif_field_translate(randoms, offset);
  * // grids of n_cells over box, meshes over box, then:
- * sif_catalog_t* cat = sif_finder_exodus_survey(...);
+ * sif_catalogue_t* cat = sif_finder_exodus_survey(...);
  * const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
- * sif_catalog_translate(cat, back);
+ * sif_catalogue_translate(cat, back);
  * @endcode
  *
  * @param randoms The random catalogue, in the caller's Cartesian frame. Only
@@ -219,7 +219,7 @@ SIF_NODISCARD int sif_finder_exodus_survey_box(const sif_field_t* randoms,
 /**
  * @brief Suggested chain-mesh resolution for this finder.
  *
- * Mesh resolution changes only speed and memory: the catalog is identical at
+ * Mesh resolution changes only speed and memory: the catalogue is identical at
  * any resolution, so it is safe to tune. It is worth tuning -- at box/4, the
  * rule the finder used back when it built the mesh itself, an 8 million
  * particle run measured about 1.3x slower than at this resolution, and a

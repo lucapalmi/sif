@@ -52,7 +52,7 @@ BARRIER_BOX = dict(
 )
 
 # Optional smooth perturbation on top of the SMT shape, as insurance against
-# the shape-generalization failure seen across spectral families. Kept small on
+# the shape-generalisation failure seen across spectral families. Kept small on
 # purpose: the emulator's contract is the SMT family, and this only widens the
 # neighbourhood around it rather than claiming arbitrary barriers.
 PERTURB_FRACTION = 0.25   # share of curves carrying one
@@ -162,7 +162,7 @@ def barrier_values(sigma, params):
 
     The perturbation is a low-order Chebyshev-like ripple in ln sigma: smooth,
     bounded, and zero-mean in the log, so it changes the barrier's shape
-    without moving its overall normalization.
+    without moving its overall normalisation.
     """
     a, b, g = params["alpha"], params["beta"], params["gamma"]
     B = a * (1.0 + (b / sigma) ** g)

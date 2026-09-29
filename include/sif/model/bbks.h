@@ -11,8 +11,8 @@
  *
  * The number density of maxima depends on the field only through its spectral
  * moments, which is what makes it the natural prediction to hold a
- * phase-randomized surrogate against: everything BBKS knows about a field
- * survives phase randomization, so any disagreement with a directly counted
+ * phase-randomised surrogate against: everything BBKS knows about a field
+ * survives phase randomisation, so any disagreement with a directly counted
  * catalogue is phase information.
  *
  * Follows the presentation of Wu, Phys. Dark Universe 30 (2020) 100654,
@@ -49,7 +49,7 @@ SIF_NODISCARD sif_real* sif_bbks_gamma(const sif_delta_moments_t* moments);
  * smoothing radius.
  *
  * The characteristic separation between peaks of the smoothed field, and the
- * length that sets the normalization of the BBKS number density.
+ * length that sets the normalisation of the BBKS number density.
  *
  * @param moments Moment set with order >= 2.
  * @return Newly allocated array of n_radii lengths, released with
@@ -135,7 +135,7 @@ SIF_NODISCARD sif_real* sif_bbks_number_density_cumulative(
  * the convention of the measured size function; `options` records which. The
  * sign is chosen so the result is a positive number density.
  *
- * `r_centers` is `moments->radii`. The model is evaluated pointwise rather
+ * `r_centres` is `moments->radii`. The model is evaluated pointwise rather
  * than binned, so `r_edges` is reconstructed as geometric midpoints and
  * `counts` and `err` stay zero.
  *

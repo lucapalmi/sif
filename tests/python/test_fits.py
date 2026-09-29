@@ -155,29 +155,29 @@ def test_inspect(capsys):
 COSMOLOGY = dict(omega_m=0.31)
 
 
-def make_catalog(tmp_path, n=50):
+def make_catalogue(tmp_path, n=50):
     """A catalogue, through the text format: centres 500-2000 Mpc/h out."""
     rng = np.random.default_rng(5)
-    centers = rng.normal(size=(n, 3))
+    centres = rng.normal(size=(n, 3))
     distance = 500 + 1500 * rng.random(n)
-    centers *= (distance / np.linalg.norm(centers, axis=1))[:, None]
+    centres *= (distance / np.linalg.norm(centres, axis=1))[:, None]
     radii = 10 + 20 * rng.random(n)
     path = tmp_path / "voids.txt"
     with open(path, "w") as f:
         f.write(f"{n}\n")
-        np.savetxt(f, np.column_stack([centers, radii]))
-    return pysif.io.read_catalog_ascii(str(path))
+        np.savetxt(f, np.column_stack([centres, radii]))
+    return pysif.io.read_catalogue_ascii(str(path))
 
 
-def test_catalog_to_sky(tmp_path):
-    cat = make_catalog(tmp_path)
+def test_catalogue_to_sky(tmp_path):
+    cat = make_catalogue(tmp_path)
     assert cat.units == "cartesian"
-    cartesian = np.array(cat.centers)
+    cartesian = np.array(cat.centres)
     radii = np.array(cat.radii)
 
     cat.to_sky(**COSMOLOGY)
     assert cat.units == "sky"
-    ra, dec, z = np.array(cat.centers).T
+    ra, dec, z = np.array(cat.centres).T
     assert ((ra >= 0) & (ra < 360)).all() and (np.abs(dec) <= 90).all()
     np.testing.assert_array_equal(cat.radii, radii)
 
@@ -194,34 +194,34 @@ def test_catalog_to_sky(tmp_path):
 
 
 @pytest.mark.parametrize("sky", [False, True])
-def test_catalog_round_trips(tmp_path, sky):
-    cat = make_catalog(tmp_path)
+def test_catalogue_round_trips(tmp_path, sky):
+    cat = make_catalogue(tmp_path)
     if sky:
         cat.to_sky(**COSMOLOGY)
 
     fits = tmp_path / "voids.fits"
-    pysif.io.write_catalog_fits(fits, cat)
-    back = pysif.io.read_catalog_fits(fits)
+    pysif.io.write_catalogue_fits(fits, cat)
+    back = pysif.io.read_catalogue_fits(fits)
     assert back.units == cat.units
-    np.testing.assert_array_equal(back.centers, cat.centers)
+    np.testing.assert_array_equal(back.centres, cat.centres)
     np.testing.assert_array_equal(back.radii, cat.radii)
 
     # The text format keeps the coordinates too.
     txt = tmp_path / "again.txt"
-    pysif.io.write_catalog_ascii(str(txt), cat)
-    assert pysif.io.read_catalog_ascii(str(txt)).units == cat.units
+    pysif.io.write_catalogue_ascii(str(txt), cat)
+    assert pysif.io.read_catalogue_ascii(str(txt)).units == cat.units
 
 
-def test_catalog_errors(tmp_path):
+def test_catalogue_errors(tmp_path):
     with pytest.raises(FileNotFoundError):
-        pysif.io.read_catalog_fits(tmp_path / "missing.fits")
+        pysif.io.read_catalogue_fits(tmp_path / "missing.fits")
     with pytest.raises(ValueError):
-        pysif.io.read_catalog_fits(path("catalogue.fits"))  # galaxies, not voids
+        pysif.io.read_catalogue_fits(path("catalogue.fits"))  # galaxies, not voids
 
 
 def test_keywords(tmp_path):
     fits = tmp_path / "voids.fits"
-    pysif.io.write_catalog_fits(fits, make_catalog(tmp_path))
+    pysif.io.write_catalogue_fits(fits, make_catalogue(tmp_path))
 
     pysif.io.set_fits_key(fits, "NTRACER", 2**60 + 1)
     pysif.io.set_fits_key(fits, "search_factor", 1.5)
@@ -250,12 +250,12 @@ def test_keywords(tmp_path):
 
 def test_products_in_one_file(tmp_path):
     fits = tmp_path / "voids.fits"
-    cat = pysif.catalog_from_numpy(*(np.random.default_rng(2).random((4, 30)) * 50))
+    cat = pysif.catalogue_from_numpy(*(np.random.default_rng(2).random((4, 30)) * 50))
     cat.set_metadata("finder", "exodus")
     cat.set_metadata("search_factor", 1.5)
-    pysif.io.write_catalog_fits(fits, cat)
+    pysif.io.write_catalogue_fits(fits, cat)
 
-    vsf = pysif.measure.size_function_catalog(cat, 50.0, 6)
+    vsf = pysif.measure.size_function_catalogue(cat, 50.0, 6)
     pysif.io.write_size_function_fits(fits, vsf)
     back = pysif.io.read_size_function_fits(fits)
     np.testing.assert_array_equal(back.vsf, vsf.vsf)
@@ -263,8 +263,8 @@ def test_products_in_one_file(tmp_path):
 
     # Rewritten, the catalogue keeps what was measured from it.
     cat.set_metadata("finder", "by hand")
-    pysif.io.write_catalog_fits(fits, cat)
-    again = pysif.io.read_catalog_fits(fits)
+    pysif.io.write_catalogue_fits(fits, cat)
+    again = pysif.io.read_catalogue_fits(fits)
     assert again.metadata == {"finder": "by hand", "search_factor": 1.5}
     assert pysif.io.fits_key(fits, "SEARCH_FACTOR", hdu="VOIDS") == 1.5
     np.testing.assert_array_equal(pysif.io.read_size_function_fits(fits).vsf,
@@ -273,4 +273,4 @@ def test_products_in_one_file(tmp_path):
     with pytest.raises(ValueError, match="holds no profiles"):
         pysif.io.read_profiles_fits(fits)
     with pytest.raises(OSError):  # a file sif did not write
-        pysif.io.write_catalog_fits(path("catalogue.fits"), cat)
+        pysif.io.write_catalogue_fits(path("catalogue.fits"), cat)

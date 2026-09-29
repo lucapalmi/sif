@@ -11,7 +11,7 @@
  *
  * Two objects, with different lifetimes. The manager owns the process-global
  * FFTW state -- the plan cache and its wisdom file -- and lives from
- * sif_init() to sif_finalize(). A workspace owns the buffers and plans for one
+ * sif_init() to sif_finalise(). A workspace owns the buffers and plans for one
  * grid size and is created and destroyed around a piece of work.
  *
  * The transforms are real-to-complex, so the Fourier-space array holds only
@@ -147,7 +147,7 @@ typedef enum {
  * @param save_wisdom Save the plans on the disk
  * @param wisdom_file The path to the wisdom file
  *
- * @return The initialized fft manager
+ * @return The initialised fft manager
  */
 SIF_NODISCARD sif_fft_manager_t* sif__fft_manager_init(
   bool skip_tuning, const char* wisdom_dir);
@@ -155,9 +155,9 @@ SIF_NODISCARD sif_fft_manager_t* sif__fft_manager_init(
 /**
  * @brief Closes an fft manager
  *
- *@param mgr The fft manager to finalize
+ *@param mgr The fft manager to finalise
  */
-void sif__fft_manager_finalize(sif_fft_manager_t* mgr);
+void sif__fft_manager_finalise(sif_fft_manager_t* mgr);
 
 /**
  * @brief Allocates a fft workspace
@@ -174,7 +174,7 @@ void sif__fft_manager_finalize(sif_fft_manager_t* mgr);
  * @param mgr The global fft manager
  * @param n_cells the number of cells for the fft
  *
- * @return The initialized fft workspace
+ * @return The initialised fft workspace
  */
 SIF_NODISCARD sif_fft_workspace_t* sif__fft_workspace_alloc(
   sif_fft_manager_t* mgr, uint32_t n_cells);
@@ -220,7 +220,7 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws);
  * @param box_length The physical length of the simulation box
  *
  * @return SIF_OK on success, SIF_ERR_INVALID if the backward stage was never
- * initialized or the filter is unsupported, SIF_ERR_ALLOC on failure
+ * initialised or the filter is unsupported, SIF_ERR_ALLOC on failure
  */
 int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
   sif_real r, sif_real box_length);
@@ -303,11 +303,11 @@ int sif__fft_set_cic_correction(sif_fft_workspace_t* ws, int enable);
  * @param resample_amplitudes If false, every |delta_k| is preserved exactly and
  * only the phase changes. If true, amplitudes are additionally redrawn from the
  * Rayleigh distribution with the same mean square, giving a true Gaussian
- * random field realization rather than a fixed-amplitude one.
+ * random field realisation rather than a fixed-amplitude one.
  *
  * @return SIF_OK, or SIF_ERR_INVALID if the workspace has no spectrum
  */
-int sif__fft_randomize_phases(
+int sif__fft_randomise_phases(
   sif_fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes);
 
 /** @brief Highest order sif__fft_spectral_moments will accept. Past this the
@@ -324,7 +324,7 @@ int sif__fft_randomize_phases(
  * @brief Spectral moments of the filtered field, evaluated in Fourier space
  *
  * Computes sigma_j^2(R) = sum_{k != 0} k^(2j) |delta_k|^2 W^2(kR) for every
- * j from 0 to max_order in a single pass, normalized so that j = 0 reproduces
+ * j from 0 to max_order in a single pass, normalised so that j = 0 reproduces
  * the variance of the real-space smoothed field. Pinning the convention on
  * that identity is what makes the whole family unambiguous: it is the discrete
  * Parseval relation, exact rather than a continuum approximation, so
@@ -365,7 +365,7 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   uint64_t n_tracers, double* sigma_sq, double* high_k_fraction);
 
 /**
- * @brief Execute the complex-to-real fft, normalized and compacted
+ * @brief Execute the complex-to-real fft, normalised and compacted
  *
  * The transform runs in place on the workspace's real-space buffer, which is
  * then stripped of its FFTW row padding so the result is a contiguous

@@ -38,7 +38,7 @@ set(PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_fits.c
 
     # Structures Submodule
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_catalog.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_catalogue.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_grid.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_field.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_chain_mesh.c

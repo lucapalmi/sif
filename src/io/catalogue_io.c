@@ -4,10 +4,10 @@
  * This file is part of sif. See COPYING for the full license text.
  */
 
-#include "sif/io/catalog_io.h"
+#include "sif/io/catalogue_io.h"
 
 #include "sif/utils/logger.h"
-#include "structures/catalog_internal.h"
+#include "structures/catalogue_internal.h"
 
 #include <ctype.h>
 #include <math.h>
@@ -23,17 +23,17 @@
  * a written file can reach; a longer line is refused as malformed rather than
  * split.
  */
-#define CATALOG_LINE_MAX 4096
+#define CATALOGUE_LINE_MAX 4096
 
 /* Values a row may hold: the six sif writes, and room for columns another
  * tool added that the reader skips. Past the last column a layout places,
  * a row may run on with anything. */
-#define CATALOG_MAX_COLS 64
+#define CATALOGUE_MAX_COLS 64
 
-int sif_catalog_write_ascii(
-  const char* filepath, const sif_catalog_t* catalog) {
-  if (!catalog || !filepath) {
-    SIF_LOG_ERROR("io", "invalid arguments for write_catalog_ascii");
+int sif_catalogue_write_ascii(
+  const char* filepath, const sif_catalogue_t* catalogue) {
+  if (!catalogue || !filepath) {
+    SIF_LOG_ERROR("io", "invalid arguments for write_catalogue_ascii");
     return SIF_ERR_INVALID;
   }
 
@@ -47,45 +47,45 @@ int sif_catalog_write_ascii(
    * instead of growing it a void at a time or scanning the file twice; the
    * names say what each column is, sky or Cartesian, footprint or not. Both
    * behind '#', so numpy.loadtxt and friends read the rows as they are. */
-  fprintf(file, "#n=%" PRIu64 "\n", catalog->n_voids);
+  fprintf(file, "#n=%" PRIu64 "\n", catalogue->n_voids);
 
   /* The catalogue's metadata, one key a line, before the names: strings in
    * quotes, so that "10" comes back a string, numbers as they are. */
-  for (uint32_t m = 0; m < sif_catalog_meta_count(catalog); m++) {
-    const char* key = sif_catalog_meta_name(catalog, m);
-    switch (sif_catalog_meta_kind(catalog, key)) {
-    case SIF_CATALOG_META_INT:
+  for (uint32_t m = 0; m < sif_catalogue_meta_count(catalogue); m++) {
+    const char* key = sif_catalogue_meta_name(catalogue, m);
+    switch (sif_catalogue_meta_kind(catalogue, key)) {
+    case SIF_CATALOGUE_META_INT:
       fprintf(file, "#%s=%lld\n", key,
-        (long long)sif_catalog_meta_int_get(catalog, key));
+        (long long)sif_catalogue_meta_int_get(catalogue, key));
       break;
-    case SIF_CATALOG_META_REAL:
+    case SIF_CATALOGUE_META_REAL:
       fprintf(
-        file, "#%s=%.17g\n", key, sif_catalog_meta_real_get(catalog, key));
+        file, "#%s=%.17g\n", key, sif_catalogue_meta_real_get(catalogue, key));
       break;
-    case SIF_CATALOG_META_STRING:
+    case SIF_CATALOGUE_META_STRING:
       fprintf(
-        file, "#%s=\"%s\"\n", key, sif_catalog_meta_string_get(catalog, key));
+        file, "#%s=\"%s\"\n", key, sif_catalogue_meta_string_get(catalogue, key));
       break;
-    case SIF_CATALOG_META_MISSING:
+    case SIF_CATALOGUE_META_MISSING:
       break;
     }
   }
-  fputs(catalog->units == SIF_COORDINATES_SKY ? "#ra dec z r" : "#cx cy cz r",
+  fputs(catalogue->units == SIF_COORDINATES_SKY ? "#ra dec z r" : "#cx cy cz r",
     file);
-  if (catalog->footprint)
+  if (catalogue->footprint)
     fputs(" footprint footprint_shell", file);
   fputc('\n', file);
 
   /* SIF_PRI_REAL round-trips: a catalogue written and read back gives the same
    * radii bit for bit, which is what lets a size function computed from the
    * file match one computed in memory. */
-  for (uint64_t i = 0; i < catalog->n_voids; i++) {
+  for (uint64_t i = 0; i < catalogue->n_voids; i++) {
     fprintf(file,
       SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL " " SIF_PRI_REAL,
-      catalog->cx[i], catalog->cy[i], catalog->cz[i], catalog->radii[i]);
-    if (catalog->footprint)
-      fprintf(file, " " SIF_PRI_REAL " " SIF_PRI_REAL, catalog->footprint[i],
-        catalog->footprint_shell[i]);
+      catalogue->cx[i], catalogue->cy[i], catalogue->cz[i], catalogue->radii[i]);
+    if (catalogue->footprint)
+      fprintf(file, " " SIF_PRI_REAL " " SIF_PRI_REAL, catalogue->footprint[i],
+        catalogue->footprint_shell[i]);
     fputc('\n', file);
   }
 
@@ -99,7 +99,7 @@ int sif_catalog_write_ascii(
   }
 
   SIF_LOG_INFO(
-    "io", "saved %" PRIu64 " voids to %s (ASCII)", catalog->n_voids, filepath);
+    "io", "saved %" PRIu64 " voids to %s (ASCII)", catalogue->n_voids, filepath);
   return SIF_OK;
 }
 
@@ -116,9 +116,9 @@ typedef enum { LINE_END, LINE_TOO_LONG, LINE_COMMENT, LINE_DATA } line_kind_t;
  * comment comes back without its '#' and the blanks around it.
  */
 static line_kind_t next_line(FILE* file, char* line, char** text) {
-  while (fgets(line, CATALOG_LINE_MAX, file)) {
+  while (fgets(line, CATALOGUE_LINE_MAX, file)) {
     const size_t len = strlen(line);
-    if (len == CATALOG_LINE_MAX - 1 && line[len - 1] != '\n' && !feof(file))
+    if (len == CATALOGUE_LINE_MAX - 1 && line[len - 1] != '\n' && !feof(file))
       return LINE_TOO_LONG;
 
     char* p = line + strspn(line, " \t\r\n");
@@ -153,7 +153,7 @@ static bool parse_real(const char* s, char** end, sif_real* out) {
  * The values of a data row, separated by blanks or commas, and how many.
  *
  * Without a `limit` (0) every column has to be a number, and a row with more
- * than CATALOG_MAX_COLS, or with anything else, is -1. With one, only the
+ * than CATALOGUE_MAX_COLS, or with anything else, is -1. With one, only the
  * first `limit` columns are looked at, and one that is not a number sets its
  * bit in `bad` rather than failing: the caller knows which columns it reads,
  * and another tool's file can have a name or a flag in one it skips.
@@ -167,7 +167,7 @@ static int parse_row(const char* text, sif_real* v, int limit, uint64_t* bad) {
     p += strspn(p, SEPARATORS);
     if (!*p || (limit > 0 && n == limit))
       return n;
-    if (n == CATALOG_MAX_COLS)
+    if (n == CATALOGUE_MAX_COLS)
       return -1;
     const size_t len = strcspn(p, SEPARATORS);
     char* end;
@@ -362,7 +362,7 @@ static bool parse_count(const char* text, uint64_t* n) {
  * else a string as written. Returns whether the comment was one; a key the
  * catalogue does not allow is logged and skipped, not fatal.
  */
-static bool parse_meta(char* text, sif_catalog_t* into) {
+static bool parse_meta(char* text, sif_catalogue_t* into) {
   char* eq = strchr(text, '=');
   if (!eq)
     return false;
@@ -377,34 +377,34 @@ static bool parse_meta(char* text, sif_catalog_t* into) {
   const size_t len = strlen(value);
   if (len >= 2 && value[0] == '"' && value[len - 1] == '"') {
     value[len - 1] = '\0';
-    (void)sif_catalog_meta_string_set(into, key, value + 1);
+    (void)sif_catalogue_meta_string_set(into, key, value + 1);
     return true;
   }
   char* stop;
   const long long i = strtoll(value, &stop, 10);
   if (stop != value && !*stop) {
-    (void)sif_catalog_meta_int_set(into, key, (int64_t)i);
+    (void)sif_catalogue_meta_int_set(into, key, (int64_t)i);
     return true;
   }
   const double d = strtod(value, &stop);
   if (stop != value && !*stop && isfinite(d)) {
-    (void)sif_catalog_meta_real_set(into, key, d);
+    (void)sif_catalogue_meta_real_set(into, key, d);
     return true;
   }
-  (void)sif_catalog_meta_string_set(into, key, value);
+  (void)sif_catalogue_meta_string_set(into, key, value);
   return true;
 }
 
 /* Every exit after the file is open goes through here. */
-static sif_catalog_t* fail(FILE* file, sif_catalog_t* catalog) {
-  sif_catalog_free(catalog);
+static sif_catalogue_t* fail(FILE* file, sif_catalogue_t* catalogue) {
+  sif_catalogue_free(catalogue);
   fclose(file);
   return NULL;
 }
 
-sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
+sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt) {
   if (!filepath) {
-    SIF_LOG_ERROR("io", "invalid filepath for read_catalog_ascii");
+    SIF_LOG_ERROR("io", "invalid filepath for read_catalogue_ascii");
     return NULL;
   }
 
@@ -421,7 +421,7 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
     return NULL;
   }
 
-  char line[CATALOG_LINE_MAX];
+  char line[CATALOGUE_LINE_MAX];
   char* text = NULL;
   line_kind_t kind;
 
@@ -433,7 +433,7 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
 
   /* The metadata, held until the catalogue exists: its size is only known
    * once the header is read. */
-  sif_catalog_t* meta = sif_catalog_alloc(1);
+  sif_catalogue_t* meta = sif_catalogue_alloc(1);
   if (!meta)
     return fail(file, NULL);
 
@@ -453,7 +453,7 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
           "%s: the column names mix sky (ra, dec) and Cartesian (cx, cy) "
           "centres",
           filepath);
-        sif_catalog_free(meta);
+        sif_catalogue_free(meta);
         return fail(file, NULL);
       }
       have_names = named == 1;
@@ -483,26 +483,26 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
     }
     if (fseek(file, data_at, SEEK_SET) != 0) {
       SIF_LOG_ERROR("io", "%s: cannot read the rows a second time", filepath);
-      sif_catalog_free(meta);
+      sif_catalogue_free(meta);
       return fail(file, NULL);
     }
     kind = next_line(file, line, &text);
   }
 
-  sif_catalog_t* catalog = sif_catalog_alloc(n_voids);
-  const int copied = catalog ? sif__catalog_meta_copy(catalog, meta) : SIF_OK;
-  sif_catalog_free(meta);
-  if (!catalog || copied != SIF_OK) {
-    SIF_LOG_ERROR("io", "failed to allocate catalog for loading");
-    return fail(file, catalog);
+  sif_catalogue_t* catalogue = sif_catalogue_alloc(n_voids);
+  const int copied = catalogue ? sif__catalogue_meta_copy(catalogue, meta) : SIF_OK;
+  sif_catalogue_free(meta);
+  if (!catalogue || copied != SIF_OK) {
+    SIF_LOG_ERROR("io", "failed to allocate catalogue for loading");
+    return fail(file, catalogue);
   }
   if (layout.sky)
-    catalog->units = SIF_COORDINATES_SKY;
+    catalogue->units = SIF_COORDINATES_SKY;
 
   /*
    * Rows are required to be there: the count said how many, and a file that
    * stops short is truncated rather than merely small. Reading fewer would
-   * hand back a catalogue whose tail is uninitialized memory.
+   * hand back a catalogue whose tail is uninitialised memory.
    *
    * Without names, the first row decides the layout -- four columns, or six
    * with the footprint -- and every row after it has to agree. With them,
@@ -516,7 +516,7 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
     if (placed[c] + 1 > needed)
       needed = placed[c] + 1;
 
-  sif_real v[CATALOG_MAX_COLS];
+  sif_real v[CATALOGUE_MAX_COLS];
   uint64_t bad = 0;
   for (uint64_t i = 0; i < n_voids; i++) {
     while (kind == LINE_COMMENT)
@@ -524,7 +524,7 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
     if (kind == LINE_TOO_LONG) {
       SIF_LOG_ERROR(
         "io", "%s: a line is too long to be a catalogue row", filepath);
-      return fail(file, catalog);
+      return fail(file, catalogue);
     }
     const int got = kind == LINE_DATA
                       ? parse_row(text, v, have_names ? needed : 0, &bad)
@@ -538,29 +538,29 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
       }
     }
     if (i == 0 && layout.fp >= 0 &&
-        sif_catalog_reserve_footprint(catalog) != SIF_OK)
-      return fail(file, catalog);
+        sif_catalogue_reserve_footprint(catalogue) != SIF_OK)
+      return fail(file, catalogue);
 
     if (have_names ? got < needed : got != n_columns) {
       SIF_LOG_ERROR("io",
         "void %" PRIu64 " of %s has %d readable columns, expected %d", i,
         filepath, got < 0 ? 0 : got, have_names ? needed : n_columns);
-      return fail(file, catalog);
+      return fail(file, catalogue);
     }
     for (int c = 0; c < 6; c++)
       if (placed[c] >= 0 && (bad >> placed[c] & 1)) {
         SIF_LOG_ERROR("io", "void %" PRIu64 " of %s: column %d is not a number",
           i, filepath, placed[c] + 1);
-        return fail(file, catalog);
+        return fail(file, catalogue);
       }
 
-    catalog->cx[i] = v[layout.x];
-    catalog->cy[i] = v[layout.y];
-    catalog->cz[i] = v[layout.z];
-    catalog->radii[i] = v[layout.r];
+    catalogue->cx[i] = v[layout.x];
+    catalogue->cy[i] = v[layout.y];
+    catalogue->cz[i] = v[layout.z];
+    catalogue->radii[i] = v[layout.r];
     if (layout.fp >= 0) {
-      catalog->footprint[i] = v[layout.fp];
-      catalog->footprint_shell[i] = v[layout.fp_shell];
+      catalogue->footprint[i] = v[layout.fp];
+      catalogue->footprint_shell[i] = v[layout.fp_shell];
     }
     kind = next_line(file, line, &text);
   }
@@ -571,20 +571,20 @@ sif_catalog_t* sif_catalog_read_ascii(const char* filepath, const char* fmt) {
   if (kind != LINE_END) {
     SIF_LOG_ERROR(
       "io", "%s holds more rows than its count of %" PRIu64, filepath, n_voids);
-    return fail(file, catalog);
+    return fail(file, catalogue);
   }
 
-  /* Filled in directly rather than through sif_catalog_append(), so the size
+  /* Filled in directly rather than through sif_catalogue_append(), so the size
    * has to be set by hand. */
-  catalog->n_voids = n_voids;
+  catalogue->n_voids = n_voids;
 
   fclose(file);
   SIF_LOG_INFO("io", "loaded %" PRIu64 " voids from %s (ASCII%s%s)", n_voids,
-    filepath, catalog->footprint ? ", with footprint" : "",
+    filepath, catalogue->footprint ? ", with footprint" : "",
     layout.sky ? ", on the sky" : "");
 
-  return catalog;
+  return catalogue;
 }
 
-#undef CATALOG_LINE_MAX
-#undef CATALOG_MAX_COLS
+#undef CATALOGUE_LINE_MAX
+#undef CATALOGUE_MAX_COLS

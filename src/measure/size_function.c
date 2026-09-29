@@ -18,13 +18,13 @@
 SIF_DEFINE_QUICKSORT(sif_sort_real_array, sif_real, a < b)
 
 /*
- * Bins every void whose radius lies in [true_r_min, true_r_max] and normalizes
+ * Bins every void whose radius lies in [true_r_min, true_r_max] and normalises
  * to a number density.
  *
  * Both branches clamp the top edge into the last bin, so a void sitting
  * exactly at true_r_max is counted rather than silently dropped.
  */
-static void fill_histogram(sif_size_function_t* vsf, const sif_catalog_t* cat,
+static void fill_histogram(sif_size_function_t* vsf, const sif_catalogue_t* cat,
   sif_real box_length, sif_real true_r_min, sif_real true_r_max,
   bool use_ln_bins) {
 
@@ -80,14 +80,14 @@ static void fill_histogram(sif_size_function_t* vsf, const sif_catalog_t* cat,
 /* Public API                                                                 */
 /* -------------------------------------------------------------------------- */
 
-sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
+sif_size_function_t* sif_size_function_catalogue(const sif_catalogue_t* cat,
   sif_real box_length, uint32_t n_bins, sif_option options, sif_real r_min_in,
   sif_real r_max_in) {
 
   const bool use_ln_bins = (options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
 
   if (!cat || cat->n_voids == 0 || n_bins == 0) {
-    SIF_LOG_ERROR("size_function", "invalid catalog or bin count");
+    SIF_LOG_ERROR("size_function", "invalid catalogue or bin count");
     return NULL;
   }
 
@@ -132,7 +132,7 @@ sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
   vsf->r_min = true_r_min;
   vsf->r_max = true_r_max;
 
-  /* 3. Bin edges and centers */
+  /* 3. Bin edges and centres */
   if (use_ln_bins) {
     const sif_real log_rmin = SIF_REAL_LOG(true_r_min);
     const sif_real log_rmax = SIF_REAL_LOG(true_r_max);
@@ -141,17 +141,17 @@ sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
     for (uint32_t i = 0; i <= n_bins; i++)
       vsf->r_edges[i] = SIF_REAL_EXP(log_rmin + i * dlogr);
     for (uint32_t i = 0; i < n_bins; i++)
-      vsf->r_centers[i] = SIF_REAL_EXP(log_rmin + (i + 0.5f) * dlogr);
+      vsf->r_centres[i] = SIF_REAL_EXP(log_rmin + (i + 0.5f) * dlogr);
   } else {
     const sif_real dr = (true_r_max - true_r_min) / (sif_real)n_bins;
 
     for (uint32_t i = 0; i <= n_bins; i++)
       vsf->r_edges[i] = true_r_min + i * dr;
     for (uint32_t i = 0; i < n_bins; i++)
-      vsf->r_centers[i] = true_r_min + (i + 0.5f) * dr;
+      vsf->r_centres[i] = true_r_min + (i + 0.5f) * dr;
   }
 
-  /* 4. Bin and normalize */
+  /* 4. Bin and normalise */
   fill_histogram(vsf, cat, box_length, true_r_min, true_r_max, use_ln_bins);
 
   /* 5. Poisson error: the relative error on a bin is 1/sqrt(N). */
@@ -178,12 +178,12 @@ sif_size_function_t* sif_size_function_catalog(const sif_catalog_t* cat,
  */
 static void interpolate_vsf(const sif_size_function_t* vsf, sif_real r_target,
   sif_real* out_val, sif_real* out_err) {
-  if (r_target <= vsf->r_centers[0]) {
+  if (r_target <= vsf->r_centres[0]) {
     *out_val = vsf->vsf[0];
     *out_err = vsf->err[0];
     return;
   }
-  if (r_target >= vsf->r_centers[vsf->n_bins - 1]) {
+  if (r_target >= vsf->r_centres[vsf->n_bins - 1]) {
     *out_val = vsf->vsf[vsf->n_bins - 1];
     *out_err = vsf->err[vsf->n_bins - 1];
     return;
@@ -192,13 +192,13 @@ static void interpolate_vsf(const sif_size_function_t* vsf, sif_real r_target,
   /* Find bounding bins */
   uint32_t idx = 0;
   for (uint32_t i = 0; i < vsf->n_bins - 1; i++) {
-    if (r_target >= vsf->r_centers[i] && r_target <= vsf->r_centers[i + 1]) {
+    if (r_target >= vsf->r_centres[i] && r_target <= vsf->r_centres[i + 1]) {
       idx = i;
       break;
     }
   }
 
-  sif_real r0 = vsf->r_centers[idx], r1 = vsf->r_centers[idx + 1];
+  sif_real r0 = vsf->r_centres[idx], r1 = vsf->r_centres[idx + 1];
   sif_real v0 = vsf->vsf[idx], v1 = vsf->vsf[idx + 1];
   sif_real e0 = vsf->err[idx], e1 = vsf->err[idx + 1];
 
@@ -236,7 +236,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
   const uint32_t merge_strategy = (options & SIF__VSF_MERGE_MASK);
   const bool use_ln_bins = (options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
 
-  /* The mask admits four values and only three are defined. An unrecognized
+  /* The mask admits four values and only three are defined. An unrecognised
    * one used to match none of the branches below, leaving every master bin at
    * whatever the allocator returned -- a result-shaped object full of nothing.
    */
@@ -244,7 +244,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
       merge_strategy != SIF_VSF_MERGE_MEDIAN &&
       merge_strategy != SIF_VSF_MERGE_STITCH) {
     SIF_LOG_ERROR(
-      "size_function", "unrecognized merge strategy in the options bitmask");
+      "size_function", "unrecognised merge strategy in the options bitmask");
     return NULL;
   }
 
@@ -265,7 +265,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
     return NULL;
 
   /* 2. Allocate the Master VSF. counts stay zero: raw void counts are not
-   * meaningful once several catalogs have been interpolated onto a shared
+   * meaningful once several catalogues have been interpolated onto a shared
    * grid. */
   sif_size_function_t* master = sif__size_function_alloc(master_bins);
   if (!master)
@@ -283,13 +283,13 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
     for (uint32_t i = 0; i <= master_bins; i++)
       master->r_edges[i] = SIF_REAL_EXP(log_rmin + i * dlogr);
     for (uint32_t i = 0; i < master_bins; i++)
-      master->r_centers[i] = SIF_REAL_EXP(log_rmin + (i + 0.5f) * dlogr);
+      master->r_centres[i] = SIF_REAL_EXP(log_rmin + (i + 0.5f) * dlogr);
   } else {
     sif_real dr = (abs_max - abs_min) / (sif_real)master_bins;
     for (uint32_t i = 0; i <= master_bins; i++)
       master->r_edges[i] = abs_min + i * dr;
     for (uint32_t i = 0; i < master_bins; i++)
-      master->r_centers[i] = abs_min + (i + 0.5f) * dr;
+      master->r_centres[i] = abs_min + (i + 0.5f) * dr;
   }
 
   /* 4. Interpolate and Merge */
@@ -304,10 +304,10 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
   }
 
   for (uint32_t b = 0; b < master_bins; b++) {
-    sif_real r_target = master->r_centers[b];
+    sif_real r_target = master->r_centres[b];
     uint32_t valid_count = 0;
 
-    /* Gather data from all catalogs that are valid at this radius */
+    /* Gather data from all catalogues that are valid at this radius */
     for (uint32_t i = 0; i < n_vsfs; i++) {
       sif_real current_min = domains ? domains[i].min : vsfs[i]->r_min;
       sif_real current_max = domains ? domains[i].max : vsfs[i]->r_max;
@@ -317,7 +317,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
           vsfs[i], r_target, &temp_vals[valid_count], &temp_errs[valid_count]);
         valid_count++;
 
-        /* If Stitch mode, the first valid catalog takes priority and we break
+        /* If Stitch mode, the first valid catalogue takes priority and we break
          */
         if (merge_strategy == SIF_VSF_MERGE_STITCH)
           break;
