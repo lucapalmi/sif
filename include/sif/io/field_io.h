@@ -85,15 +85,15 @@ SIF_NODISCARD sif_field_t* sif_field_read(
 /**
  * @brief Read a .xfield file into a field that already exists.
  *
- * @param filepath Path to the input file.
  * @param field Field to fill. Its `n_particles` must equal the file's, and its
  * arrays must already be reserved.
+ * @param filepath Path to the input file.
  * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO on any
  * file error -- including a bad magic number, an unknown version, a
  * particle-count or precision mismatch, or a failed checksum, all of which
  * are rejected rather than adapted to.
  */
-int sif_field_read_into(const char* filepath, sif_field_t* field);
+int sif_field_read_into(sif_field_t* field, const char* filepath);
 
 /**
  * @brief Write a field to a .xfield file.
@@ -181,8 +181,24 @@ int sif_field_write(
  * @warning A column that is present but does not parse as a number reads as
  * 0.0 rather than failing. Only a *missing* column causes a row to be skipped.
  */
-int sif_field_read_ascii(sif_field_t* field, const char* filepath,
+int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   const char* fmt, char delimiter, uint32_t skip_header);
+
+/**
+ * @brief Read an ASCII table into a new field.
+ *
+ * sif_field_read_ascii_into() on a field sized from the file, for the common
+ * case of one file holding everything: rows are parsed and skipped exactly as
+ * there.
+ *
+ * @param fmt Column layout; see the column formats above. Must name the
+ * positions, since the new field has none.
+ * @return The field, owned by the caller and released with sif_field_free().
+ * NULL on any failure sif_field_read_ascii_into() reports, with the reason in
+ * the log.
+ */
+SIF_NODISCARD sif_field_t* sif_field_read_ascii(
+  const char* filepath, const char* fmt, char delimiter, uint32_t skip_header);
 
 /**
  * @brief How the values of a binary file are arranged.
@@ -224,8 +240,8 @@ typedef enum {
  * reported.
  *
  * @param field Field to fill, sized or with `n_particles` 0. As for
- * sif_field_read_ascii(), blocks it already has are kept, so a second file can
- * add columns to the first.
+ * sif_field_read_ascii_into(), blocks it already has are kept, so a second
+ * file can add columns to the first.
  * @param filepath Path to the input file.
  * @param fmt Column layout; see the column formats above. For example `"x y z
  * *8 w"`.
@@ -236,14 +252,31 @@ typedef enum {
  * @param endian Byte order of the values.
  * @param header_bytes Bytes to skip before the data.
  * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, an argument out of
- * range or in the wrong place, or a format sif_field_read_ascii() would
+ * range or in the wrong place, or a format sif_field_read_ascii_into() would
  * refuse; SIF_ERR_ALLOC; SIF_ERR_IO if the file could not be read, is shorter
  * than the particles asked for, or does not divide into whole particles.
  */
-SIF_NODISCARD int sif_field_read_binary(sif_field_t* field,
+SIF_NODISCARD int sif_field_read_binary_into(sif_field_t* field,
   const char* filepath, const char* fmt, sif_binary_layout_t layout,
   sif_binary_precision_t precision, sif_binary_endian_t endian,
   uint64_t header_bytes);
+
+/**
+ * @brief Read a raw binary file into a new field.
+ *
+ * sif_field_read_binary_into() on a field sized from the file, for the common
+ * case of one file holding everything: what follows the header must then be a
+ * whole number of particles.
+ *
+ * @param fmt Column layout; see the column formats above. Must name the
+ * positions, since the new field has none.
+ * @return The field, owned by the caller and released with sif_field_free().
+ * NULL on any failure sif_field_read_binary_into() reports, with the reason
+ * in the log.
+ */
+SIF_NODISCARD sif_field_t* sif_field_read_binary(const char* filepath,
+  const char* fmt, sif_binary_layout_t layout, sif_binary_precision_t precision,
+  sif_binary_endian_t endian, uint64_t header_bytes);
 
 /** @} */
 

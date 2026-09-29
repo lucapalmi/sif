@@ -289,7 +289,7 @@ PyObject* pysif_read_field_ascii(
 
   int status = 0;
   Py_BEGIN_ALLOW_THREADS status =
-    sif_field_read_ascii(field, filepath, format, delimiter, skip_lines);
+    sif_field_read_ascii_into(field, filepath, format, delimiter, skip_lines);
   Py_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
@@ -396,7 +396,7 @@ PyObject* pysif_read_field_binary(
       return PyErr_NoMemory();
   }
 
-  const int status = sif_field_read_binary(field, filepath, format,
+  const int status = sif_field_read_binary_into(field, filepath, format,
     (sif_binary_layout_t)layout, (sif_binary_precision_t)precision,
     (sif_binary_endian_t)byteorder, header_bytes);
 
@@ -443,7 +443,7 @@ PyObject* pysif_write_catalog_ascii(
 
   int status = 0;
   Py_BEGIN_ALLOW_THREADS status =
-    sif_catalog_write_ascii(cat->catalog, filepath);
+    sif_catalog_write_ascii(filepath, cat->catalog);
   Py_END_ALLOW_THREADS
 
     if (status != 0) {
@@ -506,7 +506,7 @@ PyObject* pysif_write_profiles_ascii(
 
   int status = 0;
   Py_BEGIN_ALLOW_THREADS status =
-    sif_profiles_write_ascii(prof->dens, prof->vel, cat->catalog, filepath);
+    sif_profiles_write_ascii(filepath, prof->dens, prof->vel, cat->catalog);
   Py_END_ALLOW_THREADS
 
     if (status != SIF_OK) {

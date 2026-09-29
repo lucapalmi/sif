@@ -789,7 +789,7 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
       /* Keyed, so a file found by name still has to say it came from this
        * field before its contents are believed. */
       const uint64_t expect[2] = {key.a, key.b};
-      if (sif__grid_read_into_keyed(final_path, grid, expect) == SIF_OK) {
+      if (sif__grid_read_into_keyed(grid, final_path, expect) == SIF_OK) {
         SIF_LOG_INFO("grid_cic", "loaded cached .xgrid from %s", final_path);
         return SIF_OK;
       }

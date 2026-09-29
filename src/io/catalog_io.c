@@ -21,7 +21,7 @@
 #define CATALOG_LINE_MAX 1024
 
 int sif_catalog_write_ascii(
-  const sif_catalog_t* catalog, const char* filepath) {
+  const char* filepath, const sif_catalog_t* catalog) {
   if (!catalog || !filepath) {
     SIF_LOG_ERROR("io", "invalid arguments for write_catalog_ascii");
     return SIF_ERR_INVALID;

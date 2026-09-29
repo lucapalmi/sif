@@ -21,6 +21,7 @@
 
 #include "sif/io/gadget_io.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -104,6 +105,28 @@ static PyObject* status_error(int status, const char* path) {
     return PyErr_Format(
       PyExc_OSError, "failed to read %s; see the log for the reason", path);
   }
+}
+
+/*
+ * After a failed read: the exception for what went wrong. The reader returns
+ * only NULL, with the reason in the log, so the kind of failure is worked out
+ * again here, cheaply. A header that does not read is the file's fault (or
+ * the build's, for HDF5), and says which; one that does, but cannot give the
+ * type, the fraction or the unit asked for, is the request's. Anything past
+ * that -- a truncated block, a file missing from the set -- is I/O.
+ */
+static PyObject* read_error(const char* path, sif_gadget_format_t format,
+  int ptype, int length, double fraction) {
+  sif_gadget_header_t h;
+  const int status = sif_gadget_read_header(path, format, &h);
+  if (status != SIF_OK)
+    return status_error(status, path);
+
+  const uint64_t n = (uint32_t)ptype < h.n_types ? h.n_part_total[ptype] : 0;
+  if (n == 0 || llround(fraction * (double)n) == 0 ||
+      (length == SIF_GADGET_LENGTH_AUTO && !(h.unit_length_in_cm > 0)))
+    return status_error(SIF_ERR_INVALID, path);
+  return status_error(SIF_ERR_IO, path);
 }
 
 /* --- header --- */
@@ -368,16 +391,15 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
         path);
   }
 
-  sif_field_t* field = NULL;
   double box_length = 0.0;
-  const int status = sif_field_read_gadget(path, format,
+  sif_field_t* field = sif_field_read_gadget(path, format,
     (sif_gadget_ptype_t)(SIF_GADGET_PTYPE_0 + ptype),
     (sif_gadget_velocity_t)velocity,
     masses ? SIF_GADGET_MASS_READ : SIF_GADGET_MASS_SKIP,
-    (sif_gadget_length_t)length, fraction, (uint64_t)seed, &field, &box_length);
+    (sif_gadget_length_t)length, fraction, (uint64_t)seed, &box_length);
 
-  if (status != SIF_OK)
-    return status_error(status, path);
+  if (!field)
+    return read_error(path, format, ptype, length, fraction);
 
   sifFieldObject* obj =
     (sifFieldObject*)sifFieldType.tp_alloc(&sifFieldType, 0);

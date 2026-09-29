@@ -139,9 +139,10 @@ int main(void) {
   // the fraction argument (1.0 here) allows for subsampling, and the
   // seed after it makes it reproducible
   double box_length = 0.0;
-  if (sif_field_read_gadget("path/to/snapshot", SIF_GADGET_FORMAT_AUTO,
-        SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP,
-        SIF_GADGET_LENGTH_KPC, 1.0, 0, &field, &box_length) != SIF_OK)
+  field = sif_field_read_gadget("path/to/snapshot", SIF_GADGET_FORMAT_AUTO,
+    SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP,
+    SIF_GADGET_LENGTH_KPC, 1.0, 0, &box_length);
+  if (!field)
     goto done;
 
   // this call corrects for possible rounding errors
@@ -208,7 +209,7 @@ int main(void) {
     goto done;
 
   // we finally save the catalog and finalize the library
-  status = sif_catalog_write_ascii(catalog, "path/to/voids.txt");
+  status = sif_catalog_write_ascii("path/to/voids.txt", catalog);
 
 done:
   sif_catalog_free(catalog);
@@ -442,14 +443,10 @@ int main(void) {
   // declination (in degrees) and redshift, and the galaxies carry a weight
   // in the fourth column: "w" reads it into the field (and "*" would skip
   // a column). weights are optional, for the data and the randoms alike
-  // a field allocated with no particles takes its size from the file
-  data = sif_field_alloc(0);
-  randoms = sif_field_alloc(0);
-  if (!data || !randoms ||
-      sif_field_read_ascii(data, "path/to/galaxies.txt", "x y z w", ' ', 0) !=
-        SIF_OK ||
-      sif_field_read_ascii(randoms, "path/to/randoms.txt", "x y z", ' ', 0) !=
-        SIF_OK)
+  // each field is sized from its file
+  data = sif_field_read_ascii("path/to/galaxies.txt", "x y z w", ' ', 0);
+  randoms = sif_field_read_ascii("path/to/randoms.txt", "x y z", ' ', 0);
+  if (!data || !randoms)
     goto done;
 
   // the reader loads the three coordinates into x, y and z, so we declare
@@ -549,7 +546,7 @@ int main(void) {
 
   // we finally save the catalog, footprint columns included, and
   // finalize the library
-  status = sif_catalog_write_ascii(catalog, "path/to/voids.txt");
+  status = sif_catalog_write_ascii("path/to/voids.txt", catalog);
 
 done:
   sif_catalog_free(catalog);

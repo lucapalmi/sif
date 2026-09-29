@@ -112,7 +112,7 @@ int sif_catalog_write_hdf5(const char* filepath, const sif_catalog_t* catalog) {
   if (dump_path(dump, sizeof(dump), filepath, "catalog") != SIF_OK)
     return SIF_ERR_INVALID;
 
-  const int status = sif_catalog_write_ascii(catalog, dump);
+  const int status = sif_catalog_write_ascii(dump, catalog);
   if (status == SIF_OK)
     warn_dumped(filepath, dump);
   return status;

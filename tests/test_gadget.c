@@ -113,11 +113,11 @@ static int available(const fixture_t* fx) {
 #endif
 }
 
-static int read_all(const char* path, sif_gadget_ptype_t ptype,
+static sif_field_t* read_all(const char* path, sif_gadget_ptype_t ptype,
   sif_gadget_velocity_t vel, sif_gadget_mass_t mass, sif_gadget_length_t len,
-  double fraction, uint64_t seed, sif_field_t** out, double* box) {
-  return sif_field_read_gadget(path, SIF_GADGET_FORMAT_AUTO, ptype, vel, mass,
-    len, fraction, seed, out, box);
+  double fraction, uint64_t seed, double* box) {
+  return sif_field_read_gadget(
+    path, SIF_GADGET_FORMAT_AUTO, ptype, vel, mass, len, fraction, seed, box);
 }
 
 /* --- headers --- */
@@ -217,23 +217,20 @@ static void test_full_reads(void) {
       continue;
 
     for (uint32_t t = 0; t < 3; t++) {
-      sif_field_t* f = NULL;
       double box = 0;
-      const int status = read_all(fx->path,
+      sif_field_t* f = read_all(fx->path,
         (sif_gadget_ptype_t)(SIF_GADGET_PTYPE_0 + t), SIF_GADGET_VELOCITY_RAW,
-        SIF_GADGET_MASS_READ, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, &box);
+        SIF_GADGET_MASS_READ, SIF_GADGET_LENGTH_KPC, 1.0, 0, &box);
 
       /* A type the snapshot has none of -- or, with NTYPES=2, does not have
        * at all -- is refused rather than read as empty. */
       if (fx_total(fx, t) == 0) {
-        CHECK(status == SIF_ERR_INVALID && !f, "%s type %u: status %d",
-          fx->name, t, status);
+        CHECK(!f, "%s type %u: accepted", fx->name, t);
         sif_field_free(f);
         continue;
       }
 
-      CHECK(
-        status == SIF_OK && f, "%s type %u: status %d", fx->name, t, status);
+      CHECK(f, "%s type %u: failed", fx->name, t);
       if (!f)
         continue;
 
@@ -271,9 +268,9 @@ static void test_options(void) {
   double box = 0;
 
   /* Peculiar velocities are u * sqrt(a), a = 0.25. */
-  int status = read_all(path, SIF_GADGET_PTYPE_2, SIF_GADGET_VELOCITY_PECULIAR,
-    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_MPC, 1.0, 0, &f, &box);
-  CHECK(status == SIF_OK && f, "peculiar: status %d", status);
+  f = read_all(path, SIF_GADGET_PTYPE_2, SIF_GADGET_VELOCITY_PECULIAR,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_MPC, 1.0, 0, &box);
+  CHECK(f, "peculiar: failed");
   if (f) {
     CHECK(f->weights == NULL, "MASS_SKIP still read weights");
     CHECK(box == BOX, "MPC converted the box: %g", box);
@@ -288,25 +285,24 @@ static void test_options(void) {
   }
 
   /* No velocities asked for, none reserved. */
-  status = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-    SIF_GADGET_MASS_READ, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_OK && f && !f->vx && !f->weights,
-    "skip velocities: status %d", status);
+  f = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_READ, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(f && !f->vx && !f->weights, "skip velocities: failed");
   sif_field_free(f);
   f = NULL;
 
   /* A binary file cannot say what its unit is. */
-  status = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_AUTO, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_INVALID && !f, "AUTO on binary: status %d", status);
+  f = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_AUTO, 1.0, 0, NULL);
+  CHECK(!f, "AUTO on binary: accepted");
 
 #ifdef SIF_HAVE_HDF5
   /* An HDF5 file can: kpc/h, found in /Parameters and in /Units. */
   const char* h5[2] = {DATA "hdf5_g4/snap_005", DATA "hdf5_legacy/snap_005"};
   for (int i = 0; i < 2; i++) {
-    status = read_all(h5[i], SIF_GADGET_PTYPE_0, SIF_GADGET_VELOCITY_SKIP,
-      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_AUTO, 1.0, 0, &f, &box);
-    CHECK(status == SIF_OK && f, "AUTO on %s: status %d", h5[i], status);
+    f = read_all(h5[i], SIF_GADGET_PTYPE_0, SIF_GADGET_VELOCITY_SKIP,
+      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_AUTO, 1.0, 0, &box);
+    CHECK(f, "AUTO on %s: failed", h5[i]);
     if (f) {
       CHECK(fabs(box - 10.0) < 1e-9, "AUTO box %.12g", box);
       double worst = 0;
@@ -343,39 +339,36 @@ static void test_paths(void) {
   };
 
   for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
-    sif_field_t* f = NULL;
-    const int status =
+    sif_field_t* f =
       read_all(cases[i].path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-        SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
+        SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
 #ifndef SIF_HAVE_HDF5
     if (cases[i].is_hdf5) {
-      CHECK(status == SIF_ERR_UNSUPPORTED && !f,
-        "%s: expected UNSUPPORTED, got %d", cases[i].path, status);
+      CHECK(!f, "%s: read without HDF5", cases[i].path);
       continue;
     }
 #endif
-    CHECK(status == SIF_OK && f && f->n_particles == N_TOTAL[1],
-      "%s: status %d", cases[i].path, status);
+    CHECK(f && f->n_particles == N_TOTAL[1], "%s: failed", cases[i].path);
     sif_field_free(f);
   }
 
   sif_field_t* f = NULL;
-  int status = read_all(DATA "nothing/snap_005", SIF_GADGET_PTYPE_1,
+  f = read_all(DATA "nothing/snap_005", SIF_GADGET_PTYPE_1,
     SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0,
-    0, &f, NULL);
-  CHECK(status == SIF_ERR_IO && !f, "missing snapshot: status %d", status);
+    0, NULL);
+  CHECK(!f, "missing snapshot: accepted");
 
   /* Asking for a format the file is not in. */
-  status = sif_field_read_gadget(DATA "f1_legacy/snap_005", SIF_GADGET_FORMAT_2,
+  f = sif_field_read_gadget(DATA "f1_legacy/snap_005", SIF_GADGET_FORMAT_2,
     SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP,
-    SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_IO && !f, "wrong format: status %d", status);
+    SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f, "wrong format: accepted");
 
   /* A file that is not a snapshot at all. */
-  status = read_all(DATA "make_fixtures.py", SIF_GADGET_PTYPE_1,
+  f = read_all(DATA "make_fixtures.py", SIF_GADGET_PTYPE_1,
     SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0,
-    0, &f, NULL);
-  CHECK(status == SIF_ERR_IO && !f, "not a snapshot: status %d", status);
+    0, NULL);
+  CHECK(!f, "not a snapshot: accepted");
 }
 
 /* --- subsampling --- */
@@ -395,10 +388,10 @@ static void test_subsample(void) {
   uint64_t ref[100], other[100];
   sif_field_t* f = NULL;
 
-  int status = read_all(DATA "f1_legacy/snap_005", SIF_GADGET_PTYPE_1,
+  f = read_all(DATA "f1_legacy/snap_005", SIF_GADGET_PTYPE_1,
     SIF_GADGET_VELOCITY_RAW, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 0.3,
-    42, &f, NULL);
-  CHECK(status == SIF_OK && f, "subsample: status %d", status);
+    42, NULL);
+  CHECK(f, "subsample: failed");
   if (!f)
     return;
 
@@ -420,11 +413,9 @@ static void test_subsample(void) {
   for (size_t i = 0; i < N_FIXTURES; i++) {
     if (!available(&FIXTURES[i]))
       continue;
-    status =
-      read_all(FIXTURES[i].path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-        SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 0.3, 42, &f, NULL);
-    CHECK(status == SIF_OK && f && f->n_particles == n_ref, "%s: status %d",
-      FIXTURES[i].name, status);
+    f = read_all(FIXTURES[i].path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 0.3, 42, NULL);
+    CHECK(f && f->n_particles == n_ref, "%s: failed", FIXTURES[i].name);
     if (f && f->n_particles == n_ref) {
       indices_of(f, t, other);
       CHECK(memcmp(ref, other, n_ref * sizeof(uint64_t)) == 0,
@@ -435,9 +426,9 @@ static void test_subsample(void) {
   }
 
   /* Another seed, another subsample. */
-  status = read_all(DATA "f1_legacy/snap_005", SIF_GADGET_PTYPE_1,
+  f = read_all(DATA "f1_legacy/snap_005", SIF_GADGET_PTYPE_1,
     SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 0.3,
-    43, &f, NULL);
+    43, NULL);
   if (f) {
     indices_of(f, t, other);
     CHECK(memcmp(ref, other, n_ref * sizeof(uint64_t)) != 0,
@@ -451,9 +442,9 @@ static void test_subsample(void) {
   const int n_seeds = SIF_TEST_SCALE(2000);
   uint32_t hits[100] = {0};
   for (int s = 0; s < n_seeds; s++) {
-    status = read_all(DATA "f1_legacy/snap_005", SIF_GADGET_PTYPE_1,
+    f = read_all(DATA "f1_legacy/snap_005", SIF_GADGET_PTYPE_1,
       SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC,
-      0.3, (uint64_t)s, &f, NULL);
+      0.3, (uint64_t)s, NULL);
     if (!f)
       break;
     indices_of(f, t, other);
@@ -476,37 +467,35 @@ static void test_refusals(void) {
   printf("refusals\n");
   const char* path = DATA "f1_legacy/snap_005";
   sif_field_t* f = NULL;
-  int status;
 
   /* Two options swapped: the enum types differ, so this takes casts -- which
    * is what a wrong call through an int would look like. */
-  status = sif_field_read_gadget(path, SIF_GADGET_FORMAT_AUTO,
-    SIF_GADGET_PTYPE_1, (sif_gadget_velocity_t)SIF_GADGET_MASS_READ,
+  f = sif_field_read_gadget(path, SIF_GADGET_FORMAT_AUTO, SIF_GADGET_PTYPE_1,
+    (sif_gadget_velocity_t)SIF_GADGET_MASS_READ,
     (sif_gadget_mass_t)SIF_GADGET_VELOCITY_RAW, SIF_GADGET_LENGTH_KPC, 1.0, 0,
-    &f, NULL);
-  CHECK(status == SIF_ERR_INVALID && !f, "swapped options: status %d", status);
+    NULL);
+  CHECK(!f, "swapped options: accepted");
 
-  status = sif_field_read_gadget(path, SIF_GADGET_FORMAT_AUTO,
-    (sif_gadget_ptype_t)1, SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP,
-    SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_INVALID && !f, "bare int type: status %d", status);
+  f = sif_field_read_gadget(path, SIF_GADGET_FORMAT_AUTO, (sif_gadget_ptype_t)1,
+    SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0,
+    0, NULL);
+  CHECK(!f, "bare int type: accepted");
 
   const double fractions[] = {0.0, -0.5, 1.5, NAN, 0.001};
   for (size_t i = 0; i < sizeof(fractions) / sizeof(*fractions); i++) {
-    status = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, fractions[i], 0, &f, NULL);
-    CHECK(status == SIF_ERR_INVALID && !f, "fraction %g: status %d",
-      fractions[i], status);
+    f = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, fractions[i], 0, NULL);
+    CHECK(!f, "fraction %g: accepted", fractions[i]);
   }
 
   /* A type the snapshot has none of. */
-  status = read_all(path, SIF_GADGET_PTYPE_4, SIF_GADGET_VELOCITY_SKIP,
-    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_INVALID && !f, "empty type: status %d", status);
+  f = read_all(path, SIF_GADGET_PTYPE_4, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f, "empty type: accepted");
 
-  status = read_all(path, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL, NULL);
-  CHECK(status == SIF_ERR_INVALID, "NULL out_field: status %d", status);
+  f = read_all(NULL, SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f, "NULL path: accepted");
 }
 
 /* --- broken snapshots --- */
@@ -549,24 +538,21 @@ static void test_broken(void) {
     copy_file(from, to, -1);
   }
   remove("test_gadget_snap.2");
-  int status =
-    read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_IO && !f, "missing file: status %d", status);
+  f = read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f, "missing file: accepted");
 
   /* All three, the last cut off in its positions block. */
   copy_file(DATA "f1_legacy/snap_005.2", "test_gadget_snap.2", 600);
-  status =
-    read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_IO && !f, "truncated file: status %d", status);
+  f = read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f, "truncated file: accepted");
 
   /* A file from another snapshot in the set: the counts no longer add up. */
   copy_file(DATA "f1_legacy/snap_005.1", "test_gadget_snap.2", -1);
-  status =
-    read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
-      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, &f, NULL);
-  CHECK(status == SIF_ERR_IO && !f, "inconsistent counts: status %d", status);
+  f = read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+    SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f, "inconsistent counts: accepted");
 
   for (int i = 0; i < 3; i++) {
     snprintf(to, sizeof(to), "test_gadget_snap.%d", i);

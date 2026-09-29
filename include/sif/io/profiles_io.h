@@ -50,11 +50,11 @@
  * is void i of the catalogue it was measured from, so it has to be that
  * catalogue.
  *
+ * @param filepath Path to the output file, truncated if it exists.
  * @param dens Density set, or NULL to leave densities out.
  * @param vel Velocity set, or NULL to leave velocities out. At least one of
  * the two is required, and two given together must agree on their shape.
  * @param cat The catalogue the sets were measured from.
- * @param filepath Path to the output file, truncated if it exists.
  * @return SIF_OK, SIF_ERR_INVALID on a NULL or mismatched argument, or
  * SIF_ERR_IO if the file could not be written.
  *
@@ -62,9 +62,9 @@
  * significant digits to recover the stored sif_real exactly, so a profile
  * survives a write/read round trip unchanged.
  */
-int sif_profiles_write_ascii(const sif_density_profiles_t* dens,
-  const sif_velocity_profiles_t* vel, const sif_catalog_t* cat,
-  const char* filepath);
+int sif_profiles_write_ascii(const char* filepath,
+  const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel,
+  const sif_catalog_t* cat);
 
 /**
  * @brief Read the leading line of a profile file, without the rows.

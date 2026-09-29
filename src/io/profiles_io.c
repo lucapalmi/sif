@@ -96,13 +96,13 @@ int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
   return SIF_OK;
 }
 
-int sif_profiles_write_ascii(const sif_density_profiles_t* dens,
-  const sif_velocity_profiles_t* vel, const sif_catalog_t* cat,
-  const char* filepath) {
+int sif_profiles_write_ascii(const char* filepath,
+  const sif_density_profiles_t* dens, const sif_velocity_profiles_t* vel,
+  const sif_catalog_t* cat) {
 
   if ((!dens && !vel) || !cat || !filepath) {
     SIF_LOG_ERROR("io",
-      "sif_profiles_write_ascii needs a catalogue, a path and at least one "
+      "sif_profiles_write_ascii needs a path, a catalogue and at least one "
       "profile set");
     return SIF_ERR_INVALID;
   }

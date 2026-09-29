@@ -113,7 +113,7 @@ static void test_field_roundtrip(void) {
   sif_field_reserve_velocities(g);
   sif_field_reserve_weights(g);
 
-  CHECK(sif_field_read_into(FIELD_PATH, g) == SIF_OK, "read failed");
+  CHECK(sif_field_read_into(g, FIELD_PATH) == SIF_OK, "read failed");
 
   int identical = 1;
   for (uint64_t i = 0; i < N_P; i++) {
@@ -137,9 +137,9 @@ static void test_field_roundtrip(void) {
       (unsigned long long)h->n_particles, N_P);
   sif_field_free(h);
 
-  CHECK(sif_field_read_into(NULL, g) == SIF_ERR_INVALID,
+  CHECK(sif_field_read_into(g, NULL) == SIF_ERR_INVALID,
     "a NULL path should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_into("test_io_does_not_exist.xfield", g) == SIF_ERR_IO,
+  CHECK(sif_field_read_into(g, "test_io_does_not_exist.xfield") == SIF_ERR_IO,
     "a missing file should be SIF_ERR_IO");
 
   sif_field_free(g);
@@ -161,7 +161,7 @@ static void test_field_corruption(void) {
   sif_field_reserve_positions(g);
   sif_field_reserve_velocities(g);
   sif_field_reserve_weights(g);
-  CHECK(sif_field_read_into(FIELD_PATH, g) == SIF_ERR_IO,
+  CHECK(sif_field_read_into(g, FIELD_PATH) == SIF_ERR_IO,
     "a flipped payload bit should fail the checksum");
   sif_field_free(g);
 }
@@ -180,7 +180,7 @@ static void test_grid_roundtrip(void) {
   CHECK(sif_grid_write(GRID_PATH, grid) == SIF_OK, "write failed");
 
   sif_grid_t* back = sif_grid_alloc(N_CELLS, BOX);
-  CHECK(sif_grid_read_into(GRID_PATH, back) == SIF_OK, "read failed");
+  CHECK(sif_grid_read_into(back, GRID_PATH) == SIF_OK, "read failed");
 
   int identical = 1;
   for (uint64_t i = 0; i < grid->total_cells; i++)
@@ -196,12 +196,12 @@ static void test_grid_roundtrip(void) {
   /* A grid of the wrong shape must be refused, not partially filled: this is
    * the path the CIC cache relies on to detect a stale entry. */
   sif_grid_t* wrong = sif_grid_alloc(N_CELLS * 2u, BOX);
-  CHECK(sif_grid_read_into(GRID_PATH, wrong) == SIF_ERR_IO,
+  CHECK(sif_grid_read_into(wrong, GRID_PATH) == SIF_ERR_IO,
     "a geometry mismatch should be rejected");
   sif_grid_free(wrong);
 
   corrupt_payload(GRID_PATH, 16);
-  CHECK(sif_grid_read_into(GRID_PATH, back) == SIF_ERR_IO,
+  CHECK(sif_grid_read_into(back, GRID_PATH) == SIF_ERR_IO,
     "a flipped payload bit should fail the checksum");
 
   sif_grid_free(back);
@@ -223,7 +223,7 @@ static void test_catalog_roundtrip(void) {
   sif_catalog_append(cat, (sif_real)-0.0009765625, (sif_real)65536.03125,
     (sif_real)1e-8, (sif_real)0.5);
 
-  CHECK(sif_catalog_write_ascii(cat, CAT_PATH) == SIF_OK, "write failed");
+  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK, "write failed");
 
   sif_catalog_t* back = sif_catalog_read_ascii(CAT_PATH);
   CHECK(back != NULL, "read returned NULL");
@@ -243,7 +243,7 @@ static void test_catalog_roundtrip(void) {
     sif_catalog_free(back);
   }
 
-  CHECK(sif_catalog_write_ascii(NULL, CAT_PATH) == SIF_ERR_INVALID,
+  CHECK(sif_catalog_write_ascii(CAT_PATH, NULL) == SIF_ERR_INVALID,
     "a NULL catalogue should be SIF_ERR_INVALID");
 
   /* With a footprint: two more columns, back bit for bit. */
@@ -253,7 +253,7 @@ static void test_catalog_roundtrip(void) {
   cat->footprint[1] = (sif_real)0.0;
   cat->footprint_shell[1] = SIF_CATALOG_FOOTPRINT_UNKNOWN;
 
-  CHECK(sif_catalog_write_ascii(cat, CAT_PATH) == SIF_OK,
+  CHECK(sif_catalog_write_ascii(CAT_PATH, cat) == SIF_OK,
     "write with footprint failed");
   back = sif_catalog_read_ascii(CAT_PATH);
   CHECK(back && back->footprint && back->footprint_shell,
@@ -302,7 +302,7 @@ static void test_catalog_roundtrip(void) {
   sif_catalog_free(back);
 
   sif_catalog_t* empty = sif_catalog_alloc(1);
-  CHECK(sif_catalog_write_ascii(empty, CAT_PATH) == SIF_OK,
+  CHECK(sif_catalog_write_ascii(CAT_PATH, empty) == SIF_OK,
     "writing an empty catalogue failed");
   back = sif_catalog_read_ascii(CAT_PATH);
   CHECK(back && back->n_voids == 0, "an empty catalogue did not read back");
@@ -354,7 +354,7 @@ static void test_profiles_roundtrip(void) {
       "profile computation failed");
 
   if (dens && vel) {
-    CHECK(sif_profiles_write_ascii(dens, vel, cat, PROF_PATH) == SIF_OK,
+    CHECK(sif_profiles_write_ascii(PROF_PATH, dens, vel, cat) == SIF_OK,
       "write failed");
 
     sif_catalog_t* cat_back = NULL;
@@ -427,7 +427,7 @@ static void test_profiles_roundtrip(void) {
           SIF_PBC_PERIODIC | SIF_PROFILES_DIFFERENTIAL, &shells,
           NULL) == SIF_OK) {
       CHECK(
-        sif_profiles_write_ascii(shells, NULL, cat, PROF_HALF_PATH) == SIF_OK,
+        sif_profiles_write_ascii(PROF_HALF_PATH, shells, NULL, cat) == SIF_OK,
         "differential write failed");
 
       int is_differential = 0;
@@ -450,7 +450,7 @@ static void test_profiles_roundtrip(void) {
 
     /* Asking a file for what it does not carry has to fail rather than hand
      * back a set of zeros, which would look like a measurement. */
-    CHECK(sif_profiles_write_ascii(dens, NULL, cat, PROF_HALF_PATH) == SIF_OK,
+    CHECK(sif_profiles_write_ascii(PROF_HALF_PATH, dens, NULL, cat) == SIF_OK,
       "density-only write failed");
 
     sif_velocity_profiles_t* missing = (sif_velocity_profiles_t*)1;
@@ -463,13 +463,13 @@ static void test_profiles_roundtrip(void) {
      * void. */
     sif_catalog_t* short_cat = sif_catalog_alloc(2);
     sif_catalog_append(short_cat, 1.0f, 2.0f, 3.0f, 4.0f);
-    CHECK(sif_profiles_write_ascii(dens, vel, short_cat, PROF_PATH) ==
+    CHECK(sif_profiles_write_ascii(PROF_PATH, dens, vel, short_cat) ==
             SIF_ERR_INVALID,
       "a catalogue of the wrong length should be SIF_ERR_INVALID");
     sif_catalog_free(short_cat);
 
     CHECK(
-      sif_profiles_write_ascii(NULL, NULL, cat, PROF_PATH) == SIF_ERR_INVALID,
+      sif_profiles_write_ascii(PROF_PATH, NULL, NULL, cat) == SIF_ERR_INVALID,
       "writing no profile set at all should be SIF_ERR_INVALID");
   }
 
@@ -492,14 +492,7 @@ static void write_text(const char* body) {
 
 /* Read ASCII_PATH into a fresh field sized from the file itself. */
 static sif_field_t* read_ascii(const char* fmt, char delim, uint32_t skip) {
-  sif_field_t* f = sif_field_alloc(0);
-  if (!f)
-    return NULL;
-  if (sif_field_read_ascii(f, ASCII_PATH, fmt, delim, skip) != SIF_OK) {
-    sif_field_free(f);
-    return NULL;
-  }
-  return f;
+  return sif_field_read_ascii(ASCII_PATH, fmt, delim, skip);
 }
 
 static void test_ascii_field(void) {
@@ -574,7 +567,7 @@ static void test_ascii_field(void) {
   f = read_ascii("xyz*", ' ', 0);
   CHECK(f != NULL, "first pass failed");
   if (f) {
-    CHECK(sif_field_read_ascii(f, ASCII_PATH, "***w", ' ', 0) == SIF_OK,
+    CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "***w", ' ', 0) == SIF_OK,
       "weight-only second pass failed");
     CHECK(f->x[1] == 4 && f->z[1] == 6, "the second pass lost the positions");
     CHECK(f->weights != NULL && f->weights[1] == 200, "weights did not land");
@@ -584,7 +577,7 @@ static void test_ascii_field(void) {
   /* A field that already has a count is filled to it and no further. */
   write_text("1 2 3\n4 5 6\n7 8 9\n");
   f = sif_field_alloc(2);
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xyz", ' ', 0) == SIF_OK,
+  CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "xyz", ' ', 0) == SIF_OK,
     "read into a pre-sized field failed");
   CHECK(
     f->n_particles == 2 && f->x[1] == 4, "a pre-sized field was not respected");
@@ -601,26 +594,33 @@ static void test_ascii_field_rejections(void) {
 
   /* A format that names nothing would consume every line and write nothing,
    * leaving a field of uninitialized memory that reads as loaded. */
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "", ' ', 0) == SIF_ERR_INVALID,
+  CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "", ' ', 0) == SIF_ERR_INVALID,
     "an empty format should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "?!", ' ', 0) == SIF_ERR_INVALID,
+  CHECK(
+    sif_field_read_ascii_into(f, ASCII_PATH, "?!", ' ', 0) == SIF_ERR_INVALID,
     "a format of unknown characters should be SIF_ERR_INVALID");
 
   /* Position and velocity are reserved as one block each, so naming two of
    * the three would allocate the third and never write it. */
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xy", ' ', 0) == SIF_ERR_INVALID,
+  CHECK(
+    sif_field_read_ascii_into(f, ASCII_PATH, "xy", ' ', 0) == SIF_ERR_INVALID,
     "a partial position should be SIF_ERR_INVALID");
-  CHECK(
-    sif_field_read_ascii(f, ASCII_PATH, "xyz vx vy", ' ', 0) == SIF_ERR_INVALID,
+  CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "xyz vx vy", ' ', 0) ==
+          SIF_ERR_INVALID,
     "a partial velocity should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "w", ' ', 0) == SIF_ERR_INVALID,
-    "a weight-only format on a field with no positions should be rejected");
-
   CHECK(
-    sif_field_read_ascii(NULL, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_INVALID,
+    sif_field_read_ascii_into(f, ASCII_PATH, "w", ' ', 0) == SIF_ERR_INVALID,
+    "a weight-only format on a field with no positions should be rejected");
+  CHECK(!sif_field_read_ascii(ASCII_PATH, "w", ' ', 0),
+    "sif_field_read_ascii() returned a field with no positions");
+  CHECK(!sif_field_read_ascii("test_io_does_not_exist.txt", "xyz", ' ', 0),
+    "sif_field_read_ascii() returned a field for a missing file");
+
+  CHECK(sif_field_read_ascii_into(NULL, ASCII_PATH, "xyz", ' ', 0) ==
+          SIF_ERR_INVALID,
     "a NULL field should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_ascii(f, "test_io_does_not_exist.txt", "xyz", ' ', 0) ==
-          SIF_ERR_IO,
+  CHECK(sif_field_read_ascii_into(
+          f, "test_io_does_not_exist.txt", "xyz", ' ', 0) == SIF_ERR_IO,
     "a missing file should be SIF_ERR_IO");
   sif_field_free(f);
 
@@ -628,7 +628,7 @@ static void test_ascii_field_rejections(void) {
    * not an empty field: the caller would otherwise carry on with one. */
   write_text("# only\n\n; comments\n");
   f = sif_field_alloc(0);
-  CHECK(sif_field_read_ascii(f, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_IO,
+  CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_IO,
     "a file with no data rows should be SIF_ERR_IO");
   sif_field_free(f);
 }
@@ -676,8 +676,8 @@ static void test_column_formats(void) {
   write_text("1 2 3 4 5 6 7\n");
   for (size_t i = 0; i < sizeof(bad) / sizeof(*bad); i++) {
     f = sif_field_alloc(0);
-    CHECK(
-      sif_field_read_ascii(f, ASCII_PATH, bad[i], ' ', 0) == SIF_ERR_INVALID,
+    CHECK(sif_field_read_ascii_into(f, ASCII_PATH, bad[i], ' ', 0) ==
+            SIF_ERR_INVALID,
       "format '%s' should be SIF_ERR_INVALID", bad[i]);
     sif_field_free(f);
   }
@@ -689,13 +689,14 @@ static void test_column_formats(void) {
   f = read_ascii("x y z *", ' ', 0);
   if (f) {
     CHECK(sif_field_sort_morton(f) == SIF_OK, "sort failed");
-    CHECK(
-      sif_field_read_ascii(f, ASCII_PATH, "* * * w", ' ', 0) == SIF_ERR_INVALID,
+    CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "* * * w", ' ', 0) ==
+            SIF_ERR_INVALID,
       "adding a column to a sorted field should be SIF_ERR_INVALID");
-    CHECK(sif_field_read_ascii(f, ASCII_PATH, "x y z w", ' ', 0) == SIF_OK &&
-            f->original_indices == NULL &&
-            !(f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) && f->x[0] == 3 &&
-            f->weights[0] == 30,
+    CHECK(
+      sif_field_read_ascii_into(f, ASCII_PATH, "x y z w", ' ', 0) == SIF_OK &&
+        f->original_indices == NULL &&
+        !(f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) && f->x[0] == 3 &&
+        f->weights[0] == 30,
       "re-reading the positions should reset the sort");
     sif_field_free(f);
   }
@@ -803,7 +804,7 @@ static void test_binary_field(void) {
         write_binary(blocks, dbl, big);
 
         sif_field_t* f = sif_field_alloc(0);
-        const int status = sif_field_read_binary(f, BIN_PATH, fmt,
+        const int status = sif_field_read_binary_into(f, BIN_PATH, fmt,
           blocks ? SIF_BINARY_BLOCKS : SIF_BINARY_ROWS,
           dbl ? SIF_BINARY_FLOAT64 : SIF_BINARY_FLOAT32, endian, BIN_HEADER);
         CHECK(status == SIF_OK && f->n_particles == BIN_N,
@@ -817,18 +818,32 @@ static void test_binary_field(void) {
         sif_field_free(f);
       }
 
+  /* The allocating reader: the same particles, in a field of its own. */
+  write_binary(1, 1, host_big);
+  sif_field_t* g = sif_field_read_binary(BIN_PATH, fmt, SIF_BINARY_BLOCKS,
+    SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE, BIN_HEADER);
+  CHECK(g && g->n_particles == BIN_N && bin_mismatches(g, BIN_N) == 0,
+    "sif_field_read_binary() did not read the file");
+  sif_field_free(g);
+  CHECK(!sif_field_read_binary(BIN_PATH, "* * * w", SIF_BINARY_BLOCKS,
+          SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE, BIN_HEADER),
+    "sif_field_read_binary() returned a field with no positions");
+  CHECK(!sif_field_read_binary("test_io_missing.bin", fmt, SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, BIN_HEADER),
+    "sif_field_read_binary() returned a field for a missing file");
+
   /* A pre-sized field reads that many; a count the file cannot hold is an
    * I/O error. */
   write_binary(0, 0, host_big);
   sif_field_t* f = sif_field_alloc(10);
-  CHECK(sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
           SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_OK &&
           bin_mismatches(f, 10) == 0,
     "a pre-sized field was not filled with the first particles");
   sif_field_free(f);
 
   f = sif_field_alloc(BIN_N + 1);
-  CHECK(sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
           SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_ERR_IO,
     "asking for more particles than the file holds should be SIF_ERR_IO");
   sif_field_free(f);
@@ -846,7 +861,7 @@ static void test_binary_field(void) {
   };
   for (size_t i = 0; i < sizeof(off) / sizeof(*off); i++) {
     f = sif_field_alloc(0);
-    CHECK(sif_field_read_binary(f, BIN_PATH, off[i].fmt, SIF_BINARY_ROWS,
+    CHECK(sif_field_read_binary_into(f, BIN_PATH, off[i].fmt, SIF_BINARY_ROWS,
             off[i].prec, SIF_BINARY_NATIVE, off[i].header) == SIF_ERR_IO,
       "mismatched layout %zu should be SIF_ERR_IO", i);
     sif_field_free(f);
@@ -856,14 +871,14 @@ static void test_binary_field(void) {
    * and skipping a whole block in the block layout. */
   write_binary(1, 1, host_big);
   f = sif_field_alloc(0);
-  CHECK(
-    sif_field_read_binary(f, BIN_PATH, "x y z *8 * * * *", SIF_BINARY_BLOCKS,
-      SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_OK &&
-      !f->vx,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, "x y z *8 * * * *",
+          SIF_BINARY_BLOCKS, SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE,
+          BIN_HEADER) == SIF_OK &&
+          !f->vx,
     "positions-only read failed");
-  CHECK(
-    sif_field_read_binary(f, BIN_PATH, "* * * *8 vx vy vz *", SIF_BINARY_BLOCKS,
-      SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE, BIN_HEADER) == SIF_OK,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, "* * * *8 vx vy vz *",
+          SIF_BINARY_BLOCKS, SIF_BINARY_FLOAT64, SIF_BINARY_NATIVE,
+          BIN_HEADER) == SIF_OK,
     "velocities-only second read failed");
   CHECK(f->vx && !f->weights && f->x[5] == (sif_real)bin_value(0, 5) &&
           f->vx[5] == (sif_real)bin_value(3, 5) &&
@@ -873,22 +888,23 @@ static void test_binary_field(void) {
 
   /* Arguments in the wrong slot, or out of range. */
   f = sif_field_alloc(0);
-  CHECK(sif_field_read_binary(f, BIN_PATH, fmt,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, fmt,
           (sif_binary_layout_t)SIF_BINARY_FLOAT64,
           (sif_binary_precision_t)SIF_BINARY_ROWS, SIF_BINARY_NATIVE,
           BIN_HEADER) == SIF_ERR_INVALID,
     "swapped layout and precision should be SIF_ERR_INVALID");
-  CHECK(
-    sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS, SIF_BINARY_FLOAT32,
-      (sif_binary_endian_t)3, BIN_HEADER) == SIF_ERR_INVALID,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+          SIF_BINARY_FLOAT32, (sif_binary_endian_t)3,
+          BIN_HEADER) == SIF_ERR_INVALID,
     "a bare int byte order should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_binary(f, BIN_PATH, "x y z *0 w", SIF_BINARY_ROWS,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, "x y z *0 w", SIF_BINARY_ROWS,
           SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 0) == SIF_ERR_INVALID,
     "a zero skip width should be SIF_ERR_INVALID");
-  CHECK(sif_field_read_binary(f, "test_io_missing.bin", fmt, SIF_BINARY_ROWS,
-          SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 0) == SIF_ERR_IO,
+  CHECK(
+    sif_field_read_binary_into(f, "test_io_missing.bin", fmt, SIF_BINARY_ROWS,
+      SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 0) == SIF_ERR_IO,
     "a missing file should be SIF_ERR_IO");
-  CHECK(sif_field_read_binary(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
+  CHECK(sif_field_read_binary_into(f, BIN_PATH, fmt, SIF_BINARY_ROWS,
           SIF_BINARY_FLOAT32, SIF_BINARY_NATIVE, 1u << 20) == SIF_ERR_IO,
     "a header longer than the file should be SIF_ERR_IO");
   sif_field_free(f);

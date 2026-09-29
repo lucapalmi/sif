@@ -22,11 +22,12 @@
  * **Arguments are enumerations, one type per slot, each with its own range of
  * values.** A call spells out every choice it makes, and one that passes a
  * value in the wrong slot -- a velocity option where the mass option goes --
- * is refused with SIF_ERR_INVALID naming the slot, rather than read as
- * whatever integer it happens to be.
+ * is refused, with the slot named in the log, rather than read as whatever
+ * integer it happens to be.
  *
  * HDF5 files need a build with HDF5 (SIF_HDF5_SUPPORT); without one they are
- * refused with SIF_ERR_UNSUPPORTED, and the binary formats still work.
+ * refused (sif_gadget_read_header() says SIF_ERR_UNSUPPORTED), and the binary
+ * formats still work.
  */
 
 #ifndef SIF_IO_GADGET_IO_H
@@ -244,20 +245,20 @@ int sif_gadget_inspect(const char* path);
  * @param fraction Share of the particles to keep, in (0, 1]; 1 keeps all and
  * draws nothing.
  * @param seed Seed for the subsample; ignored when @p fraction is 1.
- * @param out_field The field, owned by the caller and released with
- * sif_field_free(). NULL on any failure.
- * @param out_box_length Optional; the box size, in Mpc/h.
- * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, an argument in the
- * wrong slot or out of range, a type the snapshot has no particles of, a
- * fraction that keeps none, or LENGTH_AUTO on a file that records no unit;
- * SIF_ERR_IO for a missing, truncated or inconsistent file -- including files
- * whose counts do not add up to the header's total; SIF_ERR_ALLOC;
- * SIF_ERR_UNSUPPORTED for HDF5 in a build without it.
+ * @param out_box_length Optional; the box size, in Mpc/h. Written only on
+ * success.
+ * @return The field, owned by the caller and released with sif_field_free().
+ * NULL on any failure, with the reason in the log: a NULL path, an argument
+ * in the wrong slot or out of range, a type the snapshot has no particles of,
+ * a fraction that keeps none, LENGTH_AUTO on a file that records no unit, a
+ * missing, truncated or inconsistent file -- including files whose counts do
+ * not add up to the header's total -- an allocation failure, or HDF5 in a
+ * build without it.
  */
-SIF_NODISCARD int sif_field_read_gadget(const char* path,
+SIF_NODISCARD sif_field_t* sif_field_read_gadget(const char* path,
   sif_gadget_format_t format, sif_gadget_ptype_t ptype,
   sif_gadget_velocity_t velocity, sif_gadget_mass_t mass,
   sif_gadget_length_t length, double fraction, uint64_t seed,
-  sif_field_t** out_field, double* out_box_length);
+  double* out_box_length);
 
 #endif /* SIF_IO_GADGET_IO_H */

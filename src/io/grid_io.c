@@ -131,12 +131,12 @@ static int header_validate(
   return SIF_OK;
 }
 
-int sif_grid_read_into(const char* filepath, sif_grid_t* grid) {
-  return sif__grid_read_into_keyed(filepath, grid, NULL);
+int sif_grid_read_into(sif_grid_t* grid, const char* filepath) {
+  return sif__grid_read_into_keyed(grid, filepath, NULL);
 }
 
 int sif__grid_read_into_keyed(
-  const char* filepath, sif_grid_t* grid, const uint64_t expect_key[2]) {
+  sif_grid_t* grid, const char* filepath, const uint64_t expect_key[2]) {
   if (!filepath || !grid)
     return SIF_ERR_INVALID;
 
@@ -263,7 +263,7 @@ sif_grid_t* sif_grid_read(const char* filepath) {
     return NULL;
   }
 
-  if (sif_grid_read_into(filepath, grid) != SIF_OK) {
+  if (sif_grid_read_into(grid, filepath) != SIF_OK) {
     sif_grid_free(grid);
     return NULL;
   }

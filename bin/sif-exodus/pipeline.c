@@ -164,14 +164,11 @@ static int read_field(
   const exodus_params_t* p, sif_field_t** out, double* file_box) {
 
   sif_field_t* field = NULL;
-  int status = SIF_OK;
   *file_box = 0.0;
 
   switch (p->input.kind) {
   case EXODUS_INPUT_XFIELD:
     field = sif_field_read(p->input.path, file_box);
-    if (!field)
-      return SIF_ERR_IO;
     break;
 
   case EXODUS_INPUT_ASCII:
@@ -189,26 +186,21 @@ static int read_field(
       return SIF_ERR_INVALID;
     }
 
-    /* A count of 0: the readers size the field from the file. */
-    field = sif_field_alloc(0);
-    if (!field)
-      return SIF_ERR_ALLOC;
-
     if (p->input.kind == EXODUS_INPUT_ASCII)
-      status = sif_field_read_ascii(field, p->input.path, p->input.columns,
+      field = sif_field_read_ascii(p->input.path, p->input.columns,
         p->input.delimiter, p->input.skip_header);
     else
-      status = sif_field_read_binary(field, p->input.path, p->input.columns,
+      field = sif_field_read_binary(p->input.path, p->input.columns,
         p->input.binary.layout, p->input.binary.precision,
         p->input.binary.endian, p->input.binary.header_bytes);
     break;
 
   case EXODUS_INPUT_GADGET:
-    status = sif_field_read_gadget(p->input.path, p->input.gadget.format,
+    field = sif_field_read_gadget(p->input.path, p->input.gadget.format,
       p->input.gadget.ptype, SIF_GADGET_VELOCITY_SKIP,
       p->input.gadget.masses ? SIF_GADGET_MASS_READ : SIF_GADGET_MASS_SKIP,
       p->input.gadget.length, p->input.gadget.fraction, p->input.gadget.seed,
-      &field, file_box);
+      file_box);
     break;
 
   default:
@@ -216,10 +208,9 @@ static int read_field(
     return SIF_ERR_INVALID;
   }
 
-  if (status != SIF_OK) {
-    sif_field_free(field);
-    return status;
-  }
+  /* Every reader returns NULL on failure, and has logged why. */
+  if (!field)
+    return SIF_ERR_IO;
 
   *out = field;
   return SIF_OK;
@@ -325,7 +316,7 @@ static int write_output(
     if (status == SIF_OK)
       status = describe_catalog(tmp, p, r);
   } else {
-    status = sif_catalog_write_ascii(cat, tmp);
+    status = sif_catalog_write_ascii(tmp, cat);
   }
 
   if (status == SIF_OK && rename(tmp, path) != 0) {

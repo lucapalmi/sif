@@ -25,8 +25,8 @@
 /**
  * @brief Write a catalogue to a text file.
  *
- * @param catalog Catalogue to write.
  * @param filepath Path to the output file, truncated if it exists.
+ * @param catalog Catalogue to write.
  * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO if the
  * file could not be written.
  *
@@ -34,7 +34,7 @@
  * significant digits to recover the stored sif_real exactly, so a catalogue
  * survives a write/read round trip unchanged.
  */
-int sif_catalog_write_ascii(const sif_catalog_t* catalog, const char* filepath);
+int sif_catalog_write_ascii(const char* filepath, const sif_catalog_t* catalog);
 
 /**
  * @brief Read a catalogue written by sif_catalog_write_ascii().

@@ -90,13 +90,13 @@ SIF_NODISCARD sif_grid_t* sif_grid_read(const char* filepath);
 /**
  * @brief Read an .xgrid file into a grid that already exists.
  *
- * @param filepath Path to the input file.
  * @param grid Grid to fill. Its geometry must match the file's.
+ * @param filepath Path to the input file.
  * @return SIF_OK, SIF_ERR_INVALID on a NULL argument, or SIF_ERR_IO on any
  * file error -- including a geometry or precision mismatch, or a failed
  * checksum, which are rejected rather than adapted to.
  */
-int sif_grid_read_into(const char* filepath, sif_grid_t* grid);
+int sif_grid_read_into(sif_grid_t* grid, const char* filepath);
 
 /**
  * @brief Write a grid to an .xgrid file.

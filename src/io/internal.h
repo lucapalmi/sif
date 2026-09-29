@@ -50,7 +50,7 @@ int sif__grid_write_keyed(
  * key differs from @p expect_key or which records none at all.
  */
 int sif__grid_read_into_keyed(
-  const char* filepath, sif_grid_t* grid, const uint64_t expect_key[2]);
+  sif_grid_t* grid, const char* filepath, const uint64_t expect_key[2]);
 
 /**
  * @brief Read a large block from a file descriptor using several threads.

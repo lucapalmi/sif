@@ -885,16 +885,14 @@ static int stream_file(stream_t* s, snap_file_t* sf, const char* path) {
   return SIF_OK;
 }
 
-int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
+sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   sif_gadget_ptype_t ptype, sif_gadget_velocity_t velocity,
   sif_gadget_mass_t mass, sif_gadget_length_t length, double fraction,
-  uint64_t seed, sif_field_t** out_field, double* out_box_length) {
+  uint64_t seed, double* out_box_length) {
 
-  if (out_field)
-    *out_field = NULL;
-  if (!path || !out_field) {
-    SIF_LOG_ERROR(TAG, "path and out_field are required");
-    return SIF_ERR_INVALID;
+  if (!path) {
+    SIF_LOG_ERROR(TAG, "a path is required");
+    return NULL;
   }
 
   if (!slot_ok((int)format, SIF_GADGET_FORMAT_AUTO, 4, "format") ||
@@ -902,11 +900,11 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
       !slot_ok((int)velocity, SIF_GADGET_VELOCITY_SKIP, 3, "velocity") ||
       !slot_ok((int)mass, SIF_GADGET_MASS_SKIP, 2, "mass") ||
       !slot_ok((int)length, SIF_GADGET_LENGTH_KPC, 3, "length"))
-    return SIF_ERR_INVALID;
+    return NULL;
 
   if (!(fraction > 0 && fraction <= 1)) {
     SIF_LOG_ERROR(TAG, "fraction must be in (0, 1], not %g", fraction);
-    return SIF_ERR_INVALID;
+    return NULL;
   }
 
   const uint32_t t = (uint32_t)(ptype - SIF_GADGET_PTYPE_0);
@@ -914,14 +912,14 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   snap_path_t sp;
   int status = path_resolve(path, &sp);
   if (status != SIF_OK)
-    return status;
+    return NULL;
 
   /* --- pass 1: every header, to size the field before reading anything --- */
 
   snap_file_t sf;
   status = snap_open(sp.first, format, &sf);
   if (status != SIF_OK)
-    return status;
+    return NULL;
   const sif_gadget_header_t h0 = sf.header;
   snap_close(&sf);
 
@@ -931,7 +929,7 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   if (t >= h0.n_types) {
     SIF_LOG_ERROR(TAG,
       "the snapshot has %u particle types; there is no type %u", h0.n_types, t);
-    return SIF_ERR_INVALID;
+    return NULL;
   }
 
   uint64_t n_total = 0;
@@ -939,18 +937,18 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   for (uint32_t i = 0; i < h0.n_files; i++) {
     status = path_file(&sp, h0.n_files, i, file);
     if (status != SIF_OK)
-      return status;
+      return NULL;
 
     status = snap_open(file, file_format, &sf);
     if (status != SIF_OK)
-      return status;
+      return NULL;
     const sif_gadget_header_t hi = sf.header;
     snap_close(&sf);
 
     if (hi.n_types != h0.n_types || hi.n_files != h0.n_files) {
       SIF_LOG_ERROR(
         TAG, "%s does not belong to the same snapshot as %s", file, sp.first);
-      return SIF_ERR_IO;
+      return NULL;
     }
     n_total += hi.n_part_file[t];
   }
@@ -960,11 +958,11 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
       "the files hold %" PRIu64 " particles of type %u, but the header says "
       "the snapshot has %" PRIu64 "; a file is missing or from another run",
       n_total, t, h0.n_part_total[t]);
-    return SIF_ERR_IO;
+    return NULL;
   }
   if (n_total == 0) {
     SIF_LOG_ERROR(TAG, "the snapshot has no particles of type %u", t);
-    return SIF_ERR_INVALID;
+    return NULL;
   }
 
   /* --- units and options --- */
@@ -981,7 +979,7 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
       "%s does not record its length unit; name it with SIF_GADGET_LENGTH_KPC "
       "or SIF_GADGET_LENGTH_MPC",
       sp.first);
-    return SIF_ERR_INVALID;
+    return NULL;
   }
 
   stream_t s;
@@ -996,7 +994,7 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
         "peculiar velocities need a scale factor, and the "
         "header's time is %g",
         h0.time);
-      return SIF_ERR_INVALID;
+      return NULL;
     }
     s.vel_scale = sqrt(h0.time);
   }
@@ -1018,7 +1016,7 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   if (s.n_keep == 0) {
     SIF_LOG_ERROR(TAG, "a fraction of %g keeps none of %" PRIu64 " particles",
       fraction, n_total);
-    return SIF_ERR_INVALID;
+    return NULL;
   }
   sif_prng_init(&s.prng, seed);
 
@@ -1079,7 +1077,7 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
 
   if (status != SIF_OK) {
     sif_field_free(s.field);
-    return status;
+    return NULL;
   }
 
   if (out_box_length)
@@ -1090,8 +1088,7 @@ int sif_field_read_gadget(const char* path, sif_gadget_format_t format,
     s.n_keep, n_total, t, h0.n_files, format_name(file_format),
     h0.n_files == 1 ? "" : "s");
 
-  *out_field = s.field;
-  return SIF_OK;
+  return s.field;
 }
 
 #undef TAG

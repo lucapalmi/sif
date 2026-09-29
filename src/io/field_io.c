@@ -171,7 +171,7 @@ static int header_validate(
   return SIF_OK;
 }
 
-int sif_field_read_into(const char* filepath, sif_field_t* field) {
+int sif_field_read_into(sif_field_t* field, const char* filepath) {
   if (!filepath || !field)
     return SIF_ERR_INVALID;
 
@@ -346,7 +346,7 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
     return NULL;
   }
 
-  if (sif_field_read_into(filepath, field) != SIF_OK) {
+  if (sif_field_read_into(field, filepath) != SIF_OK) {
     sif_field_free(field);
     return NULL;
   }
@@ -688,7 +688,7 @@ static int next_real(char** cursor, char delimiter, sif_real* out_val) {
   return 1;
 }
 
-int sif_field_read_ascii(sif_field_t* field, const char* filepath,
+int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   const char* fmt, char delimiter, uint32_t skip_header) {
 
   if (!field || !filepath || !fmt) {
@@ -904,7 +904,7 @@ static int binary_read_blocks(FILE* file, sif_field_t* field, const format_t* f,
   return SIF_OK;
 }
 
-int sif_field_read_binary(sif_field_t* field, const char* filepath,
+int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
   const char* fmt, sif_binary_layout_t layout, sif_binary_precision_t precision,
   sif_binary_endian_t endian, uint64_t header_bytes) {
 
@@ -1012,6 +1012,42 @@ int sif_field_read_binary(sif_field_t* field, const char* filepath,
   SIF_LOG_INFO(
     "io", "loaded %" PRIu64 " particles from %s", field->n_particles, filepath);
   return SIF_OK;
+}
+
+/* The allocating readers: an empty field, sized by the _into reader from the
+ * file, and released again if the read fails. */
+
+sif_field_t* sif_field_read_ascii(
+  const char* filepath, const char* fmt, char delimiter, uint32_t skip_header) {
+  sif_field_t* field = sif_field_alloc(0);
+  if (!field) {
+    SIF_LOG_ERROR("io", "failed to allocate a field for %s",
+      filepath ? filepath : "(null)");
+    return NULL;
+  }
+  if (sif_field_read_ascii_into(field, filepath, fmt, delimiter, skip_header) !=
+      SIF_OK) {
+    sif_field_free(field);
+    return NULL;
+  }
+  return field;
+}
+
+sif_field_t* sif_field_read_binary(const char* filepath, const char* fmt,
+  sif_binary_layout_t layout, sif_binary_precision_t precision,
+  sif_binary_endian_t endian, uint64_t header_bytes) {
+  sif_field_t* field = sif_field_alloc(0);
+  if (!field) {
+    SIF_LOG_ERROR("io", "failed to allocate a field for %s",
+      filepath ? filepath : "(null)");
+    return NULL;
+  }
+  if (sif_field_read_binary_into(field, filepath, fmt, layout, precision,
+        endian, header_bytes) != SIF_OK) {
+    sif_field_free(field);
+    return NULL;
+  }
+  return field;
 }
 
 #undef MAX_COLS
