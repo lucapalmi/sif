@@ -27,6 +27,33 @@ SIF_PURE_FUNCTION inline uint64_t sif__flat_index(
   return (uint64_t)ix * n * n + (uint64_t)iy * n + (uint64_t)iz;
 }
 
+int sif__finder_check_args(const char* tag, const sif_real* radii,
+  uint32_t n_radii, sif_real threshold, sif_real overlap_fraction) {
+
+  if (!radii || n_radii == 0) {
+    SIF_LOG_ERROR(tag, "radii: none given");
+    return SIF_ERR_INVALID;
+  }
+  for (uint32_t i = 0; i < n_radii; i++) {
+    if (!(radii[i] > 0.0f) || !isfinite(radii[i])) {
+      SIF_LOG_ERROR(
+        tag, "radii[%u] = %g: not a positive radius", i, (double)radii[i]);
+      return SIF_ERR_INVALID;
+    }
+  }
+  if (!(threshold > -1.0f && threshold < 0.0f)) {
+    SIF_LOG_ERROR(tag, "threshold %g: not a density contrast in (-1, 0)",
+      (double)threshold);
+    return SIF_ERR_INVALID;
+  }
+  if (!(overlap_fraction >= 0.0f && overlap_fraction <= 1.0f)) {
+    SIF_LOG_ERROR(
+      tag, "overlap_fraction %g: not in [0, 1]", (double)overlap_fraction);
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
+}
+
 /* --- 2. Field preparation --- */
 
 /*

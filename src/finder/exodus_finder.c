@@ -101,6 +101,7 @@
 
 #include "core/system_internal.h"
 #include "structures/field_internal.h"
+#include "utils/logger_internal.h"
 
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -434,8 +435,8 @@ static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
    */
   if (cell_radius >= (int32_t)mesh_n_cells) {
     SIF_LOG_ERROR(TAG,
-      "the search sphere (r_search = %g, %d mesh cells) does not fit in a mesh "
-      "of %u cells; use a finer mesh or smaller radii",
+      "search sphere of %g (%d mesh cells): wider than the mesh (%u cells); "
+      "use a finer mesh or smaller radii",
       (double)r_search, cell_radius, mesh_n_cells);
     return SIF_ERR_RANGE;
   }
@@ -452,7 +453,8 @@ static int template_build(mesh_template_t* tpl, uint32_t mesh_n_cells,
 
   if (!tpl->dx || !tpl->dy || !tpl->dz || !tpl->type || !tpl->min_d2 ||
       !tpl->max_d2) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the mesh template");
+    SIF_LOG_ERROR(
+      TAG, "out of memory: mesh template of %" PRIu64 " cells", max_cells);
     template_free(tpl);
     return SIF_ERR_ALLOC;
   }
@@ -1880,17 +1882,14 @@ static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
   sif_fft_workspace_t* ws =
     sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
   *ws_out = ws;
-  if (!ws) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the FFT workspace");
+  if (!ws)
     return SIF_ERR_ALLOC;
-  }
 
   /* Must succeed before the field is released: on failure the caller's grid
    * has to come back untouched. */
-  if (sif__fft_grid_forward(ws, grid) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "the forward FFT failed");
-    return SIF_ERR_ALLOC;
-  }
+  const int status = sif__fft_grid_forward(ws, grid);
+  if (status != SIF_OK)
+    return status;
 
   /* Before the first filter and after the transform, which is the only window
    * in which the assignment window is separable from the smoothing one. */
@@ -1900,12 +1899,7 @@ static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
   sif_free_aligned(grid->values);
   grid->values = NULL;
 
-  if (sif__fft_workspace_init_backward(ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to initialise the backward FFT");
-    return SIF_ERR_ALLOC;
-  }
-
-  return SIF_OK;
+  return sif__fft_workspace_init_backward(ws, state->fft_mgr);
 }
 
 /* random_grid and random_mesh are NULL for a box run. */
@@ -1927,7 +1921,7 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
 
   ctx->sorted_radii = sif_malloc_aligned(n_radii * sizeof(sif_real));
   if (!ctx->sorted_radii) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the radii array");
+    SIF_LOG_ERROR(TAG, "out of memory: %u radii", n_radii);
     return SIF_ERR_ALLOC;
   }
   memcpy(ctx->sorted_radii, radii, n_radii * sizeof(sif_real));
@@ -1962,17 +1956,16 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   for (int t = 0; t < ctx->n_threads; t++) {
     if (scratch_init(&ctx->scratch[t], mesh->weights != NULL, survey) !=
         SIF_OK) {
-      SIF_LOG_ERROR(TAG, "failed to allocate the per-thread radial scratch");
+      SIF_LOG_ERROR(
+        TAG, "out of memory: radial scratch for %d threads", ctx->n_threads);
       return SIF_ERR_ALLOC;
     }
   }
 
   /* The occupancy reads the random mesh only, so it goes first: nothing a
    * failure here leaves behind has touched either grid. */
-  if (survey && survey_build_occupancy(ctx, grid) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the footprint mask");
+  if (survey && survey_build_occupancy(ctx, grid) != SIF_OK)
     return SIF_ERR_ALLOC;
-  }
 
   /* The radii are sorted descending, so the last is the smallest. */
   const sif_real min_radius = ctx->sorted_radii[n_radii - 1];
@@ -2187,7 +2180,7 @@ static inline int classify_weight(sif_real w) {
  */
 static int check_weights(const sif_chain_mesh_t* mesh) {
   if (!mesh->cell_weights) {
-    SIF_LOG_ERROR(TAG, "the mesh carries weights but no per-cell weight table");
+    SIF_LOG_ERROR(TAG, "mesh: weights but no per-cell weight table");
     return SIF_ERR_INVALID;
   }
 
@@ -2203,14 +2196,14 @@ static int check_weights(const sif_chain_mesh_t* mesh) {
 
   if (n_negative > 0 || n_nonfinite > 0) {
     SIF_LOG_ERROR(TAG,
-      "the mesh weights must be finite and non-negative: %" PRIu64
-      " negative, %" PRIu64 " not finite, of %" PRIu64,
+      "mesh: weights must be finite and non-negative (%" PRIu64
+      " negative, %" PRIu64 " not finite, of %" PRIu64 ")",
       n_negative, n_nonfinite, mesh->n_particles);
     return SIF_ERR_INVALID;
   }
 
   if (!(mesh->total_weight > 0.0)) {
-    SIF_LOG_ERROR(TAG, "the mesh weights sum to zero; there is no mean density");
+    SIF_LOG_ERROR(TAG, "mesh: weights sum to zero (no mean density)");
     return SIF_ERR_INVALID;
   }
 
@@ -2228,8 +2221,17 @@ sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mes
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options) {
 
-  if (!grid || !grid->values || !mesh || !radii || n_radii == 0) {
-    SIF_LOG_ERROR(TAG, "invalid grid, mesh or radii");
+  if (!grid || !grid->values || !mesh) {
+    SIF_LOG_ERROR(TAG, "%s",
+      !grid           ? "grid: NULL"
+      : !grid->values ? "grid: no values"
+                      : "mesh: NULL");
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+  if (sif__finder_check_args(
+        TAG, radii, n_radii, threshold, overlap_fraction) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
@@ -2244,20 +2246,24 @@ sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mes
   }
 
   if (!mesh->x || mesh->n_particles == 0) {
-    SIF_LOG_ERROR(TAG, "the chain mesh holds no particles");
+    SIF_LOG_ERROR(TAG, "mesh: no particles");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
   /* Grid and mesh coordinates are used interchangeably throughout, so the two
    * have to describe the same box. */
   if (mesh->box_length != grid->box_length) {
-    SIF_LOG_ERROR(TAG, "the mesh spans a box of %g but the grid spans %g",
+    SIF_LOG_ERROR(TAG, "mesh: box of %g, grid: box of %g (must match)",
       (double)mesh->box_length, (double)grid->box_length);
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
-  if (mesh->weights && check_weights(mesh) != SIF_OK)
+  if (mesh->weights && check_weights(mesh) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
+  }
 
   return exodus_run(grid, mesh, radii, n_radii, threshold, overlap_fraction,
     options, NULL, NULL);
@@ -2335,11 +2341,10 @@ static int survey_check_margin(
   for (int k = 0; k < 3; k++) {
     if (lo[k] < margin || hi[k] > box - margin) {
       SIF_LOG_ERROR(TAG,
-        "the %s reach within %g of the box faces on axis %d ([%g, %g] in a box "
-        "of %g), but a survey needs %g of empty padding on every side, about "
-        "the largest search sphere. Embed the survey in a larger box",
-        what, (double)SIF_REAL_MIN(lo[k], box - hi[k]), k, (double)lo[k],
-        (double)hi[k], (double)box, (double)margin);
+        "%s: span [%g, %g] on axis %d of a box of %g, %g from its face "
+        "(needs %g of padding on every side, as survey_box sizes it)",
+        what, (double)lo[k], (double)hi[k], k, (double)box,
+        (double)SIF_REAL_MIN(lo[k], box - hi[k]), (double)margin);
       return SIF_ERR_RANGE;
     }
   }
@@ -2352,10 +2357,25 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
   sif_real threshold, sif_real overlap_fraction, sif_option options) {
 
-  if (!data_grid || !data_grid->values || !random_grid ||
-      !random_grid->values || !data_mesh || !random_mesh || !radii ||
-      n_radii == 0) {
-    SIF_LOG_ERROR(TAG, "invalid grids, meshes or radii");
+  const char* missing = !data_grid             ? "data grid: NULL"
+                        : !data_grid->values   ? "data grid: no values"
+                        : !random_grid         ? "random grid: NULL"
+                        : !random_grid->values ? "random grid: no values"
+                        : !data_mesh           ? "data mesh: NULL"
+                        : !random_mesh         ? "random mesh: NULL"
+                        : !data_mesh->x || data_mesh->n_particles == 0
+                          ? "data mesh: no particles"
+                        : !random_mesh->x || random_mesh->n_particles == 0
+                          ? "random mesh: no particles"
+                          : NULL;
+  if (missing) {
+    SIF_LOG_ERROR(TAG, "%s", missing);
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+  if (sif__finder_check_args(
+        TAG, radii, n_radii, threshold, overlap_fraction) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
@@ -2364,43 +2384,43 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   if (data_grid->content == SIF_GRID_DENSITY_CONTRAST ||
       random_grid->content == SIF_GRID_DENSITY_CONTRAST) {
     SIF_LOG_ERROR(TAG,
-      "a survey takes the data and random grids as densities, straight from "
-      "sif_grid_assign_cic(); do not convert them to a density contrast");
+      "%s grid: holds a density contrast; a survey takes the CIC densities "
+      "as assign_cic leaves them",
+      data_grid->content == SIF_GRID_DENSITY_CONTRAST ? "data" : "random");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
   if (data_grid->n_cells != random_grid->n_cells ||
       data_grid->box_length != random_grid->box_length) {
     SIF_LOG_ERROR(TAG,
-      "the data and random grids must match: %u cells over %g against %u "
-      "over %g",
+      "data grid: %u cells over %g, random grid: %u over %g (must match)",
       data_grid->n_cells, (double)data_grid->box_length, random_grid->n_cells,
       (double)random_grid->box_length);
-    return NULL;
-  }
-
-  if (!data_mesh->x || data_mesh->n_particles == 0 || !random_mesh->x ||
-      random_mesh->n_particles == 0) {
-    SIF_LOG_ERROR(TAG, "the data and random meshes must both hold tracers");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
   if (data_mesh->box_length != data_grid->box_length ||
       random_mesh->box_length != data_grid->box_length) {
     SIF_LOG_ERROR(TAG,
-      "the meshes span boxes of %g (data) and %g (randoms) but the grids span "
-      "%g",
+      "meshes: boxes of %g (data) and %g (randoms), grids: %g (must match)",
       (double)data_mesh->box_length, (double)random_mesh->box_length,
       (double)data_grid->box_length);
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
   if ((data_mesh->weights && check_weights(data_mesh) != SIF_OK) ||
-      (random_mesh->weights && check_weights(random_mesh) != SIF_OK))
+      (random_mesh->weights && check_weights(random_mesh) != SIF_OK)) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
+  }
 
   if (!(data_mesh->total_weight > 0.0) || !(random_mesh->total_weight > 0.0)) {
-    SIF_LOG_ERROR(TAG, "the data and the randoms must both carry weight");
+    SIF_LOG_ERROR(TAG, "%s mesh: total weight is zero",
+      data_mesh->total_weight > 0.0 ? "random" : "data");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
@@ -2413,8 +2433,10 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
     data_grid->cell_length;
 
   if (survey_check_margin(random_mesh, "randoms", margin) != SIF_OK ||
-      survey_check_margin(data_mesh, "data", margin) != SIF_OK)
+      survey_check_margin(data_mesh, "data", margin) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
+  }
 
   return exodus_run(data_grid, data_mesh, radii, n_radii, threshold,
     overlap_fraction, options, random_grid, random_mesh);
@@ -2454,9 +2476,9 @@ static int survey_field_extent(
 
   if (bad) {
     SIF_LOG_ERROR(TAG,
-      "the %s hold %" PRIu64 " tracers with a coordinate that is not a finite "
-      "number",
-      what, bad);
+      "%s: %" PRIu64 " of %" PRIu64 " with a coordinate that "
+      "is not finite",
+      what, bad, field->n_particles);
     return SIF_ERR_INVALID;
   }
 
@@ -2473,11 +2495,17 @@ int sif_finder_exodus_survey_box(const sif_field_t* data,
   if (!randoms || !randoms->x || !randoms->y || !randoms->z ||
       randoms->n_particles == 0 || !radii || n_radii == 0 || !offset ||
       !box_length) {
-    SIF_LOG_ERROR(TAG, "invalid randoms, radii or outputs for the survey box");
+    SIF_LOG_ERROR(TAG, "%s",
+      !randoms || !randoms->x || !randoms->y || !randoms->z
+        ? "randoms: no positions"
+      : randoms->n_particles == 0 ? "randoms: no particles"
+      : !radii || n_radii == 0    ? "radii: none given"
+                                  : "offset, box_length: NULL");
     return SIF_ERR_INVALID;
   }
   if (data && (!data->x || !data->y || !data->z || data->n_particles == 0)) {
-    SIF_LOG_ERROR(TAG, "invalid data for the survey box");
+    SIF_LOG_ERROR(TAG, "data: %s",
+      data->n_particles == 0 ? "no particles" : "no positions");
     return SIF_ERR_INVALID;
   }
   if (sif__field_require_cartesian(randoms, TAG) != SIF_OK ||
@@ -2488,8 +2516,7 @@ int sif_finder_exodus_survey_box(const sif_field_t* data,
    * to settle: every cell added to the box widens the margin it needs by more
    * than the cell. */
   if (n_cells < 16) {
-    SIF_LOG_ERROR(
-      TAG, "a survey box needs at least 16 grid cells, not %u", n_cells);
+    SIF_LOG_ERROR(TAG, "n_cells %u: a survey box needs at least 16", n_cells);
     return SIF_ERR_INVALID;
   }
 
@@ -2590,8 +2617,10 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
   const int survey = (random_mesh != NULL);
 
   exodus_ctx_t ctx;
-  if (ctx_init(&ctx, grid, mesh, radii, n_radii, options, random_grid,
-        random_mesh) != SIF_OK) {
+  const int init = ctx_init(
+    &ctx, grid, mesh, radii, n_radii, options, random_grid, random_mesh);
+  if (init != SIF_OK) {
+    sif__error_status_set(init);
     ctx_release(&ctx, grid);
     return NULL;
   }
@@ -2631,10 +2660,10 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
       sif_bitmask_count_set(ctx.occupied), grid->total_cells);
 
   sif_timer_t timer;
-  int failed = 0;
+  int status = SIF_OK;
   uint64_t total_mismatched = 0;
 
-  for (uint32_t i = 0; i < n_radii && !failed; i++) {
+  for (uint32_t i = 0; i < n_radii && status == SIF_OK; i++) {
     sif_timer_start(&timer);
 
     const sif_real radius = ctx.sorted_radii[i];
@@ -2649,29 +2678,26 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
     /* Every rescaling this rung asks for, whatever becomes of it. */
     rescale_report_t rescale = {0};
 
-    if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_TOP_HAT, radius,
-          grid->box_length) != SIF_OK) {
-      failed = 1;
+    status = sif__fft_apply_filter(
+      ctx.fft_ws, SIF__FILTER_TOP_HAT, radius, grid->box_length);
+    if (status != SIF_OK)
       break;
-    }
     grid->values = sif__fft_grid_backward(ctx.fft_ws);
 
     if (survey) {
-      if (sif__fft_apply_filter(ctx.random_ws, SIF__FILTER_TOP_HAT, radius,
-            grid->box_length) != SIF_OK) {
-        failed = 1;
+      status = sif__fft_apply_filter(
+        ctx.random_ws, SIF__FILTER_TOP_HAT, radius, grid->box_length);
+      if (status != SIF_OK)
         break;
-      }
       random_grid->values = sif__fft_grid_backward(ctx.random_ws);
       survey_contrast(grid->values, random_grid->values, ctx.occupied,
         survey_alpha, grid->total_cells);
     }
 
-    if (sif__finder_scan_candidates(
-          grid, ctx.mask, threshold, &ctx.candidates) != SIF_OK) {
-      failed = 1;
+    status =
+      sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
+    if (status != SIF_OK)
       break;
-    }
     stats.n_candidates = ctx.candidates.count;
 
     const sif_real rmin = RMIN_FACTOR * radius;
@@ -2715,24 +2741,20 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
       r_search = ctx.sorted_radii[i - 1];
 
     mesh_template_t tpl;
-    if (template_build(&tpl, ctx.mesh->n_cells, ctx.mesh->cell_length, rmin,
-          r_search) != SIF_OK) {
-      SIF_LOG_ERROR(
-        TAG, "could not build the mesh template for r = %g", (double)radius);
-      failed = 1;
+    status = template_build(
+      &tpl, ctx.mesh->n_cells, ctx.mesh->cell_length, rmin, r_search);
+    if (status != SIF_OK)
       break;
-    }
 
     /* The random mesh is free to use cells of its own, so it gets its own
      * template. Zeroed for a box run, where template_free() makes it a
      * no-op. */
     mesh_template_t rtpl = {0};
-    if (survey && template_build(&rtpl, random_mesh->n_cells,
-                    random_mesh->cell_length, rmin, r_search) != SIF_OK) {
-      SIF_LOG_ERROR(TAG, "could not build the random mesh template for r = %g",
-        (double)radius);
+    if (survey)
+      status = template_build(
+        &rtpl, random_mesh->n_cells, random_mesh->cell_length, rmin, r_search);
+    if (status != SIF_OK) {
       template_free(&tpl);
-      failed = 1;
       break;
     }
 
@@ -2754,7 +2776,7 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
     uint32_t resolve_window = RESOLVE_INITIAL;
 
     uint64_t k = 0;
-    while (k < ctx.candidates.count && !failed) {
+    while (k < ctx.candidates.count && status == SIF_OK) {
       uint64_t batch_count = 0;
 
       /* Phase 0: skip already-masked candidates sequentially. Doing this
@@ -2899,12 +2921,10 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
           continue;
         }
 
-        if (accept_void(&ctx, grid, res->cx, res->cy, res->cz, res->r_scaled) !=
-            SIF_OK) {
-          SIF_LOG_ERROR(TAG, "failed to store an accepted void, aborting");
-          failed = 1;
+        status =
+          accept_void(&ctx, grid, res->cx, res->cy, res->cz, res->r_scaled);
+        if (status != SIF_OK)
           break;
-        }
         stats.accepted++;
 
         const sif_real ratio = res->r_scaled / radius;
@@ -2980,7 +3000,9 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
       sif_timer_elapsed_ms(&timer) / 1000.0);
   }
 
-  if (!failed && !(options & SIF_FINDER_CONSUME_GRID)) {
+  /* Restored after a failure too: the caller gets back the grid they gave,
+   * not the last rung's smoothing of it. */
+  if (!(options & SIF_FINDER_CONSUME_GRID)) {
     if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
       grid->values = sif__fft_grid_backward(ctx.fft_ws);
       SIF_LOG_INFO(TAG, "recovered original density grid");
@@ -2990,6 +3012,14 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
       random_grid->values = sif__fft_grid_backward(ctx.random_ws);
       SIF_LOG_INFO(TAG, "recovered original random grid");
     }
+  }
+
+  /* A partial catalogue is not handed back: it would look like a run that
+   * found fewer voids. */
+  if (status != SIF_OK) {
+    sif__error_status_set(status);
+    ctx_release(&ctx, grid);
+    return NULL;
   }
 
   if (total_mismatched > 0 && ctx.cat->n_voids > 0) {
@@ -3006,7 +3036,7 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
   sif_catalogue_trim(ctx.cat);
 
   if (survey && survey_footprint(ctx.cat, ctx.occupied, grid) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the footprint columns");
+    sif__error_status_set(SIF_ERR_ALLOC);
     ctx_release(&ctx, grid);
     return NULL;
   }
@@ -3022,12 +3052,14 @@ uint32_t sif_finder_suggest_mesh_cells_survey(
   uint64_t n_particles, const sif_grid_t* random_grid, sif_real max_radius) {
 
   if (n_particles == 0 || !random_grid || !random_grid->values) {
-    SIF_LOG_ERROR(TAG, "invalid tracer count or random grid for sizing a mesh");
+    SIF_LOG_ERROR(TAG, "%s",
+      n_particles == 0 ? "n_particles: 0"
+      : !random_grid   ? "random grid: NULL"
+                       : "random grid: no values");
     return 0;
   }
   if (random_grid->content != SIF_GRID_DENSITY) {
-    SIF_LOG_ERROR(TAG,
-      "the random grid has to hold the CIC density of the randoms, not %s",
+    SIF_LOG_ERROR(TAG, "random grid: holds %s, not the randoms' CIC density",
       random_grid->content == SIF_GRID_DENSITY_CONTRAST ? "a density contrast"
                                                         : "nothing");
     return 0;
@@ -3041,7 +3073,7 @@ uint32_t sif_finder_suggest_mesh_cells_survey(
     occupied += v[c] > 0.0f;
 
   if (occupied == 0) {
-    SIF_LOG_ERROR(TAG, "the random grid holds no randoms");
+    SIF_LOG_ERROR(TAG, "random grid: no randoms (every cell is empty)");
     return 0;
   }
 

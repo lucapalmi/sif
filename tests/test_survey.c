@@ -603,20 +603,29 @@ static void run_refusals(void) {
   tracers_t data = build(x, y, z, n);
   tracers_t rand = build(rx, ry, rz, 4 * n);
 
+  sif_error_clear();
   CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
           radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
     "a survey without padding should be refused");
+  CHECK(error_has("randoms: span [") && error_has("of padding on every side") &&
+          sif_error_status() == SIF_ERR_INVALID,
+    "no padding: '%s'", sif_error_message());
 
   /* A grid already turned into a contrast against the box mean. */
   CHECK(sif_grid_to_density_contrast(data.grid) == SIF_OK,
     "density contrast failed");
+  sif_error_clear();
   CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
           radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
     "a density contrast should be refused as the data grid");
+  CHECK(error_has("data grid: holds a density contrast"), "contrast: '%s'",
+    sif_error_message());
 
+  sif_error_clear();
   CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, NULL, radii,
           n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
     "a missing random mesh should be refused");
+  CHECK(error_has("random mesh: NULL"), "no mesh: '%s'", sif_error_message());
 
   release(&data);
   release(&rand);

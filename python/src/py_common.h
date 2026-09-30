@@ -58,10 +58,10 @@ static inline PyObject* py_sif_wrap_borrowed(
  *
  * The class says what kind of failure it was: an OSError subclass for an
  * operating-system error, chosen by its errno as open() would
- * (FileNotFoundError, PermissionError, IsADirectoryError); MemoryError,
- * ValueError and RuntimeError for SIF_ERR_ALLOC, SIF_ERR_INVALID and
- * SIF_ERR_UNSUPPORTED; OSError for the rest, a file that is not what it
- * should be. For a reader that returns a pointer, @p status is
+ * (FileNotFoundError, PermissionError, IsADirectoryError); MemoryError for
+ * SIF_ERR_ALLOC, ValueError for SIF_ERR_INVALID and SIF_ERR_RANGE,
+ * RuntimeError for SIF_ERR_UNSUPPORTED; OSError for the rest, a file that is
+ * not what it should be. For a reader that returns a pointer, @p status is
  * sif_error_status(), whose SIF_OK (it did not say) reads as SIF_ERR_IO.
  *
  * @p what names the operation for the rare failure that recorded nothing.
@@ -89,7 +89,7 @@ static inline PyObject* py_sif_raise(int status, const char* what) {
   PyObject* type = PyExc_OSError;
   if (status == SIF_ERR_ALLOC)
     type = PyExc_MemoryError;
-  else if (status == SIF_ERR_INVALID)
+  else if (status == SIF_ERR_INVALID || status == SIF_ERR_RANGE)
     type = PyExc_ValueError;
   else if (status == SIF_ERR_UNSUPPORTED)
     type = PyExc_RuntimeError;

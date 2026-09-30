@@ -65,6 +65,18 @@ static inline void sif__unflatten_index(const sif_grid_t* grid, uint64_t flat,
   *ix = sif__fast_div(flat, (uint64_t)n * n, p2_shift ? 2 * p2_shift : 0);
 }
 
+/* --- argument checks, shared by every finder --- */
+
+/**
+ * @brief Check the arguments every finder takes: at least one radius, each
+ * positive and finite; a threshold in (-1, 0); an overlap fraction in [0, 1].
+ * The same ranges sif-exodus enforces on its configuration.
+ *
+ * @return SIF_OK, or SIF_ERR_INVALID with the first offending argument logged.
+ */
+int sif__finder_check_args(const char* tag, const sif_real* radii,
+  uint32_t n_radii, sif_real threshold, sif_real overlap_fraction);
+
 /* --- field preparation, shared by every finder --- */
 
 /**

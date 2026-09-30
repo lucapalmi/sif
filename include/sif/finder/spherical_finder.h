@@ -40,12 +40,12 @@
  * them descending, since accepting the large voids first is what makes the
  * mask meaningful.
  * @param n_radii Number of radii.
- * @param threshold Density contrast a cell must be at or below to seed a void.
- * Negative, since voids are underdensities.
+ * @param threshold Density contrast a cell must be at or below to seed a void,
+ * in (-1, 0).
  * @param overlap_fraction How much two voids may overlap, as a fraction of the
  * smaller one's radius: they collide when their separation falls below
- * r1 + r2 - overlap_fraction * min(r1, r2). 0 forbids overlap entirely; 1 lets
- * the smaller void's radius be swallowed.
+ * r1 + r2 - overlap_fraction * min(r1, r2), in [0, 1]. 0 forbids overlap
+ * entirely; 1 lets the smaller void's radius be swallowed.
  * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID and
  * SIF_FINDER_KEEP_CIC_WINDOW. The box is always periodic.
  *
@@ -53,8 +53,9 @@
  * window is divided back out before the first smoothing so that the top-hat is
  * the only window applied. Pass SIF_FINDER_KEEP_CIC_WINDOW for a grid that was
  * filled some other way.
- * @return Newly allocated catalogue, released with sif_catalogue_free(), or NULL
- * on invalid input or failure.
+ * @return Newly allocated catalogue, released with sif_catalogue_free(), or
+ * NULL on invalid input or failure -- also partway through a run, when the grid
+ * is still restored; sif_error_message() says why.
  *
  * @warning `grid->values` is reassigned during the run: the original buffer is
  * released once its contents are in the FFT workspace, and the workspace's is

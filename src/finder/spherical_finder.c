@@ -14,6 +14,7 @@
 #include "sif/structures/cell_linked_list.h"
 
 #include "core/system_internal.h"
+#include "utils/logger_internal.h"
 
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -82,7 +83,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
 
   ctx->sorted_radii = sif_malloc_aligned(n_radii * sizeof(sif_real));
   if (!ctx->sorted_radii) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the radii array");
+    SIF_LOG_ERROR(TAG, "out of memory: %u radii", n_radii);
     return SIF_ERR_ALLOC;
   }
   memcpy(ctx->sorted_radii, radii, n_radii * sizeof(sif_real));
@@ -107,17 +108,14 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
   if (!state)
     return SIF_ERR_INVALID;
   ctx->fft_ws = sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
-  if (!ctx->fft_ws) {
-    SIF_LOG_ERROR(TAG, "failed to allocate the FFT workspace");
+  if (!ctx->fft_ws)
     return SIF_ERR_ALLOC;
-  }
 
   /* Must succeed before the field is released: on failure the caller's grid
    * has to come back untouched. */
-  if (sif__fft_grid_forward(ctx->fft_ws, grid) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "the forward FFT failed");
-    return SIF_ERR_ALLOC;
-  }
+  const int status = sif__fft_grid_forward(ctx->fft_ws, grid);
+  if (status != SIF_OK)
+    return status;
 
   /* Before the first filter and after the transform, which is the only window
    * in which the assignment window is separable from the smoothing one. The
@@ -131,12 +129,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
   sif_free_aligned(grid->values);
   grid->values = NULL;
 
-  if (sif__fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "failed to initialise the backward FFT");
-    return SIF_ERR_ALLOC;
-  }
-
-  return SIF_OK;
+  return sif__fft_workspace_init_backward(ctx->fft_ws, state->fft_mgr);
 }
 
 /*
@@ -168,8 +161,14 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
   uint32_t n_radii, sif_real threshold, sif_real overlap_fraction,
   sif_option options) {
 
-  if (!grid || !grid->values || !radii || n_radii == 0) {
-    SIF_LOG_ERROR(TAG, "invalid grid or radii");
+  if (!grid || !grid->values) {
+    SIF_LOG_ERROR(TAG, "grid: %s", grid ? "no values" : "NULL");
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+  if (sif__finder_check_args(
+        TAG, radii, n_radii, threshold, overlap_fraction) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
@@ -184,7 +183,9 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
   }
 
   spherical_ctx_t ctx;
-  if (ctx_init(&ctx, grid, radii, n_radii, options) != SIF_OK) {
+  int status = ctx_init(&ctx, grid, radii, n_radii, options);
+  if (status != SIF_OK) {
+    sif__error_status_set(status);
     ctx_release(&ctx, grid);
     return NULL;
   }
@@ -192,26 +193,23 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
   const sif_real max_radius = ctx.sorted_radii[0];
 
   sif_timer_t timer;
-  int failed = 0;
 
-  for (uint32_t i = 0; i < n_radii && !failed; i++) {
+  for (uint32_t i = 0; i < n_radii && status == SIF_OK; i++) {
     sif_timer_start(&timer);
 
     const sif_real radius = ctx.sorted_radii[i];
     sif_finder_radius_stats_t stats = {0};
 
-    if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_TOP_HAT, radius,
-          grid->box_length) != SIF_OK) {
-      failed = 1;
+    status = sif__fft_apply_filter(
+      ctx.fft_ws, SIF__FILTER_TOP_HAT, radius, grid->box_length);
+    if (status != SIF_OK)
       break;
-    }
     grid->values = sif__fft_grid_backward(ctx.fft_ws);
 
-    if (sif__finder_scan_candidates(
-          grid, ctx.mask, threshold, &ctx.candidates) != SIF_OK) {
-      failed = 1;
+    status =
+      sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
+    if (status != SIF_OK)
       break;
-    }
     stats.n_candidates = ctx.candidates.count;
 
     /* The proxy sphere is shrunk by overlap_fraction so that permitted
@@ -247,11 +245,9 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
         continue;
       }
 
-      if (accept_void(&ctx, grid, cx, cy, cz, radius) != SIF_OK) {
-        SIF_LOG_ERROR(TAG, "failed to store an accepted void, aborting");
-        failed = 1;
+      status = accept_void(&ctx, grid, cx, cy, cz, radius);
+      if (status != SIF_OK)
         break;
-      }
       stats.accepted++;
     }
 
@@ -260,11 +256,20 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
       sif_timer_elapsed_ms(&timer) / 1000.0);
   }
 
-  if (!failed && !(options & SIF_FINDER_CONSUME_GRID)) {
+  /* Restored after a failure too, as in the exodus finder. */
+  if (!(options & SIF_FINDER_CONSUME_GRID)) {
     if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
       grid->values = sif__fft_grid_backward(ctx.fft_ws);
       SIF_LOG_INFO(TAG, "recovered original density grid");
     }
+  }
+
+  /* A partial catalogue is not handed back: it would look like a run that
+   * found fewer voids. */
+  if (status != SIF_OK) {
+    sif__error_status_set(status);
+    ctx_release(&ctx, grid);
+    return NULL;
   }
 
   sif_catalogue_trim(ctx.cat);

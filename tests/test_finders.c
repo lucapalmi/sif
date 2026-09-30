@@ -399,6 +399,89 @@ static void run_weighted_cases(void) {
   printf("  ok\n");
 }
 
+/* --- refusals --- */
+
+/*
+ * Bad arguments are refused up front with the argument named, and a run that
+ * fails partway returns NULL -- not the voids found so far -- with the grid
+ * handed back as it came.
+ */
+static void run_refusals(void) {
+  printf("refusals\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  make_field(x, y, z);
+  sif_field_t* f = sif_field_alloc(N_P);
+  sif_field_assign_positions(f, x, y, z);
+  sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
+  CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
+  CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
+  sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f, 0);
+  CHECK(mesh != NULL, "chain mesh construction failed");
+
+  const sif_real bad_radii[] = {20.0f, -3.0f};
+  const struct {
+    const sif_real* radii;
+    uint32_t n;
+    sif_real threshold, overlap;
+    const char* reason;
+  } cases[] = {
+    {radii, 0, -0.7f, 0.0f, "radii: none given"},
+    {bad_radii, 2, -0.7f, 0.0f, "radii[1] = -3: not a positive radius"},
+    {radii, n_radii, 0.5f, 0.0f, "threshold 0.5: not a density contrast"},
+    {radii, n_radii, -1.0f, 0.0f, "threshold -1: not a density contrast"},
+    {radii, n_radii, -0.7f, 1.5f, "overlap_fraction 1.5: not in [0, 1]"},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    sif_error_clear();
+    sif_catalogue_t* cat = sif_finder_exodus(g, mesh, cases[i].radii,
+      cases[i].n, cases[i].threshold, cases[i].overlap, 0);
+    CHECK(!cat && error_has(cases[i].reason) &&
+            sif_error_status() == SIF_ERR_INVALID,
+      "exodus case %zu: '%s', status %d", i, sif_error_message(),
+      sif_error_status());
+    sif_catalogue_free(cat);
+
+    sif_error_clear();
+    cat = sif_finder_spherical(
+      g, cases[i].radii, cases[i].n, cases[i].threshold, cases[i].overlap, 0);
+    CHECK(!cat && error_has(cases[i].reason) &&
+            sif_error_status() == SIF_ERR_INVALID,
+      "spherical case %zu: '%s', status %d", i, sif_error_message(),
+      sif_error_status());
+    sif_catalogue_free(cat);
+  }
+
+  /* A search sphere wider than the mesh: the first rung smooths the grid, then
+   * fails building its template. */
+  sif_real* before = malloc((size_t)g->total_cells * sizeof(sif_real));
+  memcpy(before, g->values, (size_t)g->total_cells * sizeof(sif_real));
+  const sif_real too_wide[] = {150.0f};
+  sif_error_clear();
+  sif_catalogue_t* cat = sif_finder_exodus(g, mesh, too_wide, 1, -0.7f, 0, 0);
+  CHECK(!cat, "a failed run should return NULL, not a partial catalogue");
+  CHECK(error_has("wider than the mesh") && sif_error_status() == SIF_ERR_RANGE,
+    "failed run: '%s', status %d", sif_error_message(), sif_error_status());
+  sif_catalogue_free(cat);
+
+  sif_real worst = 0.0f;
+  for (uint64_t i = 0; g->values && i < g->total_cells; i++)
+    worst = SIF_REAL_MAX(worst, SIF_REAL_ABS(g->values[i] - before[i]));
+  CHECK(g->values && worst < 1e-3f,
+    "a failed run should restore the grid (worst drift %g)", (double)worst);
+  free(before);
+
+  sif_chain_mesh_free(mesh);
+  sif_grid_free(g);
+  sif_field_free(f);
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -419,6 +502,7 @@ int main(void) {
 #endif
 
   run_weighted_cases();
+  run_refusals();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

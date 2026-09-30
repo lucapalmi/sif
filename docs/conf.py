@@ -13,6 +13,7 @@ comments in the headers.
 """
 
 import os
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -48,10 +49,16 @@ project = "sif"
 author = "Luca Palmieri"
 copyright = "2026, Luca Palmieri"
 
-# Kept in step with CMakeLists.txt by hand for now; wire it up once the docs
-# build is part of the same pipeline.
-version = "0.2"
-release = "0.2.0"
+# The version is the C library's, read from CMakeLists.txt with the same regex
+# pyproject.toml uses, so the docs, the wheel and the library cannot drift.
+_match = re.search(
+    r"project\(sif VERSION (?P<value>[0-9][0-9.]*)",
+    (REPO / "CMakeLists.txt").read_text(encoding="utf-8"),
+)
+if not _match:
+    raise RuntimeError("no 'project(sif VERSION ...)' in CMakeLists.txt")
+release = _match.group("value")
+version = ".".join(release.split(".")[:2])
 
 # --- Sources ---------------------------------------------------------------
 

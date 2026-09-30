@@ -29,10 +29,10 @@ static PyMethodDef finders_methods[] = {
     "        afterwards unless consume_grid is set.\n"
     "    mesh: ChainMesh over the same box.\n"
     "    radii: Smoothing radii to try.\n"
-    "    threshold: Density contrast a cell must reach to seed a void;\n"
-    "        negative, since voids are underdensities.\n"
+    "    threshold: Density contrast a cell must reach to seed a void, in\n"
+    "        (-1, 0).\n"
     "    overlap_fraction: How much two voids may overlap, as a fraction of\n"
-    "        the smaller one's radius. 0 forbids overlap entirely.\n"
+    "        the smaller one's radius, in [0, 1]. 0 forbids overlap entirely.\n"
     "    consume_grid: Skip restoring the grid, saving one inverse FFT.\n"
     "    search_factor: How far past a rung the rescaling looks for the\n"
     "        crossing, as a multiple of the rung. Default 1.5. This is the\n"
@@ -43,7 +43,12 @@ static PyMethodDef finders_methods[] = {
     "        Snapped to the nearest of 1.25, 1.5, 1.75, 2.0; pass 2.0 to\n"
     "        reproduce catalogues made before this argument existed.\n\n"
     "Returns:\n"
-    "    Catalogue: The voids found."},
+    "    Catalogue: The voids found.\n\n"
+    "Raises:\n"
+    "    ValueError: For an argument out of range, a mesh and grid over\n"
+    "        different boxes, or a search sphere wider than the mesh.\n"
+    "    MemoryError: If the run runs out of memory. The grid is restored\n"
+    "        either way."},
 
   {"exodus_survey", (PyCFunction)py_sif_finder_exodus_survey,
     METH_VARARGS | METH_KEYWORDS,
@@ -78,15 +83,17 @@ static PyMethodDef finders_methods[] = {
     "        need not match the data mesh's.\n"
     "    radii: Smoothing radii to try.\n"
     "    threshold: Density contrast a void is grown to, against the\n"
-    "        randoms.\n"
+    "        randoms, in (-1, 0).\n"
     "    overlap_fraction: As in exodus().\n"
     "    consume_grid: Skip restoring both grids.\n"
     "    search_factor: As in exodus(). Pass the same one to survey_box().\n\n"
     "Returns:\n"
     "    Catalogue: The voids found, with their footprint.\n\n"
     "Raises:\n"
-    "    RuntimeError: If the finder refused its inputs -- most often a\n"
-    "        survey too close to the box faces, which the log explains."},
+    "    ValueError: If the finder refused its inputs -- most often a\n"
+    "        survey too close to the box faces; the message says how much\n"
+    "        padding it needs, and survey_box() works it out.\n"
+    "    MemoryError: As in exodus()."},
 
   {"survey_box", (PyCFunction)py_sif_finder_survey_box,
     METH_VARARGS | METH_KEYWORDS,
@@ -131,12 +138,16 @@ static PyMethodDef finders_methods[] = {
     "    grid: Density contrast field. Smoothed in place and restored\n"
     "        afterwards unless consume_grid is set.\n"
     "    radii: Smoothing radii to try. Order does not matter.\n"
-    "    threshold: Density contrast a cell must reach to seed a void.\n"
+    "    threshold: Density contrast a cell must reach to seed a void, in\n"
+    "        (-1, 0).\n"
     "    overlap_fraction: How much two voids may overlap, as a fraction of\n"
-    "        the smaller one's radius.\n"
+    "        the smaller one's radius, in [0, 1].\n"
     "    consume_grid: Skip restoring the grid.\n\n"
     "Returns:\n"
-    "    Catalogue: The voids found."},
+    "    Catalogue: The voids found.\n\n"
+    "Raises:\n"
+    "    ValueError: For an argument out of range.\n"
+    "    MemoryError: If the run runs out of memory."},
 
   {"suggest_mesh_cells", (PyCFunction)py_sif_finder_suggest_mesh_cells,
     METH_VARARGS | METH_KEYWORDS,

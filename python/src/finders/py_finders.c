@@ -111,14 +111,13 @@ PyObject* py_sif_finder_suggest_mesh_cells_survey(
   }
 
   uint32_t n_cells;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS n_cells = sif_finder_suggest_mesh_cells_survey(
     (uint64_t)n_particles, grid, (sif_real)max_radius);
   Py_END_ALLOW_THREADS
 
     if (n_cells == 0) {
-    PyErr_SetString(PyExc_ValueError,
-      "no usable mesh resolution: the random grid holds no randoms");
-    return NULL;
+    return py_sif_raise(SIF_ERR_INVALID, "suggest_mesh_cells_survey");
   }
 
   return PyLong_FromUnsignedLong(n_cells);
@@ -246,6 +245,7 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
    * The mesh is borrowed for the duration; mesh_obj is kept alive by the
    * caller's reference for the whole call, so it cannot be collected here. */
   sif_catalogue_t* res_catalogue = NULL;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS res_catalogue =
     sif_finder_exodus(c_grid, c_mesh, radii_data, (uint32_t)n_radii,
       (sif_real)threshold, (sif_real)overlap_frac, options);
@@ -253,11 +253,8 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
 
     Py_DECREF(radii_arr);
 
-  if (!res_catalogue) {
-    PyErr_SetString(
-      PyExc_RuntimeError, "Exodus finder execution failed. Check system logs.");
-    return NULL;
-  }
+  if (!res_catalogue)
+    return py_sif_raise(sif_error_status(), "exodus");
 
   return wrap_catalogue(res_catalogue);
 }
@@ -296,16 +293,15 @@ PyObject* py_sif_finder_spherical(
 
   /* See the note in the exodus wrapper: the GIL is released for the run. */
   sif_catalogue_t* res_catalogue = NULL;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS res_catalogue = sif_finder_spherical(c_grid, radii_data,
     (uint32_t)n_radii, (sif_real)threshold, (sif_real)overlap_frac, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
-  if (!res_catalogue) {
-    PyErr_SetString(PyExc_RuntimeError, "Spherical finder execution failed.");
-    return NULL;
-  }
+  if (!res_catalogue)
+    return py_sif_raise(sif_error_status(), "spherical");
 
   return wrap_catalogue(res_catalogue);
 }
@@ -363,6 +359,7 @@ PyObject* py_sif_finder_exodus_survey(
   /* See the note in the exodus wrapper: the GIL is released for the run, and
    * the four borrowed objects are kept alive by the caller's references. */
   sif_catalogue_t* res = NULL;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS res = sif_finder_exodus_survey(data_grid, random_grid,
     data_mesh, random_mesh, radii_data, (uint32_t)n_radii, (sif_real)threshold,
     (sif_real)overlap_frac, options);
@@ -370,13 +367,8 @@ PyObject* py_sif_finder_exodus_survey(
 
     Py_DECREF(radii_arr);
 
-  if (!res) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "Survey finder execution failed. Check system logs: the usual cause is "
-      "a survey too close to the box faces, and the log says how much padding "
-      "it needs -- survey_box() works it out.");
-    return NULL;
-  }
+  if (!res)
+    return py_sif_raise(sif_error_status(), "exodus_survey");
 
   return wrap_catalogue(res);
 }
@@ -423,18 +415,15 @@ PyObject* py_sif_finder_survey_box(
   sif_real offset[3];
   sif_real box_length = 0.0f;
 
+  sif_error_clear();
   const int status = sif_finder_exodus_survey_box(data, randoms,
     (const sif_real*)PyArray_DATA(radii_arr),
     (uint32_t)PyArray_SHAPE(radii_arr)[0], (uint32_t)n_cells, options, offset,
     &box_length);
   Py_DECREF(radii_arr);
 
-  if (status != SIF_OK) {
-    PyErr_SetString(PyExc_ValueError,
-      "could not size a survey box: data and randoms must hold finite "
-      "positions and n_cells must be at least 16. Check system logs");
-    return NULL;
-  }
+  if (status != SIF_OK)
+    return py_sif_raise(status, "survey_box");
 
   npy_intp dims[1] = {3};
   PyObject* offset_arr = PyArray_SimpleNew(1, dims, NPY_REAL_T);

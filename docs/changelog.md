@@ -19,6 +19,11 @@ changes are always listed here.
   everywhere; a malformed catalogue format string raises `ValueError`
 - `sif_finder_exodus_survey_box()` takes the data before the randoms (NULL
   for the randoms alone)
+- The finders refuse a radius that is not positive and finite, a threshold
+  outside (-1, 0) and an overlap fraction outside [0, 1], as `sif-exodus`
+  already did; they used to run on them
+- Python: the finders raise `ValueError` (or `MemoryError`) with the reason,
+  instead of a `RuntimeError` saying to check the log
 
 ### Added
 
@@ -31,6 +36,7 @@ changes are always listed here.
 - I/O errors name the file and the place in it (line, record and byte
   offset, HDU, dataset), and keep the system's, HDF5's and cfitsio's own
   diagnosis: a truncated GADGET, HDF5 or FITS file is reported as truncated
+- Finder errors name the argument at fault
 
 ### Fixed
 
@@ -39,6 +45,9 @@ changes are always listed here.
   galaxy a few Mpc past the outermost random fell in the padding and
   `exodus_survey()` refused the run. Coordinates that are not finite are
   refused instead of passed over
+- A finder run that failed partway (a search sphere wider than the mesh, out
+  of memory) returned the voids found so far as if it had finished, and left
+  the grid smoothed. It returns NULL, and restores the grid
 
 ## v0.2.0 -- 30/09/2026
 
