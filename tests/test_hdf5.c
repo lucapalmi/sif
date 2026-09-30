@@ -27,6 +27,7 @@
 #include "measure/profiles_internal.h"
 #include "structures/results_internal.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -533,6 +534,88 @@ static void test_foreign_files(void) {
   printf("  ok\n");
 }
 
+/* A dataset of a sif file, removed or replaced by one of another length. */
+static void break_dataset(const char* path, const char* name, hsize_t n) {
+  hid_t f = H5Fopen(path, H5F_ACC_RDWR, H5P_DEFAULT);
+  H5Ldelete(f, name, H5P_DEFAULT);
+  if (n > 0) {
+    hid_t s = H5Screate_simple(1, &n, NULL);
+    hid_t d = H5Dcreate2(
+      f, name, H5T_IEEE_F64LE, s, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+    H5Dclose(d);
+    H5Sclose(s);
+  }
+  H5Fclose(f);
+}
+
+/* What the reader says when it refuses: the reason, not only the status. */
+static void test_reasons(void) {
+  printf("reasons for a refusal\n");
+  sif_catalogue_t* cat = make_catalogue(4, 0);
+
+  remove_all();
+  sif_error_clear();
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL &&
+          error_has("No such file or directory") && sif_error_errno() == ENOENT,
+    "missing file: '%s' (errno %d)", sif_error_message(), sif_error_errno());
+
+  FILE* f = fopen(PATH, "w");
+  fputs("somebody's notes\n", f);
+  fclose(f);
+  sif_error_clear();
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL &&
+          error_has("not an HDF5 file") && sif_error_errno() == 0,
+    "text file: '%s'", sif_error_message());
+
+  remove_all();
+  write_foreign_hdf5(PATH);
+  sif_error_clear();
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL && error_has("not a sif file"),
+    "foreign HDF5: '%s'", sif_error_message());
+
+  remove_all();
+  CHECK(
+    sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  set_format_version(PATH, 99);
+  sif_error_clear();
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL &&
+          error_has("version 99, this build reads up to"),
+    "newer version: '%s'", sif_error_message());
+
+  remove_all();
+  CHECK(
+    sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  break_dataset(PATH, "catalogue/radii", 0);
+  sif_error_clear();
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL &&
+          error_has("/catalogue/radii: missing"),
+    "missing dataset: '%s'", sif_error_message());
+
+  break_dataset(PATH, "catalogue/radii", 5);
+  sif_error_clear();
+  CHECK(sif_catalogue_read_hdf5(PATH) == NULL &&
+          error_has("/catalogue/radii: shape (5), expected (4)"),
+    "wrong shape: '%s'", sif_error_message());
+
+  /* A column of someone else's file that is not there. */
+  remove_all();
+  write_snapshot(PATH, 0, 8);
+  const char* paths[] = {PATH};
+  const sif_field_columns_t cols = {.x = "PartType1/Coordinates[0]",
+    .y = "PartType1/Coordinates[1]",
+    .z = "PartType1/Coordinates[2]",
+    .w = "PartType1/Nope"};
+  sif_error_clear();
+  sif_field_t* field = sif_field_read_hdf5(paths, 1, &cols, 1.0, 1.0, 0);
+  CHECK(!field && error_has("PartType1/Nope (w): missing"),
+    "missing column: '%s'", sif_error_message());
+  sif_field_free(field);
+
+  sif_catalogue_free(cat);
+  remove_all();
+  printf("  ok\n");
+}
+
 static void test_metadata(void) {
   printf("free-form metadata\n");
   remove_all();
@@ -733,6 +816,7 @@ int main(void) {
   test_round_trips();
   test_groups();
   test_foreign_files();
+  test_reasons();
   test_metadata();
   test_particles();
 #else

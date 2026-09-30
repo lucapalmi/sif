@@ -26,6 +26,7 @@
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -767,17 +768,14 @@ static void test_ascii_field(void) {
     sif_field_free(f);
   }
 
-  /* Blank lines, comments and a row that runs out of columns are not
-   * particles. Counting one leaves an entry whose components were never
-   * assigned, which reads as a particle at whatever the allocator handed
-   * back -- the origin on a fresh page, arbitrary coordinates otherwise. */
+  /* Blank lines and comments are not particles, and are skipped wherever
+   * they are. */
   write_text("# a comment\n"
              "1 2 3\n"
              "\n"
              "; another comment\n"
              "4 5 6\n"
              "   \n"
-             "7 8\n"
              "10 11 12\n"
              "\n");
   f = read_ascii("xyz", ' ', 0);
@@ -787,8 +785,7 @@ static void test_ascii_field(void) {
       (unsigned long long)f->n_particles);
     CHECK(f->x[0] == 1 && f->x[1] == 4 && f->x[2] == 10,
       "noise lines shifted the data");
-    CHECK(f->y[2] == 11 && f->z[2] == 12,
-      "the short row was counted as a particle");
+    CHECK(f->y[2] == 11 && f->z[2] == 12, "noise lines shifted the data");
     sif_field_free(f);
   }
 
@@ -885,6 +882,206 @@ static void test_ascii_field_rejections(void) {
   CHECK(sif_field_read_ascii_into(f, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_IO,
     "a file with no data rows should be SIF_ERR_IO");
   sif_field_free(f);
+}
+
+/* Every malformed line is refused, and the message says which line and
+ * why. The reader used to read what it could not parse as 0.0 and drop short
+ * rows, which turned a header line or a stray token into a particle at the
+ * origin. */
+static void test_ascii_field_reasons(void) {
+  printf("ASCII field input says why\n");
+
+  const struct {
+    const char* what;
+    const char* body;
+    const char* fmt;
+    char delim;
+    uint32_t skip;
+    const char* says;
+  } bad[] = {
+    {"a short row", "1 2 3\n7 8\n", "xyz", ' ', 0,
+      ":2: 2 columns, format 'xyz' needs 3"},
+    {"a header line", "x y z\n1 2 3\n", "xyz", ' ', 0,
+      ":1: column 1 (x): 'x' is not a number"},
+    {"a partial number", "1.5abc 2 3\n", "xyz", ' ', 0,
+      ":1: column 1 (x): '1.5abc' is not a number"},
+    {"an empty field", "1,,3\n", "xyz", ',', 0, ":1: column 2 (y): empty"},
+    {"a trailing token", "1 2 3\n4 5 6q\n", "x y z", ' ', 0,
+      ":2: column 3 (z): '6q' is not a number"},
+    {"a sky column", "10 abc 0.5\n", "ra dec z", ' ', 0,
+      ":1: column 2 (dec): 'abc' is not a number"},
+    {"only comments", "# a\n\n; b\n", "xyz", ' ', 0, ": no data rows"},
+    {"an empty file", "", "xyz", ' ', 0, ": empty file"},
+    {"a header past the end", "1 2 3\n", "xyz", ' ', 4,
+      ": no lines after the header (1 lines, skip_header 4)"},
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+    write_text(bad[i].body);
+    sif_error_clear();
+    sif_field_t* f = read_ascii(bad[i].fmt, bad[i].delim, bad[i].skip);
+    CHECK(!f, "%s: accepted", bad[i].what);
+    CHECK(error_has(bad[i].says) && error_has(ASCII_PATH),
+      "%s: reported as '%s', expected '%s'", bad[i].what, sif_error_message(),
+      bad[i].says);
+    sif_field_free(f);
+  }
+
+  /* Blanks around a non-blank delimiter are not part of the value. */
+  write_text("1 , 2 ,3\n");
+  sif_field_t* f = read_ascii("xyz", ',', 0);
+  CHECK(f && f->y[0] == 2 && f->z[0] == 3, "blanks around commas refused");
+  sif_field_free(f);
+
+  /* A column the format skips may hold anything. */
+  write_text("id7 1 2 3\n");
+  f = read_ascii("* x y z", ' ', 0);
+  CHECK(f && f->x[0] == 1, "a text column that is skipped was refused");
+  sif_field_free(f);
+
+  /* A line longer than the parser holds would be read as two rows. */
+  {
+    FILE* out = fopen(ASCII_PATH, "w");
+    if (out) {
+      fputs("1 2 3\n1 2 3", out);
+      for (int k = 0; k < 3000; k++)
+        fputs(" 0", out);
+      fputs("\n", out);
+      fclose(out);
+    }
+    sif_error_clear();
+    f = read_ascii("xyz", ' ', 0);
+    CHECK(!f && error_has(":2: line longer than"),
+      "an overlong line: reported as '%s'", sif_error_message());
+    sif_field_free(f);
+  }
+
+  /* A field sized by the caller is not shrunk to what the file holds: a
+   * second file adding columns to the first has to match it row for row. */
+  write_text("1 2 3\n4 5 6\n");
+  f = sif_field_alloc(3);
+  sif_error_clear();
+  CHECK(
+    f && sif_field_read_ascii_into(f, ASCII_PATH, "xyz", ' ', 0) == SIF_ERR_IO,
+    "a file shorter than the field was accepted");
+  CHECK(error_has(": 2 data rows, field has 3 particles"),
+    "a short file: reported as '%s'", sif_error_message());
+  sif_field_free(f);
+
+  /* The system's reasons, with the errno for callers that map it. */
+  sif_error_clear();
+  f = sif_field_read_ascii("test_io_does_not_exist.txt", "xyz", ' ', 0);
+  CHECK(!f && error_has("test_io_does_not_exist.txt: No such file") &&
+          sif_error_errno() == ENOENT,
+    "a missing file: reported as '%s' (errno %d)", sif_error_message(),
+    sif_error_errno());
+  sif_error_clear();
+  f = sif_field_read_ascii(".", "xyz", ' ', 0);
+  CHECK(!f && sif_error_errno() == EISDIR,
+    "a directory: reported as '%s' (errno %d)", sif_error_message(),
+    sif_error_errno());
+}
+
+/* The record behind sif_error_message(): the first error since a clear, per
+ * thread, whatever the log level. */
+static void test_error_record(void) {
+  printf("error record\n");
+
+  sif_error_clear();
+  CHECK(sif_error_message()[0] == '\0' && sif_error_errno() == 0,
+    "a clear record is not empty");
+
+  /* SIF_CONFIG_QUIET, which this suite runs under, prints nothing; the
+   * record is kept anyway. */
+  write_text("1 2\n");
+  sif_field_t* f = read_ascii("xyz", ' ', 0);
+  CHECK(!f && error_has(":1: 1 column") == 0 && error_has(":1: 2 columns"),
+    "a quiet failure recorded '%s'", sif_error_message());
+  CHECK(sif_error_errno() == 0, "a parse error carries errno %d",
+    sif_error_errno());
+
+  /* A second failure does not replace the first: the first is the cause. */
+  f = sif_field_read_ascii("test_io_does_not_exist.txt", "xyz", ' ', 0);
+  CHECK(!f && error_has(":1: 2 columns") && sif_error_errno() == 0,
+    "a later error replaced the first: '%s' (errno %d)", sif_error_message(),
+    sif_error_errno());
+
+  sif_error_clear();
+  CHECK(sif_error_message()[0] == '\0', "clear left '%s'", sif_error_message());
+}
+
+/* The catalogue and profile readers, likewise. */
+static void test_catalogue_reasons(void) {
+  printf("ASCII catalogue and profiles say why\n");
+
+  const struct {
+    const char* what;
+    const char* body;
+    const char* says;
+  } bad[] = {
+    {"a count past the rows", "#n=5\n1 2 3 4\n5 6 7 8\n",
+      ": 2 rows, header says 5 (truncated?)"},
+    {"a row past the count", "#n=1\n1 2 3 4\n5 6 7 8\n",
+      ":3: row beyond the header's n=1"},
+    {"a token that is not a number", "#n=2\n#cx cy cz r\n1 2 3 4\n1 2 x 4\n",
+      ":4: column 3 (z): 'x' is not a number"},
+    {"a short row", "#n=2\n#cx cy cz r\n1 2 3 4\n1 2 3\n",
+      ":4: 3 columns, expected at least 4"},
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+    FILE* f = fopen(CAT_PATH, "w");
+    if (f) {
+      fputs(bad[i].body, f);
+      fclose(f);
+    }
+    sif_error_clear();
+    sif_catalogue_t* back = sif_catalogue_read_ascii(CAT_PATH, NULL);
+    CHECK(!back, "%s: accepted", bad[i].what);
+    CHECK(error_has(bad[i].says), "%s: reported as '%s', expected '%s'",
+      bad[i].what, sif_error_message(), bad[i].says);
+    sif_catalogue_free(back);
+  }
+
+  /* A comment that is not a metadata key is skipped with a warning, and
+   * leaves no error behind: the read succeeds. */
+  FILE* f = fopen(CAT_PATH, "w");
+  if (f) {
+    fputs("#n=1\n#created by = someone\n#cx cy cz r\n1 2 3 4\n", f);
+    fclose(f);
+  }
+  sif_error_clear();
+  sif_catalogue_t* back = sif_catalogue_read_ascii(CAT_PATH, NULL);
+  CHECK(back && sif_error_message()[0] == '\0',
+    "a key that is not one: read %s, recorded '%s'", back ? "ok" : "failed",
+    sif_error_message());
+  sif_catalogue_free(back);
+
+  /* A profile file cut short in its rows. */
+  f = fopen(PROF_PATH, "w");
+  if (f) {
+    fputs("#n=2\n#n_bins=2\n#ext=2\n#r_edges=0 1 2\n#cx cy cz r density_0 "
+          "density_1\n1 2 3 4 5 6\n",
+      f);
+    fclose(f);
+  }
+  sif_density_profiles_t* dens = NULL;
+  sif_error_clear();
+  CHECK(sif_profiles_read_ascii(PROF_PATH, NULL, &dens, NULL) == SIF_ERR_IO &&
+          error_has(": 1 rows, header says 2 (truncated?)"),
+    "a short profile file: reported as '%s'", sif_error_message());
+
+  f = fopen(PROF_PATH, "w");
+  if (f) {
+    fputs("#n=1\n#n_bins=2\n#ext=2\n#r_edges=0 1 2\n#cx cy cz r density_0 "
+          "density_1\n1 2 3 4 5 nan?\n",
+      f);
+    fclose(f);
+  }
+  sif_error_clear();
+  CHECK(sif_profiles_read_ascii(PROF_PATH, NULL, &dens, NULL) == SIF_ERR_IO &&
+          error_has(": row 1, density_1: 'nan?' is not a number"),
+    "a bad profile value: reported as '%s'", sif_error_message());
+  sif_density_profiles_free(dens);
+  remove(PROF_PATH);
 }
 
 /* --- column formats --- */
@@ -1205,6 +1402,9 @@ int main(void) {
   test_profiles_roundtrip();
   test_ascii_field();
   test_ascii_field_rejections();
+  test_ascii_field_reasons();
+  test_error_record();
+  test_catalogue_reasons();
   test_column_formats();
   test_binary_field();
 

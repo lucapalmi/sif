@@ -374,7 +374,7 @@ static void test_refusals(void) {
   sif_octree_free(o);
 
   sif_real off[3], box;
-  CHECK(sif_finder_exodus_survey_box(f, radii, 1, 32, SIF_DEFAULT, off, &box) ==
+  CHECK(sif_finder_exodus_survey_box(NULL, f, radii, 1, 32, SIF_DEFAULT, off, &box) ==
           SIF_ERR_INVALID,
     "survey_box accepted it");
 

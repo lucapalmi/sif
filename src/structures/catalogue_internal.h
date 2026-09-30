@@ -37,6 +37,14 @@ typedef struct sif_catalogue_meta_entry {
  */
 bool sif__catalogue_meta_reserved(const char* key);
 
+/**
+ * @brief Whether the setters would accept @p key: an identifier of at most 64
+ * characters, not reserved. For the readers, which skip a key the setters
+ * would refuse -- with a warning of their own, where the setter would log an
+ * error.
+ */
+bool sif__catalogue_meta_key_ok(const char* key);
+
 /** @brief Copy every entry of @p from into @p to. */
 int sif__catalogue_meta_copy(sif_catalogue_t* to, const sif_catalogue_t* from);
 

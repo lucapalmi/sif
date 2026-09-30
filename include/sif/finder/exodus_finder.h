@@ -158,14 +158,17 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  * sif_finder_exodus_survey() needs empty padding around the survey, about the
  * largest search sphere on every side, and how much depends on the radii, the
  * SIF_FINDER_SEARCH_* factor and the grid cell -- which depends on the box.
- * This works all of that out from the randoms, which are the footprint: a
- * cubic box, just large enough, with the survey centred in it.
+ * This works all of that out from the tracers: a cubic box, just large enough,
+ * with the survey centred in it. Pass the data as well as the randoms: the
+ * finder checks the padding around both, and the outermost galaxies can sit
+ * a little past the outermost randoms, which sample the edge of the
+ * footprint only so finely.
  *
  * The workflow it belongs to:
  *
  * @code
  * sif_real offset[3], box;
- * sif_finder_exodus_survey_box(randoms, radii, n_radii, n_cells, opt,
+ * sif_finder_exodus_survey_box(data, randoms, radii, n_radii, n_cells, opt,
  *   offset, &box);
  * sif_field_translate(data, offset);
  * sif_field_translate(randoms, offset);
@@ -175,8 +178,9 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  * sif_catalogue_translate(cat, back);
  * @endcode
  *
- * @param randoms The random catalogue, in the caller's Cartesian frame. Only
- * read.
+ * @param data The data catalogue, in the caller's Cartesian frame, or NULL to
+ * size the box around the randoms alone. Only read.
+ * @param randoms The random catalogue, in the same frame. Only read.
  * @param radii The radii the finder will be run with.
  * @param n_radii Number of radii.
  * @param n_cells Cells per side of the grids that will be built over the
@@ -185,16 +189,17 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  * SIF_FINDER_SEARCH_* factor.
  * @param[out] offset What to add to every position, data and randoms alike.
  * @param[out] box_length Side of the box to build the grids and meshes over.
- * @return SIF_OK, or SIF_ERR_INVALID on bad arguments.
+ * @return SIF_OK, or SIF_ERR_INVALID on bad arguments or a coordinate that
+ * is not finite.
  *
  * @note Run the finder with the same radii, options and n_cells, or the
  * padding may no longer be enough; the finder checks and says so. The box is
  * sized for meshes whose cells are no larger than the search sphere, which is
  * what sif_finder_suggest_mesh_cells() gives.
  */
-SIF_NODISCARD int sif_finder_exodus_survey_box(const sif_field_t* randoms,
-  const sif_real* radii, uint32_t n_radii, uint32_t n_cells, sif_option opt,
-  sif_real offset[3], sif_real* box_length);
+SIF_NODISCARD int sif_finder_exodus_survey_box(const sif_field_t* data,
+  const sif_field_t* randoms, const sif_real* radii, uint32_t n_radii,
+  uint32_t n_cells, sif_option opt, sif_real offset[3], sif_real* box_length);
 
 /** @brief Particles per mesh cell that exodus runs fastest at. The cost
  * splits between per-cell overhead, which grows as the mesh is refined, and

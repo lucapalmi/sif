@@ -26,8 +26,10 @@
 
 #include "io/gadget_internal.h"
 #include "io/hdf5_internal.h"
+#include "io/internal.h"
 #include "sif/utils/logger.h"
 
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 
@@ -46,14 +48,17 @@ int sif__hdf5_describe(char* buf, size_t len) {
 static int dump_path(
   char* buf, size_t len, const char* filepath, const char* group) {
   const int n = snprintf(buf, len, "%s.%s.txt", filepath, group);
-  return (n > 0 && (size_t)n < len) ? SIF_OK : SIF_ERR_INVALID;
+  if (n > 0 && (size_t)n < len)
+    return SIF_OK;
+  SIF_LOG_ERROR(TAG, "%s.%s.txt: path longer than %zu characters", filepath,
+    group, len - 1);
+  return SIF_ERR_INVALID;
 }
 
 static void warn_dumped(const char* filepath, const char* dump) {
   SIF_LOG_WARNING(TAG,
-    "this build of sif has no HDF5 support, so %s was not written; the data "
-    "is saved as plain text in %s instead. Rebuild with "
-    "-DSIF_HDF5_SUPPORT=ON to write HDF5",
+    "%s: not written, HDF5 support not built; data saved as text in %s "
+    "(rebuild with -DSIF_HDF5_SUPPORT=ON)",
     filepath, dump);
 }
 
@@ -62,10 +67,8 @@ static void warn_dumped(const char* filepath, const char* dump) {
  * fclose() are what tell a full disk from a written file. */
 static int dump_close(FILE* f, const char* dump) {
   const bool ok = ferror(f) == 0;
-  if (fclose(f) != 0 || !ok) {
-    SIF_LOG_ERROR(TAG, "failed to write %s", dump);
-    return SIF_ERR_IO;
-  }
+  if (fclose(f) != 0 || !ok)
+    return sif__io_os_error(TAG, dump, "write", errno);
   return SIF_OK;
 }
 
@@ -76,10 +79,8 @@ static int dump_profiles(const char* dump, const char* what, uint64_t n_voids,
   const sif_real* rows) {
 
   FILE* f = fopen(dump, "w");
-  if (!f) {
-    SIF_LOG_ERROR(TAG, "failed to open %s for writing", dump);
-    return SIF_ERR_IO;
-  }
+  if (!f)
+    return sif__io_os_error(TAG, dump, NULL, errno);
 
   fprintf(f, "# sif %s: n_voids %" PRIu64 ", n_bins %u, ext " SIF_PRI_REAL,
     what, n_voids, n_bins, ext);
@@ -104,7 +105,7 @@ static int dump_profiles(const char* dump, const char* what, uint64_t n_voids,
 
 int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalogue) {
   if (!filepath || !catalogue) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalogue_write_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_catalogue_write_hdf5: NULL argument");
     return SIF_ERR_INVALID;
   }
 
@@ -123,7 +124,7 @@ int sif_profiles_write_hdf5(const char* filepath,
 
   if (!filepath || (!dens && !vel)) {
     SIF_LOG_ERROR(
-      TAG, "sif_profiles_write_hdf5 needs a path and at least one profile set");
+      TAG, "sif_profiles_write_hdf5: needs a path and a profile set");
     return SIF_ERR_INVALID;
   }
 
@@ -154,7 +155,7 @@ int sif_size_function_write_hdf5(
   const char* filepath, const sif_size_function_t* vsf) {
 
   if (!filepath || !vsf) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_size_function_write_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_size_function_write_hdf5: NULL argument");
     return SIF_ERR_INVALID;
   }
 
@@ -163,10 +164,8 @@ int sif_size_function_write_hdf5(
     return SIF_ERR_INVALID;
 
   FILE* f = fopen(dump, "w");
-  if (!f) {
-    SIF_LOG_ERROR(TAG, "failed to open %s for writing", dump);
-    return SIF_ERR_IO;
-  }
+  if (!f)
+    return sif__io_os_error(TAG, dump, NULL, errno);
 
   const bool linear = (vsf->options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LINEAR;
 
@@ -194,8 +193,7 @@ int sif_size_function_write_hdf5(
 
 static void refuse(const char* filepath) {
   SIF_LOG_ERROR(TAG,
-    "cannot read %s: this build of sif has no HDF5 support. Rebuild with "
-    "-DSIF_HDF5_SUPPORT=ON",
+    "%s: HDF5 support not built (rebuild with -DSIF_HDF5_SUPPORT=ON)",
     filepath ? filepath : "(null)");
 }
 
@@ -247,15 +245,14 @@ static int meta_dump(const char* filepath, const char* group, const char* key,
   meta_kind_t kind, int64_t i, double d, const char* str) {
 
   if (!filepath || !key || !*key || (kind == META_STRING && !str)) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for a metadata entry");
+    SIF_LOG_ERROR(TAG, "metadata: NULL path or key");
     return SIF_ERR_INVALID;
   }
 
   const char* g = sif__hdf5_group(group);
   if (sif__hdf5_key_reserved(g, key)) {
-    SIF_LOG_ERROR(TAG,
-      "'%s' on /%s is an attribute sif keeps for itself and cannot be set", key,
-      g ? g : "");
+    SIF_LOG_ERROR(TAG, "%s: /%s%s%s: reserved by sif", filepath, g ? g : "",
+      g ? "/" : "", key);
     return SIF_ERR_INVALID;
   }
 
@@ -264,10 +261,8 @@ static int meta_dump(const char* filepath, const char* group, const char* key,
     return SIF_ERR_INVALID;
 
   FILE* f = fopen(dump, "a");
-  if (!f) {
-    SIF_LOG_ERROR(TAG, "failed to open %s for writing", dump);
-    return SIF_ERR_IO;
-  }
+  if (!f)
+    return sif__io_os_error(TAG, dump, NULL, errno);
 
   fprintf(f, "/%s %s = ", g ? g : "", key);
   switch (kind) {
@@ -366,8 +361,8 @@ int sif__gadget_h5_open(const char* path, sif_gadget_h5_file_t** out_file,
   (void)out_header;
   *out_file = NULL;
   SIF_LOG_ERROR(TAG,
-    "%s is an HDF5 snapshot, and this build of sif has no HDF5 support. "
-    "Rebuild with -DSIF_HDF5_SUPPORT=ON to read it",
+    "%s: HDF5 snapshot, HDF5 support not built (rebuild with "
+    "-DSIF_HDF5_SUPPORT=ON)",
     path);
   return SIF_ERR_UNSUPPORTED;
 }
@@ -393,8 +388,7 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   (void)fraction;
   (void)seed;
   SIF_LOG_ERROR(TAG,
-    "this build of sif has no HDF5 support, so %s cannot be read. Rebuild "
-    "with -DSIF_HDF5_SUPPORT=ON",
+    "%s: HDF5 support not built (rebuild with -DSIF_HDF5_SUPPORT=ON)",
     paths && n_paths && paths[0] ? paths[0] : "(null)");
   return NULL;
 }

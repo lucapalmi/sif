@@ -35,17 +35,6 @@
 
 #ifdef SIF_HAVE_FITS
 
-/* Whether a file's structure reads: what tells an unreadable file from a
- * request the file cannot satisfy. The summary is thrown away. */
-static int structure_reads(const char* path) {
-  FILE* sink = tmpfile();
-  if (!sink)
-    return 1;
-  const int status = sif_fits_print_summary(path, sink);
-  fclose(sink);
-  return status != SIF_ERR_IO;
-}
-
 /* An HDU as C takes it: NULL for None, an EXTNAME, or an extension number in
  * decimal, written into `buf`. -1 with an exception set. */
 static int hdu_string(PyObject* obj, char* buf, size_t len, const char** out) {
@@ -133,13 +122,7 @@ PyObject* pysif_read_fits(PyObject* self, PyObject* args, PyObject* kwds) {
   for (Py_ssize_t i = 0; i < n; i++)
     paths[i] = PyBytes_AS_STRING(PyList_GET_ITEM(list, i));
 
-  /* A missing file is the operating system's error, with its errno: a
-   * FileNotFoundError, as open() would raise. */
   PyObject* result = NULL;
-  for (Py_ssize_t i = 0; i < n; i++)
-    if (py_sif_require_file(paths[i]) < 0)
-      goto done;
-
   const sif_field_columns_t columns = {.x = x,
     .y = y,
     .ra = ra,
@@ -149,21 +132,12 @@ PyObject* pysif_read_fits(PyObject* self, PyObject* args, PyObject* kwds) {
     .vy = vy,
     .vz = vz,
     .w = w};
+  sif_error_clear();
   sif_field_t* field = sif_field_read_fits(
     paths, (uint32_t)n, hdu, &columns, where, fraction, (uint64_t)seed);
 
   if (!field) {
-    for (Py_ssize_t i = 0; i < n; i++) {
-      if (!structure_reads(paths[i])) {
-        PyErr_Format(PyExc_OSError,
-          "cannot read %s as a FITS file; see the log for the reason",
-          paths[i]);
-        goto done;
-      }
-    }
-    PyErr_Format(PyExc_ValueError,
-      "cannot read %s%s as asked; see the log for the reason", paths[0],
-      n > 1 ? " and the rest" : "");
+    py_sif_raise(sif_error_status(), paths[0]);
     goto done;
   }
 
@@ -199,21 +173,16 @@ PyObject* pysif_inspect_fits(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
   const char* path = PyBytes_AS_STRING(path_obj);
 
-  if (py_sif_require_file(path) < 0) {
-    Py_DECREF(path_obj);
-    return NULL;
-  }
-
   FILE* tmp = tmpfile();
   if (!tmp) {
     Py_DECREF(path_obj);
     return PyErr_SetFromErrno(PyExc_OSError);
   }
+  sif_error_clear();
   const int status = sif_fits_print_summary(path, tmp);
   if (status != SIF_OK) {
     fclose(tmp);
-    PyErr_Format(PyExc_OSError,
-      "cannot read %s as a FITS file; see the log for the reason", path);
+    py_sif_raise(status, path);
     Py_DECREF(path_obj);
     return NULL;
   }
@@ -258,11 +227,11 @@ PyObject* pysif_write_catalogue_fits(
     return NULL;
 
   const char* path = PyBytes_AS_STRING(path_obj);
+  sif_error_clear();
   const int status =
     sif_catalogue_write_fits(path, ((sifCatalogueObject*)cat_obj)->catalogue);
   if (status != SIF_OK) {
-    PyErr_Format(
-      PyExc_OSError, "failed to write %s; see the log for the reason", path);
+    py_sif_raise(status, path);
     Py_DECREF(path_obj);
     return NULL;
   }
@@ -281,11 +250,11 @@ PyObject* pysif_read_catalogue_fits(
 
   const char* path = PyBytes_AS_STRING(path_obj);
   PyObject* result = NULL;
-  if (py_sif_require_file(path) == 0) {
+  {
+    sif_error_clear();
     sif_catalogue_t* cat = sif_catalogue_read_fits(path);
     if (!cat) {
-      PyErr_Format(PyExc_ValueError,
-        "cannot read %s as a void catalogue; see the log for the reason", path);
+      py_sif_raise(sif_error_status(), path);
     } else {
       sifCatalogueObject* obj =
         (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
@@ -304,16 +273,9 @@ PyObject* pysif_read_catalogue_fits(
 
 /* --- profiles and size functions --- */
 
-/* After a failed write: a file sif did not write, or one that cannot be
- * written. */
+/* After a failed write, with the C library's reason. */
 static PyObject* product_write_error(int status, const char* path) {
-  if (status == SIF_ERR_INVALID)
-    return PyErr_Format(PyExc_ValueError,
-      "cannot write %s as asked; see the log for the reason", path);
-  return PyErr_Format(PyExc_OSError,
-    "failed to write %s -- a FITS file sif did not write is never written "
-    "into; see the log",
-    path);
+  return py_sif_raise(status, path);
 }
 
 PyObject* pysif_write_profiles_fits(
@@ -327,6 +289,7 @@ PyObject* pysif_write_profiles_fits(
     return NULL;
   const char* path = PyBytes_AS_STRING(path_obj);
   const sifProfilesObject* prof = (const sifProfilesObject*)prof_obj;
+  sif_error_clear();
   const int status = sif_profiles_write_fits(path, prof->dens, prof->vel);
   PyObject* result =
     status == SIF_OK ? Py_NewRef(Py_None) : product_write_error(status, path);
@@ -349,20 +312,21 @@ PyObject* pysif_read_profiles_fits(
   int has_dens = 0, has_vel = 0;
   sif_density_profiles_t* dens = NULL;
   sif_velocity_profiles_t* vel = NULL;
-  if (py_sif_require_file(path) < 0)
-    goto done;
-  if (sif_profiles_read_header_fits(path, &has_dens, &has_vel) != SIF_OK) {
-    PyErr_Format(PyExc_OSError, "cannot read %s as a FITS file", path);
+  sif_error_clear();
+  int status = sif_profiles_read_header_fits(path, &has_dens, &has_vel);
+  if (status != SIF_OK) {
+    py_sif_raise(status, path);
     goto done;
   }
   if (!has_dens && !has_vel) {
-    PyErr_Format(PyExc_ValueError, "%s holds no profiles", path);
+    PyErr_Format(PyExc_ValueError,
+      "%s: no DENSITY_PROFILES or VELOCITY_PROFILES HDU", path);
     goto done;
   }
-  if (sif_profiles_read_fits(
-        path, has_dens ? &dens : NULL, has_vel ? &vel : NULL) != SIF_OK) {
-    PyErr_Format(PyExc_ValueError,
-      "cannot read the profiles of %s; see the log for the reason", path);
+  status = sif_profiles_read_fits(
+    path, has_dens ? &dens : NULL, has_vel ? &vel : NULL);
+  if (status != SIF_OK) {
+    py_sif_raise(status, path);
     goto done;
   }
   sifProfilesObject* prof =
@@ -392,6 +356,7 @@ PyObject* pysif_write_size_function_fits(
         PyUnicode_FSConverter, &path_obj, &sifSizeFunctionType, &vsf_obj))
     return NULL;
   const char* path = PyBytes_AS_STRING(path_obj);
+  sif_error_clear();
   const int status =
     sif_size_function_write_fits(path, ((sifSizeFunctionObject*)vsf_obj)->vsf);
   PyObject* result =
@@ -410,12 +375,11 @@ PyObject* pysif_read_size_function_fits(
     return NULL;
   const char* path = PyBytes_AS_STRING(path_obj);
   PyObject* result = NULL;
-  if (py_sif_require_file(path) == 0) {
+  {
+    sif_error_clear();
     sif_size_function_t* vsf = sif_size_function_read_fits(path);
     if (!vsf) {
-      PyErr_Format(PyExc_ValueError,
-        "cannot read the size function of %s; see the log for the reason",
-        path);
+      py_sif_raise(sif_error_status(), path);
     } else {
       sifSizeFunctionObject* obj =
         (sifSizeFunctionObject*)sifSizeFunctionType.tp_alloc(
@@ -501,6 +465,7 @@ PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds) {
     goto done;
 
   int status;
+  sif_error_clear();
   if (PyLong_Check(value)) { /* bool included, as 1 or 0 */
     const long long v = PyLong_AsLongLong(value);
     if (v == -1 && PyErr_Occurred())
@@ -518,11 +483,8 @@ PyObject* pysif_set_fits_key(PyObject* self, PyObject* args, PyObject* kwds) {
     goto done;
   }
 
-  if (status == SIF_ERR_INVALID)
-    PyErr_Format(PyExc_ValueError,
-      "cannot set %s in %s: see the log for the reason", key, path);
-  else if (status != SIF_OK)
-    PyErr_Format(PyExc_OSError, "failed to write %s; see the log", path);
+  if (status != SIF_OK)
+    py_sif_raise(status, path);
   else
     result = Py_NewRef(Py_None);
 

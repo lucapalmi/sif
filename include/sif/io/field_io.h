@@ -199,15 +199,17 @@ typedef struct {
  * @brief Read an ASCII table into an existing field.
  *
  * Blank lines, and lines whose first non-blank character is `#` or `;`, are
- * skipped wherever they appear. So is a row that runs out of columns before
- * the format is satisfied -- a partial row is not a particle, and counting one
- * would leave an entry whose remaining components were never assigned.
+ * skipped wherever they appear. Every other line after the header is a row,
+ * and has to be one: a row with fewer columns than the format, or a column
+ * the format reads that is not a number in full (`abc`, `1.5e`, an empty
+ * field between two delimiters), fails the read with the line number. A column
+ * the format skips with `*` may hold anything.
  *
  * A field whose `n_particles` is 0 is sized from the file. Since the sizing
  * pass counts lines rather than parsing them, that count is an upper bound,
  * and `n_particles` is corrected down to what actually loaded. A field that
- * already has a count is filled to that count and no further; anything left in
- * the file is reported.
+ * already has a count is filled to that count and no further; rows left in the
+ * file are reported with a warning, and a file with fewer rows is an error.
  *
  * Reserving is a no-op on a block the field already has, so a format naming
  * only the weight column can be read into a field whose positions are already
@@ -223,13 +225,12 @@ typedef struct {
  * @return SIF_OK, SIF_ERR_INVALID for a NULL argument, a malformed format, one
  * that loads no positions into a field that has none, or one that adds columns
  * to a Morton-sorted field; SIF_ERR_ALLOC if a block could not be reserved;
- * SIF_ERR_IO if the file could not be read or held no parsable row.
- *
- * @warning A column that is present but does not parse as a number reads as
- * 0.0 rather than failing. Only a *missing* column causes a row to be skipped.
+ * SIF_ERR_IO if the file could not be read, held no data row, holds a
+ * malformed row, or holds fewer rows than an already-sized field. On failure
+ * the field's contents are unspecified.
  */
-int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
-  const char* fmt, char delimiter, uint32_t skip_header);
+SIF_NODISCARD int sif_field_read_ascii_into(sif_field_t* field,
+  const char* filepath, const char* fmt, char delimiter, uint32_t skip_header);
 
 /**
  * @brief Read an ASCII table into a new field.

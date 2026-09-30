@@ -325,11 +325,11 @@ search_radii = np.geomspace(10, 60, 60, dtype=pysif.real)
 
 # we now compute the offset and the box length that pad the survey volume
 # in the box, to ensure the boundary conditions do not apply.
-# They depend on the survey footprint, the search radii and the number of
-# cells in the grid
+# They depend on the extent of the data and the randoms, the search radii
+# and the number of cells in the grid
 n_cells = 512                     # change at will
 offset, box_length = pysif.finders.survey_box(
-    randoms=randoms, radii=search_radii, n_cells=n_cells
+    randoms=randoms, radii=search_radii, n_cells=n_cells, data=data
 )
 
 # we now apply the offset
@@ -475,12 +475,12 @@ int main(void) {
 
   // we now compute the offset and the box length that pad the survey
   // volume in the box, to ensure the boundary conditions do not apply.
-  // they depend on the survey footprint (defined by the randoms), the
+  // they depend on the extent of the data and the randoms, the
   // search radii and the number of cells in the grid.
   // SIF_DEFAULT is the search factor the finder will run with
   const uint32_t n_cells = 512; // change at will
   sif_real offset[3], box_length;
-  if (sif_finder_exodus_survey_box(randoms, search_radii, n_radii, n_cells,
+  if (sif_finder_exodus_survey_box(data, randoms, search_radii, n_radii, n_cells,
         SIF_DEFAULT, offset, &box_length) != SIF_OK)
     goto done;
 

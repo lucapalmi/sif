@@ -444,6 +444,37 @@ says so explicitly. Structures own their buffers outright; there is no borrowing
 mode, and a function that would need one takes a `_into` variant writing into
 caller storage instead (`sif_field_read_into`).
 
+**Error messages.** A failure is logged once, with `SIF_LOG_ERROR`, by the
+function that knows the cause. Callers pass the status up without logging
+again: the first error is kept for `sif_error_message()`, and what Python puts
+in its exceptions, so it has to be the specific one. Every non-OK return is
+preceded by exactly one error.
+
+Messages are schematic: say what is wrong and where, not the story of the
+call.
+
+```
+<path>[:<line>]: <what is wrong>[: <detail>] [(expected A, found B)]
+```
+
+```c
+"%s:%" PRIu64 ": column %d (%s): '%s' is not a number"
+"%s: record %u at byte %" PRIu64 ": %" PRIu64 " bytes, file ends at %" PRIu64
+"%s: /catalogue/radii: shape (%llu), expected (%llu)"
+```
+
+- **Name the file**, and the place in it: a line, a byte offset, a record, an
+  HDU, a dataset path.
+- **Give the values**, expected and found, rather than calling one "wrong".
+- **An operating-system failure carries its errno**: report it with
+  `sif__io_os_error()`, which formats `strerror()` and records the errno for
+  callers that map it (Python's `FileNotFoundError`).
+- **A library's own diagnosis is kept**: cfitsio's status text, the innermost
+  message of HDF5's error stack.
+- **No silent fallbacks.** Input that is read in a way other than the caller
+  asked for is an error; input that is legitimately skipped but surprising is
+  a warning with a count and the first location.
+
 **Validate at the boundary.** Public entry points check their arguments and
 return `SIF_ERR_INVALID`; internal helpers assume the contract holds and use
 `SIF_ASSERT` for invariants. `SIF_ASSERT` compiles away unless

@@ -13,6 +13,7 @@
 #include "structures/field_internal.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -442,9 +443,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
     case 'r':
       if (tolower((unsigned char)p[1]) != 'a') {
         SIF_LOG_ERROR("io",
-          "format '%s', position %ld: 'r' must be followed by a -- the right "
-          "ascension is ra",
-          fmt, at);
+          "format '%s': position %ld: 'r' is not a column name (ra?)", fmt, at);
         return SIF_ERR_INVALID;
       }
       col.kind = COL_X;
@@ -456,8 +455,8 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       if (tolower((unsigned char)p[1]) != 'e' ||
           tolower((unsigned char)p[2]) != 'c') {
         SIF_LOG_ERROR("io",
-          "format '%s', position %ld: 'd' must begin dec -- the declination",
-          fmt, at);
+          "format '%s': position %ld: 'd' is not a column name (dec?)", fmt,
+          at);
         return SIF_ERR_INVALID;
       }
       col.kind = COL_Y;
@@ -483,8 +482,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
         col.kind = COL_VZ;
       else {
         SIF_LOG_ERROR("io",
-          "format '%s', position %ld: 'v' must be followed by x, y or z -- "
-          "velocities are vx vy vz",
+          "format '%s': position %ld: 'v' is not a column name (vx vy vz?)",
           fmt, at);
         return SIF_ERR_INVALID;
       }
@@ -496,8 +494,8 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       if (isdigit((unsigned char)*p)) {
         if (!allow_widths) {
           SIF_LOG_ERROR("io",
-            "format '%s', position %ld: a skip width (*N) only applies to "
-            "binary files; in a text file '*' skips one column",
+            "format '%s': position %ld: skip width (*N) in a text format; "
+            "'*' skips one column",
             fmt, at);
           return SIF_ERR_INVALID;
         }
@@ -505,8 +503,8 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
         const unsigned long width = strtoul(p, &end, 10);
         if (width == 0 || width > MAX_SKIP_WIDTH) {
           SIF_LOG_ERROR("io",
-            "format '%s', position %ld: a skip width must be 1 to %u bytes",
-            fmt, at, MAX_SKIP_WIDTH);
+            "format '%s': position %ld: skip width not in 1..%u bytes", fmt, at,
+            MAX_SKIP_WIDTH);
           return SIF_ERR_INVALID;
         }
         col.width = (uint32_t)width;
@@ -515,20 +513,20 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       break;
     case 'm':
       SIF_LOG_ERROR("io",
-        "format '%s', position %ld: 'm' is no longer a column name; the "
-        "weight is 'w'",
+        "format '%s': position %ld: 'm' is no longer a column name (weight "
+        "is 'w')",
         fmt, at);
       return SIF_ERR_INVALID;
     case 'u':
       SIF_LOG_ERROR("io",
-        "format '%s', position %ld: 'u' is no longer a column name; "
-        "velocities are 'vx vy vz'",
+        "format '%s': position %ld: 'u' is no longer a column name "
+        "(velocities are 'vx vy vz')",
         fmt, at);
       return SIF_ERR_INVALID;
     default:
       SIF_LOG_ERROR("io",
-        "format '%s', position %ld: '%c' is not a column name (x y z, or ra "
-        "dec z; vx vy vz w, or * to skip)",
+        "format '%s': position %ld: '%c' is not a column name (x y z | ra "
+        "dec z, vx vy vz, w, *)",
         fmt, at, *p);
       return SIF_ERR_INVALID;
     }
@@ -536,17 +534,14 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
     /* x and y are positions, ra and dec sky coordinates: a format is one or
      * the other, and z goes with either -- a length, or the redshift. */
     if (named_xy && named_radec) {
-      SIF_LOG_ERROR("io",
-        "format '%s' mixes x y with ra dec: positions are x y z, sky "
-        "coordinates ra dec z",
-        fmt);
+      SIF_LOG_ERROR("io", "format '%s': mixes x y with ra dec", fmt);
       return SIF_ERR_INVALID;
     }
 
     if (col.kind != COL_SKIP) {
       const unsigned bit = 1u << col.kind;
       if (named & bit) {
-        SIF_LOG_ERROR("io", "format '%s' names '%s' twice", fmt,
+        SIF_LOG_ERROR("io", "format '%s': '%s' named twice", fmt,
           name ? name : COL_NAMES[col.kind]);
         return SIF_ERR_INVALID;
       }
@@ -554,8 +549,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
     }
 
     if (out->n_cols == MAX_COLS) {
-      SIF_LOG_ERROR(
-        "io", "format '%s' has more than %d columns", fmt, MAX_COLS);
+      SIF_LOG_ERROR("io", "format '%s': more than %d columns", fmt, MAX_COLS);
       return SIF_ERR_INVALID;
     }
     out->cols[out->n_cols++] = col;
@@ -572,18 +566,18 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
    * one block each, so naming two of the three would allocate the third and
    * never write it. */
   if (out->has_pos && (named & pos) != pos) {
-    SIF_LOG_ERROR("io", "format '%s' names only part of the position", fmt);
+    SIF_LOG_ERROR("io", "format '%s': position named in part", fmt);
     return SIF_ERR_INVALID;
   }
   if (out->has_vel && (named & vel) != vel) {
-    SIF_LOG_ERROR("io", "format '%s' names only part of the velocity", fmt);
+    SIF_LOG_ERROR("io", "format '%s': velocity named in part", fmt);
     return SIF_ERR_INVALID;
   }
 
   /* A format of skips alone would consume the file and write nothing, leaving
    * a field whose memory reads as loaded. */
   if (named == 0) {
-    SIF_LOG_ERROR("io", "format '%s' names no column to read", fmt);
+    SIF_LOG_ERROR("io", "format '%s': no column to read", fmt);
     return SIF_ERR_INVALID;
   }
 
@@ -604,13 +598,13 @@ static int format_reserve(
   sif_field_t* field, const format_t* f, const char* fmt) {
   if (!f->has_pos && !field->x) {
     SIF_LOG_ERROR(
-      "io", "format '%s' loads no positions and the field has none", fmt);
+      "io", "format '%s': no positions, and the field has none", fmt);
     return SIF_ERR_INVALID;
   }
   if (!f->has_pos && (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED)) {
     SIF_LOG_ERROR("io",
-      "the field has been Morton-sorted, so its particles are no longer in "
-      "file order; read '%s' before sorting, or with the positions",
+      "format '%s': no positions, and the field is Morton-sorted (not in "
+      "file order); read it before sorting, or with the positions",
       fmt);
     return SIF_ERR_INVALID;
   }
@@ -683,52 +677,70 @@ static bool line_is_data(const char* line) {
          *line != ';';
 }
 
+/* Whether @p c ends a field: the delimiter, or any blank when the delimiter
+ * is a space, since a space-separated file aligns its columns with runs of
+ * either. */
+static inline bool ends_field(char c, char delimiter) {
+  if (delimiter == ' ')
+    return c == ' ' || c == '\t';
+  return c == delimiter;
+}
+
 /*
- * Reads the next numeric field and advances the cursor past it: skips leading
- * whitespace, parses one number, and leaves the cursor after the field's
- * trailing delimiter. Returns 1 if a field was consumed, 0 at the end of the
- * line.
+ * The next field of a line: skips leading blanks, finds the field's end, and
+ * parses it whole. Returns 0 at the end of the line, 1 for a field, with @p ok
+ * saying whether the field was a number and @p tok, @p tok_len what it was.
  *
- * Consumed is not parsed: a malformed field reads as 0.0, returns 1 and skips
- * to the next delimiter, so a text column inside a numeric file reads as
- * zeros rather than derailing the row.
+ * The whole field has to parse: "1.5abc" is not 1.5, and an empty field
+ * between two delimiters is not 0.
  */
-static int next_real(char** cursor, char delimiter, sif_real* out_val) {
-  if (**cursor == '\0' || **cursor == '\n')
+static int next_field(char** cursor, char delimiter, sif_real* out, bool* ok,
+  const char** tok, int* tok_len) {
+
+  /* Leading blanks are skipped, except a delimiter that is itself a blank --
+   * a tab-separated file has meaningful tabs, and eating them would merge two
+   * empty columns into one. */
+  while ((**cursor == ' ' || **cursor == '\t') &&
+         (**cursor != delimiter || delimiter == ' '))
+    (*cursor)++;
+  if (**cursor == '\0' || **cursor == '\n' || **cursor == '\r')
     return 0;
 
-  /* Leading whitespace is skipped, except when the delimiter is itself a
-   * whitespace character other than a space -- a tab-separated file has
-   * meaningful tabs, and eating them would merge two empty columns into one.
-   * A newline reached here ends the line: the row had fewer columns than the
-   * format asked for, which the caller needs to be able to tell apart from a
-   * column that merely failed to parse. */
-  while (isspace((unsigned char)**cursor) &&
-         (**cursor != delimiter || delimiter == ' ')) {
-    if (**cursor == '\n')
-      return 0;
-    (*cursor)++;
-  }
+  char* start = *cursor;
+  char* end = start;
+  while (*end != '\0' && *end != '\n' && *end != '\r' &&
+         !ends_field(*end, delimiter))
+    end++;
 
-  char* endptr;
+  /* Trailing blanks before a non-blank delimiter belong to no field. */
+  char* last = end;
+  while (last > start && (last[-1] == ' ' || last[-1] == '\t'))
+    last--;
 
   /* strtod, not strtof, even in a single-precision build: parsing at full
    * precision and narrowing once is correct, while parsing at float precision
    * would round twice. It reads the decimal point according to LC_NUMERIC,
    * which sif never changes and CPython deliberately leaves at "C". */
-  *out_val = (sif_real)strtod(*cursor, &endptr);
+  char* stop;
+  const double v = last > start ? strtod(start, &stop) : 0.0;
+  *ok = last > start && stop == last;
+  *out = (sif_real)v;
+  *tok = start;
+  *tok_len = (int)(last - start);
 
-  if (endptr == *cursor) {
-    while (**cursor != '\0' && **cursor != '\n' && **cursor != delimiter)
-      (*cursor)++;
-  } else {
-    *cursor = endptr;
-  }
-
-  if (**cursor == delimiter)
+  *cursor = end;
+  if (**cursor != '\0' && ends_field(**cursor, delimiter))
     (*cursor)++;
-
   return 1;
+}
+
+/* A column's name as the format wrote it, for messages. */
+static const char* col_label(const format_t* f, col_kind_t kind) {
+  if (f->sky && kind == COL_X)
+    return "ra";
+  if (f->sky && kind == COL_Y)
+    return "dec";
+  return COL_NAMES[kind];
 }
 
 int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
@@ -744,15 +756,20 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   if (status != SIF_OK)
     return status;
 
+  status = sif__io_check_readable("io", filepath, NULL);
+  if (status != SIF_OK)
+    return status;
+
   /* A field with no particle count yet is sized from the file. The count is an
    * upper bound -- blank and comment lines are in it -- and the real total is
    * written back once the parse knows it. */
-  if (field->n_particles == 0) {
-    field->n_particles = sif__io_ascii_row_count(filepath, skip_header);
-    if (field->n_particles == 0) {
-      SIF_LOG_ERROR("io", "failed to read particles from %s", filepath);
-      return SIF_ERR_IO;
-    }
+  const bool sized_here = field->n_particles == 0;
+  if (sized_here) {
+    uint64_t rows;
+    status = sif__io_ascii_row_count("io", filepath, skip_header, &rows);
+    if (status != SIF_OK)
+      return status;
+    field->n_particles = rows;
   }
 
   status = format_reserve(field, &f, fmt);
@@ -760,79 +777,115 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
     return status;
 
   FILE* file = fopen(filepath, "r");
-  if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s", filepath);
-    return SIF_ERR_IO;
-  }
+  if (!file)
+    return sif__io_os_error("io", filepath, NULL, errno);
 
   char line[LINE_CAP];
-  for (uint32_t i = 0; i < skip_header; i++) {
-    if (!fgets(line, sizeof(line), file))
-      break;
-  }
-
+  uint64_t lineno = 0;
   uint64_t loaded = 0;
   uint64_t skipped = 0;
+  uint64_t last_row = 0;
+  bool has_more = false;
 
-  while (loaded < field->n_particles && fgets(line, sizeof(line), file)) {
+  for (;;) {
+    if (!fgets(line, sizeof(line), file))
+      break;
+    lineno++;
+
+    /* A line the buffer cannot hold would be read in pieces, and its tail
+     * parsed as a row of its own. */
+    const size_t len = strlen(line);
+    if (len == sizeof(line) - 1 && line[len - 1] != '\n' && !feof(file)) {
+      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": line longer than %d characters",
+        filepath, lineno, LINE_CAP - 2);
+      status = SIF_ERR_IO;
+      break;
+    }
+
+    if (lineno <= skip_header)
+      continue;
     if (!line_is_data(line)) {
       skipped++;
       continue;
     }
 
-    char* cursor = line;
-    sif_real val = 0.0;
-    int col = 0;
-
-    for (; col < f.n_cols; col++) {
-      if (!next_real(&cursor, delimiter, &val))
-        break;
-      col_assign(field, f.cols[col].kind, loaded, val);
+    /* Whether the file had more to give is one more line, not another pass:
+     * counting the rows again means streaming the whole file a second time. */
+    if (loaded == field->n_particles) {
+      has_more = true;
+      break;
     }
 
-    /* A row that ran out of columns is not a particle. Not counting it is what
-     * makes it harmless: whatever was written at this index is overwritten by
-     * the next good row, or falls outside n_particles once the count below is
-     * corrected. Advancing instead would leave an entry whose remaining
-     * components were never assigned. */
+    char* cursor = line;
+    int col = 0;
+    for (; col < f.n_cols; col++) {
+      sif_real val;
+      bool ok;
+      const char* tok;
+      int tok_len;
+      if (!next_field(&cursor, delimiter, &val, &ok, &tok, &tok_len))
+        break;
+      if (f.cols[col].kind == COL_SKIP)
+        continue;
+      if (!ok) {
+        if (tok_len == 0)
+          SIF_LOG_ERROR("io", "%s:%" PRIu64 ": column %d (%s): empty", filepath,
+            lineno, col + 1, col_label(&f, f.cols[col].kind));
+        else
+          SIF_LOG_ERROR("io",
+            "%s:%" PRIu64 ": column %d (%s): '%.*s' is not a number", filepath,
+            lineno, col + 1, col_label(&f, f.cols[col].kind),
+            tok_len > 32 ? 32 : tok_len, tok);
+        status = SIF_ERR_IO;
+        break;
+      }
+      col_assign(field, f.cols[col].kind, loaded, val);
+    }
+    if (status != SIF_OK)
+      break;
+
     if (col < f.n_cols) {
-      skipped++;
-      continue;
+      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": %d column%s, format '%s' needs %d",
+        filepath, lineno, col, col == 1 ? "" : "s", fmt, f.n_cols);
+      status = SIF_ERR_IO;
+      break;
     }
 
     loaded++;
+    last_row = lineno;
   }
 
-  /* Whether the file had more to give is one more read, not another pass:
-   * counting the rows again means streaming the whole file a second time. */
-  bool has_more = false;
-  while (!has_more && fgets(line, sizeof(line), file)) {
-    has_more = line_is_data(line);
-  }
-
+  if (status == SIF_OK && ferror(file))
+    status = sif__io_os_error("io", filepath, "read", errno);
   fclose(file);
+  if (status != SIF_OK)
+    return status;
 
   if (loaded == 0) {
-    SIF_LOG_ERROR(
-      "io", "%s holds no parsable rows for format '%s'", filepath, fmt);
+    SIF_LOG_ERROR("io", "%s: no data rows", filepath);
     return SIF_ERR_IO;
   }
 
   if (loaded < field->n_particles) {
-    SIF_LOG_INFO("io",
-      "loaded %" PRIu64 " particles from %s (%" PRIu64
-      " lines skipped as blank, comment or short)",
-      loaded, filepath, skipped);
-    field->n_particles = loaded;
-  } else {
-    SIF_LOG_INFO(
-      "io", "loaded %" PRIu64 " particles from %s", loaded, filepath);
-    if (has_more) {
-      SIF_LOG_WARNING("io",
-        "field filled at %" PRIu64 " particles; %s holds more rows", loaded,
-        filepath);
+    /* Only a field sized here can be short of its count without the file
+     * being short of rows: the count included the blank and comment lines. */
+    if (!sized_here) {
+      SIF_LOG_ERROR("io",
+        "%s: %" PRIu64 " data rows, field has %" PRIu64 " particles", filepath,
+        loaded, field->n_particles);
+      return SIF_ERR_IO;
     }
+    field->n_particles = loaded;
   }
+
+  SIF_LOG_INFO("io", "loaded %" PRIu64 " particles from %s", loaded, filepath);
+  if (skipped)
+    SIF_LOG_DEBUG(
+      "io", "%s: %" PRIu64 " blank or comment lines", filepath, skipped);
+  if (has_more)
+    SIF_LOG_WARNING("io",
+      "%s: rows after line %" PRIu64 " not read (field holds %" PRIu64 ")",
+      filepath, last_row, loaded);
 
   format_loaded(field, &f);
   return SIF_OK;

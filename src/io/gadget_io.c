@@ -22,8 +22,10 @@
 #include "io/internal.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
+#include "utils/logger_internal.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -75,12 +77,10 @@ static bool slot_ok(int value, int first, int n_values, const char* slot) {
 
   const char* meant = slot_of(value);
   if (meant && strcmp(meant, slot) != 0)
-    SIF_LOG_ERROR(TAG,
-      "the %s argument was given a %s option (0x%x); are two arguments "
-      "swapped?",
-      slot, meant, value);
+    SIF_LOG_ERROR(TAG, "%s argument: 0x%x is a %s option (arguments swapped?)",
+      slot, value, meant);
   else
-    SIF_LOG_ERROR(TAG, "0x%x is not a valid %s option", value, slot);
+    SIF_LOG_ERROR(TAG, "%s argument: 0x%x is not a valid option", slot, value);
   return false;
 }
 
@@ -133,37 +133,108 @@ typedef struct {
 
 typedef struct {
   FILE* f;
+  const char* path;
+  uint64_t file_bytes;
   bool swapped;
   block_t head, pos, vel, mass;
   /* Bytes per component in each block, 4 or 8, fixed at open. */
   uint32_t pos_elem, vel_elem, mass_elem;
 } bin_file_t;
 
+/* Why a record's framing is broken, for the message. */
+typedef enum {
+  REC_OK,
+  REC_SHORT_MARKER, /* the file ends inside a length marker */
+  REC_PAST_END,     /* the length runs past the end of the file */
+  REC_MISMATCH,     /* the trailing marker is not the leading one */
+  REC_READ_ERROR    /* the system failed the read; errno says why */
+} rec_fault_t;
+
+typedef struct {
+  rec_fault_t fault;
+  off_t at; /* where the record starts */
+  uint32_t head, tail;
+  int err;
+} rec_error_t;
+
 /*
  * The Fortran framing: a 4-byte length, the payload, the same length again.
  * Reads one record's framing from the current position and leaves the stream
  * after it. Returns 1 for a record, 0 at a clean end of file, -1 for a broken
- * one -- a length that runs off the end or trailing marker that disagrees.
+ * one, with @p e saying how.
  *
  * The length is 32 bits, which is why GADGET never writes a block past 4 GB:
  * the framing could not say how long it was.
  */
-static int record_next(FILE* f, bool swapped, block_t* out) {
+static int record_next(
+  FILE* f, bool swapped, uint64_t file_bytes, block_t* out, rec_error_t* e) {
   unsigned char m[4];
-  const size_t got = fread(m, 1, 4, f);
+  memset(e, 0, sizeof(*e));
+  e->at = ftello(f);
+
+  size_t got = fread(m, 1, 4, f);
   if (got == 0 && feof(f))
     return 0;
-  if (got != 4)
+  if (got != 4) {
+    e->fault = ferror(f) ? REC_READ_ERROR : REC_SHORT_MARKER;
+    e->err = errno;
     return -1;
+  }
 
   const uint32_t len = get_u32(m, swapped);
+  e->head = len;
   out->offset = ftello(f);
   out->bytes = len;
   out->present = true;
 
-  if (fseeko(f, (off_t)len, SEEK_CUR) != 0 || fread(m, 1, 4, f) != 4)
+  if ((uint64_t)out->offset + len + 4 > file_bytes) {
+    e->fault = REC_PAST_END;
     return -1;
-  return get_u32(m, swapped) == len ? 1 : -1;
+  }
+  if (fseeko(f, (off_t)len, SEEK_CUR) != 0 || fread(m, 1, 4, f) != 4) {
+    e->fault = ferror(f) ? REC_READ_ERROR : REC_SHORT_MARKER;
+    e->err = errno;
+    return -1;
+  }
+  e->tail = get_u32(m, swapped);
+  if (e->tail != len) {
+    e->fault = REC_MISMATCH;
+    return -1;
+  }
+  return 1;
+}
+
+/* Logs a broken record, @p index from 1. */
+static void record_log(
+  const char* path, uint32_t index, const rec_error_t* e, uint64_t file_bytes) {
+  const long long at = (long long)e->at;
+  switch (e->fault) {
+  case REC_SHORT_MARKER:
+    SIF_LOG_ERROR(TAG,
+      "%s: record %u at byte %lld: file ends inside the length marker "
+      "(truncated)",
+      path, index, at);
+    break;
+  case REC_PAST_END:
+    SIF_LOG_ERROR(TAG,
+      "%s: record %u at byte %lld: length %u, file ends at byte %" PRIu64
+      " (truncated)",
+      path, index, at, e->head, file_bytes);
+    break;
+  case REC_MISMATCH:
+    SIF_LOG_ERROR(TAG,
+      "%s: record %u at byte %lld: length markers differ (%u, %u)", path, index,
+      at, e->head, e->tail);
+    break;
+  case REC_READ_ERROR: {
+    char what[64];
+    snprintf(what, sizeof(what), "record %u at byte %lld", index, at);
+    (void)sif__io_os_error(TAG, path, what, e->err);
+    break;
+  }
+  case REC_OK:
+    break;
+  }
 }
 
 /* Everything in a header except the counts is a double or an int that has a
@@ -282,8 +353,7 @@ static int parse_header(const unsigned char* p, uint64_t size, bool sw,
     if (header_sane(h) && pos_block_fits(h, pos))
       return SIF_OK;
     SIF_LOG_ERROR(TAG,
-      "%s has a 256-byte header, but it does not read as a GADGET-2 header "
-      "that matches the positions block",
+      "%s: 256-byte header: not a GADGET-2 header matching the POS block",
       path);
     return SIF_ERR_IO;
   }
@@ -304,8 +374,7 @@ static int parse_header(const unsigned char* p, uint64_t size, bool sw,
   }
 
   SIF_LOG_ERROR(TAG,
-    "%s: the %" PRIu64 "-byte header matches no GADGET header layout", path,
-    size);
+    "%s: %" PRIu64 "-byte header: matches no GADGET header layout", path, size);
   return SIF_ERR_IO;
 }
 
@@ -334,43 +403,64 @@ static void blocks_add(sif_gadget_header_t* h, const char* name) {
  * positions, velocities, IDs, then masses if any particle carries its own.
  */
 static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
-  bin_file_t* bf, sif_gadget_header_t* h) {
+  uint64_t file_bytes, bin_file_t* bf, sif_gadget_header_t* h) {
 
   memset(bf, 0, sizeof(*bf));
+  bf->path = path;
+  bf->file_bytes = file_bytes;
   bf->swapped = sw;
   bf->f = fopen(path, "rb");
-  if (!bf->f) {
-    SIF_LOG_ERROR(TAG, "could not open %s", path);
-    return SIF_ERR_IO;
-  }
+  if (!bf->f)
+    return sif__io_os_error(TAG, path, NULL, errno);
 
   block_t rec;
   block_t f1_records[5] = {{0}};
   uint32_t n_records = 0;
+  rec_error_t re;
   int r;
 
   if (format == SIF_GADGET_FORMAT_1) {
-    while ((r = record_next(bf->f, sw, &rec)) == 1) {
+    while ((r = record_next(bf->f, sw, file_bytes, &rec, &re)) == 1) {
       if (n_records < 5)
         f1_records[n_records] = rec;
       n_records++;
+    }
+    if (r < 0) {
+      record_log(path, n_records + 1, &re, file_bytes);
+      return SIF_ERR_IO;
     }
     bf->head = f1_records[0];
     bf->pos = f1_records[1];
     h->n_blocks = n_records;
   } else {
-    while ((r = record_next(bf->f, sw, &rec)) == 1) {
+    while ((r = record_next(bf->f, sw, file_bytes, &rec, &re)) == 1) {
+      n_records++;
       unsigned char label[8];
-      if (rec.bytes != 8 || fseeko(bf->f, rec.offset, SEEK_SET) != 0 ||
+      if (rec.bytes != 8) {
+        SIF_LOG_ERROR(TAG,
+          "%s: record %u at byte %lld: %" PRIu64
+          " bytes where an 8-byte block label was expected",
+          path, n_records, (long long)re.at, rec.bytes);
+        return SIF_ERR_IO;
+      }
+      if (fseeko(bf->f, rec.offset, SEEK_SET) != 0 ||
           fread(label, 1, 8, bf->f) != 8 || fseeko(bf->f, 4, SEEK_CUR) != 0) {
-        r = -1;
-        break;
+        char what[64];
+        snprintf(what, sizeof(what), "record %u", n_records);
+        return sif__io_os_error(TAG, path, what, errno);
       }
 
       block_t data;
-      if (record_next(bf->f, sw, &data) != 1) {
-        r = -1;
-        break;
+      r = record_next(bf->f, sw, file_bytes, &data, &re);
+      n_records++;
+      if (r <= 0) {
+        if (r == 0)
+          SIF_LOG_ERROR(TAG,
+            "%s: block label at byte %lld has no block after it (truncated)",
+            path, (long long)re.at);
+        else
+          record_log(path, n_records, &re, file_bytes);
+        return SIF_ERR_IO;
       }
 
       /* Four characters, padded with spaces. */
@@ -390,26 +480,27 @@ static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
       else if (strcmp(name, "MASS") == 0)
         bf->mass = data;
     }
+    if (r < 0) {
+      record_log(path, n_records + 1, &re, file_bytes);
+      return SIF_ERR_IO;
+    }
   }
 
-  if (r < 0) {
-    SIF_LOG_ERROR(TAG,
-      "%s is truncated, or its record markers do not match: not a %s file",
-      path, format_name(format));
+  if (!bf->head.present) {
+    SIF_LOG_ERROR(TAG, "%s: no HEAD block", path);
     return SIF_ERR_IO;
   }
-
-  if (!bf->head.present || bf->head.bytes > HEAD_CAP || bf->head.bytes < 64) {
-    SIF_LOG_ERROR(TAG, "%s has no GADGET header", path);
+  if (bf->head.bytes > HEAD_CAP || bf->head.bytes < 64) {
+    SIF_LOG_ERROR(TAG,
+      "%s: header record: %" PRIu64 " bytes (expected 64 to %d)", path,
+      bf->head.bytes, HEAD_CAP);
     return SIF_ERR_IO;
   }
 
   unsigned char head[HEAD_CAP];
   if (fseeko(bf->f, bf->head.offset, SEEK_SET) != 0 ||
-      fread(head, 1, bf->head.bytes, bf->f) != bf->head.bytes) {
-    SIF_LOG_ERROR(TAG, "failed to read the header of %s", path);
-    return SIF_ERR_IO;
-  }
+      fread(head, 1, bf->head.bytes, bf->f) != bf->head.bytes)
+    return sif__io_os_error(TAG, path, "header", errno);
 
   int status = parse_header(head, bf->head.bytes, sw, &bf->pos, h, path);
   if (status != SIF_OK)
@@ -434,9 +525,9 @@ static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
     bf->vel_elem = elem_size(&bf->vel, n, 3);
     if (n > 0 && bf->vel_elem == 0) {
       SIF_LOG_ERROR(TAG,
-        "%s: velocity block of %" PRIu64 " bytes does not fit %" PRIu64
-        " particles",
-        path, bf->vel.bytes, n);
+        "%s: VEL block: %" PRIu64 " bytes, expected %" PRIu64 " or %" PRIu64
+        " (%" PRIu64 " particles)",
+        path, bf->vel.bytes, 12 * n, 24 * n, n);
       return SIF_ERR_IO;
     }
   }
@@ -445,9 +536,9 @@ static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
     bf->mass_elem = elem_size(&bf->mass, n_mass, 1);
     if (n_mass > 0 && bf->mass_elem == 0) {
       SIF_LOG_ERROR(TAG,
-        "%s: mass block of %" PRIu64 " bytes does not fit %" PRIu64
-        " particles with individual masses",
-        path, bf->mass.bytes, n_mass);
+        "%s: MASS block: %" PRIu64 " bytes, expected %" PRIu64 " or %" PRIu64
+        " (%" PRIu64 " particles without a MassTable entry)",
+        path, bf->mass.bytes, 4 * n_mass, 8 * n_mass, n_mass);
       return SIF_ERR_IO;
     }
   }
@@ -482,14 +573,28 @@ static int bin_read(bin_file_t* bf, const sif_gadget_header_t* h,
       type_off += h->n_part_file[t];
   }
 
-  if (!b->present || elem == 0)
+  const char* name = block == SIF__GADGET_BLOCK_POS   ? "POS"
+                     : block == SIF__GADGET_BLOCK_VEL ? "VEL"
+                                                      : "MASS";
+  if (!b->present || elem == 0) {
+    SIF_LOG_ERROR(TAG, "%s: no %s block", bf->path, name);
     return SIF_ERR_IO;
+  }
 
   const uint64_t n_vals = count * comps;
   const off_t at = b->offset + (off_t)((type_off + start) * comps * elem);
   if (fseeko(bf->f, at, SEEK_SET) != 0 ||
-      fread(scratch, elem, n_vals, bf->f) != n_vals)
+      fread(scratch, elem, n_vals, bf->f) != n_vals) {
+    char what[96];
+    snprintf(what, sizeof(what),
+      "%s block, type %u, particles %" PRIu64 "-%" PRIu64, name, ptype, start,
+      start + count - 1);
+    if (ferror(bf->f))
+      return sif__io_os_error(TAG, bf->path, what, errno);
+    SIF_LOG_ERROR(TAG, "%s: %s: file ends before byte %" PRIu64, bf->path, what,
+      (uint64_t)at + n_vals * elem);
     return SIF_ERR_IO;
+  }
 
   if (elem == 4) {
     for (uint64_t i = 0; i < n_vals; i++) {
@@ -520,41 +625,53 @@ typedef struct {
  * signature, a SnapFormat 2 label, or a plausible header length. The byte
  * order comes out of the same look, since a length read the wrong way round
  * is not a plausible one. */
-static int detect(const char* path, sif_gadget_format_t* format, bool* sw) {
-  unsigned char buf[8];
-  FILE* f = fopen(path, "rb");
-  if (!f) {
-    SIF_LOG_ERROR(TAG, "could not open %s", path);
+static int detect(const char* path, sif_gadget_format_t* format, bool* sw,
+  uint64_t* file_bytes) {
+  int status = sif__io_check_readable(TAG, path, file_bytes);
+  if (status != SIF_OK)
+    return status;
+  if (*file_bytes < 8) {
+    SIF_LOG_ERROR(TAG, "%s: %" PRIu64 " bytes, too short for a snapshot", path,
+      *file_bytes);
     return SIF_ERR_IO;
   }
+
+  unsigned char buf[8];
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return sif__io_os_error(TAG, path, NULL, errno);
   const size_t got = fread(buf, 1, 8, f);
+  const int err = errno;
   fclose(f);
+  if (got != 8)
+    return sif__io_os_error(TAG, path, "read", err);
 
   static const unsigned char h5sig[8] = {
     0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'};
-  if (got == 8 && memcmp(buf, h5sig, 8) == 0) {
+  if (memcmp(buf, h5sig, 8) == 0) {
     *format = SIF_GADGET_FORMAT_HDF5;
     *sw = false;
     return SIF_OK;
   }
 
-  if (got == 8) {
-    for (int s = 0; s < 2; s++) {
-      const uint32_t m = get_u32(buf, s == 1);
-      if (m == 8 && memcmp(buf + 4, "HEAD", 4) == 0) {
-        *format = SIF_GADGET_FORMAT_2;
-        *sw = s == 1;
-        return SIF_OK;
-      }
-      if (m >= 64 && m <= HEAD_CAP) {
-        *format = SIF_GADGET_FORMAT_1;
-        *sw = s == 1;
-        return SIF_OK;
-      }
+  for (int s = 0; s < 2; s++) {
+    const uint32_t m = get_u32(buf, s == 1);
+    if (m == 8 && memcmp(buf + 4, "HEAD", 4) == 0) {
+      *format = SIF_GADGET_FORMAT_2;
+      *sw = s == 1;
+      return SIF_OK;
+    }
+    if (m >= 64 && m <= HEAD_CAP) {
+      *format = SIF_GADGET_FORMAT_1;
+      *sw = s == 1;
+      return SIF_OK;
     }
   }
 
-  SIF_LOG_ERROR(TAG, "%s is not a GADGET snapshot in any known format", path);
+  SIF_LOG_ERROR(TAG,
+    "%s: not a GADGET snapshot: no HDF5 signature, first record length %u "
+    "(expected 8 + HEAD, or 64 to %d)",
+    path, get_u32(buf, false), HEAD_CAP);
   return SIF_ERR_IO;
 }
 
@@ -573,13 +690,14 @@ static int snap_open(
 
   sif_gadget_format_t format;
   bool sw;
-  int status = detect(path, &format, &sw);
+  uint64_t file_bytes = 0;
+  int status = detect(path, &format, &sw, &file_bytes);
   if (status != SIF_OK)
     return status;
 
   if (want != SIF_GADGET_FORMAT_AUTO && want != format) {
-    SIF_LOG_ERROR(
-      TAG, "%s is %s, not %s", path, format_name(format), format_name(want));
+    SIF_LOG_ERROR(TAG, "%s: %s, not %s as asked", path, format_name(format),
+      format_name(want));
     return SIF_ERR_IO;
   }
 
@@ -587,7 +705,7 @@ static int snap_open(
     sf->is_hdf5 = true;
     status = sif__gadget_h5_open(path, &sf->h5, &sf->header);
   } else {
-    status = bin_open(path, format, sw, &sf->bin, &sf->header);
+    status = bin_open(path, format, sw, file_bytes, &sf->bin, &sf->header);
   }
 
   if (status != SIF_OK)
@@ -664,7 +782,8 @@ static int path_resolve(const char* path, snap_path_t* sp) {
   memset(sp, 0, sizeof(*sp));
 
   if (strlen(path) >= PATH_CAP - 32) {
-    SIF_LOG_ERROR(TAG, "path too long: %s", path);
+    SIF_LOG_ERROR(
+      TAG, "%s: path longer than %d characters", path, PATH_CAP - 33);
     return SIF_ERR_INVALID;
   }
 
@@ -699,10 +818,17 @@ static int path_resolve(const char* path, snap_path_t* sp) {
     }
   }
 
+  struct stat st;
+  if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+    SIF_LOG_ERROR(
+      TAG, "%s: a directory; name a snapshot file or base name in it", path);
+    sif__error_os_set(EISDIR);
+    return SIF_ERR_IO;
+  }
   SIF_LOG_ERROR(TAG,
-    "no snapshot at %s: not a file, and no %s.0, %s.0.hdf5 or snapdir beside "
-    "it",
-    path, path, path);
+    "%s: no snapshot (tried %s, %s.hdf5, %s.0, %s.0.hdf5, snapdir_*/)", path,
+    path, path, path, path);
+  sif__error_os_set(ENOENT);
   return SIF_ERR_IO;
 }
 
@@ -716,14 +842,18 @@ static int path_file(
 
   if (!sp->numbered) {
     SIF_LOG_ERROR(TAG,
-      "%s is one of %u files, but its name is not <base>.<n>, so the others "
-      "cannot be found",
+      "%s: file 1 of %u, but not named <base>.<n>; the others cannot be found",
       sp->first, n_files);
     return SIF_ERR_IO;
   }
 
   const int n = snprintf(buf, PATH_CAP, "%s.%u%s", sp->base, i, sp->suffix);
-  return (n > 0 && n < PATH_CAP) ? SIF_OK : SIF_ERR_INVALID;
+  if (n <= 0 || n >= PATH_CAP) {
+    SIF_LOG_ERROR(TAG, "%s.%u%s: path longer than %d characters", sp->base, i,
+      sp->suffix, PATH_CAP - 1);
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -834,7 +964,7 @@ typedef struct {
   unsigned char* scratch;
 } stream_t;
 
-static int stream_file(stream_t* s, snap_file_t* sf, const char* path) {
+static int stream_file(stream_t* s, snap_file_t* sf) {
   const uint64_t n = sf->header.n_part_file[s->ptype];
 
   for (uint64_t start = 0; start < n; start += CHUNK) {
@@ -848,12 +978,8 @@ static int stream_file(stream_t* s, snap_file_t* sf, const char* path) {
     if (status == SIF_OK && s->read_mass)
       status = snap_read(
         sf, s->ptype, SIF__GADGET_BLOCK_MASS, start, c, s->mass, s->scratch);
-    if (status != SIF_OK) {
-      SIF_LOG_ERROR(TAG,
-        "failed to read particles %" PRIu64 "-%" PRIu64 " of type %u from %s",
-        start, start + c, s->ptype, path);
-      return SIF_ERR_IO;
-    }
+    if (status != SIF_OK)
+      return status;
 
     sif_field_t* fl = s->field;
     for (uint64_t j = 0; j < c; j++) {
@@ -891,7 +1017,7 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   uint64_t seed, double* out_box_length) {
 
   if (!path) {
-    SIF_LOG_ERROR(TAG, "a path is required");
+    SIF_LOG_ERROR(TAG, "sif_field_read_gadget: NULL path");
     return NULL;
   }
 
@@ -903,7 +1029,7 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
     return NULL;
 
   if (!(fraction > 0 && fraction <= 1)) {
-    SIF_LOG_ERROR(TAG, "fraction must be in (0, 1], not %g", fraction);
+    SIF_LOG_ERROR(TAG, "fraction: %g, expected (0, 1]", fraction);
     return NULL;
   }
 
@@ -927,8 +1053,8 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   const sif_gadget_format_t file_format = h0.format;
 
   if (t >= h0.n_types) {
-    SIF_LOG_ERROR(TAG,
-      "the snapshot has %u particle types; there is no type %u", h0.n_types, t);
+    SIF_LOG_ERROR(TAG, "%s: type %u: snapshot has %u types (0 to %u)", sp.first,
+      t, h0.n_types, h0.n_types - 1);
     return NULL;
   }
 
@@ -946,8 +1072,10 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
     snap_close(&sf);
 
     if (hi.n_types != h0.n_types || hi.n_files != h0.n_files) {
-      SIF_LOG_ERROR(
-        TAG, "%s does not belong to the same snapshot as %s", file, sp.first);
+      SIF_LOG_ERROR(TAG,
+        "%s: %u types, %u files; %s: %u types, %u files (not the same "
+        "snapshot)",
+        file, hi.n_types, hi.n_files, sp.first, h0.n_types, h0.n_files);
       return NULL;
     }
     n_total += hi.n_part_file[t];
@@ -955,13 +1083,13 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
 
   if (n_total != h0.n_part_total[t]) {
     SIF_LOG_ERROR(TAG,
-      "the files hold %" PRIu64 " particles of type %u, but the header says "
-      "the snapshot has %" PRIu64 "; a file is missing or from another run",
-      n_total, t, h0.n_part_total[t]);
+      "%s: type %u: %u files hold %" PRIu64 " particles, NumPart_Total %" PRIu64
+      " (file missing or from another run?)",
+      sp.first, t, h0.n_files, n_total, h0.n_part_total[t]);
     return NULL;
   }
   if (n_total == 0) {
-    SIF_LOG_ERROR(TAG, "the snapshot has no particles of type %u", t);
+    SIF_LOG_ERROR(TAG, "%s: type %u: no particles", sp.first, t);
     return NULL;
   }
 
@@ -976,8 +1104,7 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
     pos_scale = h0.unit_length_in_cm / MPC_IN_CM;
   } else {
     SIF_LOG_ERROR(TAG,
-      "%s does not record its length unit; name it with SIF_GADGET_LENGTH_KPC "
-      "or SIF_GADGET_LENGTH_MPC",
+      "%s: no length unit recorded (pass SIF_GADGET_LENGTH_KPC or _MPC)",
       sp.first);
     return NULL;
   }
@@ -991,9 +1118,8 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   if (velocity == SIF_GADGET_VELOCITY_PECULIAR) {
     if (!(h0.time > 0)) {
       SIF_LOG_ERROR(TAG,
-        "peculiar velocities need a scale factor, and the "
-        "header's time is %g",
-        h0.time);
+        "%s: peculiar velocities need a scale factor; header Time is %g",
+        sp.first, h0.time);
       return NULL;
     }
     s.vel_scale = sqrt(h0.time);
@@ -1014,7 +1140,7 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   s.n_keep =
     s.subsample ? (uint64_t)llround(fraction * (double)n_total) : n_total;
   if (s.n_keep == 0) {
-    SIF_LOG_ERROR(TAG, "a fraction of %g keeps none of %" PRIu64 " particles",
+    SIF_LOG_ERROR(TAG, "fraction %g keeps none of %" PRIu64 " particles",
       fraction, n_total);
     return NULL;
   }
@@ -1038,6 +1164,9 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
     status = sif_field_reserve_velocities(s.field);
   if (status == SIF_OK && s.read_mass)
     status = sif_field_reserve_weights(s.field);
+  if (status != SIF_OK)
+    SIF_LOG_ERROR(
+      TAG, "%s: %" PRIu64 " particles: out of memory", sp.first, s.n_keep);
 
   /* --- pass 2: stream every file into the field --- */
 
@@ -1052,14 +1181,14 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
 
     if (s.read_vel && sf.header.n_part_file[t] > 0 && !sf.is_hdf5 &&
         !sf.bin.vel.present) {
-      SIF_LOG_ERROR(TAG, "%s has no velocity block", file);
+      SIF_LOG_ERROR(TAG, "%s: no VEL block", file);
       status = SIF_ERR_IO;
     } else if (s.read_mass && sf.header.n_part_file[t] > 0 && !sf.is_hdf5 &&
                !sf.bin.mass.present) {
-      SIF_LOG_ERROR(TAG, "%s has no mass block", file);
+      SIF_LOG_ERROR(TAG, "%s: no MASS block", file);
       status = SIF_ERR_IO;
     } else {
-      status = stream_file(&s, &sf, file);
+      status = stream_file(&s, &sf);
     }
     snap_close(&sf);
   }
@@ -1070,8 +1199,8 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
   free(s.scratch);
 
   if (status == SIF_OK && s.kept != s.n_keep) {
-    SIF_LOG_ERROR(
-      TAG, "read %" PRIu64 " particles, expected %" PRIu64, s.kept, s.n_keep);
+    SIF_LOG_ERROR(TAG, "%s: read %" PRIu64 " particles, expected %" PRIu64,
+      sp.first, s.kept, s.n_keep);
     status = SIF_ERR_IO;
   }
 

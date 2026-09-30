@@ -6,10 +6,12 @@
 
 #include "sif/io/profiles_io.h"
 
+#include "internal.h"
 #include "measure/profiles_internal.h"
 #include "sif/utils/logger.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -38,15 +40,15 @@ int sif_profiles_write_ascii(const char* filepath,
 
   if ((!dens && !vel) || !cat || !filepath) {
     SIF_LOG_ERROR("io",
-      "sif_profiles_write_ascii needs a path, a catalogue and at least one "
-      "profile set");
+      "sif_profiles_write_ascii: needs a path, a catalogue and a profile set");
     return SIF_ERR_INVALID;
   }
 
   if (!shapes_agree(dens, vel)) {
     SIF_LOG_ERROR("io",
-      "the density and velocity sets disagree on their shape and cannot share "
-      "a file");
+      "%s: density and velocity profiles differ in shape (n_voids, n_bins, "
+      "ext)",
+      filepath);
     return SIF_ERR_INVALID;
   }
 
@@ -59,17 +61,14 @@ int sif_profiles_write_ascii(const char* filepath,
    * catalogue, and writing it would label every row with the wrong void. */
   if (cat->n_voids != n_voids) {
     SIF_LOG_ERROR("io",
-      "the catalogue holds %" PRIu64 " voids but the profiles hold %" PRIu64
-      "; they are not the same measurement",
+      "%s: catalogue has %" PRIu64 " voids, profiles %" PRIu64, filepath,
       cat->n_voids, n_voids);
     return SIF_ERR_INVALID;
   }
 
   FILE* file = fopen(filepath, "w");
-  if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s for writing", filepath);
-    return SIF_ERR_IO;
-  }
+  if (!file)
+    return sif__io_os_error("io", filepath, NULL, errno);
 
   /* What the file is, then what each column is, all behind '#': the shape
    * first, so the reader can size everything once, then the bin edges every
@@ -113,10 +112,8 @@ int sif_profiles_write_ascii(const char* filepath,
    * the flush inside fclose() are what say whether the file actually reached
    * the disk. Without this a full quota reads back as a short file. */
   const bool ok = (ferror(file) == 0);
-  if (fclose(file) != 0 || !ok) {
-    SIF_LOG_ERROR("io", "failed to flush %s to disk", filepath);
-    return SIF_ERR_IO;
-  }
+  if (fclose(file) != 0 || !ok)
+    return sif__io_os_error("io", filepath, "write", errno);
 
   SIF_LOG_INFO("io", "saved %" PRIu64 " profiles (%s) to %s (ASCII)", n_voids,
     dens && vel ? "density and velocity" : (dens ? "density" : "velocity"),
@@ -146,7 +143,10 @@ static int read_legacy_header(FILE* file, const char* filepath, header_t* h) {
   if (fscanf(file, "%" SCNu64 " %" SCNu32 " " SIF_SCN_REAL " %d %d %d",
         &h->n_voids, &h->n_bins, &h->ext, &h->has_dens, &h->has_vel,
         &h->differential) != 6) {
-    SIF_LOG_ERROR("io", "failed to read the profile header from %s", filepath);
+    SIF_LOG_ERROR("io",
+      "%s: legacy header: expected 'n_voids n_bins ext has_density "
+      "has_velocity differential'",
+      filepath);
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -193,7 +193,8 @@ static int parse_names(char* text, const char* filepath, header_t* h) {
   for (int c = 0; c < 4; c++, tok = strtok_r(NULL, " \t", &save)) {
     if (!tok || strcasecmp(tok, centre[c]) != 0) {
       SIF_LOG_ERROR("io",
-        "%s: the columns have to begin cx cy cz r, or ra dec z r", filepath);
+        "%s: column %d is '%s', expected '%s' (cx cy cz r | ra dec z r)",
+        filepath, c + 1, tok ? tok : "", centre[c]);
       return SIF_ERR_INVALID;
     }
   }
@@ -208,15 +209,15 @@ static int parse_names(char* text, const char* filepath, header_t* h) {
       char want[32];
       snprintf(want, sizeof want, "%s%" PRIu32, prefix, j);
       if (!tok || strcasecmp(tok, want) != 0) {
-        SIF_LOG_ERROR("io", "%s: expected column %s after %s", filepath, want,
-          j ? "the one before" : "the centres");
+        SIF_LOG_ERROR("io", "%s: column '%s', expected '%s'", filepath,
+          tok ? tok : "", want);
         return SIF_ERR_INVALID;
       }
     }
     *(block == 0 ? &h->has_dens : &h->has_vel) = 1;
   }
   if (tok) {
-    SIF_LOG_ERROR("io", "%s: column %s is not one sif writes", filepath, tok);
+    SIF_LOG_ERROR("io", "%s: column '%s': unknown", filepath, tok);
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -280,15 +281,15 @@ static int read_named_header(FILE* file, const char* filepath, header_t* h) {
 
   if (status == SIF_OK &&
       !(have_n && have_bins && have_ext && edges_text && have_names)) {
-    SIF_LOG_ERROR("io",
-      "%s: the header needs n, n_bins, ext, r_edges and the column names",
-      filepath);
+    SIF_LOG_ERROR("io", "%s: header lacks%s%s%s%s%s", filepath,
+      have_n ? "" : " n", have_bins ? "" : " n_bins", have_ext ? "" : " ext",
+      edges_text ? "" : " r_edges", have_names ? "" : " column-names");
     status = SIF_ERR_INVALID;
   }
   if (status == SIF_OK && h->n_bins > 0) {
     h->edges = parse_edges(edges_text, h->n_bins);
     if (!h->edges) {
-      SIF_LOG_ERROR("io", "%s: r_edges is not %" PRIu32 " numbers", filepath,
+      SIF_LOG_ERROR("io", "%s: r_edges: expected %" PRIu32 " numbers", filepath,
         h->n_bins + 1);
       status = SIF_ERR_INVALID;
     }
@@ -323,8 +324,8 @@ static int read_header(FILE* file, const char* filepath, header_t* h) {
 
   if (h->n_voids == 0 || h->n_bins == 0 || (!h->has_dens && !h->has_vel)) {
     SIF_LOG_ERROR("io",
-      "%s describes an empty profile set (%" PRIu64 " voids, %" PRIu32
-      " bins, density=%d velocity=%d)",
+      "%s: empty profile set (n=%" PRIu64 ", n_bins=%" PRIu32
+      ", density=%d, velocity=%d)",
       filepath, h->n_voids, h->n_bins, h->has_dens, h->has_vel);
     free(h->edges);
     h->edges = NULL;
@@ -338,15 +339,15 @@ int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
   int* out_has_velocity, int* out_differential) {
 
   if (!filepath) {
-    SIF_LOG_ERROR("io", "invalid filepath for sif_profiles_read_header_ascii");
+    SIF_LOG_ERROR("io", "sif_profiles_read_header_ascii: NULL path");
     return SIF_ERR_INVALID;
   }
 
+  if (sif__io_check_readable("io", filepath, NULL) != SIF_OK)
+    return SIF_ERR_IO;
   FILE* file = fopen(filepath, "r");
-  if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s for reading", filepath);
-    return SIF_ERR_INVALID;
-  }
+  if (!file)
+    return sif__io_os_error("io", filepath, NULL, errno);
 
   header_t h;
   const int status = read_header(file, filepath, &h);
@@ -375,11 +376,50 @@ int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
 /* the rows                                                                  */
 /* ------------------------------------------------------------------------ */
 
+/*
+ * One value of the body, reported by where it is: data row @p row (from 1; 0
+ * for the legacy bin-edge line), column @p col, bin @p bin (UINT32_MAX for a
+ * column with none). The end of the file is left for the caller to report
+ * when it knows more -- a row count -- and is only logged here for a row cut
+ * short.
+ */
+static int read_value(FILE* file, const char* path, uint64_t row,
+  const char* col, uint32_t bin, sif_real* out) {
+  char where[64];
+  if (bin == UINT32_MAX)
+    snprintf(where, sizeof where, "%s", col);
+  else
+    snprintf(where, sizeof where, "%s_%" PRIu32, col, bin);
+
+  /* A whole token, which has to parse whole: fscanf() alone would take the
+   * "1.5" of "1.5x" and leave the "x" to be misread as the next value. */
+  char tok[64];
+  if (fscanf(file, "%63s", tok) != 1) {
+    if (ferror(file))
+      return sif__io_os_error("io", path, "read", errno);
+    /* A row that ends within itself, not between two rows. */
+    if (bin != UINT32_MAX || (strcmp(col, "cx") != 0 && strcmp(col, "ra") != 0))
+      SIF_LOG_ERROR(
+        "io", "%s: row %" PRIu64 ": ends before %s", path, row, where);
+    return SIF_ERR_IO;
+  }
+
+  char* end;
+  *out = sizeof(sif_real) == 4 ? (sif_real)strtof(tok, &end)
+                               : (sif_real)strtod(tok, &end);
+  if (end == tok || *end) {
+    SIF_LOG_ERROR("io", "%s: row %" PRIu64 ", %s: '%s' is not a number", path,
+      row, where, tok);
+    return SIF_ERR_IO;
+  }
+  return SIF_OK;
+}
+
 int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
 
   if (!filepath) {
-    SIF_LOG_ERROR("io", "invalid filepath for sif_profiles_read_ascii");
+    SIF_LOG_ERROR("io", "sif_profiles_read_ascii: NULL path");
     return SIF_ERR_INVALID;
   }
 
@@ -393,11 +433,11 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   if (out_vel)
     *out_vel = NULL;
 
+  if (sif__io_check_readable("io", filepath, NULL) != SIF_OK)
+    return SIF_ERR_IO;
   FILE* file = fopen(filepath, "r");
-  if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s for reading", filepath);
-    return SIF_ERR_INVALID;
-  }
+  if (!file)
+    return sif__io_os_error("io", filepath, NULL, errno);
 
   header_t h;
   if (read_header(file, filepath, &h) != SIF_OK) {
@@ -415,7 +455,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   /* Asked for something the file does not carry. Handing back an empty set
    * would be indistinguishable from a measurement of zeros. */
   if ((out_dens && !h.has_dens) || (out_vel && !h.has_vel)) {
-    SIF_LOG_ERROR("io", "%s carries no %s profiles", filepath,
+    SIF_LOG_ERROR("io", "%s: no %s profiles", filepath,
       (out_dens && !h.has_dens) ? "density" : "velocity");
     goto fail;
   }
@@ -424,7 +464,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   if (out_cat) {
     cat = sif_catalogue_alloc(n_voids);
     if (!cat) {
-      SIF_LOG_ERROR("io", "OOM allocating the catalogue for %s", filepath);
+      SIF_LOG_ERROR("io", "%s: catalogue: out of memory", filepath);
       goto fail;
     }
     if (h.sky)
@@ -435,7 +475,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
     dens =
       sif__density_profiles_alloc(n_voids, n_bins, h.ext, h.differential != 0);
     if (!dens) {
-      SIF_LOG_ERROR("io", "OOM allocating density profiles for %s", filepath);
+      SIF_LOG_ERROR("io", "%s: density profiles: out of memory", filepath);
       goto fail;
     }
   }
@@ -443,7 +483,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   if (out_vel) {
     vel = sif__velocity_profiles_alloc(n_voids, n_bins, h.ext);
     if (!vel) {
-      SIF_LOG_ERROR("io", "OOM allocating velocity profiles for %s", filepath);
+      SIF_LOG_ERROR("io", "%s: velocity profiles: out of memory", filepath);
       goto fail;
     }
   }
@@ -456,9 +496,8 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
     sif_real edge;
     if (h.edges) {
       edge = h.edges[j];
-    } else if (fscanf(file, SIF_SCN_REAL, &edge) != 1) {
-      SIF_LOG_ERROR(
-        "io", "failed reading bin edge %" PRIu32 " from %s", j, filepath);
+    } else if (read_value(file, filepath, 0, "r_edges", j, &edge) != SIF_OK) {
+      status = SIF_ERR_IO;
       goto fail;
     }
     if (dens)
@@ -469,16 +508,22 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
 
   /* Rows are required to be there: the header said how many, and a file that
    * stops short is truncated rather than merely small. */
+  static const char* const CENTRE[] = {"cx", "cy", "cz", "r"};
+  static const char* const CENTRE_SKY[] = {"ra", "dec", "z", "r"};
   for (uint64_t i = 0; i < n_voids; i++) {
-    sif_real cx, cy, cz, radius;
-
-    if (fscanf(file,
-          SIF_SCN_REAL " " SIF_SCN_REAL " " SIF_SCN_REAL " " SIF_SCN_REAL, &cx,
-          &cy, &cz, &radius) != 4) {
-      SIF_LOG_ERROR(
-        "io", "failed reading void %" PRIu64 " from %s", i, filepath);
-      goto fail;
+    sif_real c[4];
+    for (int k = 0; k < 4; k++) {
+      if (read_value(file, filepath, i + 1, (h.sky ? CENTRE_SKY : CENTRE)[k],
+            UINT32_MAX, &c[k]) != SIF_OK) {
+        if (feof(file))
+          SIF_LOG_ERROR("io",
+            "%s: %" PRIu64 " rows, header says %" PRIu64 " (truncated?)",
+            filepath, i, n_voids);
+        status = SIF_ERR_IO;
+        goto fail;
+      }
     }
+    const sif_real cx = c[0], cy = c[1], cz = c[2], radius = c[3];
 
     if (cat) {
       cat->cx[i] = cx;
@@ -503,10 +548,9 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
 
       for (uint32_t j = 0; j < n_bins; j++) {
         sif_real value;
-        if (fscanf(file, SIF_SCN_REAL, &value) != 1) {
-          SIF_LOG_ERROR("io",
-            "failed reading %s bin %" PRIu32 " of void %" PRIu64 " from %s",
-            block == 0 ? "density" : "velocity", j, i, filepath);
+        if (read_value(file, filepath, i + 1, block == 0 ? "density" : "v_rad",
+              j, &value) != SIF_OK) {
+          status = SIF_ERR_IO;
           goto fail;
         }
         if (row)

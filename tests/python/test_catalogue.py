@@ -111,5 +111,6 @@ def test_foreign_text_catalogue(tmp_path):
 
     with pytest.raises(OSError):
         pysif.io.read_catalogue_ascii(str(path))
-    with pytest.raises(OSError):
+    # A format without the radius is the request's mistake, not the file's.
+    with pytest.raises(ValueError, match="needs the centre"):
         pysif.io.read_catalogue_ascii(str(path), format="x y z")

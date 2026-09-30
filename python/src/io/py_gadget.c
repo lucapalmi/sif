@@ -87,33 +87,25 @@ static int parse_choice(const char* arg, const char* s,
   return -1;
 }
 
-/* After a failed call: the exception that says which kind of failure it was.
- * The reason itself is in the sif log. */
+/* After a failed call, with the C library's reason as the message. A build
+ * without HDF5 says how to get it, in pip's terms rather than CMake's. */
 static PyObject* status_error(int status, const char* path) {
-  switch (status) {
-  case SIF_ERR_INVALID:
-    return PyErr_Format(PyExc_ValueError,
-      "cannot read %s as asked; see the log for the reason", path);
-  case SIF_ERR_ALLOC:
-    return PyErr_NoMemory();
-  case SIF_ERR_UNSUPPORTED:
+  if (status == SIF_ERR_UNSUPPORTED)
     return PyErr_Format(PyExc_RuntimeError,
-      "cannot read %s: it is an HDF5 snapshot, and pysif was built without "
-      "HDF5 support (rebuild with -C cmake.define.SIF_HDF5_SUPPORT=ON)",
+      "%s: HDF5 snapshot, HDF5 support not built (rebuild pysif with "
+      "-C cmake.define.SIF_HDF5_SUPPORT=ON)",
       path);
-  default:
-    return PyErr_Format(
-      PyExc_OSError, "failed to read %s; see the log for the reason", path);
-  }
+  return py_sif_raise(status, path);
 }
 
 /*
  * After a failed read: the exception for what went wrong. The reader returns
- * only NULL, with the reason in the log, so the kind of failure is worked out
- * again here, cheaply. A header that does not read is the file's fault (or
- * the build's, for HDF5), and says which; one that does, but cannot give the
- * type, the fraction or the unit asked for, is the request's. Anything past
- * that -- a truncated block, a file missing from the set -- is I/O.
+ * only NULL, so the kind of failure is worked out again here, cheaply; the
+ * message stays the reader's, since the error record keeps the first error
+ * and the header read below comes after it. A header that does not read is
+ * the file's fault (or the build's, for HDF5); one that does, but cannot give
+ * the type, the fraction or the unit asked for, is the request's. Anything
+ * past that -- a truncated block, a file missing from the set -- is I/O.
  */
 static PyObject* read_error(const char* path, sif_gadget_format_t format,
   int ptype, int length, double fraction) {
@@ -248,6 +240,7 @@ PyObject* pysif_gadget_header(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
 
   sif_gadget_header_t h;
+  sif_error_clear();
   const int status = sif_gadget_read_header(path, format, &h);
   if (status != SIF_OK)
     return status_error(status, path);
@@ -274,6 +267,7 @@ PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
 
   sif_gadget_header_t h;
+  sif_error_clear();
   const int status = sif_gadget_read_header(path, format, &h);
   if (status != SIF_OK)
     return status_error(status, path);
@@ -381,13 +375,14 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
   /* 'auto' is the default, and a binary snapshot records no unit for it to
    * find. The reader refuses that too, but only says why in the log; the
    * header, one small read, lets the exception say it. */
+  sif_error_clear();
   if (length == SIF_GADGET_LENGTH_AUTO) {
     sif_gadget_header_t h;
     if (sif_gadget_read_header(path, format, &h) == SIF_OK &&
         h.format != SIF_GADGET_FORMAT_HDF5)
       return PyErr_Format(PyExc_ValueError,
-        "%s is a binary snapshot, which does not record its length unit: pass "
-        "length='kpc' (kpc/h, GADGET's default) or length='mpc' (Mpc/h)",
+        "%s: binary snapshot, no length unit recorded (pass length='kpc' for "
+        "GADGET's default kpc/h, or length='mpc')",
         path);
   }
 

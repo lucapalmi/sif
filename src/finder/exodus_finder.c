@@ -2427,9 +2427,48 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  */
 #define SURVEY_BOX_SLACK 1.01f
 
-int sif_finder_exodus_survey_box(const sif_field_t* randoms,
-  const sif_real* radii, uint32_t n_radii, uint32_t n_cells, sif_option opt,
-  sif_real offset[3], sif_real* box_length) {
+/*
+ * The bounding box of a field's positions, grown into lo and hi. fminf and
+ * fmaxf pass over a NaN rather than propagate it, so a coordinate that is not
+ * finite would otherwise leave the box looking fine; it is counted instead.
+ */
+static int survey_field_extent(
+  const sif_field_t* field, const char* what, sif_real lo[3], sif_real hi[3]) {
+
+  sif_real x0 = lo[0], y0 = lo[1], z0 = lo[2];
+  sif_real x1 = hi[0], y1 = hi[1], z1 = hi[2];
+  uint64_t bad = 0;
+
+#pragma omp parallel for schedule(static) reduction(min : x0, y0, z0)          \
+  reduction(max : x1, y1, z1) reduction(+ : bad)
+  for (uint64_t p = 0; p < field->n_particles; p++) {
+    const sif_real x = field->x[p], y = field->y[p], z = field->z[p];
+    bad += !(isfinite(x) && isfinite(y) && isfinite(z));
+    x0 = SIF_REAL_MIN(x0, x);
+    y0 = SIF_REAL_MIN(y0, y);
+    z0 = SIF_REAL_MIN(z0, z);
+    x1 = SIF_REAL_MAX(x1, x);
+    y1 = SIF_REAL_MAX(y1, y);
+    z1 = SIF_REAL_MAX(z1, z);
+  }
+
+  if (bad) {
+    SIF_LOG_ERROR(TAG,
+      "the %s hold %" PRIu64 " tracers with a coordinate that is not a finite "
+      "number",
+      what, bad);
+    return SIF_ERR_INVALID;
+  }
+
+  lo[0] = x0, lo[1] = y0, lo[2] = z0;
+  hi[0] = x1, hi[1] = y1, hi[2] = z1;
+  return SIF_OK;
+}
+
+int sif_finder_exodus_survey_box(const sif_field_t* data,
+  const sif_field_t* randoms, const sif_real* radii, uint32_t n_radii,
+  uint32_t n_cells, sif_option opt, sif_real offset[3],
+  sif_real* box_length) {
 
   if (!randoms || !randoms->x || !randoms->y || !randoms->z ||
       randoms->n_particles == 0 || !radii || n_radii == 0 || !offset ||
@@ -2437,7 +2476,12 @@ int sif_finder_exodus_survey_box(const sif_field_t* randoms,
     SIF_LOG_ERROR(TAG, "invalid randoms, radii or outputs for the survey box");
     return SIF_ERR_INVALID;
   }
-  if (sif__field_require_cartesian(randoms, TAG) != SIF_OK)
+  if (data && (!data->x || !data->y || !data->z || data->n_particles == 0)) {
+    SIF_LOG_ERROR(TAG, "invalid data for the survey box");
+    return SIF_ERR_INVALID;
+  }
+  if (sif__field_require_cartesian(randoms, TAG) != SIF_OK ||
+      (data && sif__field_require_cartesian(data, TAG) != SIF_OK))
     return SIF_ERR_INVALID;
 
   /* Below this the grid cell is too large a share of the box for any padding
@@ -2449,33 +2493,39 @@ int sif_finder_exodus_survey_box(const sif_field_t* randoms,
     return SIF_ERR_INVALID;
   }
 
+  /*
+   * The finder checks the padding around the data as well as the randoms, and
+   * the data are not bound to the randoms' bounding box: a sparse random
+   * catalogue samples the edge of the footprint less finely than a dense
+   * galaxy one, so the outermost galaxy can sit a few Mpc past the outermost
+   * random. The box is sized around both.
+   */
   sif_real lo[3] = {randoms->x[0], randoms->y[0], randoms->z[0]};
   sif_real hi[3] = {lo[0], lo[1], lo[2]};
-  sif_real x0 = lo[0], y0 = lo[1], z0 = lo[2], x1 = hi[0], y1 = hi[1],
-           z1 = hi[2];
+  if (survey_field_extent(randoms, "randoms", lo, hi) != SIF_OK)
+    return SIF_ERR_INVALID;
 
-#pragma omp parallel for schedule(static) reduction(min : x0, y0, z0)          \
-  reduction(max : x1, y1, z1)
-  for (uint64_t p = 0; p < randoms->n_particles; p++) {
-    x0 = SIF_REAL_MIN(x0, randoms->x[p]);
-    y0 = SIF_REAL_MIN(y0, randoms->y[p]);
-    z0 = SIF_REAL_MIN(z0, randoms->z[p]);
-    x1 = SIF_REAL_MAX(x1, randoms->x[p]);
-    y1 = SIF_REAL_MAX(y1, randoms->y[p]);
-    z1 = SIF_REAL_MAX(z1, randoms->z[p]);
+  if (data) {
+    const sif_real r_lo[3] = {lo[0], lo[1], lo[2]};
+    const sif_real r_hi[3] = {hi[0], hi[1], hi[2]};
+    if (survey_field_extent(data, "data", lo, hi) != SIF_OK)
+      return SIF_ERR_INVALID;
+
+    sif_real beyond = 0.0f;
+    for (int k = 0; k < 3; k++)
+      beyond = SIF_REAL_MAX(beyond,
+        SIF_REAL_MAX(r_lo[k] - lo[k], hi[k] - r_hi[k]));
+    if (beyond > 0.0f)
+      SIF_LOG_WARNING(TAG,
+        "the data reach %g past the randoms' bounding box; the box is sized "
+        "around both, but tracers outside the randoms are outside the "
+        "footprint",
+        (double)beyond);
   }
-
-  lo[0] = x0, lo[1] = y0, lo[2] = z0;
-  hi[0] = x1, hi[1] = y1, hi[2] = z1;
 
   sif_real extent = 0.0f;
   for (int k = 0; k < 3; k++)
     extent = SIF_REAL_MAX(extent, hi[k] - lo[k]);
-
-  if (!(extent >= 0.0f)) {
-    SIF_LOG_ERROR(TAG, "the randoms hold a coordinate that is not a number");
-    return SIF_ERR_INVALID;
-  }
 
   sif_real r_max = radii[0];
   for (uint32_t i = 1; i < n_radii; i++)

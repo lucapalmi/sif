@@ -20,15 +20,19 @@
 #include "sif/io/hdf5_io.h"
 
 #include "io/hdf5_internal.h"
+#include "io/hdf5_util.h"
+#include "io/internal.h"
 #include "measure/profiles_internal.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 #include "structures/catalogue_internal.h"
 #include "structures/results_internal.h"
+#include "utils/logger_internal.h"
 
 #include <hdf5.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <math.h>
 #include <stdbool.h>
@@ -66,27 +70,6 @@ int sif__hdf5_describe(char* buf, size_t len) {
 /* ------------------------------------------------------------------------ */
 /* plumbing                                                                  */
 /* ------------------------------------------------------------------------ */
-
-/*
- * HDF5 prints its whole error stack to stderr on every failed call, including
- * the ones that are merely questions ("is this attribute here?"). Each entry
- * point turns that off for its own duration and says what went wrong through
- * the sif logger instead -- and puts back whatever handler was there, since
- * the process may be using HDF5 for other things.
- */
-typedef struct {
-  H5E_auto2_t func;
-  void* data;
-} h5_quiet_t;
-
-static void quiet_begin(h5_quiet_t* q) {
-  H5Eget_auto2(H5E_DEFAULT, &q->func, &q->data);
-  H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
-}
-
-static void quiet_end(const h5_quiet_t* q) {
-  H5Eset_auto2(H5E_DEFAULT, q->func, q->data);
-}
 
 /* Closes any HDF5 identifier, or nothing for an invalid one, so cleanup paths
  * can close everything they might have opened without tracking what. */
@@ -138,16 +121,17 @@ static int attr_write(hid_t obj, const char* name, hid_t file_type,
   hid_t mem_type, const void* value) {
 
   if (H5Aexists(obj, name) > 0 && H5Adelete(obj, name) < 0)
-    return SIF_ERR_IO;
+    return sif__h5_keep();
 
   hid_t space = H5Screate(H5S_SCALAR);
   hid_t attr =
     H5Acreate2(obj, name, file_type, space, H5P_DEFAULT, H5P_DEFAULT);
   const int ok = attr >= 0 && H5Awrite(attr, mem_type, value) >= 0;
+  const int status = ok ? SIF_OK : sif__h5_keep();
 
   close_id(attr);
   close_id(space);
-  return ok ? SIF_OK : SIF_ERR_IO;
+  return status;
 }
 
 static int attr_write_u64(hid_t obj, const char* name, uint64_t v) {
@@ -169,12 +153,14 @@ static int attr_write_f64(hid_t obj, const char* name, double v) {
 static int attr_write_str(hid_t obj, const char* name, const char* v) {
   hid_t type = H5Tcopy(H5T_C_S1);
   if (type < 0)
-    return SIF_ERR_IO;
+    return sif__h5_keep();
 
-  int status = SIF_ERR_IO;
+  int status;
   if (H5Tset_size(type, H5T_VARIABLE) >= 0 &&
       H5Tset_cset(type, H5T_CSET_UTF8) >= 0)
     status = attr_write(obj, name, type, type, &v);
+  else
+    status = sif__h5_keep();
 
   close_id(type);
   return status;
@@ -269,10 +255,47 @@ static int dataset_write(hid_t loc, const char* name, int rank,
   int ok = dset >= 0;
   if (ok && total > 0)
     ok = H5Dwrite(dset, mem_type, H5S_ALL, H5S_ALL, H5P_DEFAULT, data) >= 0;
+  const int status = ok ? SIF_OK : sif__h5_keep();
 
   close_id(dset);
   close_id(space);
+  return status;
+}
+
+/* "/group/name", or "/name" in the root, for messages. */
+static const char* obj_path(const char* group, const char* name) {
+  static SIF_THREAD_LOCAL char buf[256];
+  snprintf(
+    buf, sizeof(buf), "/%s%s%s", group ? group : "", group ? "/" : "", name);
+  return buf;
+}
+
+/* A numeric attribute the file has to have, logged as "<path>: /group/name:
+ * <reason>" if it is missing or cannot be read. */
+static int attr_need(hid_t obj, const char* path, const char* group,
+  const char* name, hid_t mem_type, void* out) {
+  if (H5Aexists(obj, name) <= 0) {
+    SIF_LOG_ERROR(TAG, "%s: %s: missing", path, obj_path(group, name));
+    return SIF_ERR_IO;
+  }
+  hid_t attr = H5Aopen(obj, name, H5P_DEFAULT);
+  const int ok = attr >= 0 && H5Aread(attr, mem_type, out) >= 0;
+  if (!ok)
+    SIF_LOG_ERROR(
+      TAG, "%s: %s: %s", path, obj_path(group, name), sif__h5_cause());
+  close_id(attr);
   return ok ? SIF_OK : SIF_ERR_IO;
+}
+
+/* "(a)" or "(a, b)". */
+static const char* shape_text(
+  int rank, const hsize_t* dims, char* buf, size_t len) {
+  if (rank == 1)
+    snprintf(buf, len, "(%llu)", (unsigned long long)dims[0]);
+  else
+    snprintf(buf, len, "(%llu, %llu)", (unsigned long long)dims[0],
+      (unsigned long long)dims[1]);
+  return buf;
 }
 
 /*
@@ -281,39 +304,53 @@ static int dataset_write(hid_t loc, const char* name, int rank,
  * attributes, and a dataset that disagrees with them is a malformed file, not
  * something to read part of.
  */
-static int dataset_read(hid_t loc, const char* name, int rank,
-  const hsize_t* expect, hid_t mem_type, void* out) {
+static int dataset_read(hid_t loc, const char* path, const char* group,
+  const char* name, int rank, const hsize_t* expect, hid_t mem_type,
+  void* out) {
 
+  const char* where = obj_path(group, name);
   if (!link_exists(loc, name)) {
-    SIF_LOG_ERROR(TAG, "dataset '%s' is missing", name);
+    SIF_LOG_ERROR(TAG, "%s: %s: missing", path, where);
     return SIF_ERR_IO;
   }
 
   int status = SIF_ERR_IO;
   hid_t dset = H5Dopen2(loc, name, H5P_DEFAULT);
   hid_t space = dset >= 0 ? H5Dget_space(dset) : H5I_INVALID_HID;
+  if (space < 0) {
+    SIF_LOG_ERROR(TAG, "%s: %s: %s", path, where, sif__h5_cause());
+    goto done;
+  }
 
-  if (space < 0 || H5Sget_simple_extent_ndims(space) != rank)
-    goto bad_shape;
+  const int got_rank = H5Sget_simple_extent_ndims(space);
+  if (got_rank != rank) {
+    SIF_LOG_ERROR(
+      TAG, "%s: %s: rank %d, expected %d", path, where, got_rank, rank);
+    goto done;
+  }
 
   hsize_t dims[2] = {0, 0};
   H5Sget_simple_extent_dims(space, dims, NULL);
 
   hsize_t total = 1;
+  bool same = true;
   for (int i = 0; i < rank; i++) {
-    if (dims[i] != expect[i])
-      goto bad_shape;
+    same = same && dims[i] == expect[i];
     total *= dims[i];
+  }
+  if (!same) {
+    char a[64], b[64];
+    SIF_LOG_ERROR(TAG, "%s: %s: shape %s, expected %s", path, where,
+      shape_text(rank, dims, a, sizeof a),
+      shape_text(rank, expect, b, sizeof b));
+    goto done;
   }
 
   if (total == 0 ||
       H5Dread(dset, mem_type, H5S_ALL, H5S_ALL, H5P_DEFAULT, out) >= 0)
     status = SIF_OK;
-  goto done;
-
-bad_shape:
-  SIF_LOG_ERROR(
-    TAG, "dataset '%s' does not have the shape its group declares", name);
+  else
+    SIF_LOG_ERROR(TAG, "%s: %s: %s", path, where, sif__h5_cause());
 
 done:
   close_id(space);
@@ -349,6 +386,8 @@ static int centres_io(
                    : H5Dread(dset, real_mem_type(), mspace, fspace, H5P_DEFAULT,
                        cols[k]) >= 0;
     }
+    if (!ok)
+      (void)sif__h5_keep();
 
     close_id(mspace);
     close_id(fspace);
@@ -368,18 +407,24 @@ static int check_root(hid_t file, const char* path) {
   char format[16] = {0};
   uint32_t version = 0;
 
+  if (H5Aexists(file, "sif_format") <= 0) {
+    SIF_LOG_ERROR(TAG, "%s: not a sif file (no /sif_format)%s", path,
+      link_exists(file, "Header") ? "; a GADGET snapshot?" : "");
+    return SIF_ERR_IO;
+  }
   if (attr_read_str(file, "sif_format", format, sizeof(format)) != SIF_OK ||
       strcmp(format, SIF_H5_FORMAT) != 0) {
-    SIF_LOG_ERROR(TAG, "%s is an HDF5 file, but not one sif wrote", path);
+    SIF_LOG_ERROR(TAG, "%s: /sif_format is '%s', expected '%s'", path, format,
+      SIF_H5_FORMAT);
     return SIF_ERR_IO;
   }
 
-  if (attr_read(file, "sif_format_version", H5T_NATIVE_UINT32, &version) !=
-        SIF_OK ||
-      version > SIF_H5_FORMAT_VERSION) {
-    SIF_LOG_ERROR(TAG,
-      "%s is sif format version %u, newer than this build reads (%u)", path,
-      version, SIF_H5_FORMAT_VERSION);
+  if (attr_need(file, path, NULL, "sif_format_version", H5T_NATIVE_UINT32,
+        &version) != SIF_OK)
+    return SIF_ERR_IO;
+  if (version > SIF_H5_FORMAT_VERSION) {
+    SIF_LOG_ERROR(TAG, "%s: sif format version %u, this build reads up to %u",
+      path, version, SIF_H5_FORMAT_VERSION);
     return SIF_ERR_IO;
   }
 
@@ -405,25 +450,32 @@ static hid_t open_for_write(const char* path) {
   struct stat st;
 
   if (stat(path, &st) != 0) {
+    if (errno != ENOENT) {
+      (void)sif__io_os_error(TAG, path, NULL, errno);
+      return H5I_INVALID_HID;
+    }
     hid_t file = H5Fcreate(path, H5F_ACC_EXCL, H5P_DEFAULT, H5P_DEFAULT);
     if (file < 0) {
-      SIF_LOG_ERROR(TAG, "could not create %s", path);
+      SIF_LOG_ERROR(TAG, "%s: create: %s", path, sif__h5_cause());
       return H5I_INVALID_HID;
     }
     if (stamp_root(file) != SIF_OK) {
-      SIF_LOG_ERROR(TAG, "could not write the header of %s", path);
+      SIF_LOG_ERROR(TAG, "%s: root attributes: %s", path, sif__h5_kept());
       close_id(file);
       return H5I_INVALID_HID;
     }
     return file;
   }
 
+  if (S_ISDIR(st.st_mode)) {
+    (void)sif__io_os_error(TAG, path, NULL, EISDIR);
+    return H5I_INVALID_HID;
+  }
+
   hid_t file = H5Fopen(path, H5F_ACC_RDWR, H5P_DEFAULT);
   if (file < 0) {
-    SIF_LOG_ERROR(TAG,
-      "%s exists but is not an HDF5 file that can be opened for writing; "
-      "refusing to overwrite it",
-      path);
+    SIF_LOG_ERROR(
+      TAG, "%s: %s; existing file left untouched", path, sif__h5_cause());
     return H5I_INVALID_HID;
   }
 
@@ -436,11 +488,9 @@ static hid_t open_for_write(const char* path) {
 }
 
 static hid_t open_for_read(const char* path) {
-  hid_t file = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
-  if (file < 0) {
-    SIF_LOG_ERROR(TAG, "could not open %s as an HDF5 file", path);
+  hid_t file = sif__h5_open_read(TAG, path);
+  if (file < 0)
     return H5I_INVALID_HID;
-  }
 
   if (check_root(file, path) != SIF_OK) {
     close_id(file);
@@ -452,17 +502,25 @@ static hid_t open_for_read(const char* path) {
 
 /* A fresh, empty group in place of whatever was there under that name. */
 static hid_t group_replace(hid_t file, const char* name) {
-  if (link_exists(file, name) && H5Ldelete(file, name, H5P_DEFAULT) < 0)
+  if (link_exists(file, name) && H5Ldelete(file, name, H5P_DEFAULT) < 0) {
+    (void)sif__h5_keep();
     return H5I_INVALID_HID;
-  return H5Gcreate2(file, name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  }
+  const hid_t g = H5Gcreate2(file, name, H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
+  if (g < 0)
+    (void)sif__h5_keep();
+  return g;
 }
 
 static hid_t group_open(hid_t file, const char* name, const char* path) {
   if (!link_exists(file, name)) {
-    SIF_LOG_ERROR(TAG, "%s holds no /%s", path, name);
+    SIF_LOG_ERROR(TAG, "%s: /%s: missing", path, name);
     return H5I_INVALID_HID;
   }
-  return H5Gopen2(file, name, H5P_DEFAULT);
+  const hid_t g = H5Gopen2(file, name, H5P_DEFAULT);
+  if (g < 0)
+    SIF_LOG_ERROR(TAG, "%s: /%s: %s", path, name, sif__h5_cause());
+  return g;
 }
 
 /*
@@ -488,8 +546,7 @@ static void warn_rows(hid_t file, const char* path, const char* group,
   const uint64_t other = group_n_voids(file, group);
   if (other != 0 && other != n_voids) {
     SIF_LOG_WARNING(TAG,
-      "%s: /%s was written with %" PRIu64 " voids, but /%s has %" PRIu64
-      "; they cannot both describe the same voids",
+      "%s: /%s has %" PRIu64 " voids, /%s %" PRIu64 " (not the same voids)",
       path, written, n_voids, group, other);
   }
 }
@@ -548,13 +605,13 @@ static int meta_read(hid_t group, sif_catalogue_t* catalogue) {
   hsize_t idx = 0;
   if (H5Aiterate2(group, H5_INDEX_NAME, H5_ITER_INC, &idx, count_attr,
         &n_attrs) < 0)
-    return SIF_ERR_IO;
+    return sif__h5_keep();
 
   for (hsize_t i = 0; i < n_attrs; i++) {
     hid_t attr = H5Aopen_by_idx(
       group, ".", H5_INDEX_NAME, H5_ITER_INC, i, H5P_DEFAULT, H5P_DEFAULT);
     if (attr < 0)
-      return SIF_ERR_IO;
+      return sif__h5_keep();
     char name[128];
     const ssize_t len = H5Aget_name(attr, sizeof name, name);
     char lower[128] = "";
@@ -563,7 +620,7 @@ static int meta_read(hid_t group, sif_catalogue_t* catalogue) {
     lower[sizeof lower - 1] = '\0';
 
     if (len > 0 && len < (ssize_t)sizeof name &&
-        !sif__catalogue_meta_reserved(lower)) {
+        sif__catalogue_meta_key_ok(name)) {
       int64_t iv;
       double dv;
       char text[4096];
@@ -573,11 +630,12 @@ static int meta_read(hid_t group, sif_catalogue_t* catalogue) {
           (void)sif_catalogue_meta_int_set(catalogue, name, iv);
         break;
       case SIF_HDF5_ATTR_REAL:
-        if (H5Aread(attr, H5T_NATIVE_DOUBLE, &dv) >= 0)
+        if (H5Aread(attr, H5T_NATIVE_DOUBLE, &dv) >= 0 && isfinite(dv))
           (void)sif_catalogue_meta_real_set(catalogue, name, dv);
         break;
       case SIF_HDF5_ATTR_STRING:
-        if (attr_read_str(group, name, text, sizeof text) == SIF_OK)
+        if (attr_read_str(group, name, text, sizeof text) == SIF_OK &&
+            !strpbrk(text, "\n\r\""))
           (void)sif_catalogue_meta_string_set(catalogue, name, text);
         break;
       default:
@@ -591,12 +649,12 @@ static int meta_read(hid_t group, sif_catalogue_t* catalogue) {
 
 int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalogue) {
   if (!filepath || !catalogue) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalogue_write_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_catalogue_write_hdf5: NULL argument");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   int status = SIF_ERR_IO;
   hid_t file = open_for_write(filepath);
@@ -617,6 +675,8 @@ int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalo
   dset = space >= 0 ? H5Dcreate2(group, "centres", real_file_type(), space,
                         H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT)
                     : H5I_INVALID_HID;
+  if (dset < 0)
+    (void)sif__h5_keep();
   sif_real* const cols[3] = {catalogue->cx, catalogue->cy, catalogue->cz};
 
   /* The three columns of centres are otherwise unnamed: say which is
@@ -649,25 +709,26 @@ int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalo
   goto done;
 
 fail:
-  SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_CATALOGUE, filepath);
+  SIF_LOG_ERROR(
+    TAG, "%s: write /%s: %s", filepath, G_CATALOGUE, sif__h5_kept());
 
 done:
   close_id(dset);
   close_id(space);
   close_id(group);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
 sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_catalogue_read_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_catalogue_read_hdf5: NULL path");
     return NULL;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   sif_catalogue_t* cat = NULL;
   hid_t file = open_for_read(filepath);
@@ -676,12 +737,15 @@ sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
   hid_t dset = H5I_INVALID_HID;
   uint64_t n = 0;
 
-  if (group < 0 || attr_read(group, "n_voids", H5T_NATIVE_UINT64, &n) != SIF_OK)
+  if (group < 0 || attr_need(group, filepath, G_CATALOGUE, "n_voids",
+                     H5T_NATIVE_UINT64, &n) != SIF_OK)
     goto fail;
 
   cat = sif_catalogue_alloc(n);
-  if (!cat)
+  if (!cat) {
+    SIF_LOG_ERROR(TAG, "%s: %" PRIu64 " voids: out of memory", filepath, n);
     goto fail;
+  }
 
   const hsize_t dims_c[2] = {n, 3};
   const hsize_t dims_1[1] = {n};
@@ -689,25 +753,39 @@ sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
 
   /* The centres are read by column, so their shape is checked here rather
    * than by dataset_read(). */
-  if (!link_exists(group, "centres"))
+  const char* centres = obj_path(G_CATALOGUE, "centres");
+  if (!link_exists(group, "centres")) {
+    SIF_LOG_ERROR(TAG, "%s: %s: missing", filepath, centres);
     goto fail;
+  }
   dset = H5Dopen2(group, "centres", H5P_DEFAULT);
   {
     hid_t space = dset >= 0 ? H5Dget_space(dset) : H5I_INVALID_HID;
     hsize_t dims[2] = {0, 0};
-    const int good = space >= 0 && H5Sget_simple_extent_ndims(space) == 2 &&
-                     H5Sget_simple_extent_dims(space, dims, NULL) == 2 &&
-                     dims[0] == dims_c[0] && dims[1] == dims_c[1];
+    const int rank = space >= 0 ? H5Sget_simple_extent_ndims(space) : -1;
+    if (rank == 1 || rank == 2)
+      H5Sget_simple_extent_dims(space, dims, NULL);
     close_id(space);
-    if (!good) {
-      SIF_LOG_ERROR(TAG, "/%s/centres is not (n_voids, 3)", G_CATALOGUE);
+    if (rank != 2 || dims[0] != dims_c[0] || dims[1] != dims_c[1]) {
+      char a[64], b[64];
+      if (rank == 1 || rank == 2)
+        SIF_LOG_ERROR(TAG, "%s: %s: shape %s, expected %s", filepath,
+          obj_path(G_CATALOGUE, "centres"), shape_text(rank, dims, a, sizeof a),
+          shape_text(2, dims_c, b, sizeof b));
+      else
+        SIF_LOG_ERROR(TAG, "%s: %s: rank %d, expected 2", filepath,
+          obj_path(G_CATALOGUE, "centres"), rank);
       goto fail;
     }
   }
 
-  if (centres_io(dset, cols, n, 0) != SIF_OK ||
-      dataset_read(group, "radii", 1, dims_1, real_mem_type(), cat->radii) !=
-        SIF_OK)
+  if (centres_io(dset, cols, n, 0) != SIF_OK) {
+    SIF_LOG_ERROR(TAG, "%s: %s: %s", filepath, obj_path(G_CATALOGUE, "centres"),
+      sif__h5_kept());
+    goto fail;
+  }
+  if (dataset_read(group, filepath, G_CATALOGUE, "radii", 1, dims_1,
+        real_mem_type(), cat->radii) != SIF_OK)
     goto fail;
 
   /* Filled in directly rather than through sif_catalogue_append(). */
@@ -720,37 +798,44 @@ sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
     if (strcmp(coords, "sky") == 0) {
       cat->units = SIF_COORDINATES_SKY;
     } else if (strcmp(coords, "cartesian") != 0) {
-      SIF_LOG_ERROR(TAG, "/%s says its centres are \"%s\"", G_CATALOGUE, coords);
+      SIF_LOG_ERROR(TAG,
+        "%s: /%s/coordinates is '%s', expected 'cartesian' or 'sky'", filepath,
+        G_CATALOGUE, coords);
       goto fail;
     }
   }
 
-  if (meta_read(group, cat) != SIF_OK)
+  if (meta_read(group, cat) != SIF_OK) {
+    SIF_LOG_ERROR(
+      TAG, "%s: /%s attributes: %s", filepath, G_CATALOGUE, sif__h5_kept());
     goto fail;
+  }
 
   if (link_exists(group, "footprint")) {
-    if (sif_catalogue_reserve_footprint(cat) != SIF_OK ||
-        dataset_read(group, "footprint", 1, dims_1, real_mem_type(),
-          cat->footprint) != SIF_OK ||
-        dataset_read(group, "footprint_shell", 1, dims_1, real_mem_type(),
-          cat->footprint_shell) != SIF_OK)
+    if (sif_catalogue_reserve_footprint(cat) != SIF_OK) {
+      SIF_LOG_ERROR(TAG, "%s: footprint: out of memory", filepath);
+      goto fail;
+    }
+    if (dataset_read(group, filepath, G_CATALOGUE, "footprint", 1, dims_1,
+          real_mem_type(), cat->footprint) != SIF_OK ||
+        dataset_read(group, filepath, G_CATALOGUE, "footprint_shell", 1, dims_1,
+          real_mem_type(), cat->footprint_shell) != SIF_OK)
       goto fail;
   }
 
   close_id(dset);
   close_id(group);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   SIF_LOG_INFO(TAG, "loaded %" PRIu64 " voids from %s", n, filepath);
   return cat;
 
 fail:
-  SIF_LOG_ERROR(TAG, "failed to read /%s from %s", G_CATALOGUE, filepath);
   sif_catalogue_free(cat);
   close_id(dset);
   close_id(group);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return NULL;
 }
 
@@ -796,12 +881,12 @@ int sif_profiles_write_hdf5(const char* filepath,
 
   if (!filepath || (!dens && !vel)) {
     SIF_LOG_ERROR(
-      TAG, "sif_profiles_write_hdf5 needs a path and at least one profile set");
+      TAG, "sif_profiles_write_hdf5: needs a path and a profile set");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   int status = SIF_ERR_IO;
   hid_t file = open_for_write(filepath);
@@ -812,7 +897,8 @@ int sif_profiles_write_hdf5(const char* filepath,
     if (profiles_group_write(file, G_DENSITY, dens->n_voids, dens->n_bins,
           dens->ext, dens->r_edges, "profiles", dens->profiles,
           dens->differential ? 1 : 0) != SIF_OK) {
-      SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_DENSITY, filepath);
+      SIF_LOG_ERROR(
+        TAG, "%s: write /%s: %s", filepath, G_DENSITY, sif__h5_kept());
       goto done;
     }
     warn_rows(file, filepath, G_CATALOGUE, dens->n_voids, G_DENSITY);
@@ -821,7 +907,8 @@ int sif_profiles_write_hdf5(const char* filepath,
   if (vel) {
     if (profiles_group_write(file, G_VELOCITY, vel->n_voids, vel->n_bins,
           vel->ext, vel->r_edges, "v_rad", vel->v_rad, -1) != SIF_OK) {
-      SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_VELOCITY, filepath);
+      SIF_LOG_ERROR(
+        TAG, "%s: write /%s: %s", filepath, G_VELOCITY, sif__h5_kept());
       goto done;
     }
     warn_rows(file, filepath, G_CATALOGUE, vel->n_voids, G_VELOCITY);
@@ -832,7 +919,7 @@ int sif_profiles_write_hdf5(const char* filepath,
 
 done:
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
@@ -840,12 +927,12 @@ int sif_profiles_read_header_hdf5(
   const char* filepath, int* out_has_density, int* out_has_velocity) {
 
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_profiles_read_header_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_profiles_read_header_hdf5: NULL path");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = open_for_read(filepath);
   if (file >= 0) {
@@ -856,23 +943,25 @@ int sif_profiles_read_header_hdf5(
   }
 
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return file >= 0 ? SIF_OK : SIF_ERR_IO;
 }
 
 /* One profile set's shape, from its group's attributes. */
-static int profiles_shape(hid_t g, uint64_t* n_voids, uint32_t* n_bins,
-  sif_real* ext, uint8_t* differential) {
+static int profiles_shape(hid_t g, const char* path, const char* group,
+  uint64_t* n_voids, uint32_t* n_bins, sif_real* ext, uint8_t* differential) {
 
   double e = 0.0;
-  if (attr_read(g, "n_voids", H5T_NATIVE_UINT64, n_voids) != SIF_OK ||
-      attr_read(g, "n_bins", H5T_NATIVE_UINT32, n_bins) != SIF_OK ||
-      attr_read(g, "ext", H5T_NATIVE_DOUBLE, &e) != SIF_OK)
+  if (attr_need(g, path, group, "n_voids", H5T_NATIVE_UINT64, n_voids) !=
+        SIF_OK ||
+      attr_need(g, path, group, "n_bins", H5T_NATIVE_UINT32, n_bins) !=
+        SIF_OK ||
+      attr_need(g, path, group, "ext", H5T_NATIVE_DOUBLE, &e) != SIF_OK)
     return SIF_ERR_IO;
   *ext = (sif_real)e;
 
-  if (differential &&
-      attr_read(g, "differential", H5T_NATIVE_UINT8, differential) != SIF_OK)
+  if (differential && attr_need(g, path, group, "differential",
+                        H5T_NATIVE_UINT8, differential) != SIF_OK)
     return SIF_ERR_IO;
 
   return SIF_OK;
@@ -887,13 +976,12 @@ int sif_profiles_read_hdf5(const char* filepath,
     *out_vel = NULL;
 
   if (!filepath || (!out_dens && !out_vel)) {
-    SIF_LOG_ERROR(
-      TAG, "sif_profiles_read_hdf5 needs a path and at least one output");
+    SIF_LOG_ERROR(TAG, "sif_profiles_read_hdf5: needs a path and an output");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   int status = SIF_ERR_IO;
   sif_density_profiles_t* dens = NULL;
@@ -908,7 +996,7 @@ int sif_profiles_read_hdf5(const char* filepath,
    * cannot be met -- different from a file that is broken. */
   if ((out_dens && !link_exists(file, G_DENSITY)) ||
       (out_vel && !link_exists(file, G_VELOCITY))) {
-    SIF_LOG_ERROR(TAG, "%s holds no /%s", filepath,
+    SIF_LOG_ERROR(TAG, "%s: /%s: missing", filepath,
       (out_dens && !link_exists(file, G_DENSITY)) ? G_DENSITY : G_VELOCITY);
     status = SIF_ERR_INVALID;
     goto done;
@@ -920,22 +1008,24 @@ int sif_profiles_read_hdf5(const char* filepath,
     sif_real ext;
     uint8_t differential;
 
-    g = H5Gopen2(file, G_DENSITY, H5P_DEFAULT);
-    if (g < 0 || profiles_shape(g, &n, &b, &ext, &differential) != SIF_OK)
+    g = group_open(file, G_DENSITY, filepath);
+    if (g < 0 || profiles_shape(g, filepath, G_DENSITY, &n, &b, &ext,
+                   &differential) != SIF_OK)
       goto done;
 
     dens = sif__density_profiles_alloc(n, b, ext, differential != 0);
     if (!dens) {
+      SIF_LOG_ERROR(TAG, "%s: /%s: out of memory", filepath, G_DENSITY);
       status = SIF_ERR_ALLOC;
       goto done;
     }
 
     const hsize_t dims_e[1] = {(hsize_t)b + 1};
     const hsize_t dims_r[2] = {n, b};
-    if (dataset_read(g, "r_edges", 1, dims_e, real_mem_type(), dens->r_edges) !=
-          SIF_OK ||
-        dataset_read(
-          g, "profiles", 2, dims_r, real_mem_type(), dens->profiles) != SIF_OK)
+    if (dataset_read(g, filepath, G_DENSITY, "r_edges", 1, dims_e,
+          real_mem_type(), dens->r_edges) != SIF_OK ||
+        dataset_read(g, filepath, G_DENSITY, "profiles", 2, dims_r,
+          real_mem_type(), dens->profiles) != SIF_OK)
       goto done;
 
     close_id(g);
@@ -947,22 +1037,24 @@ int sif_profiles_read_hdf5(const char* filepath,
     uint32_t b;
     sif_real ext;
 
-    g = H5Gopen2(file, G_VELOCITY, H5P_DEFAULT);
-    if (g < 0 || profiles_shape(g, &n, &b, &ext, NULL) != SIF_OK)
+    g = group_open(file, G_VELOCITY, filepath);
+    if (g < 0 ||
+        profiles_shape(g, filepath, G_VELOCITY, &n, &b, &ext, NULL) != SIF_OK)
       goto done;
 
     vel = sif__velocity_profiles_alloc(n, b, ext);
     if (!vel) {
+      SIF_LOG_ERROR(TAG, "%s: /%s: out of memory", filepath, G_VELOCITY);
       status = SIF_ERR_ALLOC;
       goto done;
     }
 
     const hsize_t dims_e[1] = {(hsize_t)b + 1};
     const hsize_t dims_r[2] = {n, b};
-    if (dataset_read(g, "r_edges", 1, dims_e, real_mem_type(), vel->r_edges) !=
-          SIF_OK ||
-        dataset_read(g, "v_rad", 2, dims_r, real_mem_type(), vel->v_rad) !=
-          SIF_OK)
+    if (dataset_read(g, filepath, G_VELOCITY, "r_edges", 1, dims_e,
+          real_mem_type(), vel->r_edges) != SIF_OK ||
+        dataset_read(g, filepath, G_VELOCITY, "v_rad", 2, dims_r,
+          real_mem_type(), vel->v_rad) != SIF_OK)
       goto done;
   }
 
@@ -971,11 +1063,9 @@ int sif_profiles_read_hdf5(const char* filepath,
 done:
   close_id(g);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
 
   if (status != SIF_OK) {
-    if (status == SIF_ERR_IO)
-      SIF_LOG_ERROR(TAG, "failed to read profiles from %s", filepath);
     sif_density_profiles_free(dens);
     sif_velocity_profiles_free(vel);
     return status;
@@ -996,12 +1086,12 @@ int sif_size_function_write_hdf5(
   const char* filepath, const sif_size_function_t* vsf) {
 
   if (!filepath || !vsf) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_size_function_write_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_size_function_write_hdf5: NULL argument");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   int status = SIF_ERR_IO;
   hid_t file = open_for_write(filepath);
@@ -1043,22 +1133,22 @@ int sif_size_function_write_hdf5(
   if (status == SIF_OK)
     SIF_LOG_INFO(TAG, "saved the size function to %s", filepath);
   else if (file >= 0)
-    SIF_LOG_ERROR(TAG, "failed to write /%s to %s", G_VSF, filepath);
+    SIF_LOG_ERROR(TAG, "%s: write /%s: %s", filepath, G_VSF, sif__h5_kept());
 
   close_id(g);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
 sif_size_function_t* sif_size_function_read_hdf5(const char* filepath) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_size_function_read_hdf5");
+    SIF_LOG_ERROR(TAG, "sif_size_function_read_hdf5: NULL path");
     return NULL;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   sif_size_function_t* vsf = NULL;
   hid_t file = open_for_read(filepath);
@@ -1067,15 +1157,22 @@ sif_size_function_t* sif_size_function_read_hdf5(const char* filepath) {
   uint32_t b = 0, options = 0;
   double r_min = 0.0, r_max = 0.0;
 
-  if (g < 0 || attr_read(g, "n_bins", H5T_NATIVE_UINT32, &b) != SIF_OK ||
-      attr_read(g, "r_min", H5T_NATIVE_DOUBLE, &r_min) != SIF_OK ||
-      attr_read(g, "r_max", H5T_NATIVE_DOUBLE, &r_max) != SIF_OK ||
-      attr_read(g, "options", H5T_NATIVE_UINT32, &options) != SIF_OK)
+  if (g < 0 ||
+      attr_need(g, filepath, G_VSF, "n_bins", H5T_NATIVE_UINT32, &b) !=
+        SIF_OK ||
+      attr_need(g, filepath, G_VSF, "r_min", H5T_NATIVE_DOUBLE, &r_min) !=
+        SIF_OK ||
+      attr_need(g, filepath, G_VSF, "r_max", H5T_NATIVE_DOUBLE, &r_max) !=
+        SIF_OK ||
+      attr_need(g, filepath, G_VSF, "options", H5T_NATIVE_UINT32, &options) !=
+        SIF_OK)
     goto fail;
 
   vsf = sif__size_function_alloc(b);
-  if (!vsf)
+  if (!vsf) {
+    SIF_LOG_ERROR(TAG, "%s: /%s: out of memory", filepath, G_VSF);
     goto fail;
+  }
 
   vsf->options = (sif_option)options;
   vsf->r_min = (sif_real)r_min;
@@ -1084,27 +1181,28 @@ sif_size_function_t* sif_size_function_read_hdf5(const char* filepath) {
   const hsize_t dims_e[1] = {(hsize_t)b + 1};
   const hsize_t dims_b[1] = {b};
 
-  if (dataset_read(g, "r_edges", 1, dims_e, real_mem_type(), vsf->r_edges) !=
-        SIF_OK ||
-      dataset_read(
-        g, "r_centres", 1, dims_b, real_mem_type(), vsf->r_centres) != SIF_OK ||
-      dataset_read(g, "counts", 1, dims_b, H5T_NATIVE_UINT64, vsf->counts) !=
-        SIF_OK ||
-      dataset_read(g, "vsf", 1, dims_b, real_mem_type(), vsf->vsf) != SIF_OK ||
-      dataset_read(g, "err", 1, dims_b, real_mem_type(), vsf->err) != SIF_OK)
+  if (dataset_read(g, filepath, G_VSF, "r_edges", 1, dims_e, real_mem_type(),
+        vsf->r_edges) != SIF_OK ||
+      dataset_read(g, filepath, G_VSF, "r_centres", 1, dims_b, real_mem_type(),
+        vsf->r_centres) != SIF_OK ||
+      dataset_read(g, filepath, G_VSF, "counts", 1, dims_b, H5T_NATIVE_UINT64,
+        vsf->counts) != SIF_OK ||
+      dataset_read(g, filepath, G_VSF, "vsf", 1, dims_b, real_mem_type(),
+        vsf->vsf) != SIF_OK ||
+      dataset_read(g, filepath, G_VSF, "err", 1, dims_b, real_mem_type(),
+        vsf->err) != SIF_OK)
     goto fail;
 
   close_id(g);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return vsf;
 
 fail:
-  SIF_LOG_ERROR(TAG, "failed to read /%s from %s", G_VSF, filepath);
   sif_size_function_free(vsf);
   close_id(g);
   close_id(file);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return NULL;
 }
 
@@ -1136,14 +1234,15 @@ static int source_parse(const char* spec, h5_source_t* s) {
     char* end;
     const long k = strtol(open + 1, &end, 10);
     if (end == open + 1 || *end != ']' || k < 0) {
-      SIF_LOG_ERROR(TAG, "\"%s\": the column in [] has to be a number", spec);
+      SIF_LOG_ERROR(
+        TAG, "column spec '%s': [] must hold a column number", spec);
       return SIF_ERR_INVALID;
     }
     s->column = (int)k;
     len = (size_t)(open - spec);
   }
   if (len == 0 || len >= sizeof s->path) {
-    SIF_LOG_ERROR(TAG, "\"%s\" does not name a dataset", spec);
+    SIF_LOG_ERROR(TAG, "column spec '%s': no dataset path", spec);
     return SIF_ERR_INVALID;
   }
   memcpy(s->path, spec, len);
@@ -1156,12 +1255,12 @@ static int source_open(hid_t file, const char* filepath, const char* what,
   h5_source_t* s, hsize_t* rows) {
   s->dset = H5I_INVALID_HID;
   if (H5Lexists(file, s->path, H5P_DEFAULT) <= 0) {
-    SIF_LOG_ERROR(TAG, "%s: no dataset %s, for %s", filepath, s->path, what);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): missing", filepath, s->path, what);
     return SIF_ERR_INVALID;
   }
   s->dset = H5Dopen2(file, s->path, H5P_DEFAULT);
   if (s->dset < 0) {
-    SIF_LOG_ERROR(TAG, "%s: %s is not a dataset", filepath, s->path);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): not a dataset", filepath, s->path, what);
     return SIF_ERR_INVALID;
   }
 
@@ -1176,28 +1275,27 @@ static int source_open(hid_t file, const char* filepath, const char* what,
   close_id(space);
 
   if (cls != H5T_INTEGER && cls != H5T_FLOAT) {
-    SIF_LOG_ERROR(
-      TAG, "%s: %s, for %s, is not numeric", filepath, s->path, what);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): not numeric", filepath, s->path, what);
     return SIF_ERR_INVALID;
   }
   if (rank == 1 && s->column >= 0) {
-    SIF_LOG_ERROR(TAG, "%s: %s is one column; \"%s\" asks for a column of it",
-      filepath, s->path, s->spec);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): 1-D, but '%s' names a column", filepath,
+      s->path, what, s->spec);
     return SIF_ERR_INVALID;
   }
   if (rank == 2 && s->column < 0) {
-    SIF_LOG_ERROR(TAG, "%s: %s has %llu columns; name one, as %s[0], for %s",
-      filepath, s->path, (unsigned long long)dims[1], s->path, what);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): %llu columns; name one, as %s[0]",
+      filepath, s->path, what, (unsigned long long)dims[1], s->path);
     return SIF_ERR_INVALID;
   }
   if (rank == 2 && (hsize_t)s->column >= dims[1]) {
-    SIF_LOG_ERROR(TAG, "%s: %s has %llu columns; there is no column %d",
-      filepath, s->path, (unsigned long long)dims[1], s->column);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): column %d, dataset has %llu", filepath,
+      s->path, what, s->column, (unsigned long long)dims[1]);
     return SIF_ERR_INVALID;
   }
   if (rank != 1 && rank != 2) {
-    SIF_LOG_ERROR(TAG, "%s: %s has %d dimensions; only 1 or 2 are read",
-      filepath, s->path, rank);
+    SIF_LOG_ERROR(TAG, "%s: %s (%s): rank %d, expected 1 or 2", filepath,
+      s->path, what, rank);
     return SIF_ERR_INVALID;
   }
   *rows = dims[0];
@@ -1215,9 +1313,10 @@ static int source_read(h5_source_t* s, hsize_t first, hsize_t n) {
                    fspace, H5S_SELECT_SET, start, NULL, count, NULL) >= 0 &&
                  H5Dread(s->dset, H5T_NATIVE_DOUBLE, mspace, fspace,
                    H5P_DEFAULT, s->buf) >= 0;
+  const int status = ok ? SIF_OK : sif__h5_keep();
   close_id(mspace);
   close_id(fspace);
-  return ok ? SIF_OK : SIF_ERR_IO;
+  return status;
 }
 
 static void sources_close(h5_source_t* src) {
@@ -1231,11 +1330,9 @@ static void sources_close(h5_source_t* src) {
 /* Opens one file and every source in it; the rows they share. */
 static int file_open(const char* path, h5_source_t* src,
   const char* const* names, hid_t* out_file, hsize_t* out_rows) {
-  *out_file = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
-  if (*out_file < 0) {
-    SIF_LOG_ERROR(TAG, "could not open %s as an HDF5 file", path);
+  *out_file = sif__h5_open_read(TAG, path);
+  if (*out_file < 0)
     return SIF_ERR_IO;
-  }
   hsize_t rows = 0;
   bool first = true;
   for (int r = 0; r < P_N; r++) {
@@ -1249,8 +1346,8 @@ static int file_open(const char* path, h5_source_t* src,
       return status;
     }
     if (!first && n != rows) {
-      SIF_LOG_ERROR(TAG, "%s: %s has %llu rows, the columns before it %llu",
-        path, src[r].path, (unsigned long long)n, (unsigned long long)rows);
+      SIF_LOG_ERROR(TAG, "%s: %s (%s): %llu rows, preceding columns %llu", path,
+        src[r].path, names[r], (unsigned long long)n, (unsigned long long)rows);
       sources_close(src);
       close_id(*out_file);
       return SIF_ERR_INVALID;
@@ -1267,43 +1364,46 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   uint64_t seed) {
 
   if (!paths || n_paths == 0 || !columns) {
-    SIF_LOG_ERROR(TAG, "at least one path, and the columns, are required");
+    SIF_LOG_ERROR(TAG, "sif_field_read_hdf5: needs a path and the columns");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
   for (uint32_t i = 0; i < n_paths; i++) {
     if (!paths[i] || !*paths[i]) {
-      SIF_LOG_ERROR(TAG, "path %u of %u is empty", i + 1, n_paths);
+      SIF_LOG_ERROR(TAG, "path %u of %u: empty", i + 1, n_paths);
+      sif__error_status_set(SIF_ERR_INVALID);
       return NULL;
     }
   }
   const bool xy = columns->x || columns->y;
   const bool sky = columns->ra || columns->dec;
   if (xy && sky) {
-    SIF_LOG_ERROR(TAG,
-      "columns name both x, y and ra, dec: positions are x y z, sky "
-      "coordinates ra dec z");
+    SIF_LOG_ERROR(TAG, "columns: both x y and ra dec given");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
   if (sky ? !(columns->ra && columns->dec && columns->z)
           : !(columns->x && columns->y && columns->z)) {
-    SIF_LOG_ERROR(TAG, "datasets for all three of %s are required",
-      sky ? "ra, dec and z" : "x, y and z");
+    SIF_LOG_ERROR(TAG, "columns: %s required", sky ? "ra, dec, z" : "x, y, z");
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
   const int n_vel = !!columns->vx + !!columns->vy + !!columns->vz;
   if (n_vel != 0 && n_vel != 3) {
-    SIF_LOG_ERROR(TAG, "velocities are read all three or not at all");
+    SIF_LOG_ERROR(TAG, "columns: vx, vy, vz go together (%d given)", n_vel);
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
   if (!(fraction > 0 && fraction <= 1)) {
-    SIF_LOG_ERROR(TAG, "fraction must be in (0, 1], not %g", fraction);
+    SIF_LOG_ERROR(TAG, "fraction: %g, expected (0, 1]", fraction);
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
   if (!(length_scale > 0) || !isfinite(length_scale) ||
       (sky && length_scale != 1.0)) {
-    SIF_LOG_ERROR(TAG,
-      "length_scale must be positive, and 1 for sky coordinates, not %g",
+    SIF_LOG_ERROR(TAG, "length_scale: %g, expected > 0 (1 for sky coordinates)",
       length_scale);
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
@@ -1319,17 +1419,21 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   memset(src, 0, sizeof src);
   for (int r = 0; r < P_N; r++) {
     src[r].dset = H5I_INVALID_HID;
-    if (specs[r] && source_parse(specs[r], &src[r]) != SIF_OK)
+    if (specs[r] && source_parse(specs[r], &src[r]) != SIF_OK) {
+      sif__error_status_set(SIF_ERR_INVALID);
       return NULL;
+    }
     src[r].spec = specs[r];
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   sif_field_t* field = NULL;
   hsize_t* rows_of = calloc(n_paths, sizeof(hsize_t));
   int status = rows_of ? SIF_OK : SIF_ERR_ALLOC;
+  if (!rows_of)
+    SIF_LOG_ERROR(TAG, "out of memory");
   hid_t file = H5I_INVALID_HID;
 
   /* --- pass 0: every file, checked before anything is read --- */
@@ -1344,8 +1448,8 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
     }
   }
   if (status == SIF_OK && n_rows == 0) {
-    SIF_LOG_ERROR(
-      TAG, "%s%s holds no rows", paths[0], n_paths > 1 ? " and the rest" : "");
+    SIF_LOG_ERROR(TAG, "%s%s: no rows", paths[0],
+      n_paths > 1 ? " (and the other files)" : "");
     status = SIF_ERR_INVALID;
   }
 
@@ -1355,7 +1459,7 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
                             : n_rows;
   if (status == SIF_OK && n_keep == 0) {
     SIF_LOG_ERROR(
-      TAG, "a fraction of %g keeps none of %" PRIu64 " rows", fraction, n_rows);
+      TAG, "fraction %g keeps none of %" PRIu64 " rows", fraction, n_rows);
     status = SIF_ERR_INVALID;
   }
 
@@ -1370,6 +1474,8 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   for (int r = 0; status == SIF_OK && r < P_N; r++)
     if (specs[r] && !(src[r].buf = malloc(ROWS_CHUNK * sizeof(double))))
       status = SIF_ERR_ALLOC;
+  if (status == SIF_ERR_ALLOC && rows_of)
+    SIF_LOG_ERROR(TAG, "%s: %" PRIu64 " rows: out of memory", paths[0], n_keep);
 
   /* --- pass 1: the rows, subsampled over every file together --- */
 
@@ -1389,7 +1495,9 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
       const hsize_t n = rows - first < ROWS_CHUNK ? rows - first : ROWS_CHUNK;
       for (int r = 0; status == SIF_OK && r < P_N; r++)
         if (specs[r] && source_read(&src[r], first, n) != SIF_OK) {
-          SIF_LOG_ERROR(TAG, "%s: failed to read %s", paths[i], src[r].path);
+          SIF_LOG_ERROR(TAG, "%s: %s (%s): rows %llu-%llu: %s", paths[i],
+            src[r].path, names[r], (unsigned long long)first,
+            (unsigned long long)(first + n - 1), sif__h5_kept());
           status = SIF_ERR_IO;
         }
       for (hsize_t j = 0; status == SIF_OK && j < n; j++) {
@@ -1443,24 +1551,24 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
 
   if (status == SIF_OK && n_bad) {
     SIF_LOG_ERROR(TAG,
-      "%" PRIu64 " rows hold a value that is not finite, the first at row "
-      "%llu of %s, in %s (%s)",
-      n_bad, (unsigned long long)bad_row, bad_path, names[bad_role],
-      specs[bad_role]);
+      "%s: %s (%s): row %llu: not finite (%" PRIu64 " such rows in all)",
+      bad_path, specs[bad_role], names[bad_role], (unsigned long long)bad_row,
+      n_bad);
     status = SIF_ERR_INVALID;
   }
   if (status == SIF_OK && kept != n_keep) {
-    SIF_LOG_ERROR(
-      TAG, "read %" PRIu64 " rows, expected %" PRIu64, kept, n_keep);
+    SIF_LOG_ERROR(TAG, "%s: read %" PRIu64 " rows, expected %" PRIu64, paths[0],
+      kept, n_keep);
     status = SIF_ERR_IO;
   }
 
   for (int r = 0; r < P_N; r++)
     free(src[r].buf);
   free(rows_of);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
 
   if (status != SIF_OK) {
+    sif__error_status_set(status);
     sif_field_free(field);
     return NULL;
   }
@@ -1491,7 +1599,7 @@ static int attr_target_open(const char* path, const char* group, int writing,
   struct stat st;
   if (writing && group && stat(path, &st) != 0) {
     SIF_LOG_ERROR(
-      TAG, "%s does not exist; write /%s before describing it", path, group);
+      TAG, "%s: does not exist (write /%s before its attributes)", path, group);
     return SIF_ERR_INVALID;
   }
 
@@ -1505,14 +1613,14 @@ static int attr_target_open(const char* path, const char* group, int writing,
   }
 
   if (!link_exists(file, group)) {
-    SIF_LOG_ERROR(TAG, "%s holds no /%s", path, group);
+    SIF_LOG_ERROR(TAG, "%s: /%s: missing", path, group);
     close_id(file);
     return SIF_ERR_INVALID;
   }
 
   hid_t obj = H5Gopen2(file, group, H5P_DEFAULT);
   if (obj < 0) {
-    SIF_LOG_ERROR(TAG, "/%s in %s is not a group", group, path);
+    SIF_LOG_ERROR(TAG, "%s: /%s: not a group", path, group);
     close_id(file);
     return SIF_ERR_INVALID;
   }
@@ -1535,20 +1643,18 @@ static int meta_set(const char* path, const char* group, const char* key,
   meta_kind_t kind, int64_t i, double d, const char* str) {
 
   if (!path || !key || !*key || (kind == META_STRING && !str)) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for a metadata entry");
+    SIF_LOG_ERROR(TAG, "metadata: NULL path or key");
     return SIF_ERR_INVALID;
   }
 
   const char* g = sif__hdf5_group(group);
   if (sif__hdf5_key_reserved(g, key)) {
-    SIF_LOG_ERROR(TAG,
-      "'%s' on /%s is an attribute sif keeps for itself and cannot be set", key,
-      g ? g : "");
+    SIF_LOG_ERROR(TAG, "%s: %s: reserved by sif", path, obj_path(g, key));
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   int status = attr_target_open(path, g, 1, &file, &obj);
@@ -1565,12 +1671,11 @@ static int meta_set(const char* path, const char* group, const char* key,
       break;
     }
     if (status != SIF_OK)
-      SIF_LOG_ERROR(
-        TAG, "failed to set '%s' on /%s in %s", key, g ? g : "", path);
+      SIF_LOG_ERROR(TAG, "%s: %s: %s", path, obj_path(g, key), sif__h5_kept());
   }
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
@@ -1627,7 +1732,7 @@ static int meta_open(const char* path, const char* group, const char* key,
 
   *file = *obj = H5I_INVALID_HID;
   if (!path || !key) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for a metadata entry");
+    SIF_LOG_ERROR(TAG, "metadata: NULL path or key");
     return SIF_ERR_INVALID;
   }
 
@@ -1637,102 +1742,134 @@ static int meta_open(const char* path, const char* group, const char* key,
     return status;
 
   if (H5Aexists(*obj, key) <= 0) {
-    SIF_LOG_ERROR(TAG, "/%s in %s has no entry '%s'", g ? g : "", path, key);
+    SIF_LOG_ERROR(TAG, "%s: %s: missing", path, obj_path(g, key));
     return SIF_ERR_INVALID;
   }
 
   hid_t attr = H5Aopen(*obj, key, H5P_DEFAULT);
-  if (attr < 0)
+  if (attr < 0) {
+    SIF_LOG_ERROR(TAG, "%s: %s: %s", path, obj_path(g, key), sif__h5_cause());
     return SIF_ERR_IO;
+  }
   *kind = attr_kind_of(attr);
   close_id(attr);
   return SIF_OK;
 }
 
-static int kind_mismatch(const char* key, const char* want) {
-  SIF_LOG_ERROR(TAG, "'%s' is not %s", key, want);
+static int null_output(void) {
+  SIF_LOG_ERROR(TAG, "metadata: NULL output");
   return SIF_ERR_INVALID;
+}
+
+static int kind_mismatch(const char* path, const char* group, const char* key,
+  sif_hdf5_attr_kind_t kind, const char* want) {
+  static const char* const KIND[] = {"an integer", "a number", "a string"};
+  const char* got = (kind == SIF_HDF5_ATTR_INT)      ? KIND[0]
+                    : (kind == SIF_HDF5_ATTR_REAL)   ? KIND[1]
+                    : (kind == SIF_HDF5_ATTR_STRING) ? KIND[2]
+                                                     : "not a scalar";
+  SIF_LOG_ERROR(TAG, "%s: %s: %s, expected %s", path,
+    obj_path(sif__hdf5_group(group), key), got, want);
+  return SIF_ERR_INVALID;
+}
+
+/* A getter's read, once the kind is known to fit. */
+static int meta_read_value(hid_t obj, const char* path, const char* group,
+  const char* key, hid_t mem_type, void* out) {
+  const int status = attr_read(obj, key, mem_type, out);
+  if (status != SIF_OK)
+    SIF_LOG_ERROR(TAG, "%s: %s: %s", path,
+      obj_path(sif__hdf5_group(group), key), sif__h5_cause());
+  return status;
 }
 
 int sif_hdf5_get_attr_int(
   const char* filepath, const char* group, const char* key, int64_t* out) {
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   sif_hdf5_attr_kind_t kind;
   int status =
-    out ? meta_open(filepath, group, key, &file, &obj, &kind) : SIF_ERR_INVALID;
+    out ? meta_open(filepath, group, key, &file, &obj, &kind) : null_output();
   if (status == SIF_OK) {
-    status = kind == SIF_HDF5_ATTR_INT
-               ? attr_read(obj, key, H5T_NATIVE_INT64, out)
-               : kind_mismatch(key, "an integer");
+    status =
+      kind == SIF_HDF5_ATTR_INT
+        ? meta_read_value(obj, filepath, group, key, H5T_NATIVE_INT64, out)
+        : kind_mismatch(filepath, group, key, kind, "an integer");
   }
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
 int sif_hdf5_get_attr_real(
   const char* filepath, const char* group, const char* key, double* out) {
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   sif_hdf5_attr_kind_t kind;
   int status =
-    out ? meta_open(filepath, group, key, &file, &obj, &kind) : SIF_ERR_INVALID;
+    out ? meta_open(filepath, group, key, &file, &obj, &kind) : null_output();
   if (status == SIF_OK) {
     /* An integer is a number too; HDF5 converts it on the way in. */
-    status = (kind == SIF_HDF5_ATTR_REAL || kind == SIF_HDF5_ATTR_INT)
-               ? attr_read(obj, key, H5T_NATIVE_DOUBLE, out)
-               : kind_mismatch(key, "a number");
+    status =
+      (kind == SIF_HDF5_ATTR_REAL || kind == SIF_HDF5_ATTR_INT)
+        ? meta_read_value(obj, filepath, group, key, H5T_NATIVE_DOUBLE, out)
+        : kind_mismatch(filepath, group, key, kind, "a number");
   }
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
 int sif_hdf5_get_attr_string(const char* filepath, const char* group,
   const char* key, char* buf, size_t len) {
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   sif_hdf5_attr_kind_t kind;
   int status = (buf && len)
                  ? meta_open(filepath, group, key, &file, &obj, &kind)
-                 : SIF_ERR_INVALID;
+                 : null_output();
   if (status == SIF_OK) {
-    status = kind == SIF_HDF5_ATTR_STRING ? attr_read_str(obj, key, buf, len)
-                                          : kind_mismatch(key, "a string");
+    if (kind != SIF_HDF5_ATTR_STRING) {
+      status = kind_mismatch(filepath, group, key, kind, "a string");
+    } else {
+      status = attr_read_str(obj, key, buf, len);
+      if (status == SIF_ERR_IO)
+        SIF_LOG_ERROR(TAG, "%s: %s: unreadable string", filepath,
+          obj_path(sif__hdf5_group(group), key));
+    }
   }
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
 int sif_hdf5_attr_kind(const char* filepath, const char* group, const char* key,
   sif_hdf5_attr_kind_t* out) {
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   sif_hdf5_attr_kind_t kind = SIF_HDF5_ATTR_OTHER;
   const int status =
-    out ? meta_open(filepath, group, key, &file, &obj, &kind) : SIF_ERR_INVALID;
+    out ? meta_open(filepath, group, key, &file, &obj, &kind) : null_output();
   if (status == SIF_OK)
     *out = kind;
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
@@ -1740,12 +1877,12 @@ int sif_hdf5_attr_count(
   const char* filepath, const char* group, uint32_t* out) {
 
   if (!filepath || !out) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_hdf5_attr_count");
+    SIF_LOG_ERROR(TAG, "sif_hdf5_attr_count: NULL argument");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   int status =
@@ -1755,14 +1892,18 @@ int sif_hdf5_attr_count(
      * has changed twice across the HDF5 versions sif builds against. */
     uint32_t n = 0;
     hsize_t idx = 0;
-    if (H5Aiterate2(obj, H5_INDEX_NAME, H5_ITER_INC, &idx, count_attr, &n) < 0)
+    if (H5Aiterate2(obj, H5_INDEX_NAME, H5_ITER_INC, &idx, count_attr, &n) <
+        0) {
+      SIF_LOG_ERROR(TAG, "%s: /%s: %s", filepath,
+        sif__hdf5_group(group) ? sif__hdf5_group(group) : "", sif__h5_cause());
       status = SIF_ERR_IO;
-    else
+    } else {
       *out = n;
+    }
   }
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }
 
@@ -1770,12 +1911,12 @@ int sif_hdf5_attr_name(const char* filepath, const char* group, uint32_t index,
   char* buf, size_t len) {
 
   if (!filepath || !buf || len == 0) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_hdf5_attr_name");
+    SIF_LOG_ERROR(TAG, "sif_hdf5_attr_name: NULL argument");
     return SIF_ERR_INVALID;
   }
 
-  h5_quiet_t quiet;
-  quiet_begin(&quiet);
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
 
   hid_t file = H5I_INVALID_HID, obj = H5I_INVALID_HID;
   int status =
@@ -1785,6 +1926,8 @@ int sif_hdf5_attr_name(const char* filepath, const char* group, uint32_t index,
       (hsize_t)index, buf, len, H5P_DEFAULT);
     if (n < 0) {
       buf[0] = '\0';
+      SIF_LOG_ERROR(TAG, "%s: /%s: no attribute at index %u", filepath,
+        sif__hdf5_group(group) ? sif__hdf5_group(group) : "", index);
       status = SIF_ERR_INVALID;
     } else if ((size_t)n >= len) {
       status = SIF_ERR_RANGE;
@@ -1792,6 +1935,6 @@ int sif_hdf5_attr_name(const char* filepath, const char* group, uint32_t index,
   }
 
   attr_target_close(file, obj);
-  quiet_end(&quiet);
+  sif__h5_quiet_end(&quiet);
   return status;
 }

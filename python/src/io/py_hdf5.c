@@ -43,28 +43,25 @@ static int warn_if_fallback(const char* filepath) {
 #endif
 }
 
-/* After a failed read: which of the two kinds of failure it was. */
-static PyObject* read_error(const char* filepath) {
+/* After a failed read, with the C library's reason; @p status is SIF_ERR_IO
+ * for a reader that only returns NULL. A build without HDF5 says how to get
+ * it, in pip's terms rather than CMake's. */
+static PyObject* read_error(int status, const char* filepath) {
 #ifdef SIF_HAVE_HDF5
-  return PyErr_Format(
-    PyExc_OSError, "failed to read %s; see the log for the reason", filepath);
+  return py_sif_raise(status, filepath);
 #else
+  (void)status;
   return PyErr_Format(PyExc_RuntimeError,
-    "cannot read %s: pysif was built without HDF5 support (rebuild with "
+    "%s: HDF5 support not built (rebuild pysif with "
     "-C cmake.define.SIF_HDF5_SUPPORT=ON)",
     filepath);
 #endif
 }
 
+/* After a write; the caller clears the error record before making it. */
 static PyObject* write_status(int status, const char* filepath) {
-  if (status == SIF_ERR_INVALID)
-    return PyErr_Format(PyExc_ValueError,
-      "nothing to write to %s; see the log for the reason", filepath);
   if (status != SIF_OK)
-    return PyErr_Format(PyExc_OSError,
-      "failed to write %s; see the log for the reason (an existing file that "
-      "sif did not write is never overwritten)",
-      filepath);
+    return py_sif_raise(status, filepath);
   if (warn_if_fallback(filepath) < 0)
     return NULL;
   Py_RETURN_NONE;
@@ -82,6 +79,7 @@ PyObject* pysif_write_catalogue_hdf5(
         args, kwds, "sO!", kwlist, &filepath, &sifCatalogueType, &cat_obj))
     return NULL;
 
+  sif_error_clear();
   return write_status(
     sif_catalogue_write_hdf5(filepath, ((sifCatalogueObject*)cat_obj)->catalogue),
     filepath);
@@ -95,9 +93,10 @@ PyObject* pysif_read_catalogue_hdf5(
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
     return NULL;
 
+  sif_error_clear();
   sif_catalogue_t* cat = sif_catalogue_read_hdf5(filepath);
   if (!cat)
-    return read_error(filepath);
+    return read_error(SIF_ERR_IO, filepath);
 
   sifCatalogueObject* obj =
     (sifCatalogueObject*)sifCatalogueType.tp_alloc(&sifCatalogueType, 0);
@@ -122,6 +121,7 @@ PyObject* pysif_write_profiles_hdf5(
     return NULL;
 
   const sifProfilesObject* prof = (const sifProfilesObject*)prof_obj;
+  sif_error_clear();
   return write_status(
     sif_profiles_write_hdf5(filepath, prof->dens, prof->vel), filepath);
 }
@@ -136,17 +136,21 @@ PyObject* pysif_read_profiles_hdf5(
 
   /* Whatever sets the file holds, which the C reader will not guess. */
   int has_dens = 0, has_vel = 0;
-  if (sif_profiles_read_header_hdf5(filepath, &has_dens, &has_vel) != SIF_OK)
-    return read_error(filepath);
+  sif_error_clear();
+  int status = sif_profiles_read_header_hdf5(filepath, &has_dens, &has_vel);
+  if (status != SIF_OK)
+    return read_error(status, filepath);
 
   if (!has_dens && !has_vel)
-    return PyErr_Format(PyExc_ValueError, "%s holds no profiles", filepath);
+    return PyErr_Format(PyExc_ValueError,
+      "%s: no /density_profiles or /velocity_profiles", filepath);
 
   sif_density_profiles_t* dens = NULL;
   sif_velocity_profiles_t* vel = NULL;
-  if (sif_profiles_read_hdf5(
-        filepath, has_dens ? &dens : NULL, has_vel ? &vel : NULL) != SIF_OK)
-    return read_error(filepath);
+  status = sif_profiles_read_hdf5(
+    filepath, has_dens ? &dens : NULL, has_vel ? &vel : NULL);
+  if (status != SIF_OK)
+    return read_error(status, filepath);
 
   sifProfilesObject* prof =
     (sifProfilesObject*)sifProfilesType.tp_alloc(&sifProfilesType, 0);
@@ -172,6 +176,7 @@ PyObject* pysif_write_size_function_hdf5(
         args, kwds, "sO!", kwlist, &filepath, &sifSizeFunctionType, &vsf_obj))
     return NULL;
 
+  sif_error_clear();
   return write_status(sif_size_function_write_hdf5(
                         filepath, ((sifSizeFunctionObject*)vsf_obj)->vsf),
     filepath);
@@ -185,9 +190,10 @@ PyObject* pysif_read_size_function_hdf5(
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
     return NULL;
 
+  sif_error_clear();
   sif_size_function_t* vsf = sif_size_function_read_hdf5(filepath);
   if (!vsf)
-    return read_error(filepath);
+    return read_error(SIF_ERR_IO, filepath);
 
   sifSizeFunctionObject* obj =
     (sifSizeFunctionObject*)sifSizeFunctionType.tp_alloc(
@@ -209,20 +215,24 @@ static PyObject* meta_value(
   const char* filepath, const char* group, const char* key, int skip_other) {
 
   sif_hdf5_attr_kind_t kind;
-  if (sif_hdf5_attr_kind(filepath, group, key, &kind) != SIF_OK)
-    return read_error(filepath);
+  sif_error_clear();
+  int status = sif_hdf5_attr_kind(filepath, group, key, &kind);
+  if (status != SIF_OK)
+    return read_error(status, filepath);
 
   switch (kind) {
   case SIF_HDF5_ATTR_INT: {
     int64_t v;
-    if (sif_hdf5_get_attr_int(filepath, group, key, &v) != SIF_OK)
-      return read_error(filepath);
+    status = sif_hdf5_get_attr_int(filepath, group, key, &v);
+    if (status != SIF_OK)
+      return read_error(status, filepath);
     return PyLong_FromLongLong((long long)v);
   }
   case SIF_HDF5_ATTR_REAL: {
     double v;
-    if (sif_hdf5_get_attr_real(filepath, group, key, &v) != SIF_OK)
-      return read_error(filepath);
+    status = sif_hdf5_get_attr_real(filepath, group, key, &v);
+    if (status != SIF_OK)
+      return read_error(status, filepath);
     return PyFloat_FromDouble(v);
   }
   case SIF_HDF5_ATTR_STRING: {
@@ -240,7 +250,7 @@ static PyObject* meta_value(
       }
       PyMem_Free(buf);
       if (st != SIF_ERR_RANGE)
-        return read_error(filepath);
+        return read_error(st, filepath);
       len *= 4;
     }
   }
@@ -248,7 +258,8 @@ static PyObject* meta_value(
     if (skip_other)
       Py_RETURN_NONE;
     return PyErr_Format(PyExc_TypeError,
-      "'%s' is not a single integer, number or string; read it with h5py", key);
+      "%s: '%s': not a scalar integer, number or string (read it with h5py)",
+      filepath, key);
   }
 }
 
@@ -264,6 +275,7 @@ PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
 
   int status;
+  sif_error_clear();
 
   /* bool before int, since bool is one; anything with __index__ (a numpy
    * integer) as an integer; anything with __float__ as a real. */
@@ -291,11 +303,6 @@ PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
       "metadata values are int, float or str, not %s", Py_TYPE(value)->tp_name);
   }
 
-  if (status == SIF_ERR_INVALID)
-    return PyErr_Format(PyExc_ValueError,
-      "cannot set '%s' in %s: the group is missing, or the name is one sif "
-      "keeps for itself (see the log)",
-      key, filepath);
   return write_status(status, filepath);
 }
 
@@ -322,8 +329,10 @@ PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
     return NULL;
 
   uint32_t n = 0;
-  if (sif_hdf5_attr_count(filepath, group, &n) != SIF_OK)
-    return read_error(filepath);
+  sif_error_clear();
+  const int status = sif_hdf5_attr_count(filepath, group, &n);
+  if (status != SIF_OK)
+    return read_error(status, filepath);
 
   PyObject* out = PyDict_New();
   if (!out)
@@ -331,9 +340,10 @@ PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
 
   for (uint32_t i = 0; i < n; i++) {
     char name[1024];
-    if (sif_hdf5_attr_name(filepath, group, i, name, sizeof(name)) != SIF_OK) {
+    const int st = sif_hdf5_attr_name(filepath, group, i, name, sizeof(name));
+    if (st != SIF_OK) {
       Py_DECREF(out);
-      return read_error(filepath);
+      return read_error(st, filepath);
     }
 
     PyObject* v = meta_value(filepath, group, name, 1);
@@ -349,20 +359,6 @@ PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
 }
 
 /* --- particles from any HDF5 file --- */
-
-/* Whether a file begins with the HDF5 signature: what tells a file that is
- * not HDF5 from a request an HDF5 file cannot satisfy. */
-static int is_hdf5_file(const char* path) {
-  static const unsigned char sig[8] = {
-    0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'};
-  unsigned char head[8];
-  FILE* f = fopen(path, "rb");
-  if (!f)
-    return 0;
-  const size_t n = fread(head, 1, 8, f);
-  fclose(f);
-  return n == 8 && memcmp(head, sig, 8) == 0;
-}
 
 PyObject* pysif_read_hdf5(PyObject* self, PyObject* args, PyObject* kwds) {
   (void)self;
@@ -414,14 +410,6 @@ PyObject* pysif_read_hdf5(PyObject* self, PyObject* args, PyObject* kwds) {
   }
   for (Py_ssize_t i = 0; i < n; i++)
     paths[i] = PyBytes_AS_STRING(PyList_GET_ITEM(list, i));
-  for (Py_ssize_t i = 0; i < n; i++) {
-    if (py_sif_require_file(paths[i]) < 0)
-      goto done;
-    if (!is_hdf5_file(paths[i])) {
-      PyErr_Format(PyExc_OSError, "%s is not an HDF5 file", paths[i]);
-      goto done;
-    }
-  }
 
   const sif_field_columns_t columns = {.x = x,
     .y = y,
@@ -432,12 +420,11 @@ PyObject* pysif_read_hdf5(PyObject* self, PyObject* args, PyObject* kwds) {
     .vy = vy,
     .vz = vz,
     .w = w};
+  sif_error_clear();
   sif_field_t* field = sif_field_read_hdf5(
     paths, (uint32_t)n, &columns, length_scale, fraction, (uint64_t)seed);
   if (!field) {
-    PyErr_Format(PyExc_ValueError,
-      "cannot read %s%s as asked; see the log for the reason", paths[0],
-      n > 1 ? " and the rest" : "");
+    py_sif_raise(sif_error_status(), paths[0]);
     goto done;
   }
   sifFieldObject* obj =

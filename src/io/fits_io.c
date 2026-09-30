@@ -23,16 +23,19 @@
 #include "sif/io/fits_io.h"
 
 #include "io/fits_internal.h"
+#include "io/internal.h"
 #include "measure/profiles_internal.h"
 #include "sif/structures/bitmask.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 #include "structures/catalogue_internal.h"
 #include "structures/results_internal.h"
+#include "utils/logger_internal.h"
 
 #include <fitsio.h>
 
 #include <ctype.h>
+#include <errno.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <math.h>
@@ -77,12 +80,21 @@ static void log_fits(int fstatus, const char* fmt, ...) {
   char text[FLEN_STATUS];
   fits_get_errstatus(fstatus, text);
 
+  /* cfitsio stacks messages a line at a time, and splits some around the
+   * file name: "Error reading data buffer from file:", then the name. The
+   * name is already in the message, and the trailing colons go with it. */
   char detail[512] = "";
   char msg[FLEN_ERRMSG];
   size_t used = 0;
   while (fits_read_errmsg(msg) && used + 3 < sizeof(detail)) {
+    char* m = msg + strspn(msg, " ");
+    size_t len = strlen(m);
+    while (len > 0 && (m[len - 1] == ' ' || m[len - 1] == ':'))
+      m[--len] = '\0';
+    if (len == 0 || strstr(what, m))
+      continue;
     const int n = snprintf(
-      detail + used, sizeof(detail) - used, "%s%s", used ? "; " : "", msg);
+      detail + used, sizeof(detail) - used, "%s%s", used ? "; " : "", m);
     if (n < 0)
       break;
     used += (size_t)n;
@@ -92,6 +104,75 @@ static void log_fits(int fstatus, const char* fmt, ...) {
     SIF_LOG_ERROR(TAG, "%s: %s (%s)", what, text, detail);
   else
     SIF_LOG_ERROR(TAG, "%s: %s", what, text);
+}
+
+/*
+ * Whether @p path looks cut short. Every FITS file is a whole number of
+ * 2880-byte blocks, so one that starts like FITS and is not is truncated --
+ * which cfitsio reports only as an HDU it cannot find or an end of file. A
+ * compressed file (gzip, which cfitsio reads transparently) is left to
+ * cfitsio.
+ */
+static bool is_truncated(const char* path, uint64_t* bytes) {
+  struct stat st;
+  if (stat(path, &st) != 0 || !S_ISREG(st.st_mode))
+    return false;
+  *bytes = (uint64_t)st.st_size;
+  if (*bytes % 2880 == 0)
+    return false;
+  char head[6] = {0};
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return false;
+  const size_t got = fread(head, 1, sizeof(head), f);
+  fclose(f);
+  return got == sizeof(head) && memcmp(head, "SIMPLE", 6) == 0;
+}
+
+static void log_truncated(const char* path, uint64_t bytes) {
+  fits_clear_errmsg();
+  SIF_LOG_ERROR(TAG,
+    "%s: %" PRIu64 " bytes, not a multiple of 2880 (truncated)", path, bytes);
+}
+
+/* Whether @p path starts as a FITS file does, or as a gzip file, which
+ * cfitsio reads transparently. */
+static bool looks_like_fits(const char* path) {
+  unsigned char head[6] = {0};
+  FILE* f = fopen(path, "rb");
+  if (!f)
+    return true; /* let cfitsio say why */
+  const size_t got = fread(head, 1, sizeof(head), f);
+  fclose(f);
+  if (got >= 2 && head[0] == 0x1f && head[1] == 0x8b)
+    return true;
+  return got == sizeof(head) && memcmp(head, "SIMPLE", 6) == 0;
+}
+
+/* Opens a file, with the reasons it cannot be put the plain way: the
+ * system's for a missing or unreadable one, truncation for a short one,
+ * cfitsio's for the rest. */
+static int open_file(const char* path, int mode, fitsfile** out) {
+  *out = NULL;
+  uint64_t bytes = 0;
+  if (sif__io_check_readable(TAG, path, &bytes) != SIF_OK)
+    return SIF_ERR_IO;
+
+  int fstatus = 0;
+  fits_open_diskfile(out, path, mode, &fstatus);
+  if (fstatus) {
+    *out = NULL;
+    if (!looks_like_fits(path)) {
+      fits_clear_errmsg();
+      SIF_LOG_ERROR(TAG, "%s: not a FITS file (no SIMPLE card)", path);
+    } else if (is_truncated(path, &bytes)) {
+      log_truncated(path, bytes);
+    } else {
+      log_fits(fstatus, "%s", path);
+    }
+    return SIF_ERR_IO;
+  }
+  return SIF_OK;
 }
 
 /* ------------------------------------------------------------------------ */
@@ -115,7 +196,7 @@ static int move_to_hdu(
   if (is_number) {
     const long ext = strtol(hdu, NULL, 10);
     if (ext > INT_MAX - 1) {
-      SIF_LOG_ERROR(TAG, "%s has no extension %s", path, hdu);
+      SIF_LOG_ERROR(TAG, "%s: no HDU %s", path, hdu);
       return SIF_ERR_INVALID;
     }
     /* cfitsio counts from 1 at the primary HDU; the extension number, as
@@ -131,11 +212,21 @@ static int move_to_hdu(
 
   if (fstatus == END_OF_FILE || fstatus == BAD_HDU_NUM) {
     fits_clear_errmsg();
-    SIF_LOG_ERROR(TAG, "%s has no HDU %s", path, hdu);
+    uint64_t bytes = 0;
+    if (is_truncated(path, &bytes)) {
+      log_truncated(path, bytes);
+      return SIF_ERR_IO;
+    }
+    int n_hdus = 0;
+    fstatus = 0;
+    fits_get_num_hdus(f, &n_hdus, &fstatus);
+    fits_clear_errmsg();
+    SIF_LOG_ERROR(
+      TAG, "%s: no HDU %s (%d HDUs, 0 to %d)", path, hdu, n_hdus, n_hdus - 1);
     return SIF_ERR_INVALID;
   }
   if (fstatus) {
-    log_fits(fstatus, "failed to move to HDU %s of %s", hdu, path);
+    log_fits(fstatus, "%s: HDU %s", path, hdu);
     return SIF_ERR_IO;
   }
   return SIF_OK;
@@ -156,10 +247,20 @@ static int move_to_table(fitsfile* f, const char* path, const char* hdu) {
         return SIF_OK;
     }
     if (fstatus) {
-      log_fits(fstatus, "failed to read the HDUs of %s", path);
+      uint64_t bytes = 0;
+      if (is_truncated(path, &bytes))
+        log_truncated(path, bytes);
+      else
+        log_fits(fstatus, "%s: HDUs", path);
       return SIF_ERR_IO;
     }
-    SIF_LOG_ERROR(TAG, "%s holds no table", path);
+    /* A file cut off inside its first extension reads as one without it. */
+    uint64_t bytes = 0;
+    if (is_truncated(path, &bytes)) {
+      log_truncated(path, bytes);
+      return SIF_ERR_IO;
+    }
+    SIF_LOG_ERROR(TAG, "%s: no table HDU (%d HDUs)", path, n_hdus);
     return SIF_ERR_INVALID;
   }
 
@@ -167,7 +268,7 @@ static int move_to_table(fitsfile* f, const char* path, const char* hdu) {
   if (status != SIF_OK)
     return status;
   if (!is_table(hdutype)) {
-    SIF_LOG_ERROR(TAG, "HDU %s of %s is an image, not a table", hdu, path);
+    SIF_LOG_ERROR(TAG, "%s: HDU %s: an image, not a table", path, hdu);
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -216,13 +317,41 @@ static bool type_is_numeric(int type) {
          type != TCOMPLEX && type != TDBLCOMPLEX;
 }
 
+/* The current table's column names, "A, B, C", for a message about one
+ * that is not there; the first few, then a count. */
+static const char* column_list(fitsfile* f) {
+  static SIF_THREAD_LOCAL char buf[256];
+  int n_cols = 0, fstatus = 0;
+  fits_get_num_cols(f, &n_cols, &fstatus);
+  size_t used = 0;
+  buf[0] = '\0';
+  int c = 1;
+  for (; c <= n_cols && !fstatus; c++) {
+    char key[FLEN_KEYWORD], name[FLEN_VALUE] = "";
+    fits_make_keyn("TTYPE", c, key, &fstatus);
+    fits_read_key(f, TSTRING, key, name, NULL, &fstatus);
+    if (fstatus)
+      break;
+    if (used + strlen(name) + 16 > sizeof(buf))
+      break;
+    used += (size_t)snprintf(
+      buf + used, sizeof(buf) - used, "%s%s", c > 1 ? ", " : "", name);
+  }
+  if (c <= n_cols && !fstatus)
+    snprintf(buf + used, sizeof(buf) - used, ", ... (%d in all)", n_cols);
+  fits_clear_errmsg();
+  return buf;
+}
+
 static int source_open(fitsfile* f, const char* path, const char* what,
   const char* spec, source_t* s) {
   s->spec = spec;
   s->expr = malloc(strlen(spec) + 1);
   s->buf = malloc((size_t)CHUNK * sizeof(double));
-  if (!s->expr || !s->buf)
+  if (!s->expr || !s->buf) {
+    SIF_LOG_ERROR(TAG, "%s: out of memory", path);
     return SIF_ERR_ALLOC;
+  }
   strcpy(s->expr, spec);
 
   int fstatus = 0;
@@ -231,7 +360,8 @@ static int source_open(fitsfile* f, const char* path, const char* what,
     fits_get_colnum(f, CASEINSEN, s->expr, &s->colnum, &fstatus);
     if (fstatus) {
       fits_clear_errmsg();
-      SIF_LOG_ERROR(TAG, "%s: no column %s, for %s", path, spec, what);
+      SIF_LOG_ERROR(TAG, "%s: column %s (%s): missing; table has %s", path,
+        spec, what, column_list(f));
       return SIF_ERR_INVALID;
     }
 
@@ -239,19 +369,18 @@ static int source_open(fitsfile* f, const char* path, const char* what,
     LONGLONG repeat = 0, width = 0;
     fits_get_eqcoltypell(f, s->colnum, &type, &repeat, &width, &fstatus);
     if (fstatus) {
-      log_fits(fstatus, "%s: failed to read the type of column %s", path, spec);
+      log_fits(fstatus, "%s: column %s", path, spec);
       return SIF_ERR_IO;
     }
     if (type < 0 || !type_is_numeric(type)) {
-      SIF_LOG_ERROR(
-        TAG, "%s: column %s, for %s, is not numeric", path, spec, what);
+      SIF_LOG_ERROR(TAG, "%s: column %s (%s): not numeric", path, spec, what);
       return SIF_ERR_INVALID;
     }
     if (repeat != 1) {
       SIF_LOG_ERROR(TAG,
-        "%s: column %s, for %s, holds %lld values a row; only scalar columns "
-        "are read",
-        path, spec, what, (long long)repeat);
+        "%s: column %s (%s): %lld values per row, expected 1 (name one as "
+        "%s[k])",
+        path, spec, what, (long long)repeat, spec);
       return SIF_ERR_INVALID;
     }
     return SIF_OK;
@@ -265,11 +394,11 @@ static int source_open(fitsfile* f, const char* path, const char* what,
   long n_elem = 0, naxes[1];
   fits_test_expr(f, s->expr, 1, &type, &n_elem, &naxis, naxes, &fstatus);
   if (fstatus) {
-    log_fits(fstatus, "%s: cannot evaluate \"%s\", for %s", path, spec, what);
+    log_fits(fstatus, "%s: expression '%s' (%s)", path, spec, what);
     return SIF_ERR_INVALID;
   }
   if (!type_is_numeric(type) || (n_elem != 1 && n_elem != -1)) {
-    SIF_LOG_ERROR(TAG, "%s: \"%s\", for %s, is not a number for each row", path,
+    SIF_LOG_ERROR(TAG, "%s: expression '%s' (%s): not one number per row", path,
       spec, what);
     return SIF_ERR_INVALID;
   }
@@ -283,7 +412,8 @@ static void source_close(source_t* s) {
 
 /* Rows [first, first + n) of a source, 0-based, as doubles. An undefined
  * value comes back as NaN. */
-static int source_read(fitsfile* f, source_t* s, long first, long n) {
+static int source_read(
+  fitsfile* f, const char* path, source_t* s, long first, long n) {
   double nulval = NAN;
   int anynul = 0, fstatus = 0;
 
@@ -295,8 +425,12 @@ static int source_read(fitsfile* f, source_t* s, long first, long n) {
       f, TDOUBLE, s->expr, first + 1, n, &nulval, s->buf, &anynul, &fstatus);
 
   if (fstatus) {
-    log_fits(fstatus, "failed to read rows %ld-%ld of %s", first + 1, first + n,
-      s->spec);
+    uint64_t bytes = 0;
+    if (is_truncated(path, &bytes))
+      log_truncated(path, bytes);
+    else
+      log_fits(
+        fstatus, "%s: %s: rows %ld-%ld", path, s->spec, first + 1, first + n);
     return SIF_ERR_IO;
   }
   return SIF_OK;
@@ -332,13 +466,12 @@ static int filter_check(const table_t* t, char* where) {
   long n_elem = 0, naxes[1];
   fits_test_expr(t->f, where, 1, &type, &n_elem, &naxis, naxes, &fstatus);
   if (fstatus) {
-    log_fits(fstatus, "%s: cannot evaluate the filter \"%s\"", t->path, where);
+    log_fits(fstatus, "%s: filter '%s'", t->path, where);
     return SIF_ERR_INVALID;
   }
   if (type != TLOGICAL || (n_elem != 1 && n_elem != -1)) {
-    SIF_LOG_ERROR(TAG,
-      "%s: the filter \"%s\" is not true or false for each row", t->path,
-      where);
+    SIF_LOG_ERROR(
+      TAG, "%s: filter '%s': not one boolean per row", t->path, where);
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -354,18 +487,15 @@ static int table_open(table_t* t, const char* path, const char* hdu,
   t->path = path;
 
   int fstatus = 0;
-  fits_open_diskfile(&t->f, path, READONLY, &fstatus);
-  if (fstatus) {
-    log_fits(fstatus, "failed to open %s", path);
-    t->f = NULL;
-    return SIF_ERR_IO;
-  }
+  int status = open_file(path, READONLY, &t->f);
+  if (status != SIF_OK)
+    return status;
 
-  int status = move_to_table(t->f, path, hdu);
+  status = move_to_table(t->f, path, hdu);
   if (status == SIF_OK) {
     fits_get_num_rows(t->f, &t->n_rows, &fstatus);
     if (fstatus) {
-      log_fits(fstatus, "failed to read the row count of %s", path);
+      log_fits(fstatus, "%s: row count", path);
       status = SIF_ERR_IO;
     }
   }
@@ -390,8 +520,8 @@ static int filter_rows(const table_t* t, char* where, sif_bitmask_t* mask,
     int fstatus = 0;
     fits_find_rows(t->f, where, first + 1, n, &n_good, row_status, &fstatus);
     if (fstatus) {
-      log_fits(fstatus, "%s: failed to evaluate the filter on rows %ld-%ld",
-        t->path, first + 1, first + n);
+      log_fits(fstatus, "%s: filter '%s': rows %ld-%ld", t->path, where,
+        first + 1, first + n);
       return SIF_ERR_IO;
     }
     for (long j = 0; j < n; j++)
@@ -444,11 +574,9 @@ static int stream_table(stream_t* st, table_t* t, uint64_t offset) {
     for (int r = 0; r < N_ROLES; r++) {
       if (!src[r].spec)
         continue;
-      const int status = source_read(t->f, &src[r], first, n);
-      if (status != SIF_OK) {
-        SIF_LOG_ERROR(TAG, "in %s", t->path);
+      const int status = source_read(t->f, t->path, &src[r], first, n);
+      if (status != SIF_OK)
         return status;
-      }
     }
 
     for (long j = 0; j < n; j++) {
@@ -507,12 +635,12 @@ static int stream_table(stream_t* st, table_t* t, uint64_t offset) {
 static int check_args(const char* const* paths, uint32_t n_paths,
   const sif_field_columns_t* columns, double fraction) {
   if (!paths || n_paths == 0 || !columns) {
-    SIF_LOG_ERROR(TAG, "at least one path, and the columns, are required");
+    SIF_LOG_ERROR(TAG, "sif_field_read_fits: needs a path and the columns");
     return SIF_ERR_INVALID;
   }
   for (uint32_t i = 0; i < n_paths; i++) {
     if (!paths[i] || !*paths[i]) {
-      SIF_LOG_ERROR(TAG, "path %u of %u is empty", i + 1, n_paths);
+      SIF_LOG_ERROR(TAG, "path %u of %u: empty", i + 1, n_paths);
       return SIF_ERR_INVALID;
     }
   }
@@ -520,27 +648,22 @@ static int check_args(const char* const* paths, uint32_t n_paths,
   const bool xy = columns->x || columns->y;
   const bool radec = columns->ra || columns->dec;
   if (xy && radec) {
-    SIF_LOG_ERROR(TAG,
-      "columns name both x, y and ra, dec: positions are x y z, sky "
-      "coordinates ra dec z");
+    SIF_LOG_ERROR(TAG, "columns: both x y and ra dec given");
     return SIF_ERR_INVALID;
   }
   if (radec ? !(columns->ra && columns->dec && columns->z)
             : !(columns->x && columns->y && columns->z)) {
-    SIF_LOG_ERROR(TAG, "columns for all three of %s are required",
-      radec ? "ra, dec and z" : "x, y and z");
+    SIF_LOG_ERROR(
+      TAG, "columns: %s required", radec ? "ra, dec, z" : "x, y, z");
     return SIF_ERR_INVALID;
   }
   const int n_vel = !!columns->vx + !!columns->vy + !!columns->vz;
   if (n_vel != 0 && n_vel != 3) {
-    SIF_LOG_ERROR(TAG,
-      "velocities are read all three or not at all; %d of vx, vy and vz were "
-      "named",
-      n_vel);
+    SIF_LOG_ERROR(TAG, "columns: vx, vy, vz go together (%d given)", n_vel);
     return SIF_ERR_INVALID;
   }
   if (!(fraction > 0 && fraction <= 1)) {
-    SIF_LOG_ERROR(TAG, "fraction must be in (0, 1], not %g", fraction);
+    SIF_LOG_ERROR(TAG, "fraction: %g, expected (0, 1]", fraction);
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -565,9 +688,7 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
     columns->vz, columns->w};
   for (int r = 0; r < N_ROLES; r++) {
     if (specs[r] && !*specs[r]) {
-      SIF_LOG_ERROR(TAG,
-        "the column for %s is an empty string; leave it NULL to read none",
-        names[r]);
+      SIF_LOG_ERROR(TAG, "columns: %s is empty (NULL reads none)", names[r]);
       return SIF_ERR_INVALID;
     }
   }
@@ -576,13 +697,16 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
   char* expr = NULL;
   if (where && *where) {
     expr = malloc(strlen(where) + 1);
-    if (!expr)
+    if (!expr) {
+      SIF_LOG_ERROR(TAG, "out of memory");
       return SIF_ERR_ALLOC;
+    }
     strcpy(expr, where);
   }
 
   uint64_t* offsets = calloc((size_t)n_paths + 1, sizeof(uint64_t));
   if (!offsets) {
+    SIF_LOG_ERROR(TAG, "out of memory");
     free(expr);
     return SIF_ERR_ALLOC;
   }
@@ -599,9 +723,8 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
   }
   const uint64_t n_rows = offsets[n_paths];
   if (status == SIF_OK && n_rows == 0) {
-    SIF_LOG_ERROR(TAG, "the table%s in %s%s %s no rows",
-      n_paths == 1 ? "" : "s", paths[0], n_paths == 1 ? "" : " and the rest",
-      n_paths == 1 ? "has" : "have");
+    SIF_LOG_ERROR(TAG, "%s%s: no rows", paths[0],
+      n_paths == 1 ? "" : " (and the other files)");
     status = SIF_ERR_INVALID;
   }
 
@@ -613,6 +736,8 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
     mask = sif_bitmask_alloc(n_rows);
     char* row_status = malloc((size_t)CHUNK);
     status = (mask && row_status) ? SIF_OK : SIF_ERR_ALLOC;
+    if (status != SIF_OK)
+      SIF_LOG_ERROR(TAG, "%" PRIu64 " rows: out of memory", n_rows);
     n_pass = 0;
     for (uint32_t i = 0; status == SIF_OK && i < n_paths; i++) {
       status = table_open(&t, paths[i], hdu, specs, names, expr);
@@ -623,8 +748,8 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
     }
     free(row_status);
     if (status == SIF_OK && n_pass == 0) {
-      SIF_LOG_ERROR(TAG, "the filter \"%s\" keeps none of the %" PRIu64 " rows",
-        where, n_rows);
+      SIF_LOG_ERROR(
+        TAG, "filter '%s': keeps none of %" PRIu64 " rows", where, n_rows);
       status = SIF_ERR_INVALID;
     }
   }
@@ -634,8 +759,8 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
     n_keep =
       fraction < 1 ? (uint64_t)llround(fraction * (double)n_pass) : n_pass;
     if (n_keep == 0) {
-      SIF_LOG_ERROR(TAG, "a fraction of %g keeps none of %" PRIu64 " rows",
-        fraction, n_pass);
+      SIF_LOG_ERROR(
+        TAG, "fraction %g keeps none of %" PRIu64 " rows", fraction, n_pass);
       status = SIF_ERR_INVALID;
     }
   }
@@ -651,6 +776,8 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
       status = sif_field_reserve_velocities(st.field);
     if (status == SIF_OK && specs[ROLE_W])
       status = sif_field_reserve_weights(st.field);
+    if (status != SIF_OK)
+      SIF_LOG_ERROR(TAG, "%" PRIu64 " rows: out of memory", n_keep);
   }
 
   if (status == SIF_OK) {
@@ -670,20 +797,16 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
   if (status == SIF_OK && st.n_bad) {
     char hint[160] = "";
     if (st.bad_spec)
-      snprintf(hint, sizeof(hint),
-        "; drop them with a filter such as "
-        "\"!ISNULL(%s)\"",
-        st.bad_spec);
+      snprintf(hint, sizeof(hint), "; filter with '!ISNULL(%s)'", st.bad_spec);
     SIF_LOG_ERROR(TAG,
-      "%" PRIu64 " row%s the filter keeps hold an undefined value, the first "
-      "at row %ld of %s, in %s (\"%s\")%s",
-      st.n_bad, st.n_bad == 1 ? "" : "s", st.bad_row, st.bad_path,
-      names[st.bad_role], specs[st.bad_role], hint);
+      "%s: %s (%s): row %ld: undefined (%" PRIu64 " such rows in all%s)",
+      st.bad_path, specs[st.bad_role], names[st.bad_role], st.bad_row, st.n_bad,
+      hint);
     status = SIF_ERR_INVALID;
   }
   if (status == SIF_OK && st.kept != n_keep) {
-    SIF_LOG_ERROR(
-      TAG, "read %" PRIu64 " rows, expected %" PRIu64, st.kept, n_keep);
+    SIF_LOG_ERROR(TAG, "%s: read %" PRIu64 " rows, expected %" PRIu64, paths[0],
+      st.kept, n_keep);
     status = SIF_ERR_IO;
   }
 
@@ -722,7 +845,10 @@ sif_field_t* sif_field_read_fits(const char* const* paths, uint32_t n_paths,
   const char* hdu, const sif_field_columns_t* columns, const char* where,
   double fraction, uint64_t seed) {
   sif_field_t* field = NULL;
-  (void)read_fits(paths, n_paths, hdu, columns, where, fraction, seed, &field);
+  const int status =
+    read_fits(paths, n_paths, hdu, columns, where, fraction, seed, &field);
+  if (status != SIF_OK)
+    sif__error_status_set(status);
   return field;
 }
 
@@ -788,17 +914,14 @@ static int print_table(fitsfile* f, FILE* stream) {
 
 int sif_fits_print_summary(const char* path, FILE* stream) {
   if (!path || !stream) {
-    SIF_LOG_ERROR(TAG, "path and stream are required");
+    SIF_LOG_ERROR(TAG, "sif_fits_print_summary: NULL argument");
     return SIF_ERR_INVALID;
   }
 
   fitsfile* f = NULL;
   int fstatus = 0;
-  fits_open_diskfile(&f, path, READONLY, &fstatus);
-  if (fstatus) {
-    log_fits(fstatus, "failed to open %s", path);
+  if (open_file(path, READONLY, &f) != SIF_OK)
     return SIF_ERR_IO;
-  }
 
   int n_hdus = 0;
   fits_get_num_hdus(f, &n_hdus, &fstatus);
@@ -841,7 +964,11 @@ int sif_fits_print_summary(const char* path, FILE* stream) {
   fflush(stream);
 
   if (fstatus) {
-    log_fits(fstatus, "failed to read the structure of %s", path);
+    uint64_t bytes = 0;
+    if (is_truncated(path, &bytes))
+      log_truncated(path, bytes);
+    else
+      log_fits(fstatus, "%s: structure", path);
     return SIF_ERR_IO;
   }
   return SIF_OK;
@@ -887,7 +1014,7 @@ static int product_open(const char* path, fitsfile** out) {
     fits_update_key(f, TSTRING, "SIFVER", SIF_VERSION_STRING,
       "the sif version that wrote the file", &st);
     if (st) {
-      log_fits(st, "failed to create %s", path);
+      log_fits(st, "%s: create", path);
       if (f) {
         int close_st = 0;
         fits_close_file(f, &close_st);
@@ -898,18 +1025,16 @@ static int product_open(const char* path, fitsfile** out) {
     return SIF_OK;
   }
 
-  fits_open_diskfile(&f, path, READWRITE, &st);
-  if (st) {
-    log_fits(st, "failed to open %s for writing", path);
+  if (S_ISDIR(sb.st_mode))
+    return sif__io_os_error(TAG, path, NULL, EISDIR);
+  if (open_file(path, READWRITE, &f) != SIF_OK)
     return SIF_ERR_IO;
-  }
   char format[FLEN_VALUE];
   key_string(f, FORMAT_KEY, format);
   if (strcmp(format, FORMAT_NAME) != 0) {
     SIF_LOG_ERROR(TAG,
-      "%s is a FITS file sif did not write, and is not written into; give "
-      "another path",
-      path);
+      "%s: not written by sif (no %s = '%s'); existing file left untouched",
+      path, FORMAT_KEY, FORMAT_NAME);
     fits_close_file(f, &st);
     return SIF_ERR_IO;
   }
@@ -938,7 +1063,7 @@ static int product_close(fitsfile* f, int st, const char* path) {
   int close_st = 0;
   fits_close_file(f, &close_st);
   if (st || close_st) {
-    log_fits(st ? st : close_st, "failed to write %s", path);
+    log_fits(st ? st : close_st, "%s: write", path);
     return SIF_ERR_IO;
   }
   return SIF_OK;
@@ -951,20 +1076,22 @@ static int product_read_open(
   *out = NULL;
   fitsfile* f = NULL;
   int st = 0;
-  fits_open_diskfile(&f, path, READONLY, &st);
-  if (st) {
-    log_fits(st, "failed to open %s", path);
+  if (open_file(path, READONLY, &f) != SIF_OK)
     return SIF_ERR_IO;
-  }
   char name[FLEN_VALUE];
   snprintf(name, sizeof name, "%s", extname);
   fits_movnam_hdu(f, ANY_HDU, name, 0, &st);
   if (st) {
     fits_clear_errmsg();
-    SIF_LOG_ERROR(TAG, "%s holds no %s table", path, extname);
+    uint64_t bytes = 0;
+    const bool cut = is_truncated(path, &bytes);
+    if (cut)
+      log_truncated(path, bytes);
+    else
+      SIF_LOG_ERROR(TAG, "%s: no %s HDU", path, extname);
     st = 0;
     fits_close_file(f, &st);
-    return SIF_ERR_INVALID;
+    return cut ? SIF_ERR_IO : SIF_ERR_INVALID;
   }
   *out = f;
   return SIF_OK;
@@ -986,9 +1113,8 @@ static void warn_rows(
   }
   if ((uint64_t)n != n_rows)
     SIF_LOG_WARNING(TAG,
-      "%s: %s has %" PRIu64 " rows but the catalogue %lld voids; they do not "
-      "belong together",
-      path, extname, n_rows, (long long)n);
+      "%s: %s has %" PRIu64 " rows, VOIDS %lld (not the same voids)", path,
+      extname, n_rows, (long long)n);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -1035,7 +1161,7 @@ static void meta_read(fitsfile* f, sif_catalogue_t* catalogue) {
     for (; name[c] && c < sizeof lower - 1; c++)
       lower[c] = (char)tolower((unsigned char)name[c]);
     lower[c] = '\0';
-    if (sif__catalogue_meta_reserved(lower))
+    if (!sif__catalogue_meta_key_ok(lower))
       continue;
 
     char kind = 0;
@@ -1048,7 +1174,7 @@ static void meta_read(fitsfile* f, sif_catalogue_t* catalogue) {
     if (kind == 'C') {
       char* text = NULL;
       fits_read_key_longstr(f, name, &text, NULL, &kst);
-      if (!kst && text)
+      if (!kst && text && !strpbrk(text, "\n\r\""))
         (void)sif_catalogue_meta_string_set(catalogue, lower, text);
       if (text)
         fits_free_memory(text, &kst);
@@ -1062,7 +1188,9 @@ static void meta_read(fitsfile* f, sif_catalogue_t* catalogue) {
       for (char* d = value; *d; d++)
         if (*d == 'D' || *d == 'd')
           *d = 'E';
-      (void)sif_catalogue_meta_real_set(catalogue, lower, strtod(value, NULL));
+      const double d = strtod(value, NULL);
+      if (isfinite(d))
+        (void)sif_catalogue_meta_real_set(catalogue, lower, d);
     }
   }
   fits_clear_errmsg();
@@ -1070,7 +1198,7 @@ static void meta_read(fitsfile* f, sif_catalogue_t* catalogue) {
 
 int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalogue) {
   if (!filepath || !catalogue) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_catalogue_write_fits");
+    SIF_LOG_ERROR(TAG, "sif_catalogue_write_fits: NULL argument");
     return SIF_ERR_INVALID;
   }
 
@@ -1125,17 +1253,14 @@ static int column_of(fitsfile* f, const char* name) {
 
 sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_catalogue_read_fits");
+    SIF_LOG_ERROR(TAG, "sif_catalogue_read_fits: NULL path");
     return NULL;
   }
 
   fitsfile* f = NULL;
   int fstatus = 0;
-  fits_open_diskfile(&f, filepath, READONLY, &fstatus);
-  if (fstatus) {
-    log_fits(fstatus, "failed to open %s", filepath);
+  if (open_file(filepath, READONLY, &f) != SIF_OK)
     return NULL;
-  }
 
   sif_catalogue_t* cat = NULL;
   int status = move_to_table(f, filepath, VOIDS_EXTNAME);
@@ -1143,7 +1268,7 @@ sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
   if (status == SIF_OK) {
     fits_get_num_rowsll(f, &n, &fstatus);
     if (fstatus) {
-      log_fits(fstatus, "failed to read the row count of %s", filepath);
+      log_fits(fstatus, "%s: " VOIDS_EXTNAME ": row count", filepath);
       status = SIF_ERR_IO;
     }
   }
@@ -1168,21 +1293,31 @@ sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
     cols[4] = column_of(f, "FOOTPRINT");
     cols[5] = column_of(f, "FOOTPRINT_SHELL");
     if (!cols[0] || !cols[1] || !cols[2] || !cols[3]) {
-      SIF_LOG_ERROR(TAG,
-        "%s: the " VOIDS_EXTNAME " table has no %s and R columns", filepath,
-        sky ? "RA, DEC, Z" : "CX, CY, CZ");
+      static const char* const CART[4] = {"CX", "CY", "CZ", "R"};
+      static const char* const SKY[4] = {"RA", "DEC", "Z", "R"};
+      char missing[64] = "";
+      for (int c = 0; c < 4; c++)
+        if (!cols[c])
+          snprintf(missing + strlen(missing), sizeof(missing) - strlen(missing),
+            "%s%s", missing[0] ? ", " : "", (sky ? SKY : CART)[c]);
+      SIF_LOG_ERROR(TAG, "%s: " VOIDS_EXTNAME ": no %s column; table has %s",
+        filepath, missing, column_list(f));
       status = SIF_ERR_INVALID;
     } else if (!cols[4] != !cols[5]) {
-      SIF_LOG_ERROR(
-        TAG, "%s: one footprint column without the other", filepath);
+      SIF_LOG_ERROR(TAG, "%s: " VOIDS_EXTNAME ": %s without %s", filepath,
+        cols[4] ? "FOOTPRINT" : "FOOTPRINT_SHELL",
+        cols[4] ? "FOOTPRINT_SHELL" : "FOOTPRINT");
       status = SIF_ERR_INVALID;
     }
   }
 
   if (status == SIF_OK) {
     cat = sif_catalogue_alloc((uint64_t)n);
-    if (!cat || (cols[4] && sif_catalogue_reserve_footprint(cat) != SIF_OK))
+    if (!cat || (cols[4] && sif_catalogue_reserve_footprint(cat) != SIF_OK)) {
+      SIF_LOG_ERROR(
+        TAG, "%s: %lld voids: out of memory", filepath, (long long)n);
       status = SIF_ERR_ALLOC;
+    }
   }
 
   if (status == SIF_OK && n > 0) {
@@ -1196,7 +1331,11 @@ sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
         f, REAL_TYPE, cols[c], 1, 1, n, NULL, out[c], &anynul, &fstatus);
     }
     if (fstatus) {
-      log_fits(fstatus, "failed to read the voids of %s", filepath);
+      uint64_t bytes = 0;
+      if (is_truncated(filepath, &bytes))
+        log_truncated(filepath, bytes);
+      else
+        log_fits(fstatus, "%s: " VOIDS_EXTNAME, filepath);
       status = SIF_ERR_IO;
     }
   }
@@ -1208,6 +1347,7 @@ sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
   fits_close_file(f, &close_status);
 
   if (status != SIF_OK) {
+    sif__error_status_set(status);
     sif_catalogue_free(cat);
     return NULL;
   }
@@ -1268,12 +1408,12 @@ int sif_profiles_write_fits(const char* filepath,
 
   if (!filepath || (!dens && !vel)) {
     SIF_LOG_ERROR(
-      TAG, "sif_profiles_write_fits needs a path and at least one profile set");
+      TAG, "sif_profiles_write_fits: needs a path and a profile set");
     return SIF_ERR_INVALID;
   }
   if ((dens && dens->n_bins > MAX_PROFILE_BINS) ||
       (vel && vel->n_bins > MAX_PROFILE_BINS)) {
-    SIF_LOG_ERROR(TAG, "profiles of more than %u bins do not fit a FITS header",
+    SIF_LOG_ERROR(TAG, "%s: more than %u bins (FITS header limit)", filepath,
       MAX_PROFILE_BINS);
     return SIF_ERR_INVALID;
   }
@@ -1314,16 +1454,13 @@ static bool has_hdu(fitsfile* f, const char* extname) {
 int sif_profiles_read_header_fits(
   const char* filepath, int* out_has_density, int* out_has_velocity) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_profiles_read_header_fits");
+    SIF_LOG_ERROR(TAG, "sif_profiles_read_header_fits: NULL path");
     return SIF_ERR_INVALID;
   }
   fitsfile* f = NULL;
   int st = 0;
-  fits_open_diskfile(&f, filepath, READONLY, &st);
-  if (st) {
-    log_fits(st, "failed to open %s", filepath);
+  if (open_file(filepath, READONLY, &f) != SIF_OK)
     return SIF_ERR_IO;
-  }
   if (out_has_density)
     *out_has_density = has_hdu(f, DENS_EXTNAME);
   if (out_has_velocity)
@@ -1334,8 +1471,8 @@ int sif_profiles_read_header_fits(
 
 /* A profile table's shape and edges, from its header; the rows are read by
  * the caller once the set is allocated. */
-static int profiles_shape(fitsfile* f, uint64_t* n_voids, uint32_t* n_bins,
-  sif_real* ext, int* differential) {
+static int profiles_shape(fitsfile* f, const char* path, const char* extname,
+  uint64_t* n_voids, uint32_t* n_bins, sif_real* ext, int* differential) {
   int st = 0;
   LONGLONG n = 0, nb = 0;
   double e = 0.0;
@@ -1347,8 +1484,14 @@ static int profiles_shape(fitsfile* f, uint64_t* n_voids, uint32_t* n_bins,
     fits_read_key(f, TLOGICAL, "DIFFERENTIAL", &d, NULL, &st);
     *differential = d;
   }
-  if (st || nb <= 0 || nb > (LONGLONG)MAX_PROFILE_BINS) {
-    fits_clear_errmsg();
+  if (st) {
+    log_fits(st, "%s: %s: N_BINS, EXT%s", path, extname,
+      differential ? ", DIFFERENTIAL" : "");
+    return SIF_ERR_IO;
+  }
+  if (nb <= 0 || nb > (LONGLONG)MAX_PROFILE_BINS) {
+    SIF_LOG_ERROR(TAG, "%s: %s: N_BINS = %lld, expected 1 to %u", path, extname,
+      (long long)nb, MAX_PROFILE_BINS);
     return SIF_ERR_IO;
   }
   *n_voids = (uint64_t)n;
@@ -1357,22 +1500,31 @@ static int profiles_shape(fitsfile* f, uint64_t* n_voids, uint32_t* n_bins,
   return SIF_OK;
 }
 
-static int profiles_rows_read(fitsfile* f, uint64_t n_voids, uint32_t n_bins,
-  sif_real* edges, sif_real* rows) {
+static int profiles_rows_read(fitsfile* f, const char* path,
+  const char* extname, uint64_t n_voids, uint32_t n_bins, sif_real* edges,
+  sif_real* rows) {
   int st = 0;
   for (uint32_t j = 0; j <= n_bins && !st; j++) {
     char key[FLEN_KEYWORD];
     snprintf(key, sizeof key, "EDGE%" PRIu32, j);
     double v = 0.0;
     fits_read_key(f, TDOUBLE, key, &v, NULL, &st);
+    if (st) {
+      log_fits(st, "%s: %s: %s", path, extname, key);
+      return SIF_ERR_IO;
+    }
     edges[j] = (sif_real)v;
   }
   int anynul = 0;
-  if (!st && n_voids > 0)
+  if (n_voids > 0)
     fits_read_col(f, REAL_TYPE, 1, 1, 1, (LONGLONG)(n_voids * n_bins), NULL,
       rows, &anynul, &st);
   if (st) {
-    fits_clear_errmsg();
+    uint64_t bytes = 0;
+    if (is_truncated(path, &bytes))
+      log_truncated(path, bytes);
+    else
+      log_fits(st, "%s: %s: rows", path, extname);
     return SIF_ERR_IO;
   }
   return SIF_OK;
@@ -1386,8 +1538,7 @@ int sif_profiles_read_fits(const char* filepath,
   if (out_vel)
     *out_vel = NULL;
   if (!filepath || (!out_dens && !out_vel)) {
-    SIF_LOG_ERROR(
-      TAG, "sif_profiles_read_fits needs a path and at least one output");
+    SIF_LOG_ERROR(TAG, "sif_profiles_read_fits: needs a path and an output");
     return SIF_ERR_INVALID;
   }
 
@@ -1402,14 +1553,18 @@ int sif_profiles_read_fits(const char* filepath,
     sif_real ext;
     int differential;
     status = product_read_open(filepath, DENS_EXTNAME, &f);
+    if (status == SIF_OK) {
+      status =
+        profiles_shape(f, filepath, DENS_EXTNAME, &n, &b, &ext, &differential);
+    }
     if (status == SIF_OK &&
-        profiles_shape(f, &n, &b, &ext, &differential) != SIF_OK)
-      status = SIF_ERR_IO;
-    if (status == SIF_OK &&
-        !(dens = sif__density_profiles_alloc(n, b, ext, differential != 0)))
+        !(dens = sif__density_profiles_alloc(n, b, ext, differential != 0))) {
+      SIF_LOG_ERROR(TAG, "%s: %s: out of memory", filepath, DENS_EXTNAME);
       status = SIF_ERR_ALLOC;
+    }
     if (status == SIF_OK)
-      status = profiles_rows_read(f, n, b, dens->r_edges, dens->profiles);
+      status = profiles_rows_read(
+        f, filepath, DENS_EXTNAME, n, b, dens->r_edges, dens->profiles);
     if (f) {
       int st = 0;
       fits_close_file(f, &st);
@@ -1422,12 +1577,15 @@ int sif_profiles_read_fits(const char* filepath,
     uint32_t b;
     sif_real ext;
     status = product_read_open(filepath, VEL_EXTNAME, &f);
-    if (status == SIF_OK && profiles_shape(f, &n, &b, &ext, NULL) != SIF_OK)
-      status = SIF_ERR_IO;
-    if (status == SIF_OK && !(vel = sif__velocity_profiles_alloc(n, b, ext)))
-      status = SIF_ERR_ALLOC;
     if (status == SIF_OK)
-      status = profiles_rows_read(f, n, b, vel->r_edges, vel->v_rad);
+      status = profiles_shape(f, filepath, VEL_EXTNAME, &n, &b, &ext, NULL);
+    if (status == SIF_OK && !(vel = sif__velocity_profiles_alloc(n, b, ext))) {
+      SIF_LOG_ERROR(TAG, "%s: %s: out of memory", filepath, VEL_EXTNAME);
+      status = SIF_ERR_ALLOC;
+    }
+    if (status == SIF_OK)
+      status = profiles_rows_read(
+        f, filepath, VEL_EXTNAME, n, b, vel->r_edges, vel->v_rad);
     if (f) {
       int st = 0;
       fits_close_file(f, &st);
@@ -1435,8 +1593,6 @@ int sif_profiles_read_fits(const char* filepath,
   }
 
   if (status != SIF_OK) {
-    if (status == SIF_ERR_IO)
-      SIF_LOG_ERROR(TAG, "failed to read profiles from %s", filepath);
     sif_density_profiles_free(dens);
     sif_velocity_profiles_free(vel);
     return status;
@@ -1455,7 +1611,7 @@ int sif_profiles_read_fits(const char* filepath,
 int sif_size_function_write_fits(
   const char* filepath, const sif_size_function_t* vsf) {
   if (!filepath || !vsf) {
-    SIF_LOG_ERROR(TAG, "invalid arguments for sif_size_function_write_fits");
+    SIF_LOG_ERROR(TAG, "sif_size_function_write_fits: NULL argument");
     return SIF_ERR_INVALID;
   }
 
@@ -1503,12 +1659,15 @@ int sif_size_function_write_fits(
 
 sif_size_function_t* sif_size_function_read_fits(const char* filepath) {
   if (!filepath) {
-    SIF_LOG_ERROR(TAG, "invalid filepath for sif_size_function_read_fits");
+    SIF_LOG_ERROR(TAG, "sif_size_function_read_fits: NULL path");
     return NULL;
   }
   fitsfile* f;
-  if (product_read_open(filepath, VSF_EXTNAME, &f) != SIF_OK)
+  const int open_status = product_read_open(filepath, VSF_EXTNAME, &f);
+  if (open_status != SIF_OK) {
+    sif__error_status_set(open_status);
     return NULL;
+  }
 
   int st = 0;
   LONGLONG nb = 0, opt = 0;
@@ -1517,10 +1676,24 @@ sif_size_function_t* sif_size_function_read_fits(const char* filepath) {
   fits_read_key(f, TDOUBLE, "R_MIN", &r_min, NULL, &st);
   fits_read_key(f, TDOUBLE, "R_MAX", &r_max, NULL, &st);
   fits_read_key(f, TLONGLONG, "OPTIONS", &opt, NULL, &st);
+  if (st) {
+    log_fits(
+      st, "%s: " VSF_EXTNAME ": N_BINS, R_MIN, R_MAX, OPTIONS", filepath);
+    int close_st = 0;
+    fits_close_file(f, &close_st);
+    return NULL;
+  }
+  if (nb <= 0 || nb > UINT32_MAX) {
+    SIF_LOG_ERROR(TAG, "%s: " VSF_EXTNAME ": N_BINS = %lld, expected > 0",
+      filepath, (long long)nb);
+    int close_st = 0;
+    fits_close_file(f, &close_st);
+    return NULL;
+  }
 
-  sif_size_function_t* vsf = !st && nb > 0 && nb <= UINT32_MAX
-                               ? sif__size_function_alloc((uint32_t)nb)
-                               : NULL;
+  sif_size_function_t* vsf = sif__size_function_alloc((uint32_t)nb);
+  if (!vsf)
+    SIF_LOG_ERROR(TAG, "%s: " VSF_EXTNAME ": out of memory", filepath);
   if (vsf) {
     const LONGLONG b = nb;
     int anynul = 0;
@@ -1539,10 +1712,11 @@ sif_size_function_t* sif_size_function_read_fits(const char* filepath) {
   int close_st = 0;
   fits_close_file(f, &close_st);
   if (st || !vsf) {
-    if (st)
-      log_fits(st, "failed to read the size function of %s", filepath);
-    else
-      SIF_LOG_ERROR(TAG, "%s: the size function table is malformed", filepath);
+    uint64_t bytes = 0;
+    if (st && is_truncated(filepath, &bytes))
+      log_truncated(filepath, bytes);
+    else if (st)
+      log_fits(st, "%s: " VSF_EXTNAME, filepath);
     sif_size_function_free(vsf);
     return NULL;
   }
@@ -1559,17 +1733,14 @@ static int open_at(
   const char* path, const char* hdu, int mode, fitsfile** out) {
   *out = NULL;
   if (!path) {
-    SIF_LOG_ERROR(TAG, "a path is required");
+    SIF_LOG_ERROR(TAG, "keyword: NULL path");
     return SIF_ERR_INVALID;
   }
 
   fitsfile* f = NULL;
   int fstatus = 0;
-  fits_open_diskfile(&f, path, mode, &fstatus);
-  if (fstatus) {
-    log_fits(fstatus, "failed to open %s", path);
+  if (open_file(path, mode, &f) != SIF_OK)
     return SIF_ERR_IO;
-  }
   if (hdu && *hdu) {
     int hdutype = 0;
     const int status = move_to_hdu(f, path, hdu, &hdutype);
@@ -1649,7 +1820,7 @@ double sif_fits_get_key_real(
       out = 0.0;
     }
   } else if (kind == SIF_FITS_KEY_STRING) {
-    SIF_LOG_WARNING(TAG, "%s: keyword %s holds text, not a number", path, key);
+    SIF_LOG_WARNING(TAG, "%s: keyword %s: text, not a number", path, key);
   }
 
   int fstatus = 0;
@@ -1696,7 +1867,7 @@ void sif_fits_get_key_string(
 static int set_key(
   const char* path, const char* hdu, const char* key, int type, void* value) {
   if (!key || !*key) {
-    SIF_LOG_ERROR(TAG, "a keyword name is required");
+    SIF_LOG_ERROR(TAG, "%s: keyword: no name", path ? path : "(null)");
     return SIF_ERR_INVALID;
   }
   fitsfile* f;
@@ -1714,14 +1885,14 @@ static int set_key(
   else
     fits_update_key(f, type, name, value, NULL, &fstatus);
   if (fstatus) {
-    log_fits(fstatus, "%s: failed to write keyword %s", path, key);
+    log_fits(fstatus, "%s: keyword %s", path, key);
     status = fstatus == BAD_KEYCHAR || fstatus == BAD_ORDER ? SIF_ERR_INVALID
                                                             : SIF_ERR_IO;
   }
   int close_status = 0;
   fits_close_file(f, &close_status);
   if (status == SIF_OK && close_status) {
-    log_fits(close_status, "failed to write %s", path);
+    log_fits(close_status, "%s: write", path);
     status = SIF_ERR_IO;
   }
   return status;
@@ -1736,7 +1907,8 @@ int sif_fits_set_key_int(
 int sif_fits_set_key_real(
   const char* path, const char* hdu, const char* key, double value) {
   if (!isfinite(value)) {
-    SIF_LOG_ERROR(TAG, "keyword %s: FITS has no value for %g", key, value);
+    SIF_LOG_ERROR(TAG, "%s: keyword %s: %g has no FITS representation",
+      path ? path : "(null)", key ? key : "(null)", value);
     return SIF_ERR_INVALID;
   }
   return set_key(path, hdu, key, TDOUBLE, &value);
@@ -1745,7 +1917,8 @@ int sif_fits_set_key_real(
 int sif_fits_set_key_string(
   const char* path, const char* hdu, const char* key, const char* value) {
   if (!value) {
-    SIF_LOG_ERROR(TAG, "keyword %s: no value", key ? key : "(null)");
+    SIF_LOG_ERROR(TAG, "%s: keyword %s: NULL value", path ? path : "(null)",
+      key ? key : "(null)");
     return SIF_ERR_INVALID;
   }
   return set_key(path, hdu, key, TSTRING, (void*)value);

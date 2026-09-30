@@ -453,6 +453,8 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 #  define SIF_ALWAYS_INLINE inline __attribute__((always_inline))
 /** @brief Align an object on a cache line. */
 #  define SIF_ALIGN_T __attribute__((aligned(SIF_CACHE_LINE)))
+/** @brief One instance of a static object per thread. */
+#  define SIF_THREAD_LOCAL __thread
 
 #else
 
@@ -461,6 +463,13 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 #  define SIF_HOT_LOOP
 #  define SIF_ALWAYS_INLINE inline
 #  define SIF_ALIGN_T
+/* C11 has the keyword; a C99 compiler that is neither GCC nor Clang gets one
+ * object shared by every thread, which only matters to the error record. */
+#  if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+#    define SIF_THREAD_LOCAL _Thread_local
+#  else
+#    define SIF_THREAD_LOCAL
+#  endif
 
 #endif
 

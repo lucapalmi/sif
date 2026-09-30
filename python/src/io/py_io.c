@@ -291,18 +291,14 @@ PyObject* pysif_read_field_ascii(
     return PyErr_NoMemory();
 
   int status = 0;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status =
     sif_field_read_ascii_into(field, filepath, format, delimiter, skip_lines);
   Py_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
     sif_field_free(field);
-    if (status == SIF_ERR_INVALID)
-      return PyErr_Format(PyExc_ValueError,
-        "cannot read %s with format '%s'; see the log for the reason", filepath,
-        format);
-    return PyErr_Format(
-      PyExc_IOError, "Failed to read ASCII field from %s", filepath);
+    return py_sif_raise(status, filepath);
   }
 
   sifFieldObject* obj =
@@ -399,6 +395,7 @@ PyObject* pysif_read_field_binary(
       return PyErr_NoMemory();
   }
 
+  sif_error_clear();
   const int status = sif_field_read_binary_into(field, filepath, format,
     (sif_binary_layout_t)layout, (sif_binary_precision_t)precision,
     (sif_binary_endian_t)byteorder, header_bytes);
@@ -406,14 +403,7 @@ PyObject* pysif_read_field_binary(
   if (status != SIF_OK) {
     if (!target)
       sif_field_free(field);
-    if (status == SIF_ERR_ALLOC)
-      return PyErr_NoMemory();
-    if (status == SIF_ERR_INVALID)
-      return PyErr_Format(PyExc_ValueError,
-        "cannot read %s with format '%s'; see the log for the reason", filepath,
-        format);
-    return PyErr_Format(
-      PyExc_OSError, "failed to read %s; see the log for the reason", filepath);
+    return py_sif_raise(status, filepath);
   }
 
   if (target) {
@@ -445,13 +435,13 @@ PyObject* pysif_write_catalogue_ascii(
   sifCatalogueObject* cat = (sifCatalogueObject*)cat_obj;
 
   int status = 0;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status =
     sif_catalogue_write_ascii(filepath, cat->catalogue);
   Py_END_ALLOW_THREADS
 
-    if (status != 0) {
-    return PyErr_Format(
-      PyExc_IOError, "Failed to write ASCII catalogue to %s", filepath);
+    if (status != SIF_OK) {
+    return py_sif_raise(status, filepath);
   }
 
   Py_RETURN_NONE;
@@ -470,16 +460,12 @@ PyObject* pysif_read_catalogue_ascii(
 
   sif_catalogue_t* cat = NULL;
 
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS cat = sif_catalogue_read_ascii(filepath, format);
   Py_END_ALLOW_THREADS
 
     if (!cat) {
-    if (format)
-      return PyErr_Format(PyExc_IOError,
-        "cannot read %s with format '%s'; see the log for the reason", filepath,
-        format);
-    return PyErr_Format(
-      PyExc_IOError, "Failed to read ASCII catalogue from %s", filepath);
+    return py_sif_raise(sif_error_status(), filepath);
   }
 
   sifCatalogueObject* obj =
@@ -514,14 +500,13 @@ PyObject* pysif_write_profiles_ascii(
   }
 
   int status = 0;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status =
     sif_profiles_write_ascii(filepath, prof->dens, prof->vel, cat->catalogue);
   Py_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
-    return PyErr_Format(
-      status == SIF_ERR_INVALID ? PyExc_ValueError : PyExc_IOError,
-      "Failed to write profiles to %s; see the log for the reason", filepath);
+    return py_sif_raise(status, filepath);
   }
 
   Py_RETURN_NONE;
@@ -538,11 +523,11 @@ PyObject* pysif_read_profiles_ascii(
   /* Asking for a block the file does not carry is an error, so the header
      says which to ask for. */
   int has_dens = 0, has_vel = 0;
-  if (sif_profiles_read_header_ascii(
-        filepath, NULL, NULL, NULL, &has_dens, &has_vel, NULL) != SIF_OK) {
-    return PyErr_Format(
-      PyExc_IOError, "Failed to read profiles from %s", filepath);
-  }
+  sif_error_clear();
+  const int header_status = sif_profiles_read_header_ascii(
+    filepath, NULL, NULL, NULL, &has_dens, &has_vel, NULL);
+  if (header_status != SIF_OK)
+    return py_sif_raise(header_status, filepath);
 
   sif_catalogue_t* cat = NULL;
   sif_density_profiles_t* dens = NULL;
@@ -554,8 +539,7 @@ PyObject* pysif_read_profiles_ascii(
   Py_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
-    return PyErr_Format(
-      PyExc_IOError, "Failed to read profiles from %s", filepath);
+    return py_sif_raise(status, filepath);
   }
 
   sifProfilesObject* prof =

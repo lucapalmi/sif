@@ -11,6 +11,7 @@
 #include <Python.h>
 
 #include "sif/core/macros.h"
+#include "sif/utils/logger.h"
 
 #define NPY_NO_DEPRECATED_API  NPY_1_7_API_VERSION
 #define PY_ARRAY_UNIQUE_SYMBOL pysif_ARRAY_API
@@ -48,6 +49,52 @@ static inline PyObject* py_sif_wrap_borrowed(
 
   PyArray_CLEARFLAGS((PyArrayObject*)array, NPY_ARRAY_WRITEABLE);
   return array;
+}
+
+/*
+ * @brief Raises the exception for a failed sif call, with the library's own
+ * account of why as its message -- the first error it logged since
+ * sif_error_clear(), which the binding calls before the call.
+ *
+ * The class says what kind of failure it was: an OSError subclass for an
+ * operating-system error, chosen by its errno as open() would
+ * (FileNotFoundError, PermissionError, IsADirectoryError); MemoryError,
+ * ValueError and RuntimeError for SIF_ERR_ALLOC, SIF_ERR_INVALID and
+ * SIF_ERR_UNSUPPORTED; OSError for the rest, a file that is not what it
+ * should be. For a reader that returns a pointer, @p status is
+ * sif_error_status(), whose SIF_OK (it did not say) reads as SIF_ERR_IO.
+ *
+ * @p what names the operation for the rare failure that recorded nothing.
+ * Always returns NULL.
+ */
+static inline PyObject* py_sif_raise(int status, const char* what) {
+  const char* msg = sif_error_message();
+  const int err = sif_error_errno();
+  if (!msg[0]) {
+    PyErr_Format(
+      PyExc_OSError, "%s: failed (no reason recorded)", what ? what : "sif");
+    return NULL;
+  }
+
+  if (err) {
+    /* OSError(errno, text) picks the subclass for the errno itself. */
+    PyObject* args = Py_BuildValue("(is)", err, msg);
+    if (args) {
+      PyErr_SetObject(PyExc_OSError, args);
+      Py_DECREF(args);
+    }
+    return NULL;
+  }
+
+  PyObject* type = PyExc_OSError;
+  if (status == SIF_ERR_ALLOC)
+    type = PyExc_MemoryError;
+  else if (status == SIF_ERR_INVALID)
+    type = PyExc_ValueError;
+  else if (status == SIF_ERR_UNSUPPORTED)
+    type = PyExc_RuntimeError;
+  PyErr_SetString(type, msg);
+  return NULL;
 }
 
 #endif /* SIF_PY_PY_COMMON_H */

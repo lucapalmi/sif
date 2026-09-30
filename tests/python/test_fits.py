@@ -270,7 +270,7 @@ def test_products_in_one_file(tmp_path):
     np.testing.assert_array_equal(pysif.io.read_size_function_fits(fits).vsf,
                                   vsf.vsf)
 
-    with pytest.raises(ValueError, match="holds no profiles"):
+    with pytest.raises(ValueError, match="no DENSITY_PROFILES or VELOCITY_PROFILES"):
         pysif.io.read_profiles_fits(fits)
     with pytest.raises(OSError):  # a file sif did not write
         pysif.io.write_catalogue_fits(path("catalogue.fits"), cat)

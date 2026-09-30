@@ -21,6 +21,7 @@
 #include "sif/structures/field.h"
 #include "structures/results_internal.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -30,6 +31,8 @@
 #ifdef SIF_HAVE_FITS
 #  include <fitsio.h>
 #endif
+
+#include "test_util.h"
 
 static int failures = 0;
 
@@ -403,6 +406,64 @@ static void test_refusals(void) {
     "the extended filename syntax was interpreted");
   CHECK(refused(NULL, NULL, &SKY, NULL, 1.0), "a NULL path accepted");
   CHECK(refused(FIXTURE, NULL, NULL, NULL, 1.0), "NULL columns accepted");
+}
+
+/* The first @p bytes of the fixture, or a line of text, under @p to. */
+static void write_broken(const char* to, long bytes) {
+  FILE* out = fopen(to, "wb");
+  if (!out)
+    return;
+  if (bytes < 0) {
+    fputs("not a FITS file at all\n", out);
+  } else {
+    FILE* in = fopen(FIXTURE, "rb");
+    for (long i = 0; in && i < bytes; i++) {
+      const int c = fgetc(in);
+      if (c == EOF)
+        break;
+      fputc(c, out);
+    }
+    if (in)
+      fclose(in);
+  }
+  fclose(out);
+}
+
+/* What the reader says when it refuses: the reason, not only the status. */
+static void test_reasons(void) {
+  printf("reasons for a refusal\n");
+  const char* broken = "test_fits_broken.fits";
+
+  const sif_field_columns_t nope = {.x = "RA", .y = "DEC", .z = "NOPE"};
+  sif_error_clear();
+  CHECK(refused(FIXTURE, NULL, &nope, NULL, 1.0) &&
+          error_has("column NOPE (z): missing; table has RA, DEC"),
+    "missing column: '%s'", sif_error_message());
+
+  sif_error_clear();
+  CHECK(refused("no_such_file.fits", NULL, &SKY, NULL, 1.0) &&
+          error_has("No such file or directory") && sif_error_errno() == ENOENT,
+    "missing file: '%s' (errno %d)", sif_error_message(), sif_error_errno());
+
+  sif_error_clear();
+  CHECK(refused(FIXTURE, "7", &SKY, NULL, 1.0) && error_has("no HDU 7"),
+    "missing HDU: '%s'", sif_error_message());
+
+  write_broken(broken, 4000);
+  sif_error_clear();
+  CHECK(refused(broken, NULL, &SKY, NULL, 1.0) &&
+          error_has("4000 bytes, not a multiple of 2880 (truncated)"),
+    "truncated file: '%s'", sif_error_message());
+
+  write_broken(broken, -1);
+  sif_error_clear();
+  CHECK(refused(broken, NULL, &SKY, NULL, 1.0) && error_has("not a FITS file"),
+    "text file: '%s'", sif_error_message());
+  remove(broken);
+
+  sif_error_clear();
+  CHECK(!sif_catalogue_read_fits(FIXTURE) && error_has("no HDU VOIDS"),
+    "a table that is not a catalogue: '%s'", sif_error_message());
 }
 
 static void test_several_files(void) {
@@ -808,6 +869,7 @@ int main(void) {
   test_vectors_and_gzip();
   test_summary();
   test_catalogues();
+  test_reasons();
   test_keywords();
   test_products();
   remove_fixtures();

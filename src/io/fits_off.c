@@ -25,8 +25,7 @@ int sif__fits_describe(char* buf, size_t len) {
 
 static int refuse(const char* path) {
   SIF_LOG_ERROR("fits",
-    "this build of sif has no FITS support, so %s cannot be used. Rebuild "
-    "with -DSIF_FITS_SUPPORT=ON",
+    "%s: FITS support not built (rebuild with -DSIF_FITS_SUPPORT=ON)",
     path ? path : "(null)");
   return SIF_ERR_UNSUPPORTED;
 }

@@ -77,16 +77,48 @@ int sif__io_pread_parallel(
  * lines, so the cost is a single streaming pass. Used to size a field before
  * the real parse runs.
  *
+ * @param tag Log tag of the caller.
  * @param filepath Path to the file.
  * @param skip_header Header lines to exclude from the count.
- * @return Lines after the header, or 0 if the file could not be opened or read.
+ * @param[out] out_rows Lines after the header, at least 1 on success.
+ * @return SIF_OK; SIF_ERR_IO, logged, if the file cannot be read, is empty,
+ * or holds nothing past the header.
  *
  * @note This is an upper bound on the particle count, not the count itself:
  * blank and comment lines are counted here and dropped by the parser. Sizing a
  * field from it therefore over-allocates slightly, which is the intended
  * trade -- the alternative is parsing the file twice.
  */
-uint64_t sif__io_ascii_row_count(const char* filepath, uint32_t skip_header);
+SIF_NODISCARD int sif__io_ascii_row_count(const char* tag, const char* filepath,
+  uint32_t skip_header, uint64_t* out_rows);
+
+/**
+ * @brief Log an operating-system failure as "<path>: <strerror>", or
+ * "<path>: <what>: <strerror>", and record @p err with the error.
+ *
+ * @param what What was being done, or NULL when opening the file is all it
+ * was.
+ * @return SIF_ERR_IO, for `return sif__io_os_error(...)`.
+ */
+int sif__io_os_error(
+  const char* tag, const char* path, const char* what, int err);
+
+/**
+ * @brief Check that @p path names something a reader can open: that it
+ * exists, is not a directory, and is readable.
+ *
+ * Run before a library (HDF5, cfitsio) is handed the path, since what they
+ * report for a missing file is their own failure, not the system's.
+ *
+ * @param[out] out_bytes The file's size, or NULL.
+ * @return SIF_OK, or SIF_ERR_IO with the reason logged and its errno
+ * recorded.
+ */
+SIF_NODISCARD int sif__io_check_readable(
+  const char* tag, const char* path, uint64_t* out_bytes);
+
+/** @brief strerror(), safe to call from several threads. */
+const char* sif__io_strerror(int err);
 
 /**
  * @brief Reverse the bytes of a 32- or 64-bit word: the conversion between

@@ -20,6 +20,7 @@
 #include "sif/io/gadget_io.h"
 #include "sif/structures/field.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -538,21 +539,66 @@ static void test_broken(void) {
     copy_file(from, to, -1);
   }
   remove("test_gadget_snap.2");
+  sif_error_clear();
   f = read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
     SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
   CHECK(!f, "missing file: accepted");
+  CHECK(error_has("test_gadget_snap.2: No such file") &&
+          sif_error_errno() == ENOENT,
+    "missing file: reported as '%s' (errno %d)", sif_error_message(),
+    sif_error_errno());
 
   /* All three, the last cut off in its positions block. */
   copy_file(DATA "f1_legacy/snap_005.2", "test_gadget_snap.2", 600);
+  sif_error_clear();
   f = read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
     SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
   CHECK(!f, "truncated file: accepted");
+  CHECK(error_has("test_gadget_snap.2: record ") && error_has("(truncated)"),
+    "truncated file: reported as '%s'", sif_error_message());
 
   /* A file from another snapshot in the set: the counts no longer add up. */
   copy_file(DATA "f1_legacy/snap_005.1", "test_gadget_snap.2", -1);
+  sif_error_clear();
   f = read_all("test_gadget_snap", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
     SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
   CHECK(!f, "inconsistent counts: accepted");
+  CHECK(error_has("NumPart_Total"), "inconsistent counts: reported as '%s'",
+    sif_error_message());
+
+  /* Too short to hold any header at all, and not a snapshot in any format. */
+  FILE* out = fopen("test_gadget_snap.0", "wb");
+  if (out) {
+    fputs("abc", out);
+    fclose(out);
+  }
+  sif_error_clear();
+  f =
+    read_all("test_gadget_snap.0", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f && error_has("3 bytes, too short"), "3-byte file: reported as '%s'",
+    sif_error_message());
+
+  out = fopen("test_gadget_snap.0", "wb");
+  if (out) {
+    fputs("not a snapshot, but long enough to look at\n", out);
+    fclose(out);
+  }
+  sif_error_clear();
+  f =
+    read_all("test_gadget_snap.0", SIF_GADGET_PTYPE_1, SIF_GADGET_VELOCITY_SKIP,
+      SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0, 0, NULL);
+  CHECK(!f && error_has("not a GADGET snapshot"), "text file: reported as '%s'",
+    sif_error_message());
+
+  /* A name that is nothing at all: the system's error, for Python to map. */
+  sif_error_clear();
+  f = read_all("test_gadget_nothing_here", SIF_GADGET_PTYPE_1,
+    SIF_GADGET_VELOCITY_SKIP, SIF_GADGET_MASS_SKIP, SIF_GADGET_LENGTH_KPC, 1.0,
+    0, NULL);
+  CHECK(!f && error_has("no snapshot") && sif_error_errno() == ENOENT,
+    "missing base name: reported as '%s' (errno %d)", sif_error_message(),
+    sif_error_errno());
 
   for (int i = 0; i < 3; i++) {
     snprintf(to, sizeof(to), "test_gadget_snap.%d", i);

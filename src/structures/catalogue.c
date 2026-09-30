@@ -419,6 +419,11 @@ static bool meta_key(const char* key, char out[META_KEY_MAX + 1]) {
   return !sif__catalogue_meta_reserved(out);
 }
 
+bool sif__catalogue_meta_key_ok(const char* key) {
+  char k[META_KEY_MAX + 1];
+  return meta_key(key, k);
+}
+
 static int meta_find(const sif_catalogue_t* cat, const char* key) {
   char k[META_KEY_MAX + 1];
   size_t i = 0;

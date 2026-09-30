@@ -7,8 +7,11 @@
 #include "sif/utils/logger.h"
 
 #include "core/system_internal.h"
+#include "utils/logger_internal.h"
 
 #include <stdarg.h>
+#include <stdbool.h>
+#include <string.h>
 #include <unistd.h>
 
 /* ANSI codes */
@@ -57,7 +60,78 @@ static int use_colour_for(FILE* out) {
   return *cached;
 }
 
+/*
+ * The error record: the first error since the last clear, per thread.
+ *
+ * `latest` says whether the most recent error logged is the recorded one, so
+ * that sif__error_os_set() attaches an errno to the error it follows and not
+ * to an earlier, unrelated one.
+ */
+#define RECORD_CAP 1024
+
+typedef struct {
+  bool set;
+  bool latest;
+  int os_error;
+  int status;
+  char text[RECORD_CAP];
+} error_record_t;
+
+static SIF_THREAD_LOCAL error_record_t record;
+
+static void record_v(const char* fmt, va_list args) {
+  if (record.set) {
+    record.latest = false;
+    return;
+  }
+  vsnprintf(record.text, sizeof(record.text), fmt, args);
+  record.set = true;
+  record.latest = true;
+  record.os_error = 0;
+  record.status = SIF_OK;
+}
+
+void sif__error_record(const char* fmt, ...) {
+  va_list args;
+  va_start(args, fmt);
+  record_v(fmt, args);
+  va_end(args);
+}
+
+void sif__error_os_set(int os_error) {
+  if (record.set && record.latest)
+    record.os_error = os_error;
+}
+
+void sif__error_status_set(int status) {
+  if (record.set && record.status == SIF_OK)
+    record.status = status;
+}
+
+int sif_error_status(void) { return record.set ? record.status : SIF_OK; }
+
+const char* sif_error_message(void) { return record.set ? record.text : ""; }
+
+int sif_error_errno(void) { return record.set ? record.os_error : 0; }
+
+void sif_error_clear(void) {
+  record.set = false;
+  record.latest = false;
+  record.os_error = 0;
+  record.status = SIF_OK;
+  record.text[0] = '\0';
+}
+
 void sif__log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
+  /* Recorded before the runtime floor is applied: an error nobody sees in the
+   * log is still the reason the call failed. */
+  if (level == SIF_LOG_LEVEL_ERROR) {
+    va_list args;
+    va_start(args, fmt);
+    record_v(fmt, args);
+    va_end(args);
+  }
+
   /* Clamped, not asserted: this function backs the SIF_LOG_* macros and is
    * therefore part of the ABI, so the level can be anything a caller passes,
    * while the tables above have one entry per real level. */
@@ -95,3 +169,5 @@ void sif__log_flush(void) {
   fflush(stdout);
   fflush(stderr);
 }
+
+#undef RECORD_CAP

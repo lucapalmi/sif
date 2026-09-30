@@ -6,10 +6,13 @@
 
 #include "sif/io/catalogue_io.h"
 
+#include "internal.h"
 #include "sif/utils/logger.h"
 #include "structures/catalogue_internal.h"
+#include "utils/logger_internal.h"
 
 #include <ctype.h>
+#include <errno.h>
 #include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -33,15 +36,13 @@
 int sif_catalogue_write_ascii(
   const char* filepath, const sif_catalogue_t* catalogue) {
   if (!catalogue || !filepath) {
-    SIF_LOG_ERROR("io", "invalid arguments for write_catalogue_ascii");
+    SIF_LOG_ERROR("io", "sif_catalogue_write_ascii: NULL argument");
     return SIF_ERR_INVALID;
   }
 
   FILE* file = fopen(filepath, "w");
-  if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s for writing", filepath);
-    return SIF_ERR_IO;
-  }
+  if (!file)
+    return sif__io_os_error("io", filepath, NULL, errno);
 
   /* The count goes first so the reader can allocate the catalogue once,
    * instead of growing it a void at a time or scanning the file twice; the
@@ -93,10 +94,8 @@ int sif_catalogue_write_ascii(
    * the flush inside fclose() are what say whether the file actually reached
    * the disk. Without this a full quota reads back as a short catalogue. */
   const bool ok = (ferror(file) == 0);
-  if (fclose(file) != 0 || !ok) {
-    SIF_LOG_ERROR("io", "failed to flush %s to disk", filepath);
-    return SIF_ERR_IO;
-  }
+  if (fclose(file) != 0 || !ok)
+    return sif__io_os_error("io", filepath, "write", errno);
 
   SIF_LOG_INFO(
     "io", "saved %" PRIu64 " voids to %s (ASCII)", catalogue->n_voids, filepath);
@@ -113,10 +112,14 @@ typedef enum { LINE_END, LINE_TOO_LONG, LINE_COMMENT, LINE_DATA } line_kind_t;
 /*
  * The next line that holds anything, into `line`, and what it is. Blank lines
  * are skipped, as the whitespace-driven reader this replaced skipped them. A
- * comment comes back without its '#' and the blanks around it.
+ * comment comes back without its '#' and the blanks around it. `lineno`
+ * counts every line read, blank ones included, so it is the line's number in
+ * the file.
  */
-static line_kind_t next_line(FILE* file, char* line, char** text) {
+static line_kind_t next_line(
+  FILE* file, char* line, char** text, uint64_t* lineno) {
   while (fgets(line, CATALOGUE_LINE_MAX, file)) {
+    (*lineno)++;
     const size_t len = strlen(line);
     if (len == CATALOGUE_LINE_MAX - 1 && line[len - 1] != '\n' && !feof(file))
       return LINE_TOO_LONG;
@@ -150,13 +153,13 @@ static bool parse_real(const char* s, char** end, sif_real* out) {
 }
 
 /*
- * The values of a data row, separated by blanks or commas, and how many.
+ * The values of a data row, separated by blanks or commas, and how many; -1
+ * for a row of more than CATALOGUE_MAX_COLS.
  *
- * Without a `limit` (0) every column has to be a number, and a row with more
- * than CATALOGUE_MAX_COLS, or with anything else, is -1. With one, only the
- * first `limit` columns are looked at, and one that is not a number sets its
- * bit in `bad` rather than failing: the caller knows which columns it reads,
- * and another tool's file can have a name or a flag in one it skips.
+ * With a `limit`, only the first `limit` columns are looked at. A column that
+ * is not a number sets its bit in `bad` rather than failing: the caller knows
+ * which columns it reads, and another tool's file can have a name or a flag
+ * in one it skips.
  */
 static int parse_row(const char* text, sif_real* v, int limit, uint64_t* bad) {
   static const char SEPARATORS[] = " \t\r\n,";
@@ -171,14 +174,25 @@ static int parse_row(const char* text, sif_real* v, int limit, uint64_t* bad) {
       return -1;
     const size_t len = strcspn(p, SEPARATORS);
     char* end;
-    if (!parse_real(p, &end, &v[n]) || (size_t)(end - p) != len) {
-      if (limit == 0)
-        return -1;
+    if (!parse_real(p, &end, &v[n]) || (size_t)(end - p) != len)
       *bad |= UINT64_C(1) << n;
-    }
     n++;
     p += len;
   }
+}
+
+/* Column @p col (from 0) of a data row, for a message: its start, and its
+ * length through @p len. */
+static const char* row_token(const char* text, int col, int* len) {
+  static const char SEPARATORS[] = " \t\r\n,";
+  const char* p = text + strspn(text, SEPARATORS);
+  for (int c = 0; c < col && *p; c++) {
+    p += strcspn(p, SEPARATORS);
+    p += strspn(p, SEPARATORS);
+  }
+  const size_t n = strcspn(p, SEPARATORS);
+  *len = n > 32 ? 32 : (int)n;
+  return p;
 }
 
 /* Where each quantity sits in a row, or -1. */
@@ -302,15 +316,14 @@ static int parse_format(const char* fmt, layout_t* out) {
       l.sky = true;
     } else {
       SIF_LOG_ERROR("io",
-        "catalogue format '%s', position %ld: '%c' names no column -- use x "
-        "y z (or ra dec z), r, and * for a column not read",
+        "catalogue format '%s': position %ld: '%c' is not a column name (x y "
+        "z | ra dec z, r, *)",
         fmt, at, *p);
       return SIF_ERR_INVALID;
     }
     if (*slot >= 0) {
       SIF_LOG_ERROR("io",
-        "catalogue format '%s', position %ld: %s is named twice", fmt, at,
-        name);
+        "catalogue format '%s': position %ld: '%s' named twice", fmt, at, name);
       return SIF_ERR_INVALID;
     }
     *slot = col++;
@@ -318,17 +331,12 @@ static int parse_format(const char* fmt, layout_t* out) {
   }
 
   if (cartesian && l.sky) {
-    SIF_LOG_ERROR("io",
-      "catalogue format '%s' mixes sky (ra, dec) and Cartesian (x, y) "
-      "centres",
-      fmt);
+    SIF_LOG_ERROR("io", "catalogue format '%s': mixes ra dec with x y", fmt);
     return SIF_ERR_INVALID;
   }
   if (l.x < 0 || l.y < 0 || l.z < 0 || l.r < 0) {
     SIF_LOG_ERROR("io",
-      "catalogue format '%s' has to name the centre, x y z or ra dec z, and "
-      "the radius, r",
-      fmt);
+      "catalogue format '%s': needs the centre (x y z | ra dec z) and r", fmt);
     return SIF_ERR_INVALID;
   }
   *out = l;
@@ -359,10 +367,11 @@ static bool parse_count(const char* text, uint64_t* n) {
 /*
  * A "key=value" comment, into the metadata of `into`: a quoted value is a
  * string, one that parses whole as an integer or a number is that, anything
- * else a string as written. Returns whether the comment was one; a key the
- * catalogue does not allow is logged and skipped, not fatal.
+ * else a string as written. Returns whether the comment was one; a key or a
+ * value the catalogue does not allow is skipped with a warning, not fatal.
  */
-static bool parse_meta(char* text, sif_catalogue_t* into) {
+static bool parse_meta(
+  char* text, sif_catalogue_t* into, const char* path, uint64_t lineno) {
   char* eq = strchr(text, '=');
   if (!eq)
     return false;
@@ -374,21 +383,33 @@ static bool parse_meta(char* text, sif_catalogue_t* into) {
   char* value = eq + 1;
   value += strspn(value, " \t");
 
+  if (!sif__catalogue_meta_key_ok(key)) {
+    SIF_LOG_WARNING("io", "%s:%" PRIu64 ": '%s': not a metadata key, skipped",
+      path, lineno, key);
+    return true;
+  }
+
   const size_t len = strlen(value);
   if (len >= 2 && value[0] == '"' && value[len - 1] == '"') {
     value[len - 1] = '\0';
-    (void)sif_catalogue_meta_string_set(into, key, value + 1);
-    return true;
+    value++;
+  } else {
+    char* stop;
+    const long long i = strtoll(value, &stop, 10);
+    if (stop != value && !*stop) {
+      (void)sif_catalogue_meta_int_set(into, key, (int64_t)i);
+      return true;
+    }
+    const double d = strtod(value, &stop);
+    if (stop != value && !*stop && isfinite(d)) {
+      (void)sif_catalogue_meta_real_set(into, key, d);
+      return true;
+    }
   }
-  char* stop;
-  const long long i = strtoll(value, &stop, 10);
-  if (stop != value && !*stop) {
-    (void)sif_catalogue_meta_int_set(into, key, (int64_t)i);
-    return true;
-  }
-  const double d = strtod(value, &stop);
-  if (stop != value && !*stop && isfinite(d)) {
-    (void)sif_catalogue_meta_real_set(into, key, d);
+  if (strchr(value, '"')) {
+    SIF_LOG_WARNING("io",
+      "%s:%" PRIu64 ": '%s': value holds a double quote, skipped", path, lineno,
+      key);
     return true;
   }
   (void)sif_catalogue_meta_string_set(into, key, value);
@@ -404,55 +425,63 @@ static sif_catalogue_t* fail(FILE* file, sif_catalogue_t* catalogue) {
 
 sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt) {
   if (!filepath) {
-    SIF_LOG_ERROR("io", "invalid filepath for read_catalogue_ascii");
+    SIF_LOG_ERROR("io", "sif_catalogue_read_ascii: NULL path");
     return NULL;
   }
 
   /* A format places the columns, and any names in the file are then just a
    * comment. It is checked before the file is opened. */
   layout_t layout = {0, 1, 2, 3, -1, -1, false};
-  if (fmt && parse_format(fmt, &layout) != SIF_OK)
+  if (fmt && parse_format(fmt, &layout) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
+  }
   const bool have_format = fmt != NULL;
 
+  if (sif__io_check_readable("io", filepath, NULL) != SIF_OK)
+    return NULL;
   FILE* file = fopen(filepath, "r");
   if (!file) {
-    SIF_LOG_ERROR("io", "failed to open %s for reading", filepath);
+    (void)sif__io_os_error("io", filepath, NULL, errno);
     return NULL;
   }
 
   char line[CATALOGUE_LINE_MAX];
   char* text = NULL;
   line_kind_t kind;
+  uint64_t lineno = 0;
 
   /* --- the header: the comments before the first row --- */
 
   uint64_t n_voids = 0;
   bool have_count = false, have_names = have_format;
-  long data_at = 0; /* where the first row starts */
+  long data_at = 0;       /* where the first row starts */
+  uint64_t data_line = 0; /* and the lines before it */
 
   /* The metadata, held until the catalogue exists: its size is only known
    * once the header is read. */
   sif_catalogue_t* meta = sif_catalogue_alloc(1);
-  if (!meta)
+  if (!meta) {
+    SIF_LOG_ERROR("io", "%s: out of memory", filepath);
     return fail(file, NULL);
+  }
 
   for (;;) {
     data_at = ftell(file);
-    kind = next_line(file, line, &text);
+    data_line = lineno;
+    kind = next_line(file, line, &text, &lineno);
     if (kind != LINE_COMMENT)
       break;
     if (!have_count && parse_count(text, &n_voids)) {
       have_count = true;
     } else if (strchr(text, '=')) {
-      (void)parse_meta(text, meta);
+      (void)parse_meta(text, meta, filepath, lineno);
     } else if (!have_names) { /* never with a format */
       const int named = parse_names(text, &layout);
       if (named < 0) {
         SIF_LOG_ERROR("io",
-          "%s: the column names mix sky (ra, dec) and Cartesian (cx, cy) "
-          "centres",
-          filepath);
+          "%s:%" PRIu64 ": column names mix ra dec with cx cy", filepath,
+          lineno);
         sif_catalogue_free(meta);
         return fail(file, NULL);
       }
@@ -469,31 +498,34 @@ sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt)
       n_voids = (uint64_t)legacy;
       have_count = true;
       data_at = ftell(file);
-      kind = next_line(file, line, &text);
+      data_line = lineno;
+      kind = next_line(file, line, &text, &lineno);
     }
   }
 
   /* Without a count the rows are counted first, and then read. */
   if (!have_count) {
     for (line_kind_t k = kind; k != LINE_END;
-      k = next_line(file, line, &text)) {
+      k = next_line(file, line, &text, &lineno)) {
       if (k == LINE_TOO_LONG)
         break;
       n_voids += k == LINE_DATA;
     }
     if (fseek(file, data_at, SEEK_SET) != 0) {
-      SIF_LOG_ERROR("io", "%s: cannot read the rows a second time", filepath);
+      (void)sif__io_os_error("io", filepath, "seek", errno);
       sif_catalogue_free(meta);
       return fail(file, NULL);
     }
-    kind = next_line(file, line, &text);
+    lineno = data_line;
+    kind = next_line(file, line, &text, &lineno);
   }
 
   sif_catalogue_t* catalogue = sif_catalogue_alloc(n_voids);
   const int copied = catalogue ? sif__catalogue_meta_copy(catalogue, meta) : SIF_OK;
   sif_catalogue_free(meta);
   if (!catalogue || copied != SIF_OK) {
-    SIF_LOG_ERROR("io", "failed to allocate catalogue for loading");
+    SIF_LOG_ERROR(
+      "io", "%s: %" PRIu64 " voids: out of memory", filepath, n_voids);
     return fail(file, catalogue);
   }
   if (layout.sky)
@@ -512,6 +544,8 @@ sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt)
   int needed = 0;
   const int placed[] = {
     layout.x, layout.y, layout.z, layout.r, layout.fp, layout.fp_shell};
+  const char* const placed_name[] = {layout.sky ? "ra" : "x",
+    layout.sky ? "dec" : "y", "z", "r", "footprint", "footprint_shell"};
   for (int c = 0; c < 6; c++)
     if (placed[c] + 1 > needed)
       needed = placed[c] + 1;
@@ -520,15 +554,25 @@ sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt)
   uint64_t bad = 0;
   for (uint64_t i = 0; i < n_voids; i++) {
     while (kind == LINE_COMMENT)
-      kind = next_line(file, line, &text);
+      kind = next_line(file, line, &text, &lineno);
     if (kind == LINE_TOO_LONG) {
-      SIF_LOG_ERROR(
-        "io", "%s: a line is too long to be a catalogue row", filepath);
+      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": line longer than %d characters",
+        filepath, lineno, CATALOGUE_LINE_MAX - 2);
       return fail(file, catalogue);
     }
-    const int got = kind == LINE_DATA
-                      ? parse_row(text, v, have_names ? needed : 0, &bad)
-                      : -1;
+    if (kind == LINE_END) {
+      SIF_LOG_ERROR("io",
+        "%s: %" PRIu64 " rows, header says %" PRIu64 " (truncated?)", filepath,
+        i, n_voids);
+      return fail(file, catalogue);
+    }
+
+    const int got = parse_row(text, v, have_names ? needed : 0, &bad);
+    if (got < 0) {
+      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": more than %d columns", filepath,
+        lineno, CATALOGUE_MAX_COLS);
+      return fail(file, catalogue);
+    }
 
     if (i == 0 && !have_names) {
       n_columns = got == 6 ? 6 : 4;
@@ -538,19 +582,24 @@ sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt)
       }
     }
     if (i == 0 && layout.fp >= 0 &&
-        sif_catalogue_reserve_footprint(catalogue) != SIF_OK)
+        sif_catalogue_reserve_footprint(catalogue) != SIF_OK) {
+      SIF_LOG_ERROR("io", "%s: footprint: out of memory", filepath);
       return fail(file, catalogue);
+    }
 
     if (have_names ? got < needed : got != n_columns) {
-      SIF_LOG_ERROR("io",
-        "void %" PRIu64 " of %s has %d readable columns, expected %d", i,
-        filepath, got < 0 ? 0 : got, have_names ? needed : n_columns);
+      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": %d columns, expected %s%d", filepath,
+        lineno, got, have_names ? "at least " : "",
+        have_names ? needed : n_columns);
       return fail(file, catalogue);
     }
     for (int c = 0; c < 6; c++)
       if (placed[c] >= 0 && (bad >> placed[c] & 1)) {
-        SIF_LOG_ERROR("io", "void %" PRIu64 " of %s: column %d is not a number",
-          i, filepath, placed[c] + 1);
+        int len;
+        const char* tok = row_token(text, placed[c], &len);
+        SIF_LOG_ERROR("io",
+          "%s:%" PRIu64 ": column %d (%s): '%.*s' is not a number", filepath,
+          lineno, placed[c] + 1, placed_name[c], len, tok);
         return fail(file, catalogue);
       }
 
@@ -562,15 +611,19 @@ sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt)
       catalogue->footprint[i] = v[layout.fp];
       catalogue->footprint_shell[i] = v[layout.fp_shell];
     }
-    kind = next_line(file, line, &text);
+    kind = next_line(file, line, &text, &lineno);
   }
 
   /* More rows than the count said is as wrong as fewer. */
   while (kind == LINE_COMMENT)
-    kind = next_line(file, line, &text);
+    kind = next_line(file, line, &text, &lineno);
   if (kind != LINE_END) {
-    SIF_LOG_ERROR(
-      "io", "%s holds more rows than its count of %" PRIu64, filepath, n_voids);
+    SIF_LOG_ERROR("io", "%s:%" PRIu64 ": row beyond the header's n=%" PRIu64,
+      filepath, lineno, n_voids);
+    return fail(file, catalogue);
+  }
+  if (ferror(file)) {
+    (void)sif__io_os_error("io", filepath, "read", errno);
     return fail(file, catalogue);
   }
 

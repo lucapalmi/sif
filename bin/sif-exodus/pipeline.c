@@ -610,13 +610,14 @@ static int footprint_volume(sif_field_t* randoms, double* volume) {
  * the box, so the default is found by going back and forth until the two
  * agree, which takes a step or two: the padding is mostly the search sphere.
  */
-static int survey_geometry(const exodus_params_t* p, const sif_field_t* randoms,
+static int survey_geometry(const exodus_params_t* p, const sif_field_t* data,
+  const sif_field_t* randoms,
   const sif_real* radii, sif_option search, double mps, uint32_t* n_cells,
   sif_real offset[3], sif_real* box) {
 
   uint32_t n = p->grid.n_cells ? p->grid.n_cells : 64;
   for (int step = 0;; step++) {
-    if (sif_finder_exodus_survey_box(randoms, radii, p->finder.n_radii, n,
+    if (sif_finder_exodus_survey_box(data, randoms, radii, p->finder.n_radii, n,
           search, offset, box) != SIF_OK) {
       SIF_LOG_ERROR(TAG, "no box can hold the survey with a %u^3 grid", n);
       return SIF_ERR_INVALID;
@@ -721,7 +722,7 @@ static int survey_prepare(const exodus_params_t* p, sif_option search,
   }
 
   status = survey_geometry(
-    p, randoms, radii, search, r.mps, &r.grid_cells, offset, &box);
+    p, data, randoms, radii, search, r.mps, &r.grid_cells, offset, &box);
   if (status != SIF_OK)
     goto fail;
   r.box = box;

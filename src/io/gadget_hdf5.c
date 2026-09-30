@@ -17,6 +17,7 @@
 
 #include "io/gadget_internal.h"
 
+#include "io/hdf5_util.h"
 #include "sif/utils/logger.h"
 
 #include <hdf5.h>
@@ -29,28 +30,13 @@
 
 struct sif_gadget_h5_file {
   hid_t file;
+  /* For messages; owned. */
+  char* path;
   /* "PartType" or "ParticleType". */
   const char* group_prefix;
   uint32_t n_types;
   uint64_t n_part_file[SIF_GADGET_MAX_TYPES];
 };
-
-/* HDF5 prints its error stack for every failed call, including the ones that
- * only ask whether something exists. Silenced for the duration of each entry
- * point, and put back as it was. */
-typedef struct {
-  H5E_auto2_t func;
-  void* data;
-} quiet_t;
-
-static void quiet_begin(quiet_t* q) {
-  H5Eget_auto2(H5E_DEFAULT, &q->func, &q->data);
-  H5Eset_auto2(H5E_DEFAULT, NULL, NULL);
-}
-
-static void quiet_end(const quiet_t* q) {
-  H5Eset_auto2(H5E_DEFAULT, q->func, q->data);
-}
 
 static int link_exists(hid_t loc, const char* name) {
   return H5Lexists(loc, name, H5P_DEFAULT) > 0;
@@ -139,28 +125,30 @@ int sif__gadget_h5_open(
   const char* path, sif_gadget_h5_file_t** out_file, sif_gadget_header_t* h) {
 
   *out_file = NULL;
-  quiet_t q;
-  quiet_begin(&q);
+  sif__h5_quiet_t q;
+  sif__h5_quiet_begin(&q);
 
   int status = SIF_ERR_IO;
   sif_gadget_h5_file_t* f = calloc(1, sizeof(*f));
   hid_t header = H5I_INVALID_HID, params = H5I_INVALID_HID;
   hid_t units = H5I_INVALID_HID;
 
-  if (!f) {
+  if (f) {
+    f->file = H5I_INVALID_HID;
+    f->path = strdup(path);
+  }
+  if (!f || !f->path) {
+    SIF_LOG_ERROR(TAG, "%s: out of memory", path);
     status = SIF_ERR_ALLOC;
     goto done;
   }
-  f->file = H5I_INVALID_HID;
 
-  f->file = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
-  if (f->file < 0) {
-    SIF_LOG_ERROR(TAG, "could not open %s as an HDF5 file", path);
+  f->file = sif__h5_open_read(TAG, path);
+  if (f->file < 0)
     goto done;
-  }
 
   if (!link_exists(f->file, "Header")) {
-    SIF_LOG_ERROR(TAG, "%s has no /Header: not a GADGET snapshot", path);
+    SIF_LOG_ERROR(TAG, "%s: no /Header (not a GADGET snapshot)", path);
     goto done;
   }
   header = H5Gopen2(f->file, "Header", H5P_DEFAULT);
@@ -172,19 +160,31 @@ int sif__gadget_h5_open(
   /* --- counts --- */
 
   uint64_t high[SIF_GADGET_MAX_TYPES] = {0};
-  const size_t n_types = attr_array(header, "NumPart_ThisFile",
-    H5T_NATIVE_UINT64, h->n_part_file, SIF_GADGET_MAX_TYPES);
-  if (n_types == 0 ||
-      attr_array(header, "NumPart_Total", H5T_NATIVE_UINT64, h->n_part_total,
-        SIF_GADGET_MAX_TYPES) != n_types ||
-      attr_array(header, "MassTable", H5T_NATIVE_DOUBLE, h->mass_table,
-        SIF_GADGET_MAX_TYPES) != n_types) {
+  static const char* const COUNTS[3] = {
+    "NumPart_ThisFile", "NumPart_Total", "MassTable"};
+  size_t len[3];
+  len[0] = attr_array(
+    header, COUNTS[0], H5T_NATIVE_UINT64, h->n_part_file, SIF_GADGET_MAX_TYPES);
+  len[1] = attr_array(header, COUNTS[1], H5T_NATIVE_UINT64, h->n_part_total,
+    SIF_GADGET_MAX_TYPES);
+  len[2] = attr_array(
+    header, COUNTS[2], H5T_NATIVE_DOUBLE, h->mass_table, SIF_GADGET_MAX_TYPES);
+  for (int k = 0; k < 3; k++) {
+    if (len[k] == 0) {
+      SIF_LOG_ERROR(TAG,
+        "%s: /Header/%s: missing, not numeric, or more than %d entries", path,
+        COUNTS[k], SIF_GADGET_MAX_TYPES);
+      goto done;
+    }
+  }
+  if (len[1] != len[0] || len[2] != len[0]) {
     SIF_LOG_ERROR(TAG,
-      "%s: /Header lacks NumPart_ThisFile, NumPart_Total or MassTable, or they "
-      "disagree on the number of types",
-      path);
+      "%s: /Header: NumPart_ThisFile, NumPart_Total, MassTable have %zu, %zu, "
+      "%zu entries",
+      path, len[0], len[1], len[2]);
     goto done;
   }
+  const size_t n_types = len[0];
 
   /* Pre-GADGET-4 writers keep the totals in 32 bits and the high words
    * apart. */
@@ -199,9 +199,12 @@ int sif__gadget_h5_open(
 
   uint32_t n_files = 0;
   if (attr_array(
-        header, "NumFilesPerSnapshot", H5T_NATIVE_UINT32, &n_files, 1) != 1 ||
-      !attr_double_any(&header, 1, "Time", &h->time)) {
-    SIF_LOG_ERROR(TAG, "%s: /Header lacks NumFilesPerSnapshot or Time", path);
+        header, "NumFilesPerSnapshot", H5T_NATIVE_UINT32, &n_files, 1) != 1) {
+    SIF_LOG_ERROR(TAG, "%s: /Header/NumFilesPerSnapshot: missing", path);
+    goto done;
+  }
+  if (!attr_double_any(&header, 1, "Time", &h->time)) {
+    SIF_LOG_ERROR(TAG, "%s: /Header/Time: missing", path);
     goto done;
   }
   h->n_files = n_files;
@@ -265,7 +268,7 @@ done:
     H5Gclose(params);
   if (header >= 0)
     H5Gclose(header);
-  quiet_end(&q);
+  sif__h5_quiet_end(&q);
 
   if (status == SIF_OK) {
     *out_file = f;
@@ -288,33 +291,40 @@ int sif__gadget_h5_read(sif_gadget_h5_file_t* f, uint32_t ptype,
   group_name(f, ptype, gname, sizeof(gname));
   snprintf(name, sizeof(name), "%s/%s", gname, dataset);
 
-  quiet_t q;
-  quiet_begin(&q);
+  sif__h5_quiet_t q;
+  sif__h5_quiet_begin(&q);
 
   int status = SIF_ERR_IO;
   hid_t ds = H5I_INVALID_HID, fspace = H5I_INVALID_HID;
   hid_t mspace = H5I_INVALID_HID;
 
   if (!link_exists(f->file, gname) || !link_exists(f->file, name)) {
-    SIF_LOG_ERROR(TAG, "the snapshot has no /%s", name);
+    SIF_LOG_ERROR(TAG, "%s: /%s: missing", f->path, name);
     goto done;
   }
 
   ds = H5Dopen2(f->file, name, H5P_DEFAULT);
   fspace = ds >= 0 ? H5Dget_space(ds) : H5I_INVALID_HID;
-  if (fspace < 0)
+  if (fspace < 0) {
+    SIF_LOG_ERROR(TAG, "%s: /%s: %s", f->path, name, sif__h5_cause());
     goto done;
+  }
 
   hsize_t dims[2] = {0, 0};
   const int rank = H5Sget_simple_extent_ndims(fspace);
-  if (rank < 1 || rank > 2 || H5Sget_simple_extent_dims(fspace, dims, NULL) < 0)
+  if (rank < 1 || rank > 2 ||
+      H5Sget_simple_extent_dims(fspace, dims, NULL) < 0) {
+    SIF_LOG_ERROR(
+      TAG, "%s: /%s: rank %d, expected 1 or 2", f->path, name, rank);
     goto done;
+  }
 
   const hsize_t width = rank == 2 ? dims[1] : 1;
   if ((int)width != comps || dims[0] != f->n_part_file[ptype] ||
       start + count > dims[0]) {
-    SIF_LOG_ERROR(TAG, "/%s has shape (%llu, %llu), expected (%" PRIu64 ", %d)",
-      name, (unsigned long long)dims[0], (unsigned long long)width,
+    SIF_LOG_ERROR(TAG,
+      "%s: /%s: shape (%llu, %llu), expected (%" PRIu64 ", %d)", f->path, name,
+      (unsigned long long)dims[0], (unsigned long long)width,
       f->n_part_file[ptype], comps);
     goto done;
   }
@@ -325,8 +335,11 @@ int sif__gadget_h5_read(sif_gadget_h5_file_t* f, uint32_t ptype,
   mspace = H5Screate_simple(1, &n_vals, NULL);
   if (mspace < 0 ||
       H5Sselect_hyperslab(fspace, H5S_SELECT_SET, off, NULL, cnt, NULL) < 0 ||
-      H5Dread(ds, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, out) < 0)
+      H5Dread(ds, H5T_NATIVE_DOUBLE, mspace, fspace, H5P_DEFAULT, out) < 0) {
+    SIF_LOG_ERROR(TAG, "%s: /%s: rows %" PRIu64 "-%" PRIu64 ": %s", f->path,
+      name, start, start + count - 1, sif__h5_cause());
     goto done;
+  }
 
   status = SIF_OK;
 
@@ -337,7 +350,7 @@ done:
     H5Sclose(fspace);
   if (ds >= 0)
     H5Dclose(ds);
-  quiet_end(&q);
+  sif__h5_quiet_end(&q);
   return status;
 }
 
@@ -346,6 +359,7 @@ void sif__gadget_h5_close(sif_gadget_h5_file_t* f) {
     return;
   if (f->file >= 0)
     H5Fclose(f->file);
+  free(f->path);
   free(f);
 }
 

@@ -4,11 +4,18 @@
  * This file is part of sif. See COPYING for the full license text.
  */
 
+/* The XSI strerror_r(), which returns an int. glibc swaps in its own, which
+ * returns a char*, when _GNU_SOURCE is defined. */
+#undef _GNU_SOURCE
+
 #include "internal.h"
 
 #include "core/system_internal.h"
 #include "sif/utils/logger.h"
+#include "utils/logger_internal.h"
 
+#include <errno.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 /* Big enough that the newline scan is bound by the disk rather than by the
@@ -58,16 +65,50 @@ int sif__io_pread_parallel(
   return failed ? SIF_ERR_IO : SIF_OK;
 }
 
-uint64_t sif__io_ascii_row_count(const char* filepath, uint32_t skip_header) {
+const char* sif__io_strerror(int err) {
+  static SIF_THREAD_LOCAL char buf[128];
+  if (strerror_r(err, buf, sizeof(buf)) != 0)
+    snprintf(buf, sizeof(buf), "error %d", err);
+  return buf;
+}
+
+int sif__io_os_error(
+  const char* tag, const char* path, const char* what, int err) {
+  if (what)
+    SIF_LOG_ERROR(tag, "%s: %s: %s", path, what, sif__io_strerror(err));
+  else
+    SIF_LOG_ERROR(tag, "%s: %s", path, sif__io_strerror(err));
+  sif__error_os_set(err);
+  return SIF_ERR_IO;
+}
+
+int sif__io_check_readable(
+  const char* tag, const char* path, uint64_t* out_bytes) {
+  struct stat st;
+  if (stat(path, &st) != 0)
+    return sif__io_os_error(tag, path, NULL, errno);
+  if (S_ISDIR(st.st_mode))
+    return sif__io_os_error(tag, path, NULL, EISDIR);
+  if (access(path, R_OK) != 0)
+    return sif__io_os_error(tag, path, NULL, errno);
+
+  if (out_bytes)
+    *out_bytes = (uint64_t)st.st_size;
+  return SIF_OK;
+}
+
+int sif__io_ascii_row_count(const char* tag, const char* filepath,
+  uint32_t skip_header, uint64_t* out_rows) {
+  *out_rows = 0;
+
   FILE* f = fopen(filepath, "r");
-  if (!f) {
-    SIF_LOG_ERROR("io", "failed to open %s", filepath);
-    return 0;
-  }
+  if (!f)
+    return sif__io_os_error(tag, filepath, NULL, errno);
 
   char buffer[COUNT_BUFFER_BYTES];
   size_t bytes_read;
   uint64_t total_lines = 0;
+  uint64_t total_bytes = 0;
   char last = '\n';
 
   while ((bytes_read = fread(buffer, 1, sizeof(buffer), f)) > 0) {
@@ -76,6 +117,7 @@ uint64_t sif__io_ascii_row_count(const char* filepath, uint32_t skip_header) {
         total_lines++;
     }
     last = buffer[bytes_read - 1];
+    total_bytes += bytes_read;
   }
 
   /* A file whose last line has no terminator still holds a row, and counting
@@ -87,16 +129,24 @@ uint64_t sif__io_ascii_row_count(const char* filepath, uint32_t skip_header) {
   /* A read error leaves a count that is merely plausible, which is worse than
    * none: the caller would size a field from it and truncate the data without
    * ever knowing the file was not fully read. */
-  const int failed = ferror(f);
+  const int err = ferror(f) ? errno : 0;
   fclose(f);
-  if (failed) {
-    SIF_LOG_ERROR("io", "error while reading %s", filepath);
-    return 0;
+  if (err)
+    return sif__io_os_error(tag, filepath, "read", err);
+
+  if (total_bytes == 0) {
+    SIF_LOG_ERROR(tag, "%s: empty file", filepath);
+    return SIF_ERR_IO;
+  }
+  if (total_lines <= skip_header) {
+    SIF_LOG_ERROR(tag,
+      "%s: no lines after the header (%" PRIu64 " lines, skip_header %u)",
+      filepath, total_lines, skip_header);
+    return SIF_ERR_IO;
   }
 
-  if (total_lines <= skip_header)
-    return 0;
-  return total_lines - skip_header;
+  *out_rows = total_lines - skip_header;
+  return SIF_OK;
 }
 
 #undef COUNT_BUFFER_BYTES

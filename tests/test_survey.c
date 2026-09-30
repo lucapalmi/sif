@@ -415,7 +415,7 @@ static void run_workflow(void) {
 
   sif_real offset[3], box = 0.0f;
   CHECK(sif_finder_exodus_survey_box(
-          fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
+          fd, fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
     "the box helper failed");
 
   CHECK(sif_field_translate(fd, offset) == SIF_OK &&
@@ -510,6 +510,79 @@ static void run_workflow(void) {
   printf("  ok\n");
 }
 
+/*
+ * The box sif_finder_exodus_survey_box() sizes has to leave the padding the
+ * finder asks for around the data too, not only around the randoms: a sparse
+ * random catalogue samples the edge of the footprint less finely, and a galaxy
+ * past the outermost random would otherwise land in the padding.
+ */
+static void run_survey_box(void) {
+  printf("survey box\n");
+
+  const uint64_t n = 20000;
+  sif_real* x = malloc(n * sizeof(sif_real));
+  sif_real* y = malloc(n * sizeof(sif_real));
+  sif_real* z = malloc(n * sizeof(sif_real));
+  sif_real* rx = malloc(4 * n * sizeof(sif_real));
+  sif_real* ry = malloc(4 * n * sizeof(sif_real));
+  sif_real* rz = malloc(4 * n * sizeof(sif_real));
+
+  rng_state = 0x2545F4914F6CDD1DULL;
+  draw(x, y, z, n, 0, 0, 0.0f);
+  draw(rx, ry, rz, 4 * n, 0, 0, 0.0f);
+
+  /* One galaxy 10 past the randoms on the low side of x. */
+  sif_real r_lo = rx[0];
+  for (uint64_t i = 1; i < 4 * n; i++)
+    r_lo = SIF_REAL_MIN(r_lo, rx[i]);
+  x[0] = r_lo - 10.0f;
+
+  sif_field_t* fd = sif_field_alloc(n);
+  sif_field_assign_positions(fd, x, y, z);
+  sif_field_t* fr = sif_field_alloc(4 * n);
+  sif_field_assign_positions(fr, rx, ry, rz);
+
+  /* The padding survey_check_margin() asks for, with mesh cells no larger
+   * than the search sphere and the default search factor. */
+  const sif_real r_max = radii[0];
+  sif_real offset[3], box = 0.0f;
+
+  CHECK(sif_finder_exodus_survey_box(
+          NULL, fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
+    "the box helper failed on the randoms alone");
+  sif_real cell = box / N_GRID;
+  sif_real margin = r_max + SIF_REAL_MAX(0.5f * r_max, 3.0f * cell) + cell;
+  CHECK(x[0] + offset[0] < margin,
+    "the outlier should fall in the padding of a box sized on the randoms "
+    "(%g, margin %g)",
+    (double)(x[0] + offset[0]), (double)margin);
+
+  CHECK(sif_finder_exodus_survey_box(
+          fd, fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
+    "the box helper failed on data and randoms");
+  cell = box / N_GRID;
+  margin = r_max + SIF_REAL_MAX(0.5f * r_max, 3.0f * cell) + cell;
+  CHECK(x[0] + offset[0] >= margin,
+    "a box sized on both should pad the outlier (%g, margin %g)",
+    (double)(x[0] + offset[0]), (double)margin);
+
+  /* A coordinate that is not a number is refused, not skipped. */
+  fd->y[1] = NAN;
+  CHECK(sif_finder_exodus_survey_box(fd, fr, radii, n_radii, N_GRID,
+          SIF_DEFAULT, offset, &box) == SIF_ERR_INVALID,
+    "a NaN in the data should be refused");
+
+  sif_field_free(fd);
+  sif_field_free(fr);
+  free(x);
+  free(y);
+  free(z);
+  free(rx);
+  free(ry);
+  free(rz);
+  printf("  ok\n");
+}
+
 static void run_refusals(void) {
   printf("refusals\n");
 
@@ -572,6 +645,7 @@ int main(void) {
   run_weights();
 #endif
   run_workflow();
+  run_survey_box();
   run_refusals();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,

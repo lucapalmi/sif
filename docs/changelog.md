@@ -3,6 +3,43 @@
 **sif** is at version 0.x: the API may change between releases, and breaking
 changes are always listed here.
 
+## Unreleased
+
+### Breaking changes
+
+- The ASCII particle reader is strict: a row with fewer columns than the
+  format, or a read column that is not a number in full (`abc`, `1.5e`, an
+  empty field), fails the read with its line number. Both used to be skipped
+  or read as 0 without a word. Columns skipped with `*` may still hold
+  anything
+- An ASCII read into a field that already has a particle count fails if the
+  file holds fewer rows, instead of shrinking the field
+- Python: I/O exceptions carry the reason as their message. A missing file
+  raises `FileNotFoundError` (or `PermissionError`, `IsADirectoryError`)
+  everywhere; a malformed catalogue format string raises `ValueError`
+- `sif_finder_exodus_survey_box()` takes the data before the randoms (NULL
+  for the randoms alone)
+
+### Added
+
+- `sif_error_message()`, `sif_error_errno()`, `sif_error_status()` and
+  `sif_error_clear()`: the first error logged on the thread since the last
+  clear, whatever the log level
+
+### Changed
+
+- I/O errors name the file and the place in it (line, record and byte
+  offset, HDU, dataset), and keep the system's, HDF5's and cfitsio's own
+  diagnosis: a truncated GADGET, HDF5 or FITS file is reported as truncated
+
+### Fixed
+
+- The survey box is sized around the data as well as the randoms
+  (`survey_box(..., data=data)` in Python). Sized on the randoms alone, a
+  galaxy a few Mpc past the outermost random fell in the padding and
+  `exodus_survey()` refused the run. Coordinates that are not finite are
+  refused instead of passed over
+
 ## v0.2.0 -- 30/09/2026
 
 ### Breaking changes

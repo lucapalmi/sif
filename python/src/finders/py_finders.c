@@ -385,15 +385,20 @@ PyObject* py_sif_finder_exodus_survey(
 PyObject* py_sif_finder_survey_box(
   PyObject* self, PyObject* args, PyObject* kwds) {
 
-  PyObject *randoms_obj = NULL, *radii_obj = NULL;
+  PyObject *randoms_obj = NULL, *radii_obj = NULL, *data_obj = Py_None;
   unsigned int n_cells;
   double search_factor = 1.5;
 
   static char* kwlist[] = {
-    "randoms", "radii", "n_cells", "search_factor", NULL};
+    "randoms", "radii", "n_cells", "search_factor", "data", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OI|d", kwlist, &sifFieldType,
-        &randoms_obj, &radii_obj, &n_cells, &search_factor)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OI|dO", kwlist,
+        &sifFieldType, &randoms_obj, &radii_obj, &n_cells, &search_factor,
+        &data_obj)) {
+    return NULL;
+  }
+  if (data_obj != Py_None && !PyObject_TypeCheck(data_obj, &sifFieldType)) {
+    PyErr_SetString(PyExc_TypeError, "data must be a Field or None");
     return NULL;
   }
 
@@ -403,16 +408,22 @@ PyObject* py_sif_finder_survey_box(
   if (py_sif_field_check_cartesian(
         (sifFieldObject*)randoms_obj, "size a survey box around it") < 0)
     return NULL;
+  if (data_obj != Py_None &&
+      py_sif_field_check_cartesian(
+        (sifFieldObject*)data_obj, "size a survey box around it") < 0)
+    return NULL;
 
   PyArrayObject* radii_arr = radii_from_object(radii_obj);
   if (!radii_arr)
     return NULL;
 
   const sif_field_t* randoms = ((sifFieldObject*)randoms_obj)->field;
+  const sif_field_t* data =
+    data_obj == Py_None ? NULL : ((sifFieldObject*)data_obj)->field;
   sif_real offset[3];
   sif_real box_length = 0.0f;
 
-  const int status = sif_finder_exodus_survey_box(randoms,
+  const int status = sif_finder_exodus_survey_box(data, randoms,
     (const sif_real*)PyArray_DATA(radii_arr),
     (uint32_t)PyArray_SHAPE(radii_arr)[0], (uint32_t)n_cells, options, offset,
     &box_length);
@@ -420,8 +431,8 @@ PyObject* py_sif_finder_survey_box(
 
   if (status != SIF_OK) {
     PyErr_SetString(PyExc_ValueError,
-      "could not size a survey box: the randoms must hold positions and "
-      "n_cells must be at least 16");
+      "could not size a survey box: data and randoms must hold finite "
+      "positions and n_cells must be at least 16. Check system logs");
     return NULL;
   }
 

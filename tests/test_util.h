@@ -36,4 +36,17 @@
 #  define SIF_TEST_SCALE(n) (n)
 #endif
 
+#include <string.h>
+
+#include "sif/utils/logger.h"
+
+/*
+ * Whether the error recorded since the last sif_error_clear() holds
+ * @p needle. For tests of a failure's reason, not only of its status: each
+ * clears, makes the failing call, and checks the message it left.
+ */
+static inline int error_has(const char* needle) {
+  return strstr(sif_error_message(), needle) != NULL;
+}
+
 #endif /* SIF_TESTS_TEST_UTIL_H */

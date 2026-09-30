@@ -100,15 +100,75 @@ void sif__log_flush(void);
 #  define SIF_LOG_WARNING(tag, fmt, ...) ((void)0)
 #endif
 
+/* Compiled out, an error is still recorded for sif_error_message(): the
+ * record is how a caller finds out why something failed, and a build that
+ * prints nothing must not also lose that. */
 #if SIF_LOG_LEVEL <= SIF_LOG_LEVEL_ERROR
 #  define SIF_LOG_ERROR(tag, fmt, ...)                                         \
     sif__log_impl(SIF_LOG_LEVEL_ERROR, tag, fmt, ##__VA_ARGS__)
 #else
-#  define SIF_LOG_ERROR(tag, fmt, ...) ((void)0)
+#  define SIF_LOG_ERROR(tag, fmt, ...) sif__error_record(fmt, ##__VA_ARGS__)
 #endif
 
 /** @brief Flush both output streams. */
 #define SIF_LOG_FLUSH() sif__log_flush()
+
+/** @} */
+
+/** @brief Backs a compiled-out SIF_LOG_ERROR(). Not part of the API. */
+void sif__error_record(const char* fmt, ...);
+
+/**
+ * @defgroup error_record Error record
+ * @brief Why the last failed call failed, for callers that cannot read the
+ * log.
+ *
+ * Every error logged is also kept, per thread, until sif_error_clear(). Only
+ * the first one since the clear is kept: that is the root cause, and anything
+ * logged after it is a consequence. The intended use is
+ *
+ * @code
+ * sif_error_clear();
+ * if (sif_catalogue_read_hdf5(path) == NULL)
+ *   fprintf(stderr, "%s\n", sif_error_message());
+ * @endcode
+ *
+ * The record does not depend on the runtime log level: an error suppressed
+ * from the output is still recorded.
+ *
+ * @note Per thread. An error logged by an OpenMP worker is recorded on that
+ * worker, not on the thread that made the call; the library logs I/O errors
+ * outside parallel regions for this reason.
+ * @{
+ */
+
+/**
+ * @brief The first error logged on this thread since the last
+ * sif_error_clear(), without the level and tag; "" if there was none.
+ *
+ * @return A buffer owned by the library, valid until the next error or clear
+ * on this thread.
+ */
+const char* sif_error_message(void);
+
+/**
+ * @brief The operating-system error (an errno value) behind the recorded
+ * error, or 0 if it was not one -- a malformed file rather than a missing
+ * one, say.
+ */
+int sif_error_errno(void);
+
+/**
+ * @brief The status behind the recorded error, for the readers that return a
+ * pointer and so cannot return one: SIF_ERR_INVALID for a request the file
+ * cannot satisfy (a column it does not have), SIF_ERR_IO for a file that is
+ * not what it should be. SIF_OK if the failing call did not say, which the
+ * caller should read as SIF_ERR_IO.
+ */
+int sif_error_status(void);
+
+/** @brief Forget the recorded error on this thread. */
+void sif_error_clear(void);
 
 /** @} */
 

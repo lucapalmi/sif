@@ -338,7 +338,7 @@ set_source_files_properties(vendor/predicates/predicates.c
 # The HDF5 entry points always exist; which file implements them decides
 # whether they do the work or report that this build cannot.
 if(SIF_WITH_HDF5)
-  list(APPEND SOURCES src/io/hdf5.c src/io/gadget_hdf5.c)
+  list(APPEND SOURCES src/io/hdf5.c src/io/gadget_hdf5.c src/io/hdf5_util.c)
 else()
   list(APPEND SOURCES src/io/hdf5_off.c)
 endif()
