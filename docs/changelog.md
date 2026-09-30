@@ -1,12 +1,22 @@
 # Changelog
 
-**sif** is at version 0.x: the API may change between releases, and breaking
-changes are always listed here.
+Current version: v0.2 release 1
 
-## Unreleased
 
-### Breaking changes
+## v0.2.1 -- 30/09/2026
 
+### Added
+
+- `sif_error_message()`, `sif_error_errno()`, `sif_error_status()` and
+  `sif_error_clear()`: the first error logged on the thread since the last
+  clear, whatever the log level
+
+### Changed
+
+- I/O errors name the file and the place in it (line, record and byte
+  offset, HDU, dataset), and keep the system's, HDF5's and cfitsio's own
+  diagnosis: a truncated GADGET, HDF5 or FITS file is reported as truncated
+- Finder errors name the argument at fault
 - The ASCII particle reader is strict: a row with fewer columns than the
   format, or a read column that is not a number in full (`abc`, `1.5e`, an
   empty field), fails the read with its line number. Both used to be skipped
@@ -24,19 +34,6 @@ changes are always listed here.
   already did; they used to run on them
 - Python: the finders raise `ValueError` (or `MemoryError`) with the reason,
   instead of a `RuntimeError` saying to check the log
-
-### Added
-
-- `sif_error_message()`, `sif_error_errno()`, `sif_error_status()` and
-  `sif_error_clear()`: the first error logged on the thread since the last
-  clear, whatever the log level
-
-### Changed
-
-- I/O errors name the file and the place in it (line, record and byte
-  offset, HDU, dataset), and keep the system's, HDF5's and cfitsio's own
-  diagnosis: a truncated GADGET, HDF5 or FITS file is reported as truncated
-- Finder errors name the argument at fault
 
 ### Fixed
 
