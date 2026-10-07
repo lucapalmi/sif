@@ -19,6 +19,7 @@
 
 #include "sif/io/gadget_io.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /** @brief The blocks the reader reads. */
@@ -57,5 +58,9 @@ int sif__gadget_h5_read(sif_gadget_h5_file_t* file, uint32_t ptype,
 
 /** @brief Close a file. NULL is accepted. */
 void sif__gadget_h5_close(sif_gadget_h5_file_t* file);
+
+/** @brief Whether @p path is an HDF5 file with a /Header group, asked
+ * without logging; false in a build without HDF5. */
+bool sif__gadget_h5_looks(const char* path);
 
 #endif /* SIF__IO_GADGET_INTERNAL_H */

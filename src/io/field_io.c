@@ -14,6 +14,8 @@
 
 #include <ctype.h>
 #include <errno.h>
+#include <inttypes.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -356,6 +358,162 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
     header.n_particles, filepath);
   return field;
 }
+
+/* --- .xfield check --- */
+
+/* Values a deep check reads at a time. */
+#define XFIELD_CHUNK ((size_t)1 << 20)
+
+int sif_field_check_xfield(const char* filepath, bool deep, FILE* report) {
+  if (!filepath) {
+    SIF_LOG_ERROR("xfield", "sif_field_check_xfield: NULL path");
+    return SIF_ERR_INVALID;
+  }
+
+  uint64_t bytes = 0;
+  int status = sif__io_check_readable("xfield", filepath, &bytes);
+  if (status != SIF_OK)
+    return status;
+
+  FILE* file = fopen(filepath, "rb");
+  if (!file)
+    return sif__io_os_error("xfield", filepath, NULL, errno);
+
+  sif_xfield_header_t h;
+  memset(&h, 0, sizeof(h));
+  const size_t got = fread(&h, 1, sizeof(h), file);
+  if (got < sizeof(h) && ferror(file)) {
+    const int err = errno;
+    fclose(file);
+    return sif__io_os_error("xfield", filepath, "header", err);
+  }
+  if (got < 4 || memcmp(h.magic, SIF_XFIELD_MAGIC, 4) != 0) {
+    fclose(file);
+    SIF_LOG_ERROR("xfield", "%s: not an .xfield file (no %s magic)", filepath,
+      SIF_XFIELD_MAGIC);
+    return SIF_ERR_IO;
+  }
+  if (got < sizeof(h)) {
+    fclose(file);
+    SIF_LOG_ERROR("xfield",
+      "%s: %" PRIu64 " bytes, shorter than the %zu-byte header (truncated)",
+      filepath, bytes, sizeof(h));
+    return SIF_ERR_IO;
+  }
+
+  sif__io_problems_t pr = {"xfield", 0};
+  const size_t elem = h.is_double ? 8 : 4;
+  const int n_arrays = 3 + (h.has_velocities ? 3 : 0) + (h.has_weights ? 1 : 0);
+  const uint64_t expect =
+    sizeof(h) + (uint64_t)n_arrays * h.n_particles * (uint64_t)elem;
+
+  if (report) {
+    fprintf(report, "%s\n", filepath);
+    fprintf(report, "format        .xfield version %u, %s precision\n",
+      h.version, h.is_double ? "double" : "single");
+    fprintf(report, "particles     %" PRIu64 "\n", h.n_particles);
+    fprintf(report, "box size      %.8g\n", h.box_length);
+    fprintf(report, "velocities    %s\n", h.has_velocities ? "yes" : "no");
+    fprintf(report, "weights       %s\n", h.has_weights ? "yes" : "no");
+    fprintf(report, "size          %" PRIu64 " bytes\n", bytes);
+  }
+
+  if (h.version > SIF_XFIELD_VERSION)
+    sif__io_problem(&pr, "%s: version %u, this build reads up to %u", filepath,
+      h.version, (unsigned)SIF_XFIELD_VERSION);
+  if ((h.is_double != 0) != (sizeof(sif_real) == 8))
+    sif__io_problem(&pr, "%s: %s precision, this build reads %s", filepath,
+      h.is_double ? "double" : "single",
+      sizeof(sif_real) == 8 ? "double" : "single");
+  if (bytes != expect)
+    sif__io_problem(&pr, "%s: %" PRIu64 " bytes, header says %" PRIu64 " (%s)",
+      filepath, bytes, expect, bytes < expect ? "truncated" : "trailing bytes");
+
+  /* The deep pass reads what the file says it holds, in either precision, so
+   * it can vouch for a file this build could not load as well. */
+  if (deep && bytes >= expect && h.version <= SIF_XFIELD_VERSION) {
+    static const char* const names[7] = {"x", "y", "z", "vx", "vy", "vz", "w"};
+    const int which[7] = {0, 1, 2, h.has_velocities ? 3 : -1,
+      h.has_velocities ? 4 : -1, h.has_velocities ? 5 : -1,
+      h.has_weights ? 6 : -1};
+    sif__io_stats_t stats[7];
+    uint64_t outside[3] = {0, 0, 0}, negative = 0;
+    memset(stats, 0, sizeof(stats));
+
+    unsigned char* buf = malloc(XFIELD_CHUNK * elem);
+    if (!buf) {
+      fclose(file);
+      SIF_LOG_ERROR(
+        "xfield", "out of memory: %zu-byte read buffer", XFIELD_CHUNK * elem);
+      return SIF_ERR_ALLOC;
+    }
+
+    uint32_t crc = SIF_CRC32_INIT;
+    for (int a = 0; a < 7 && status == SIF_OK; a++) {
+      if (which[a] < 0)
+        continue;
+      for (uint64_t done = 0; done < h.n_particles;) {
+        const size_t c =
+          (size_t)(h.n_particles - done < XFIELD_CHUNK ? h.n_particles - done
+                                                       : XFIELD_CHUNK);
+        if (fread(buf, elem, c, file) != c) {
+          status = sif__io_os_error("xfield", filepath, names[a], errno);
+          break;
+        }
+        crc = sif_crc32_update(crc, buf, c * elem);
+        for (size_t i = 0; i < c; i++) {
+          double v;
+          if (elem == 8) {
+            memcpy(&v, buf + 8 * i, 8);
+          } else {
+            float fv;
+            memcpy(&fv, buf + 4 * i, 4);
+            v = fv;
+          }
+          sif__io_stats_add(&stats[a], v);
+          if (a < 3 && !(v >= 0.0 && v < h.box_length))
+            outside[a]++;
+          if (a == 6 && v < 0.0)
+            negative++;
+        }
+        done += c;
+      }
+    }
+    free(buf);
+    fclose(file);
+    if (status != SIF_OK)
+      return status;
+
+    if (h.version >= 2 && sif_crc32_final(crc) != h.crc32)
+      sif__io_problem(&pr, "%s: checksum %08x, header says %08x (corrupt)",
+        filepath, sif_crc32_final(crc), h.crc32);
+    for (int a = 0; a < 3; a++)
+      if (outside[a])
+        sif__io_problem(&pr,
+          "%s: %s: %" PRIu64 " of %" PRIu64 " outside [0, %g) or not finite",
+          filepath, names[a], outside[a], h.n_particles, h.box_length);
+    if (negative)
+      sif__io_problem(&pr, "%s: w: %" PRIu64 " negative", filepath, negative);
+
+    if (report) {
+      if (h.version < 2)
+        fprintf(report, "checksum      none (version 1)\n");
+      else
+        fprintf(report, "checksum      %s\n",
+          sif_crc32_final(crc) == h.crc32 ? "matches" : "does not match");
+      sif__io_stats_header(report, 8);
+      for (int a = 0; a < 7; a++)
+        if (which[a] >= 0)
+          sif__io_stats_print(report, names[a], 8, &stats[a]);
+    }
+  } else {
+    fclose(file);
+  }
+
+  return sif__io_problems_end(&pr, report);
+}
+
+#undef XFIELD_CHUNK
 
 /* --- column formats --- */
 
@@ -890,6 +1048,220 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   format_loaded(field, &f);
   return SIF_OK;
 }
+
+/* --- ASCII check --- */
+
+/* Columns a check keeps the range of; a wider file is counted, not ranged. */
+#define CHECK_COLS 64
+
+/* A token for a message: at most 32 characters of it. */
+#define TOKEN_SHOWN(len) ((len) > 32 ? 32 : (len))
+
+/* A hint for a token that is not a number, when it looks like two numbers
+ * joined by a delimiter other than the one in use. */
+static const char* delimiter_hint(const char* tok, int len, char delimiter) {
+  if (delimiter != ',' && memchr(tok, ',', (size_t)len))
+    return " (comma-separated? pass the delimiter ',')";
+  if (delimiter != ';' && memchr(tok, ';', (size_t)len))
+    return " (semicolon-separated? pass the delimiter ';')";
+  return "";
+}
+
+int sif_field_check_ascii(const char* filepath, const char* fmt, char delimiter,
+  uint32_t skip_header, FILE* report) {
+
+  if (!filepath) {
+    SIF_LOG_ERROR("io", "sif_field_check_ascii: NULL path");
+    return SIF_ERR_INVALID;
+  }
+  if (delimiter == '\0')
+    delimiter = ' ';
+
+  format_t f;
+  const bool formatted = fmt != NULL;
+  if (formatted && format_parse(fmt, false, &f) != SIF_OK)
+    return SIF_ERR_INVALID;
+
+  uint64_t bytes = 0;
+  int status = sif__io_check_readable("io", filepath, &bytes);
+  if (status != SIF_OK)
+    return status;
+
+  FILE* file = fopen(filepath, "r");
+  if (!file)
+    return sif__io_os_error("io", filepath, NULL, errno);
+
+  sif__io_problems_t pr = {"io", 0};
+  sif__io_stats_t stats[CHECK_COLS];
+  memset(stats, 0, sizeof(stats));
+
+  char* line = NULL;
+  size_t cap = 0;
+  ssize_t len;
+  uint64_t lineno = 0, rows = 0, blank = 0;
+  int cols_min = 0, cols_max = 0, cols_first = 0;
+  uint64_t first_row_line = 0;
+
+  while ((len = getline(&line, &cap, file)) >= 0) {
+    lineno++;
+    if (lineno <= skip_header)
+      continue;
+    if (!line_is_data(line)) {
+      blank++;
+      continue;
+    }
+    if (len > LINE_CAP - 2)
+      sif__io_problem(&pr,
+        "%s:%" PRIu64 ": %zd characters (the reader takes %d)", filepath,
+        lineno, len, LINE_CAP - 2);
+
+    rows++;
+    char* cursor = line;
+    int col = 0, n_bad = 0;
+    bool digits = false;
+    sif_real val;
+    bool ok;
+    const char* tok;
+    int tok_len;
+    const char* first_bad = NULL;
+    int first_bad_len = 0, first_bad_col = 0;
+
+    while (next_field(&cursor, delimiter, &val, &ok, &tok, &tok_len)) {
+      const col_kind_t kind =
+        formatted ? (col < f.n_cols ? f.cols[col].kind : COL_SKIP) : COL_X;
+      col++;
+      if (kind == COL_SKIP)
+        continue;
+
+      if (!ok) {
+        for (int k = 0; k < tok_len && !digits; k++)
+          digits = isdigit((unsigned char)tok[k]) != 0;
+        if (n_bad++ == 0) {
+          first_bad = tok;
+          first_bad_len = tok_len;
+          first_bad_col = col;
+        }
+        continue;
+      }
+
+      /* Re-parsed at double precision: the range is the file's, not what a
+       * single-precision build would make of it. */
+      const double v = strtod(tok, NULL);
+      if (col <= CHECK_COLS)
+        sif__io_stats_add(&stats[col - 1], v);
+
+      if (formatted && !isfinite(v))
+        sif__io_problem(&pr,
+          "%s:%" PRIu64 ": column %d (%s): '%.*s' is not finite", filepath,
+          lineno, col, col_label(&f, kind), TOKEN_SHOWN(tok_len), tok);
+      else if (formatted && f.sky && kind == COL_Y && (v < -90.0 || v > 90.0))
+        sif__io_problem(&pr,
+          "%s:%" PRIu64 ": column %d (dec): %g, outside [-90, 90]", filepath,
+          lineno, col, v);
+    }
+
+    if (rows == 1) {
+      cols_first = cols_min = cols_max = col;
+      first_row_line = lineno;
+    } else {
+      cols_min = col < cols_min ? col : cols_min;
+      cols_max = col > cols_max ? col : cols_max;
+    }
+
+    /* A first row with no digit in it is a header nobody skipped. */
+    if (rows == 1 && n_bad > 0 && n_bad == col && !digits) {
+      sif__io_problem(&pr,
+        "%s:%" PRIu64 ": no number in the row (a header? skip %" PRIu64
+        " line%s)",
+        filepath, lineno, lineno, lineno == 1 ? "" : "s");
+    } else if (n_bad > 0) {
+      const col_kind_t kind =
+        formatted ? f.cols[first_bad_col - 1].kind : COL_X;
+      char name[16] = "";
+      if (formatted)
+        snprintf(name, sizeof(name), " (%s)", col_label(&f, kind));
+      if (first_bad_len == 0)
+        sif__io_problem(&pr, "%s:%" PRIu64 ": column %d%s: empty", filepath,
+          lineno, first_bad_col, name);
+      else
+        sif__io_problem(&pr,
+          "%s:%" PRIu64 ": column %d%s: '%.*s' is not a number%s", filepath,
+          lineno, first_bad_col, name, TOKEN_SHOWN(first_bad_len), first_bad,
+          delimiter_hint(first_bad, first_bad_len, delimiter));
+    }
+
+    if (formatted && col < f.n_cols)
+      sif__io_problem(&pr, "%s:%" PRIu64 ": %d column%s, format '%s' needs %d",
+        filepath, lineno, col, col == 1 ? "" : "s", fmt, f.n_cols);
+    else if (!formatted && rows > 1 && col != cols_first)
+      sif__io_problem(&pr,
+        "%s:%" PRIu64 ": %d column%s, line %" PRIu64 " has %d", filepath,
+        lineno, col, col == 1 ? "" : "s", first_row_line, cols_first);
+  }
+
+  const bool read_error = ferror(file) != 0;
+  const int err = errno;
+  free(line);
+  fclose(file);
+  if (read_error)
+    return sif__io_os_error("io", filepath, "read", err);
+
+  if (lineno == 0)
+    sif__io_problem(&pr, "%s: empty file", filepath);
+  else if (rows == 0)
+    sif__io_problem(
+      &pr, "%s: no data rows (%" PRIu64 " lines)", filepath, lineno);
+
+  if (report) {
+    fprintf(report, "%s\n", filepath);
+    if (delimiter == ' ')
+      fprintf(report, "format        ASCII, space-separated");
+    else if (delimiter == '\t')
+      fprintf(report, "format        ASCII, tab-separated");
+    else
+      fprintf(report, "format        ASCII, '%c'-separated", delimiter);
+    if (formatted)
+      fprintf(report, ", columns '%s'", fmt);
+    fprintf(report, "\nsize          %" PRIu64 " bytes\n", bytes);
+    fprintf(report,
+      "lines         %" PRIu64 " (%" PRIu32 " header, %" PRIu64
+      " blank or comment)\n",
+      lineno, skip_header < lineno ? skip_header : (uint32_t)lineno, blank);
+    fprintf(report, "rows          %" PRIu64 "\n", rows);
+    if (rows > 0) {
+      if (cols_min == cols_max)
+        fprintf(report, "columns       %d", cols_min);
+      else
+        fprintf(report, "columns       %d to %d", cols_min, cols_max);
+      if (formatted && cols_min > f.n_cols)
+        fprintf(report, " (the format reads %d)", f.n_cols);
+      fputc('\n', report);
+
+      sif__io_stats_header(report, 12);
+      const int shown = cols_max < CHECK_COLS ? cols_max : CHECK_COLS;
+      for (int c = 0; c < shown; c++) {
+        char name[32];
+        if (formatted) {
+          const col_kind_t kind = c < f.n_cols ? f.cols[c].kind : COL_SKIP;
+          if (kind == COL_SKIP)
+            continue;
+          snprintf(name, sizeof(name), "%d (%s)", c + 1, col_label(&f, kind));
+        } else {
+          snprintf(name, sizeof(name), "%d", c + 1);
+        }
+        if (stats[c].n > 0)
+          sif__io_stats_print(report, name, 12, &stats[c]);
+      }
+      if (cols_max > CHECK_COLS)
+        fprintf(report, "(columns past %d not ranged)\n", CHECK_COLS);
+    }
+  }
+
+  return sif__io_problems_end(&pr, report);
+}
+
+#undef CHECK_COLS
+#undef TOKEN_SHOWN
 
 /* --- raw binary input --- */
 

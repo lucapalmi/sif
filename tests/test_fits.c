@@ -429,6 +429,45 @@ static void write_broken(const char* to, long bytes) {
   fclose(out);
 }
 
+/* The check: the summary, truncation, and with deep every column. */
+static void test_check(void) {
+  printf("check\n");
+  const char* broken = "test_fits_broken.fits";
+
+  FILE* report = tmpfile();
+  sif_error_clear();
+  CHECK(sif_fits_check(FIXTURE, true, report) == SIF_OK, "the fixture: '%s'",
+    sif_error_message());
+  char line[256];
+  bool ranged = false;
+  rewind(report);
+  while (fgets(line, sizeof(line), report))
+    ranged |= strncmp(line, "RA ", 3) == 0;
+  CHECK(ranged, "the deep check ranged no RA column");
+  fclose(report);
+
+  /* Cut inside the last table's data: every header still reads. */
+  FILE* in = fopen(FIXTURE, "rb");
+  long size = 0;
+  if (in) {
+    fseek(in, 0, SEEK_END);
+    size = ftell(in);
+    fclose(in);
+  }
+  write_broken(broken, size - 100);
+  sif_error_clear();
+  CHECK(sif_fits_check(broken, false, NULL) == SIF_ERR_IO &&
+          error_has("not a multiple of 2880 (truncated)"),
+    "a truncated file: '%s'", sif_error_message());
+
+  write_broken(broken, -1);
+  sif_error_clear();
+  CHECK(sif_fits_check(broken, false, NULL) == SIF_ERR_IO &&
+          error_has("not a FITS file"),
+    "a text file: '%s'", sif_error_message());
+  remove(broken);
+}
+
 /* What the reader says when it refuses: the reason, not only the status. */
 static void test_reasons(void) {
   printf("reasons for a refusal\n");
@@ -870,6 +909,7 @@ int main(void) {
   test_summary();
   test_catalogues();
   test_reasons();
+  test_check();
   test_keywords();
   test_products();
   remove_fixtures();

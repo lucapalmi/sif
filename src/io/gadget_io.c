@@ -778,25 +778,21 @@ static bool try_candidate(snap_path_t* sp, const char* base, const char* tail,
  * and the same two inside `snapdir_010/`, which is where GADGET puts a
  * multi-file snapshot.
  */
-static int path_resolve(const char* path, snap_path_t* sp) {
+static bool path_find(const char* path, snap_path_t* sp) {
   memset(sp, 0, sizeof(*sp));
-
-  if (strlen(path) >= PATH_CAP - 32) {
-    SIF_LOG_ERROR(
-      TAG, "%s: path longer than %d characters", path, PATH_CAP - 33);
-    return SIF_ERR_INVALID;
-  }
+  if (strlen(path) >= PATH_CAP - 32)
+    return false;
 
   if (is_file(path)) {
     snprintf(sp->first, PATH_CAP, "%s", path);
     sp->numbered = split_numbered(path, sp);
-    return SIF_OK;
+    return true;
   }
 
   if (try_candidate(sp, path, ".hdf5", false, "") ||
       try_candidate(sp, path, ".0", true, "") ||
       try_candidate(sp, path, ".0.hdf5", true, ".hdf5"))
-    return SIF_OK;
+    return true;
 
   /* snapdir_XXX, where XXX is what follows the last underscore of the name. */
   const char* slash = strrchr(path, '/');
@@ -814,9 +810,21 @@ static int path_resolve(const char* path, snap_path_t* sp) {
         dir_base, PATH_CAP, "%.*ssnapdir_%s/%s", dir_len, path, us + 1, name);
       if (try_candidate(sp, dir_base, ".0", true, "") ||
           try_candidate(sp, dir_base, ".0.hdf5", true, ".hdf5"))
-        return SIF_OK;
+        return true;
     }
   }
+  return false;
+}
+
+/* path_find(), and why it found nothing. */
+static int path_resolve(const char* path, snap_path_t* sp) {
+  if (strlen(path) >= PATH_CAP - 32) {
+    SIF_LOG_ERROR(
+      TAG, "%s: path longer than %d characters", path, PATH_CAP - 33);
+    return SIF_ERR_INVALID;
+  }
+  if (path_find(path, sp))
+    return SIF_OK;
 
   struct stat st;
   if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
@@ -934,6 +942,42 @@ void sif_gadget_print_header(const sif_gadget_header_t* h, FILE* stream) {
   }
 }
 
+bool sif_gadget_is_snapshot(const char* path) {
+  snap_path_t sp;
+  if (!path || !path_find(path, &sp))
+    return false;
+
+  unsigned char buf[8];
+  FILE* f = fopen(sp.first, "rb");
+  if (!f)
+    return false;
+  const bool whole = fread(buf, 1, 8, f) == 8;
+
+  static const unsigned char h5sig[8] = {
+    0x89, 'H', 'D', 'F', '\r', '\n', 0x1a, '\n'};
+  bool found = false;
+  if (whole && memcmp(buf, h5sig, 8) == 0) {
+    fclose(f);
+    return sif__gadget_h5_looks(sp.first);
+  }
+
+  /* A SnapFormat 2 label, or a SnapFormat 1 header record whose trailing
+   * marker matches its leading one: a coincidence either way round is
+   * unlikely enough for a guess that only picks the check to run. */
+  for (int s = 0; whole && s < 2 && !found; s++) {
+    const uint32_t m = get_u32(buf, s == 1);
+    if (m == 8 && memcmp(buf + 4, "HEAD", 4) == 0) {
+      found = true;
+    } else if (m >= 64 && m <= HEAD_CAP) {
+      unsigned char tail[4];
+      found = fseeko(f, (off_t)(4 + m), SEEK_SET) == 0 &&
+              fread(tail, 1, 4, f) == 4 && get_u32(tail, s == 1) == m;
+    }
+  }
+  fclose(f);
+  return found;
+}
+
 int sif_gadget_inspect(const char* path) {
   sif_gadget_header_t h;
   const int status = sif_gadget_read_header(path, SIF_GADGET_FORMAT_AUTO, &h);
@@ -944,6 +988,180 @@ int sif_gadget_inspect(const char* path) {
   sif_gadget_print_header(&h, stdout);
   fflush(stdout);
   return SIF_OK;
+}
+
+/* ------------------------------------------------------------------------ */
+/* the check                                                                 */
+/* ------------------------------------------------------------------------ */
+
+/* The ranges a deep check keeps for one particle type. */
+typedef struct {
+  sif__io_stats_t pos[3], mass;
+  uint64_t outside, negative;
+} type_stats_t;
+
+/* Every position, and every mass a particle carries, of one file. */
+static int check_file_values(snap_file_t* sf, double box, type_stats_t* ts,
+  double* pos, double* mass, unsigned char* scratch) {
+  const sif_gadget_header_t* h = &sf->header;
+  for (uint32_t t = 0; t < h->n_types; t++) {
+    const uint64_t n = h->n_part_file[t];
+    const bool masses = h->mass_table[t] == 0;
+    for (uint64_t start = 0; start < n; start += CHUNK) {
+      const uint64_t c = (n - start < CHUNK) ? n - start : CHUNK;
+      int status =
+        snap_read(sf, t, SIF__GADGET_BLOCK_POS, start, c, pos, scratch);
+      if (status == SIF_OK && masses)
+        status =
+          snap_read(sf, t, SIF__GADGET_BLOCK_MASS, start, c, mass, scratch);
+      if (status != SIF_OK)
+        return status;
+
+      for (uint64_t j = 0; j < c; j++) {
+        bool out = false;
+        for (int k = 0; k < 3; k++) {
+          const double v = pos[3 * j + k];
+          sif__io_stats_add(&ts[t].pos[k], v);
+          out |= box > 0 && !(v >= 0 && v < box);
+        }
+        ts[t].outside += out;
+        if (masses) {
+          sif__io_stats_add(&ts[t].mass, mass[j]);
+          ts[t].negative += mass[j] < 0;
+        }
+      }
+    }
+  }
+  return SIF_OK;
+}
+
+int sif_gadget_check(
+  const char* path, sif_gadget_format_t format, bool deep, FILE* report) {
+  if (!path) {
+    SIF_LOG_ERROR(TAG, "sif_gadget_check: NULL path");
+    return SIF_ERR_INVALID;
+  }
+  if (!slot_ok((int)format, SIF_GADGET_FORMAT_AUTO, 4, "format"))
+    return SIF_ERR_INVALID;
+
+  snap_path_t sp;
+  int status = path_resolve(path, &sp);
+  if (status != SIF_OK)
+    return status;
+
+  snap_file_t sf;
+  status = snap_open(sp.first, format, &sf);
+  if (status != SIF_OK)
+    return status;
+  const sif_gadget_header_t h0 = sf.header;
+  snap_close(&sf);
+
+  if (report) {
+    fprintf(report, "%s\n", sp.first);
+    sif_gadget_print_header(&h0, report);
+    fflush(report);
+  }
+
+  sif__io_problems_t pr = {TAG, 0};
+  type_stats_t ts[SIF_GADGET_MAX_TYPES];
+  memset(ts, 0, sizeof(ts));
+  uint64_t sums[SIF_GADGET_MAX_TYPES] = {0};
+
+  double* pos = NULL;
+  double* mass = NULL;
+  unsigned char* scratch = NULL;
+  if (deep) {
+    pos = malloc(3 * CHUNK * sizeof(double));
+    mass = malloc(CHUNK * sizeof(double));
+    scratch = malloc(3 * CHUNK * 8);
+    if (!pos || !mass || !scratch) {
+      free(pos);
+      free(mass);
+      free(scratch);
+      SIF_LOG_ERROR(TAG, "out of memory: read buffers");
+      return SIF_ERR_ALLOC;
+    }
+  }
+
+  /* Every file, whatever is wrong with an earlier one: a check lists what it
+   * finds rather than stopping at it. A file that cannot be opened has said
+   * why already, and is counted. */
+  char file[PATH_CAP];
+  uint32_t n_open = 0;
+  for (uint32_t i = 0; i < h0.n_files; i++) {
+    if (path_file(&sp, h0.n_files, i, file) != SIF_OK) {
+      pr.n++;
+      break;
+    }
+    if (snap_open(file, h0.format, &sf) != SIF_OK) {
+      pr.n++;
+      continue;
+    }
+    n_open++;
+
+    const sif_gadget_header_t* hi = &sf.header;
+    if (hi->n_types != h0.n_types || hi->n_files != h0.n_files) {
+      sif__io_problem(&pr,
+        "%s: %u types, %u files; %s: %u types, %u files (not the same "
+        "snapshot)",
+        file, hi->n_types, hi->n_files, sp.first, h0.n_types, h0.n_files);
+    } else {
+      for (uint32_t t = 0; t < h0.n_types; t++)
+        sums[t] += hi->n_part_file[t];
+      if (deep &&
+          check_file_values(&sf, h0.box_size, ts, pos, mass, scratch) != SIF_OK)
+        pr.n++;
+    }
+    snap_close(&sf);
+  }
+
+  free(pos);
+  free(mass);
+  free(scratch);
+
+  if (n_open == h0.n_files) {
+    for (uint32_t t = 0; t < h0.n_types; t++)
+      if (sums[t] != h0.n_part_total[t])
+        sif__io_problem(&pr,
+          "%s: type %u: %u files hold %" PRIu64 ", NumPart_Total %" PRIu64,
+          sp.first, t, h0.n_files, sums[t], h0.n_part_total[t]);
+  }
+
+  if (deep) {
+    for (uint32_t t = 0; t < h0.n_types; t++) {
+      if (ts[t].outside)
+        sif__io_problem(&pr,
+          "%s: type %u: %" PRIu64 " of %" PRIu64
+          " positions outside [0, %g) or not finite",
+          sp.first, t, ts[t].outside, ts[t].pos[0].n, h0.box_size);
+      if (ts[t].negative)
+        sif__io_problem(&pr, "%s: type %u: %" PRIu64 " negative masses",
+          sp.first, t, ts[t].negative);
+    }
+  }
+
+  if (report) {
+    fprintf(report, "files read    %u of %u\n", n_open, h0.n_files);
+    if (deep) {
+      sif__io_stats_header(report, 10);
+      static const char* const axis[3] = {"x", "y", "z"};
+      for (uint32_t t = 0; t < h0.n_types; t++) {
+        char name[16];
+        for (int k = 0; k < 3; k++) {
+          if (ts[t].pos[k].n == 0)
+            continue;
+          snprintf(name, sizeof(name), "%u %s", t, axis[k]);
+          sif__io_stats_print(report, name, 10, &ts[t].pos[k]);
+        }
+        if (ts[t].mass.n > 0) {
+          snprintf(name, sizeof(name), "%u mass", t);
+          sif__io_stats_print(report, name, 10, &ts[t].mass);
+        }
+      }
+    }
+  }
+
+  return sif__io_problems_end(&pr, report);
 }
 
 /* ------------------------------------------------------------------------ */

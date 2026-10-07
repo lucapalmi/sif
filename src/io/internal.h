@@ -17,6 +17,7 @@
 #ifndef SIF__IO_INTERNAL_H
 #define SIF__IO_INTERNAL_H
 
+#include <math.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -119,6 +120,65 @@ SIF_NODISCARD int sif__io_check_readable(
 
 /** @brief strerror(), safe to call from several threads. */
 const char* sif__io_strerror(int err);
+
+/* --- file checks --- */
+
+/**
+ * @brief How many problems a check logs one by one; past this it counts them,
+ * and says how many more there were at the end.
+ */
+#define SIF__IO_PROBLEMS_SHOWN 10
+
+/** @brief The problems a check has found so far. */
+typedef struct {
+  const char* tag;
+  uint64_t n;
+} sif__io_problems_t;
+
+/**
+ * @brief Log one problem a check found, as an ERROR, while fewer than
+ * SIF__IO_PROBLEMS_SHOWN have been; count it either way.
+ */
+void sif__io_problem(sif__io_problems_t* p, const char* fmt, ...)
+  SIF_PRINTF_LIKE(2, 3);
+
+/**
+ * @brief Close a check: log how many problems went unlisted, and write the
+ * total to @p report.
+ *
+ * @return SIF_OK for none, SIF_ERR_IO otherwise.
+ */
+int sif__io_problems_end(const sif__io_problems_t* p, FILE* report);
+
+/** @brief The range of a column of values, as a deep check reports it. */
+typedef struct {
+  uint64_t n;
+  uint64_t n_nonfinite;
+  double min, max;
+} sif__io_stats_t;
+
+static inline void sif__io_stats_add(sif__io_stats_t* s, double v) {
+  s->n++;
+  if (!isfinite(v)) {
+    s->n_nonfinite++;
+    return;
+  }
+  if (s->n == s->n_nonfinite + 1 || v < s->min)
+    s->min = v;
+  if (s->n == s->n_nonfinite + 1 || v > s->max)
+    s->max = v;
+}
+
+/** @brief Folds @p b into @p a. */
+void sif__io_stats_merge(sif__io_stats_t* a, const sif__io_stats_t* b);
+
+/** @brief The header line for a table of sif__io_stats_print() rows. */
+void sif__io_stats_header(FILE* report, int name_width);
+
+/** @brief One row of the table: the column's name, min, max and how many
+ * values were not finite. */
+void sif__io_stats_print(
+  FILE* report, const char* name, int name_width, const sif__io_stats_t* s);
 
 /**
  * @brief Reverse the bytes of a 32- or 64-bit word: the conversion between

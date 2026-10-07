@@ -1938,3 +1938,287 @@ int sif_hdf5_attr_name(const char* filepath, const char* group, uint32_t index,
   sif__h5_quiet_end(&quiet);
   return status;
 }
+
+/* --- the check --- */
+
+/* Values a deep check reads at a time, and how deep a tree it walks. */
+#define CHECK_VALUES ((hsize_t)1 << 20)
+#define CHECK_DEPTH  32
+
+typedef struct {
+  const char* path;
+  bool deep;
+  FILE* report;
+  sif__io_problems_t* pr;
+  uint64_t n_groups, n_datasets;
+  /* Deep: the ranges, printed after the tree. */
+  char** names;
+  sif__io_stats_t* stats;
+  size_t n_stats, cap_stats;
+} h5_walk_t;
+
+/* "float32", "uint64", "string", ... */
+static const char* type_text(hid_t type, char* buf, size_t len) {
+  const size_t bits = 8 * H5Tget_size(type);
+  switch (H5Tget_class(type)) {
+  case H5T_INTEGER:
+    snprintf(
+      buf, len, "%sint%zu", H5Tget_sign(type) == H5T_SGN_NONE ? "u" : "", bits);
+    break;
+  case H5T_FLOAT:
+    snprintf(buf, len, "float%zu", bits);
+    break;
+  case H5T_STRING:
+    snprintf(buf, len, "string");
+    break;
+  case H5T_COMPOUND:
+    snprintf(buf, len, "compound");
+    break;
+  default:
+    snprintf(buf, len, "other");
+    break;
+  }
+  return buf;
+}
+
+static uint32_t attr_count(hid_t obj) {
+  uint32_t n = 0;
+  hsize_t idx = 0;
+  if (H5Aiterate2(obj, H5_INDEX_NAME, H5_ITER_INC, &idx, count_attr, &n) < 0)
+    return 0;
+  return n;
+}
+
+/* Every value of a numeric dataset, a block of its leading dimension at a
+ * time, as doubles. */
+static int dataset_range(hid_t ds, const char* obj, h5_walk_t* w) {
+  hid_t space = H5Dget_space(ds);
+  const int rank = space >= 0 ? H5Sget_simple_extent_ndims(space) : -1;
+  hsize_t dims[H5S_MAX_RANK] = {0};
+  if (rank < 0 || H5Sget_simple_extent_dims(space, dims, NULL) < 0) {
+    sif__io_problem(w->pr, "%s: %s: %s", w->path, obj, sif__h5_cause());
+    close_id(space);
+    return SIF_ERR_IO;
+  }
+
+  hsize_t inner = 1;
+  for (int k = 1; k < rank; k++)
+    inner *= dims[k];
+  const hsize_t lead = rank == 0 ? 1 : dims[0];
+  hsize_t rows = inner > 0 ? CHECK_VALUES / inner : lead;
+  if (rows < 1)
+    rows = 1;
+
+  double* buf = malloc((size_t)(rows * (inner ? inner : 1)) * sizeof(double));
+  if (!buf) {
+    close_id(space);
+    SIF_LOG_ERROR(TAG, "out of memory: read buffer for %s", obj);
+    return SIF_ERR_ALLOC;
+  }
+
+  sif__io_stats_t s = {0};
+  int status = SIF_OK;
+  for (hsize_t r = 0; r < lead && inner > 0; r += rows) {
+    const hsize_t take = lead - r < rows ? lead - r : rows;
+    hsize_t start[H5S_MAX_RANK] = {0}, count[H5S_MAX_RANK];
+    for (int k = 0; k < rank; k++)
+      count[k] = dims[k];
+    hid_t mem = H5I_INVALID_HID;
+    herr_t e = 0;
+    if (rank > 0) {
+      start[0] = r;
+      count[0] = take;
+      e = H5Sselect_hyperslab(space, H5S_SELECT_SET, start, NULL, count, NULL);
+      mem = H5Screate_simple(rank, count, NULL);
+    } else {
+      mem = H5Screate(H5S_SCALAR);
+    }
+    if (e < 0 || mem < 0 ||
+        H5Dread(ds, H5T_NATIVE_DOUBLE, mem, space, H5P_DEFAULT, buf) < 0) {
+      sif__io_problem(w->pr, "%s: %s: rows %llu-%llu: %s", w->path, obj,
+        (unsigned long long)r, (unsigned long long)(r + take - 1),
+        sif__h5_cause());
+      close_id(mem);
+      status = SIF_ERR_IO;
+      break;
+    }
+    close_id(mem);
+    for (hsize_t i = 0; i < take * inner; i++)
+      sif__io_stats_add(&s, buf[i]);
+  }
+  free(buf);
+  close_id(space);
+  if (status != SIF_OK || s.n == 0)
+    return status;
+
+  if (w->n_stats == w->cap_stats) {
+    const size_t cap = w->cap_stats ? 2 * w->cap_stats : 16;
+    char** names = realloc(w->names, cap * sizeof(char*));
+    if (names)
+      w->names = names;
+    sif__io_stats_t* stats =
+      names ? realloc(w->stats, cap * sizeof(sif__io_stats_t)) : NULL;
+    if (!names || !stats) {
+      SIF_LOG_ERROR(TAG, "out of memory: ranges of %zu datasets", cap);
+      return SIF_ERR_ALLOC;
+    }
+    w->stats = stats;
+    w->cap_stats = cap;
+  }
+  w->names[w->n_stats] = strdup(obj);
+  if (!w->names[w->n_stats]) {
+    SIF_LOG_ERROR(TAG, "out of memory");
+    return SIF_ERR_ALLOC;
+  }
+  w->stats[w->n_stats++] = s;
+  return SIF_OK;
+}
+
+static int walk_group(h5_walk_t* w, hid_t group, const char* at, int depth) {
+  H5G_info_t info;
+  if (H5Gget_info(group, &info) < 0) {
+    sif__io_problem(w->pr, "%s: %s: %s", w->path, at, sif__h5_cause());
+    return SIF_OK;
+  }
+
+  for (hsize_t i = 0; i < info.nlinks; i++) {
+    const ssize_t len = H5Lget_name_by_idx(
+      group, ".", H5_INDEX_NAME, H5_ITER_INC, i, NULL, 0, H5P_DEFAULT);
+    char* name = len > 0 ? malloc((size_t)len + 1) : NULL;
+    if (!name || H5Lget_name_by_idx(group, ".", H5_INDEX_NAME, H5_ITER_INC, i,
+                   name, (size_t)len + 1, H5P_DEFAULT) < 0) {
+      free(name);
+      sif__io_problem(w->pr, "%s: %s: link %llu: %s", w->path, at,
+        (unsigned long long)i, sif__h5_cause());
+      continue;
+    }
+
+    char obj[1024];
+    snprintf(obj, sizeof(obj), "%s/%s", strcmp(at, "/") == 0 ? "" : at, name);
+
+    hid_t id = H5Oopen(group, name, H5P_DEFAULT);
+    free(name);
+    if (id < 0) {
+      sif__io_problem(w->pr, "%s: %s: %s", w->path, obj, sif__h5_cause());
+      continue;
+    }
+
+    int status = SIF_OK;
+    const H5I_type_t kind = H5Iget_type(id);
+    if (kind == H5I_GROUP) {
+      w->n_groups++;
+      if (w->report) {
+        const uint32_t n = attr_count(id);
+        fprintf(w->report, "%-40s group, %u attribute%s\n", obj, n,
+          n == 1 ? "" : "s");
+      }
+      if (depth + 1 < CHECK_DEPTH)
+        status = walk_group(w, id, obj, depth + 1);
+      else
+        sif__io_problem(w->pr, "%s: %s: nested deeper than %d groups", w->path,
+          obj, CHECK_DEPTH);
+    } else if (kind == H5I_DATASET) {
+      w->n_datasets++;
+      hid_t type = H5Dget_type(id);
+      hid_t space = H5Dget_space(id);
+      const int rank = space >= 0 ? H5Sget_simple_extent_ndims(space) : -1;
+      hsize_t dims[H5S_MAX_RANK] = {0};
+      if (rank > 0)
+        H5Sget_simple_extent_dims(space, dims, NULL);
+      if (w->report) {
+        char t[32], shape[256] = "scalar";
+        if (rank > 0) {
+          size_t used = 0;
+          for (int k = 0; k < rank && used < sizeof(shape); k++)
+            used += (size_t)snprintf(shape + used, sizeof(shape) - used,
+              "%s%llu%s", k ? ", " : "(", (unsigned long long)dims[k],
+              k == rank - 1 ? ")" : "");
+        }
+        fprintf(w->report, "%-40s %-8s %s\n", obj,
+          type >= 0 ? type_text(type, t, sizeof(t)) : "?", shape);
+      }
+      const H5T_class_t cls = type >= 0 ? H5Tget_class(type) : H5T_NO_CLASS;
+      if (w->deep && (cls == H5T_INTEGER || cls == H5T_FLOAT))
+        status = dataset_range(id, obj, w);
+      close_id(space);
+      close_id(type);
+    } else if (w->report) {
+      fprintf(w->report, "%-40s named datatype\n", obj);
+    }
+    H5Oclose(id);
+    if (status == SIF_ERR_ALLOC)
+      return status;
+  }
+  return SIF_OK;
+}
+
+int sif_hdf5_check(const char* path, bool deep, FILE* report) {
+  if (!path) {
+    SIF_LOG_ERROR(TAG, "sif_hdf5_check: NULL path");
+    return SIF_ERR_INVALID;
+  }
+
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
+
+  hid_t file = sif__h5_open_read(TAG, path);
+  if (file < 0) {
+    sif__h5_quiet_end(&quiet);
+    return SIF_ERR_IO;
+  }
+
+  sif__io_problems_t pr = {TAG, 0};
+  if (report) {
+    fprintf(report, "%s\n", path);
+    if (H5Aexists(file, "sif_format") > 0) {
+      uint32_t version = 0;
+      char written[32] = "?";
+      if (H5Aexists(file, "sif_format_version") > 0)
+        (void)attr_need(
+          file, path, NULL, "sif_format_version", H5T_NATIVE_UINT32, &version);
+      (void)attr_read_str(file, "sif_version", written, sizeof(written));
+      fprintf(report, "format        HDF5, sif file (layout %u, sif %s)\n",
+        version, written);
+    } else if (link_exists(file, "Header")) {
+      fprintf(report,
+        "format        HDF5, GADGET snapshot (--format gadget for its "
+        "header)\n");
+    } else {
+      fprintf(report, "format        HDF5\n");
+    }
+    const uint32_t n_attrs = attr_count(file);
+    fprintf(report, "root          %u attribute%s\n", n_attrs,
+      n_attrs == 1 ? "" : "s");
+  }
+
+  /* A sif file this build cannot read is a problem with it, as for the
+   * readers; check_root() says which. */
+  if (H5Aexists(file, "sif_format") > 0 && check_root(file, path) != SIF_OK)
+    pr.n++;
+
+  h5_walk_t w = {path, deep, report, &pr, 0, 0, NULL, NULL, 0, 0};
+  const int status = walk_group(&w, file, "/", 0);
+
+  if (report) {
+    fprintf(report, "objects       %" PRIu64 " groups, %" PRIu64 " datasets\n",
+      w.n_groups, w.n_datasets);
+    if (deep && w.n_stats > 0) {
+      sif__io_stats_header(report, 40);
+      for (size_t i = 0; i < w.n_stats; i++)
+        sif__io_stats_print(report, w.names[i], 40, &w.stats[i]);
+    }
+  }
+  for (size_t i = 0; i < w.n_stats; i++)
+    free(w.names[i]);
+  free(w.names);
+  free(w.stats);
+
+  H5Fclose(file);
+  sif__h5_quiet_end(&quiet);
+  if (status != SIF_OK)
+    return status;
+  return sif__io_problems_end(&pr, report);
+}
+
+#undef CHECK_VALUES
+#undef CHECK_DEPTH

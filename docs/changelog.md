@@ -5,6 +5,22 @@ Current version: v0.2 release 1
 
 ## Unreleased
 
+### Added
+
+- `sif-exodus --check FILE` checks a data file as well as a configuration.
+  It tells the kind from the contents (ASCII, FITS, HDF5, GADGET, `.xfield`),
+  lists every problem with where it is, and prints a summary. The options:
+  - `--deep` reads every value, for each column's range. On a configuration,
+    it reads the inputs as the run would
+  - `--format` overrides the guess
+  - `--columns`, `--delimiter` and `--skip-header` check an ASCII file
+    against a column format
+- `sif_field_check_ascii()`, `sif_field_check_xfield()`, `sif_fits_check()`,
+  `sif_hdf5_check()` and `sif_gadget_check()`: the same checks in the
+  library, with a summary written to a stream
+- `sif_gadget_is_snapshot()`: whether a path names a GADGET snapshot, asked
+  without logging
+
 ### Fixed
 
 - The survey finder's footprint read below 1 for voids well inside the

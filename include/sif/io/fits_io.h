@@ -138,6 +138,23 @@ int sif_fits_print_summary(const char* path, FILE* stream);
 int sif_fits_inspect(const char* path);
 
 /**
+ * @brief Check a FITS file without loading it: sif_fits_print_summary() to
+ * @p report, which walks every HDU's header, and a check that the file is not
+ * cut short inside the last one's data.
+ *
+ * With @p deep, every numeric column of every table is read as well, a block
+ * of rows at a time, and its range written to @p report: a vector column over
+ * all its elements, an undefined value counted as not finite.
+ *
+ * @param report Where the summary goes, or NULL for none.
+ * @return SIF_OK for a sound file; SIF_ERR_IO for one with problems, each
+ * logged as an ERROR, or one that cannot be read; SIF_ERR_ALLOC;
+ * SIF_ERR_INVALID for a NULL path; SIF_ERR_UNSUPPORTED in a build without
+ * cfitsio.
+ */
+int sif_fits_check(const char* path, bool deep, FILE* report);
+
+/**
  * @defgroup fits_products Catalogues and their products
  * @brief A catalogue and what was measured from it, in one FITS file, as the
  * HDF5 file holds them:

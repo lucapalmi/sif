@@ -49,6 +49,12 @@ int sif_fits_print_summary(const char* path, FILE* stream) {
 
 int sif_fits_inspect(const char* path) { return refuse(path); }
 
+int sif_fits_check(const char* path, bool deep, FILE* report) {
+  (void)deep;
+  (void)report;
+  return refuse(path);
+}
+
 int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalogue) {
   (void)catalogue;
   return refuse(filepath);

@@ -548,6 +548,49 @@ static void break_dataset(const char* path, const char* name, hsize_t n) {
   H5Fclose(f);
 }
 
+/* The check: the tree, what the file is, and with deep every value. */
+static void test_check(void) {
+  printf("check\n");
+  sif_catalogue_t* cat = make_catalogue(4, 0);
+
+  remove_all();
+  CHECK(
+    sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
+  FILE* report = tmpfile();
+  sif_error_clear();
+  CHECK(sif_hdf5_check(PATH, true, report) == SIF_OK, "a sif file: '%s'",
+    sif_error_message());
+  char line[256];
+  bool said = false, listed = false, ranged = false;
+  rewind(report);
+  while (fgets(line, sizeof(line), report)) {
+    said |= strstr(line, "HDF5, sif file") != NULL;
+    listed |= strstr(line, "/catalogue/radii") && strstr(line, "(4)");
+    ranged |= strncmp(line, "/catalogue/radii ", 17) == 0 &&
+              strstr(line, "(4)") == NULL;
+  }
+  CHECK(said && listed && ranged, "the report: kind %d, tree %d, ranges %d",
+    said, listed, ranged);
+  fclose(report);
+
+  /* A sif file this build could not read is a problem with it. */
+  set_format_version(PATH, 99);
+  sif_error_clear();
+  CHECK(sif_hdf5_check(PATH, false, NULL) == SIF_ERR_IO &&
+          error_has("version 99, this build reads up to"),
+    "a newer layout: '%s'", sif_error_message());
+
+  /* Cut short: HDF5's own diagnosis. */
+  CHECK(truncate(PATH, 1000) == 0, "truncate failed");
+  sif_error_clear();
+  CHECK(
+    sif_hdf5_check(PATH, false, NULL) == SIF_ERR_IO && error_has("(truncated)"),
+    "a truncated file: '%s'", sif_error_message());
+
+  sif_catalogue_free(cat);
+  remove_all();
+}
+
 /* What the reader says when it refuses: the reason, not only the status. */
 static void test_reasons(void) {
   printf("reasons for a refusal\n");
@@ -817,6 +860,7 @@ int main(void) {
   test_groups();
   test_foreign_files();
   test_reasons();
+  test_check();
   test_metadata();
   test_particles();
 #else

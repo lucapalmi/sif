@@ -34,7 +34,9 @@
 #include "sif/core/macros.h"
 #include "sif/structures/field.h"
 
+#include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 /** @brief Magic number at the start of every .xfield file. */
 #define SIF_XFIELD_MAGIC "XFLD"
@@ -94,6 +96,23 @@ SIF_NODISCARD sif_field_t* sif_field_read(
  * are rejected rather than adapted to.
  */
 int sif_field_read_into(sif_field_t* field, const char* filepath);
+
+/**
+ * @brief Check an .xfield file without loading it: its header, and that its
+ * size is the one the header implies.
+ *
+ * With @p deep, every value is read as well, a block at a time: the
+ * checksum is recomputed, the positions have to be finite and inside the
+ * box, and the weights non-negative. A file in the other precision is
+ * checked as fully, though this build could not load it (which is itself
+ * reported).
+ *
+ * @param report Where the summary goes, or NULL for none.
+ * @return SIF_OK for a sound file; SIF_ERR_IO for one with problems, each
+ * logged as an ERROR, or one that cannot be read; SIF_ERR_ALLOC;
+ * SIF_ERR_INVALID for a NULL path.
+ */
+int sif_field_check_xfield(const char* filepath, bool deep, FILE* report);
 
 /**
  * @brief Write a field to a .xfield file.
@@ -247,6 +266,32 @@ SIF_NODISCARD int sif_field_read_ascii_into(sif_field_t* field,
  */
 SIF_NODISCARD sif_field_t* sif_field_read_ascii(
   const char* filepath, const char* fmt, char delimiter, uint32_t skip_header);
+
+/**
+ * @brief Check that an ASCII table is well formed, without loading it.
+ *
+ * Reads the whole file, row by row, and logs each problem as an ERROR with
+ * its line -- the first SIF__IO_PROBLEMS_SHOWN of them, then a count of the
+ * rest -- rather than stopping at the first, as a reader does.
+ *
+ * With @p fmt NULL the check is generic: every row has as many columns as
+ * the first, and every field is a number. With a format it is what
+ * sif_field_read_ascii() would make of the file: every row has the columns
+ * the format needs, and every column it reads is a finite number (a
+ * declination within [-90, 90]); columns skipped with `*` may hold anything.
+ *
+ * @param filepath The file.
+ * @param fmt Column layout, as for sif_field_read_ascii(), or NULL.
+ * @param delimiter As for sif_field_read_ascii(); '\0' for a space.
+ * @param skip_header Leading lines to skip.
+ * @param report Where the summary goes -- rows, columns, and each column's
+ * range -- or NULL for none.
+ * @return SIF_OK for a well-formed file; SIF_ERR_IO for one with problems,
+ * or one that cannot be read; SIF_ERR_INVALID for a NULL path or a malformed
+ * format.
+ */
+int sif_field_check_ascii(const char* filepath, const char* fmt, char delimiter,
+  uint32_t skip_header, FILE* report);
 
 /**
  * @brief How the values of a binary file are arranged.

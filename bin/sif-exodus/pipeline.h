@@ -247,6 +247,11 @@ uint64_t pipeline_peak_bytes(
  * step that failed, which has already been logged. */
 SIF_NODISCARD int pipeline_box(const exodus_params_t* params);
 
+/* Read one input, as a run does. *file_box is the box the file records, or
+ * 0. Returns SIF_OK, or the status of what failed, already logged. */
+SIF_NODISCARD int pipeline_read_input(
+  const exodus_input_t* in, sif_field_t** out, double* file_box);
+
 /* Run the pipeline on a survey, the same way. */
 SIF_NODISCARD int pipeline_survey(const exodus_params_t* params);
 

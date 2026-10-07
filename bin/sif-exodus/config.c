@@ -2203,6 +2203,91 @@ static uint64_t physical_memory(void) {
 
 static void check_output(checker_t* ch, const exodus_params_t* p);
 
+/* An ASCII input, every row of it, against its column format: every problem
+ * the reader would stop at the first of. Logged by the library, and counted
+ * here as one. */
+static bool check_ascii_rows(checker_t* ch, const exodus_input_t* src) {
+  if (src->kind != EXODUS_INPUT_ASCII || !src->columns)
+    return true;
+  if (sif_field_check_ascii(src->path, src->columns, src->delimiter,
+        src->skip_header, NULL) == SIF_OK)
+    return true;
+  ch->n_errors++;
+  return false;
+}
+
+/* A box's input, read as the run reads it, and its values checked. What it
+ * finds out -- the count, the box a file records -- goes into *in. */
+static void check_input_values(checker_t* ch, const exodus_input_t* src,
+  const char* name, double box, input_facts_t* in) {
+  if (!check_ascii_rows(ch, src))
+    return;
+
+  sif_field_t* field = NULL;
+  double file_box = 0.0;
+  if (pipeline_read_input(src, &field, &file_box) != SIF_OK) {
+    ch->n_errors++;
+    return;
+  }
+  if (!(box > 0.0))
+    box = file_box;
+
+  double lo[3] = {0, 0, 0}, hi[3] = {0, 0, 0}, w_lo = 0, w_hi = 0;
+  uint64_t n_bad = 0, n_outside = 0, n_negative = 0, n_ok = 0;
+  const sif_real* pos[3] = {field->x, field->y, field->z};
+  for (uint64_t i = 0; i < field->n_particles; i++) {
+    bool bad = false, out = false;
+    for (int k = 0; k < 3; k++) {
+      const double v = pos[k][i];
+      bad |= !isfinite(v);
+      out |= box > 0.0 && !(v >= 0.0 && v < box);
+    }
+    if (bad) {
+      n_bad++;
+      continue;
+    }
+    n_outside += out;
+    for (int k = 0; k < 3; k++) {
+      const double v = pos[k][i];
+      lo[k] = n_ok ? fmin(lo[k], v) : v;
+      hi[k] = n_ok ? fmax(hi[k], v) : v;
+    }
+    if (field->weights) {
+      const double w = field->weights[i];
+      n_negative += w < 0.0;
+      w_lo = n_ok ? fmin(w_lo, w) : w;
+      w_hi = n_ok ? fmax(w_hi, w) : w;
+    }
+    n_ok++;
+  }
+
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
+    "%s: %llu tracers read; x [%g, %g], y [%g, %g], z [%g, %g]", name,
+    (unsigned long long)field->n_particles, lo[0], hi[0], lo[1], hi[1], lo[2],
+    hi[2]);
+  if (field->weights)
+    check_say(
+      ch, SIF_LOG_LEVEL_INFO, NULL, "%s: weights [%g, %g]", name, w_lo, w_hi);
+  if (n_bad)
+    check_say(ch, SIF_LOG_LEVEL_ERROR, name,
+      "%llu of %llu tracers with a position that is not finite",
+      (unsigned long long)n_bad, (unsigned long long)field->n_particles);
+  if (n_outside)
+    check_say(ch, SIF_LOG_LEVEL_WARNING, name,
+      "%llu of %llu tracers outside [0, %g); the run wraps them into the box",
+      (unsigned long long)n_outside, (unsigned long long)field->n_particles,
+      box);
+  if (n_negative)
+    check_say(ch, SIF_LOG_LEVEL_ERROR, name, "%llu negative weights",
+      (unsigned long long)n_negative);
+
+  in->n_tracers = field->n_particles;
+  in->weighted = field->weights != NULL;
+  if (!(in->box > 0.0))
+    in->box = file_box;
+  sif_field_free(field);
+}
+
 /*
  * A survey's shape. Its box, grid and meshes all follow from the footprint,
  * which only reading the randoms measures, so for --check (`summary`) both
@@ -2210,12 +2295,19 @@ static void check_output(checker_t* ch, const exodus_params_t* p);
  * the files are only opened, since the run is about to measure it anyway.
  */
 static void check_survey(
-  checker_t* ch, const exodus_params_t* p, bool summary) {
+  checker_t* ch, const exodus_params_t* p, bool summary, bool deep) {
   input_facts_t data = {0, 0.0, false}, randoms = {0, 0.0, false};
   inspect_input(ch, &p->input, "input.data", &data);
   inspect_input(ch, &p->randoms, "input.random", &randoms);
   if (!summary || ch->n_errors)
     return;
+
+  /* The layout below reads both inputs, and stops at the first bad row. */
+  if (deep) {
+    const bool data_ok = check_ascii_rows(ch, &p->input);
+    if (!check_ascii_rows(ch, &p->randoms) || !data_ok)
+      return;
+  }
 
   if (p->survey.sky) {
     const sif_cosmology_t* k = &p->survey.cosmology;
@@ -2282,19 +2374,22 @@ static void check_survey(
       human_bytes(a, sizeof a, plan.peak_bytes), human_bytes(b, sizeof b, ram));
 }
 
-int config_check(const exodus_config_t* c, const char* file, bool summary) {
+int config_check(
+  const exodus_config_t* c, const char* file, bool summary, bool deep) {
   const exodus_params_t* p = &c->params;
   checker_t ch = {file, !summary, 0};
   input_facts_t in = {0, 0.0, false};
 
   if (p->mode == EXODUS_MODE_SURVEY) {
-    check_survey(&ch, p, summary);
+    check_survey(&ch, p, summary, deep);
     check_output(&ch, p);
     return ch.n_errors ? -1 : 0;
   }
 
-  /* 1. The input, as far as its header goes. */
+  /* 1. The input, as far as its header goes, and with --deep every value. */
   inspect_input(&ch, &p->input, "input", &in);
+  if (deep && ch.n_errors == 0)
+    check_input_values(&ch, &p->input, "input", p->input.box_length, &in);
 
   const double box = p->input.box_length > 0.0 ? p->input.box_length : in.box;
   const uint64_t n = in.n_tracers;

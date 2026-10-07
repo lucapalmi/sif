@@ -455,9 +455,13 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 #  define SIF_ALIGN_T __attribute__((aligned(SIF_CACHE_LINE)))
 /** @brief One instance of a static object per thread. */
 #  define SIF_THREAD_LOCAL __thread
+/** @brief Check the arguments against a printf format: argument @p f is the
+ * format, the variadic ones start at @p a. */
+#  define SIF_PRINTF_LIKE(f, a) __attribute__((format(printf, f, a)))
 
 #else
 
+#  define SIF_PRINTF_LIKE(f, a)
 #  define SIF_NODISCARD
 #  define SIF_PURE_FUNCTION
 #  define SIF_HOT_LOOP

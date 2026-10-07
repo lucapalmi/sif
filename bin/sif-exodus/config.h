@@ -85,9 +85,13 @@ int config_load(const char* path, const config_define_t* defines,
  *
  * With `summary` (for --check) everything goes to stderr under the name
  * `file`, the run's shape included; without it (before a run, with the
- * library up) errors and warnings go to the log. Returns 0, or -1 if the run
- * could not succeed. */
-int config_check(const exodus_config_t* config, const char* file, bool summary);
+ * library up) errors and warnings go to the log. With `deep` the inputs are
+ * read too, as the run reads them, and their values checked: an ASCII input
+ * against its column format, every row; a box's input for positions that are
+ * not finite or fall outside the box, and negative weights. Returns 0, or -1
+ * if the run could not succeed. */
+int config_check(
+  const exodus_config_t* config, const char* file, bool summary, bool deep);
 
 /* Release everything config_load() allocated. */
 void config_free(exodus_config_t* config);

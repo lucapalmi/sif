@@ -36,6 +36,7 @@
 #include "sif/core/macros.h"
 #include "sif/structures/field.h"
 
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 
@@ -219,6 +220,41 @@ void sif_gadget_print_header(const sif_gadget_header_t* header, FILE* stream);
  * @return As sif_gadget_read_header().
  */
 int sif_gadget_inspect(const char* path);
+
+/**
+ * @brief Whether @p path names a GADGET snapshot, in any format: a file, or a
+ * multi-file snapshot's base name, as sif_field_read_gadget() resolves it.
+ *
+ * A guess from the first bytes -- a SnapFormat 2 label, a SnapFormat 1
+ * header record, an HDF5 file with a /Header group -- that logs nothing, for
+ * picking how to look at a file. It vouches for nothing past that:
+ * sif_gadget_check() does.
+ */
+bool sif_gadget_is_snapshot(const char* path);
+
+/**
+ * @brief Check a snapshot without loading it: every file of it opens, its
+ * record framing is whole (binary formats), it belongs to the same snapshot
+ * as the first, and the per-file counts add up to NumPart_Total.
+ *
+ * With @p deep, every position and every per-particle mass of every type is
+ * read as well, a block at a time: positions have to be finite and inside
+ * [0, box size), masses non-negative. That reads most of the snapshot, which
+ * is why it is asked for rather than done.
+ *
+ * Each problem is logged as an ERROR, and the check carries on to the next
+ * file rather than stopping.
+ *
+ * @param path A snapshot file, or a multi-file snapshot's base name.
+ * @param format Expected format, or SIF_GADGET_FORMAT_AUTO.
+ * @param deep Read the values too.
+ * @param report Where the header and the summary go, or NULL for none.
+ * @return SIF_OK for a sound snapshot; SIF_ERR_IO for one with problems or
+ * one that cannot be read; SIF_ERR_INVALID; SIF_ERR_ALLOC; SIF_ERR_UNSUPPORTED
+ * for HDF5 in a build without it.
+ */
+int sif_gadget_check(
+  const char* path, sif_gadget_format_t format, bool deep, FILE* report);
 
 /**
  * @brief Read one particle type of a GADGET snapshot into a new field.

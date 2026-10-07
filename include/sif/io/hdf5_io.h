@@ -321,4 +321,23 @@ SIF_NODISCARD int sif_hdf5_attr_name(const char* filepath, const char* group,
 
 /** @} */
 
+/**
+ * @brief Check an HDF5 file without loading it: it opens (a truncated file
+ * says so), every group and dataset in it can be opened, and a sif file is
+ * one this build reads. Lists the tree to @p report -- every group with its
+ * attribute count, every dataset with its type and shape -- and says what the
+ * file is: a sif file, a GADGET snapshot (checked as one by
+ * sif_gadget_check()), or neither.
+ *
+ * With @p deep, every numeric dataset is read as well, a block at a time, and
+ * its range written to @p report.
+ *
+ * @param report Where the summary goes, or NULL for none.
+ * @return SIF_OK for a sound file; SIF_ERR_IO for one with problems, each
+ * logged as an ERROR, or one that cannot be opened; SIF_ERR_ALLOC;
+ * SIF_ERR_INVALID for a NULL path; SIF_ERR_UNSUPPORTED in a build without
+ * HDF5.
+ */
+int sif_hdf5_check(const char* path, bool deep, FILE* report);
+
 #endif /* SIF_IO_HDF5_IO_H */

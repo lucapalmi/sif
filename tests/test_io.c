@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "test_util.h"
 
@@ -1386,6 +1387,111 @@ static void test_binary_field(void) {
   sif_field_free(f);
 }
 
+/* The report's "problems" line: the count, or 0 for "none". */
+static long report_problems(FILE* report) {
+  char line[256];
+  long n = -1;
+  rewind(report);
+  while (fgets(line, sizeof(line), report))
+    if (strncmp(line, "problems", 8) == 0)
+      n = strstr(line, "none") ? 0 : strtol(line + 8, NULL, 10);
+  return n;
+}
+
+static void test_ascii_check(void) {
+  printf("ASCII check lists every problem\n");
+
+  FILE* report = tmpfile();
+  write_text("# x y z\n1 2 3\n4 5 6\n");
+  CHECK(sif_field_check_ascii(ASCII_PATH, NULL, ' ', 0, report) == SIF_OK &&
+          report_problems(report) == 0,
+    "a sound file: '%s'", sif_error_message());
+  fclose(report);
+
+  /* Generic: the column count comes from the first row, and every problem
+   * is counted, not only the first. */
+  report = tmpfile();
+  write_text("x y z\n1 2 3\n4 5\n7 8 q\n1 2 3 4\n");
+  sif_error_clear();
+  CHECK(sif_field_check_ascii(ASCII_PATH, NULL, ' ', 0, report) == SIF_ERR_IO,
+    "a malformed file passed");
+  CHECK(error_has(":1: no number in the row (a header?"),
+    "the first problem: '%s'", sif_error_message());
+  CHECK(report_problems(report) == 4, "%ld problems, expected 4",
+    report_problems(report));
+  fclose(report);
+
+  /* Against a format: what the reader would refuse, a NaN included, and
+   * nothing in a skipped column. */
+  report = tmpfile();
+  write_text("1 2 3 junk\n4 5 nan junk\n7 8 junk\n");
+  sif_error_clear();
+  CHECK(
+    sif_field_check_ascii(ASCII_PATH, "x y z *", ' ', 0, report) == SIF_ERR_IO,
+    "a malformed file passed its format");
+  CHECK(error_has(":2: column 3 (z): 'nan' is not finite"),
+    "the first problem: '%s'", sif_error_message());
+  /* Row 3 twice over: 'junk' where z should be, and a column short. */
+  CHECK(report_problems(report) == 3, "%ld problems, expected 3",
+    report_problems(report));
+  fclose(report);
+
+  write_text("");
+  sif_error_clear();
+  CHECK(sif_field_check_ascii(ASCII_PATH, "xyz", ' ', 0, NULL) == SIF_ERR_IO &&
+          error_has(": empty file"),
+    "an empty file: '%s'", sif_error_message());
+
+  sif_error_clear();
+  CHECK(
+    sif_field_check_ascii(ASCII_PATH, "x q z", ' ', 0, NULL) == SIF_ERR_INVALID,
+    "a malformed format should be refused");
+}
+
+static void test_xfield_check(void) {
+  printf("xfield check\n");
+
+  /* make_field() runs past the box on purpose; the deep check would say so. */
+  sif_field_t* f = make_field();
+  if (!f)
+    return;
+  for (uint64_t i = 0; i < N_P; i++) {
+    f->x[i] = SIF_REAL_FMOD(f->x[i], BOX);
+    f->y[i] = SIF_REAL_FMOD(f->y[i], BOX);
+    f->z[i] = SIF_REAL_FMOD(f->z[i], BOX);
+  }
+  CHECK(sif_field_write(FIELD_PATH, f, (double)BOX) == SIF_OK, "write failed");
+  sif_field_free(f);
+
+  sif_error_clear();
+  FILE* report = tmpfile();
+  CHECK(sif_field_check_xfield(FIELD_PATH, true, report) == SIF_OK &&
+          report_problems(report) == 0,
+    "a sound file: '%s'", sif_error_message());
+  fclose(report);
+
+  /* A flipped bit only the deep check can see. */
+  corrupt_payload(FIELD_PATH, 40);
+  CHECK(sif_field_check_xfield(FIELD_PATH, false, NULL) == SIF_OK,
+    "the shallow check reads no values");
+  sif_error_clear();
+  CHECK(sif_field_check_xfield(FIELD_PATH, true, NULL) == SIF_ERR_IO &&
+          error_has("(corrupt)"),
+    "a corrupt payload: '%s'", sif_error_message());
+
+  CHECK(truncate(FIELD_PATH, 1000) == 0, "truncate failed");
+  sif_error_clear();
+  CHECK(sif_field_check_xfield(FIELD_PATH, false, NULL) == SIF_ERR_IO &&
+          error_has("1000 bytes, header says") && error_has("(truncated)"),
+    "a truncated file: '%s'", sif_error_message());
+
+  write_text("1 2 3\n");
+  sif_error_clear();
+  CHECK(sif_field_check_xfield(ASCII_PATH, false, NULL) == SIF_ERR_IO &&
+          error_has("not an .xfield file"),
+    "a text file: '%s'", sif_error_message());
+}
+
 int main(void) {
   if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
     printf("FAIL: sif_init\n");
@@ -1403,6 +1509,8 @@ int main(void) {
   test_ascii_field();
   test_ascii_field_rejections();
   test_ascii_field_reasons();
+  test_ascii_check();
+  test_xfield_check();
   test_error_record();
   test_catalogue_reasons();
   test_column_formats();

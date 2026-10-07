@@ -15,6 +15,9 @@
 #include "utils/logger_internal.h"
 
 #include <errno.h>
+#include <inttypes.h>
+#include <stdarg.h>
+#include <stdbool.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -80,6 +83,56 @@ int sif__io_os_error(
     SIF_LOG_ERROR(tag, "%s: %s", path, sif__io_strerror(err));
   sif__error_os_set(err);
   return SIF_ERR_IO;
+}
+
+void sif__io_problem(sif__io_problems_t* p, const char* fmt, ...) {
+  if (p->n++ >= SIF__IO_PROBLEMS_SHOWN)
+    return;
+  char msg[1024];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(msg, sizeof(msg), fmt, ap);
+  va_end(ap);
+  SIF_LOG_ERROR(p->tag, "%s", msg);
+}
+
+int sif__io_problems_end(const sif__io_problems_t* p, FILE* report) {
+  if (p->n > SIF__IO_PROBLEMS_SHOWN)
+    SIF_LOG_ERROR(p->tag, "%" PRIu64 " more problems not listed",
+      p->n - SIF__IO_PROBLEMS_SHOWN);
+  if (report) {
+    if (p->n)
+      fprintf(report, "problems      %" PRIu64 "\n", p->n);
+    else
+      fprintf(report, "problems      none\n");
+    fflush(report);
+  }
+  return p->n ? SIF_ERR_IO : SIF_OK;
+}
+
+void sif__io_stats_merge(sif__io_stats_t* a, const sif__io_stats_t* b) {
+  const bool a_has = a->n > a->n_nonfinite, b_has = b->n > b->n_nonfinite;
+  if (b_has && (!a_has || b->min < a->min))
+    a->min = b->min;
+  if (b_has && (!a_has || b->max > a->max))
+    a->max = b->max;
+  a->n += b->n;
+  a->n_nonfinite += b->n_nonfinite;
+}
+
+void sif__io_stats_header(FILE* report, int name_width) {
+  fprintf(report, "%-*s  %15s  %15s  %10s\n", name_width, "column", "min",
+    "max", "non-finite");
+}
+
+void sif__io_stats_print(
+  FILE* report, const char* name, int name_width, const sif__io_stats_t* s) {
+  if (s->n == s->n_nonfinite)
+    fprintf(report, "%-*s  %15s  %15s  %10" PRIu64 "\n", name_width, name, "-",
+      "-", s->n_nonfinite);
+  else
+    fprintf(report, "%-*s  %15.8g  %15.8g  %10" PRIu64 "\n", name_width, name,
+      s->min, s->max, s->n_nonfinite);
 }
 
 int sif__io_check_readable(

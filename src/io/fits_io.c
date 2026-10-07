@@ -978,6 +978,143 @@ int sif_fits_inspect(const char* path) {
   return sif_fits_print_summary(path, stdout);
 }
 
+/* The range of every numeric column of the current table, a block of rows at
+ * a time. A vector column is ranged over all its elements; an undefined
+ * value counts as not finite. */
+static int check_table_values(
+  fitsfile* f, const char* path, int hdu, FILE* report) {
+  int fstatus = 0, n_cols = 0;
+  LONGLONG n_rows = 0;
+  long block = 0;
+  fits_get_num_rowsll(f, &n_rows, &fstatus);
+  fits_get_num_cols(f, &n_cols, &fstatus);
+  fits_get_rowsize(f, &block, &fstatus);
+  if (fstatus) {
+    log_fits(fstatus, "%s: HDU %d", path, hdu);
+    return SIF_ERR_IO;
+  }
+  if (block < 1)
+    block = 1;
+  if (block > CHUNK)
+    block = CHUNK;
+
+  if (report) {
+    char name[FLEN_VALUE];
+    key_string(f, "EXTNAME", name);
+    fprintf(report, "[%d] %s\n", hdu, name);
+    sif__io_stats_header(report, 20);
+  }
+
+  int status = SIF_OK;
+  double* buf = NULL;
+  size_t buf_len = 0;
+  for (int c = 1; c <= n_cols && status == SIF_OK; c++) {
+    int type = 0;
+    LONGLONG repeat = 0, width = 0;
+    char key[FLEN_KEYWORD], name[FLEN_VALUE];
+    fits_get_eqcoltypell(f, c, &type, &repeat, &width, &fstatus);
+    fits_make_keyn("TTYPE", c, key, &fstatus);
+    key_string(f, key, name);
+    if (fstatus) {
+      log_fits(fstatus, "%s: HDU %d, column %d", path, hdu, c);
+      status = SIF_ERR_IO;
+      break;
+    }
+    if (type < 0 || !type_is_numeric(type) || repeat < 1)
+      continue;
+
+    const size_t need = (size_t)block * (size_t)repeat;
+    if (need > buf_len) {
+      double* grown = realloc(buf, need * sizeof(double));
+      if (!grown) {
+        SIF_LOG_ERROR(TAG, "out of memory: %zu-value read buffer", need);
+        status = SIF_ERR_ALLOC;
+        break;
+      }
+      buf = grown;
+      buf_len = need;
+    }
+
+    sif__io_stats_t s = {0};
+    for (LONGLONG row = 1; row <= n_rows; row += block) {
+      const LONGLONG rows = n_rows - row + 1 < block ? n_rows - row + 1 : block;
+      const LONGLONG n = rows * repeat;
+      int anynul = 0;
+      double nulval = NAN;
+      fits_read_col(f, TDOUBLE, c, row, 1, n, &nulval, buf, &anynul, &fstatus);
+      if (fstatus) {
+        log_fits(fstatus, "%s: HDU %d, column %s, rows %lld-%lld", path, hdu,
+          name, (long long)row, (long long)(row + rows - 1));
+        status = SIF_ERR_IO;
+        break;
+      }
+      for (LONGLONG i = 0; i < n; i++)
+        sif__io_stats_add(&s, buf[i]);
+    }
+    if (status == SIF_OK && report && s.n > 0)
+      sif__io_stats_print(report, name, 20, &s);
+  }
+  free(buf);
+  return status;
+}
+
+int sif_fits_check(const char* path, bool deep, FILE* report) {
+  if (!path) {
+    SIF_LOG_ERROR(TAG, "sif_fits_check: NULL path");
+    return SIF_ERR_INVALID;
+  }
+
+  /* The summary opens the file and walks every HDU's header, which is where
+   * cfitsio finds a broken structure. */
+  FILE* sink = report ? report : tmpfile();
+  int status = sink ? sif_fits_print_summary(path, sink) : SIF_ERR_IO;
+  if (sink && sink != report)
+    fclose(sink);
+  if (status != SIF_OK)
+    return status;
+
+  sif__io_problems_t pr = {TAG, 0};
+
+  /* The last HDU's data is past every header, so a file cut short inside it
+   * passes the walk above. */
+  uint64_t bytes = 0;
+  if (is_truncated(path, &bytes))
+    sif__io_problem(&pr,
+      "%s: %" PRIu64 " bytes, not a multiple of 2880 "
+      "(truncated)",
+      path, bytes);
+
+  if (deep && pr.n == 0) {
+    fitsfile* f = NULL;
+    int fstatus = 0, n_hdus = 0;
+    if (open_file(path, READONLY, &f) != SIF_OK)
+      return SIF_ERR_IO;
+    fits_get_num_hdus(f, &n_hdus, &fstatus);
+    for (int i = 1; fstatus == 0 && i <= n_hdus; i++) {
+      int hdutype = 0;
+      fits_movabs_hdu(f, i, &hdutype, &fstatus);
+      if (fstatus) {
+        log_fits(fstatus, "%s: HDU %d", path, i - 1);
+        pr.n++;
+        break;
+      }
+      if (!is_table(hdutype))
+        continue;
+      const int st = check_table_values(f, path, i - 1, report);
+      if (st == SIF_ERR_ALLOC) {
+        fits_close_file(f, &fstatus);
+        return st;
+      }
+      if (st != SIF_OK)
+        pr.n++;
+    }
+    int close_status = 0;
+    fits_close_file(f, &close_status);
+  }
+
+  return sif__io_problems_end(&pr, report);
+}
+
 /* ------------------------------------------------------------------------ */
 /* products: the file                                                        */
 /* ------------------------------------------------------------------------ */

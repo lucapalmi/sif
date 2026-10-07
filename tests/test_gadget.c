@@ -606,6 +606,64 @@ static void test_broken(void) {
   }
 }
 
+/* The check: every file, whatever is wrong with an earlier one. */
+static void test_check(void) {
+  printf("check\n");
+  char from[512], to[64];
+
+  /* Every fixture, deep: sound, and told apart from what is not one. */
+  const char* sound[] = {DATA "f1_legacy/snap_005", DATA "f1_g4/snap_005",
+    DATA "f1_g4_u32/snap_005", DATA "f2_swapped/snap_005",
+    DATA "hdf5_g4/snap_005", DATA "hdf5_legacy/snap_005"};
+  for (size_t i = 0; i < sizeof(sound) / sizeof(sound[0]); i++) {
+#ifndef SIF_HAVE_HDF5
+    if (strstr(sound[i], "hdf5"))
+      continue;
+#endif
+    sif_error_clear();
+    CHECK(
+      sif_gadget_check(sound[i], SIF_GADGET_FORMAT_AUTO, true, NULL) == SIF_OK,
+      "%s: '%s'", sound[i], sif_error_message());
+    CHECK(sif_gadget_is_snapshot(sound[i]), "%s: not taken for a snapshot",
+      sound[i]);
+  }
+  CHECK(!sif_gadget_is_snapshot(DATA "make_fixtures.py"),
+    "a script taken for a snapshot");
+  CHECK(!sif_gadget_is_snapshot(DATA "nothing/snap_005"),
+    "a missing path taken for a snapshot");
+
+  /* Three files, the middle one cut short and the last missing: both are
+   * reported, and the first still read. */
+  for (int i = 0; i < 2; i++) {
+    snprintf(from, sizeof(from), DATA "f1_legacy/snap_005.%d", i);
+    snprintf(to, sizeof(to), "test_gadget_check.%d", i);
+    copy_file(from, to, i == 1 ? 600 : -1);
+  }
+  remove("test_gadget_check.2");
+  FILE* report = tmpfile();
+  sif_error_clear();
+  CHECK(sif_gadget_check("test_gadget_check", SIF_GADGET_FORMAT_AUTO, false,
+          report) == SIF_ERR_IO,
+    "a broken snapshot passed");
+  CHECK(error_has("test_gadget_check.1: record") && error_has("(truncated)"),
+    "the first problem: '%s'", sif_error_message());
+
+  char line[256];
+  bool counted = false, read_one = false;
+  rewind(report);
+  while (fgets(line, sizeof(line), report)) {
+    counted |= strncmp(line, "problems      2", 15) == 0;
+    read_one |= strncmp(line, "files read    1 of 3", 20) == 0;
+  }
+  CHECK(counted && read_one, "the report: 2 problems, 1 file of 3 read");
+  fclose(report);
+
+  for (int i = 0; i < 2; i++) {
+    snprintf(to, sizeof(to), "test_gadget_check.%d", i);
+    remove(to);
+  }
+}
+
 int main(void) {
   if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
     printf("FAIL: sif_init\n");
@@ -619,6 +677,7 @@ int main(void) {
   test_subsample();
   test_refusals();
   test_broken();
+  test_check();
 
   sif_finalise();
 

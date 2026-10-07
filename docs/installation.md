@@ -31,6 +31,7 @@ The library has few, non-vendored dependencies that should be available on your 
 1. `cmake`
 2. `fftw3`
 3. `hdf5` (optional)
+4. `cfitsio` (optional)
 
 You can install them with any package manager,
 ```shell
@@ -54,7 +55,7 @@ The library is compiled through CMake. These are the available options
 
 - **SIF_HDF5_SUPPORT:** activates the [HDF5](https://support.hdfgroup.org/documentation/hdf5/latest/_intro_h_d_f5.html) integration. By default, HDF5 is used only if it's available as a CMake package and is a serial build (no MPI). Options **(AUTO|ON|OFF)**, default **AUTO**.
 
-- **SIF_FITS_SUPPORT:** activates the FITS format integration through [cfitsio](https://heasarc.gsfc.nasa.gov/fitsio/). cfitsio is looked for with pkg-config and in the usual places; `-DCFITSIO_ROOT=...` points at an install elsewhere. Options **(AUTO|ON|OFF)**, default **AUTO**.
+- **SIF_FITS_SUPPORT:** activates the FITS format integration through [cfitsio](https://heasarc.gsfc.nasa.gov/fitsio/). It is found through pkg-config when available; if it is installed somewhere pkg-config does not know about (common on clusters), pass its install prefix with `-DCFITSIO_ROOT=/path/to/cfitsio` or set the `CFITSIO_ROOT` environment variable. Options **(AUTO|ON|OFF)**, default **AUTO**.
 
 - **SIF_NATIVE_ARCH:** activates the `-march=native` compile flag in Release builds. If the compiled binary is going to be used on machines with different architectures, this option should be turned off. Options **(ON|OFF)**, default **ON**.
 
@@ -85,14 +86,10 @@ The python package can be installed with pip.
 ```
 pip install .
 ```
-
-:::{note}
 The project's compile options are set to their default values. If you need to modify them, the standard syntax is
 ```
 pip install . -C cmake.define.OpenMP_ROOT=$(brew --prefix libomp)
 ```
-
-:::
 
 :::{admonition} HPC cluster usage
 :class: tip

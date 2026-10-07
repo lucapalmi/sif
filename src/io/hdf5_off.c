@@ -380,6 +380,11 @@ int sif__gadget_h5_read(sif_gadget_h5_file_t* file, uint32_t ptype,
 
 void sif__gadget_h5_close(sif_gadget_h5_file_t* file) { (void)file; }
 
+bool sif__gadget_h5_looks(const char* path) {
+  (void)path;
+  return false;
+}
+
 sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   const sif_field_columns_t* columns, double length_scale, double fraction,
   uint64_t seed) {
@@ -391,4 +396,11 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
     "%s: HDF5 support not built (rebuild with -DSIF_HDF5_SUPPORT=ON)",
     paths && n_paths && paths[0] ? paths[0] : "(null)");
   return NULL;
+}
+
+int sif_hdf5_check(const char* path, bool deep, FILE* report) {
+  (void)deep;
+  (void)report;
+  refuse(path);
+  return SIF_ERR_UNSUPPORTED;
 }

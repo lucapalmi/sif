@@ -165,8 +165,7 @@ static bool columns_name_velocities(const char* columns) {
   return strchr(columns, 'v') || strchr(columns, 'V');
 }
 
-/* Read one input. *file_box is the box the file records, or 0. */
-static int read_field(
+int pipeline_read_input(
   const exodus_input_t* in, sif_field_t** out, double* file_box) {
 
   sif_field_t* field = NULL;
@@ -425,7 +424,7 @@ int pipeline_box(const exodus_params_t* p) {
   /* 1. Field. */
   sif_timer_start(&t);
   double file_box;
-  status = read_field(&p->input, &field, &file_box);
+  status = pipeline_read_input(&p->input, &field, &file_box);
   if (status != SIF_OK)
     goto done;
   status = resolve_box(p, file_box, &r.box);
@@ -659,10 +658,10 @@ static int survey_prepare(const exodus_params_t* p, sif_option search,
    * chosen around the footprint below. */
   sif_timer_start(&t);
   double unused_box;
-  status = read_field(&p->input, &data, &unused_box);
+  status = pipeline_read_input(&p->input, &data, &unused_box);
   if (status != SIF_OK)
     goto fail;
-  status = read_field(&p->randoms, &randoms, &unused_box);
+  status = pipeline_read_input(&p->randoms, &randoms, &unused_box);
   if (status != SIF_OK)
     goto fail;
 

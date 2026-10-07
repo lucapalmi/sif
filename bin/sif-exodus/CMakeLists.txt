@@ -26,4 +26,4 @@ configure_file(${CMAKE_CURRENT_BINARY_DIR}/template.c.tmp
   ${CMAKE_CURRENT_BINARY_DIR}/template.c COPYONLY)
 
 sif_add_program(sif-exodus
-  main.c config.c pipeline.c ${CMAKE_CURRENT_BINARY_DIR}/template.c)
+  main.c config.c inspect.c pipeline.c ${CMAKE_CURRENT_BINARY_DIR}/template.c)

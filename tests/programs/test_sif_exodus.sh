@@ -491,6 +491,123 @@ run --check box_sky.lua
 expect_status 2 "sky coordinates in a box"
 expect_error "which only a survey does" "sky coordinates in a box"
 
+# --- --check on a data file ------------------------------------------------
+
+expect_out() {
+  grep -qF -- "$1" out.txt || { fail "$2: no \"$1\" in"; cat out.txt; }
+}
+
+# ASCII: told from its contents, checked row by row, every problem listed.
+printf '# x y z w\n1 2 3 1\n4 5 6 1\n7 8 9 1\n' >good.txt
+run --check good.txt
+expect_status 0 "--check an ASCII file"
+expect_out "rows          3" "--check an ASCII file"
+expect_error "good.txt: OK" "--check an ASCII file"
+
+printf 'x y z\n1 2 3\n4 5\n7 8 abc\n1,2,3\n' >bad.txt
+run --check bad.txt
+expect_status 2 "--check a malformed ASCII file"
+expect_error "bad.txt:1: no number in the row (a header? skip 1 line)" "a header"
+expect_error "bad.txt:3: 2 columns, line 1 has 3" "a short row"
+expect_error "bad.txt:4: column 3: 'abc' is not a number" "not a number"
+expect_error "(comma-separated? pass the delimiter ',')" "the delimiter hint"
+expect_out "problems      5" "the problem count"
+
+run --check --skip-header 1 --columns "x y z" bad.txt
+expect_status 2 "--check against a format"
+expect_error "bad.txt:3: 2 columns, format 'x y z' needs 3" "--check against a format"
+run --check --skip-header 1 --columns "x y z" --delimiter , bad.txt
+expect_status 2 "--check with a delimiter"
+expect_error "'1 2 3' is not a number" "--check with a delimiter"
+
+run --check missing.txt
+expect_status 2 "--check a missing file"
+expect_error "missing.txt: No such file or directory" "--check a missing file"
+
+# GADGET, binary and multi-file, by its base name.
+run --check "$DATA/gadget/f1_legacy/snap_005"
+expect_status 0 "--check a snapshot"
+expect_out "files read    3 of 3" "--check a snapshot"
+run --check --deep "$DATA/gadget/f1_legacy/snap_005"
+expect_status 0 "--check --deep a snapshot"
+expect_out "1 x" "--check --deep a snapshot"
+
+mkdir -p cut
+for i in 0 1 2; do cp "$DATA/gadget/f1_legacy/snap_005.$i" cut/; done
+head -c 2000 "$DATA/gadget/f1_legacy/snap_005.1" >cut/snap_005.1
+run --check cut/snap_005
+expect_status 2 "--check a truncated snapshot"
+expect_error "cut/snap_005.1: record" "--check a truncated snapshot"
+expect_out "files read    2 of 3" "--check a truncated snapshot"
+
+# .xfield: the header, and with --deep every value.
+run --check tracers.xfield
+expect_status 0 "--check an .xfield"
+expect_out "particles     1" "--check an .xfield"
+# Its header carries no checksum, which only reading every value finds.
+run --check --deep tracers.xfield
+expect_status 2 "--check --deep an .xfield"
+expect_error "header says 00000000 (corrupt)" "--check --deep an .xfield"
+head -c 70 tracers.xfield >short.xfield
+run --check short.xfield
+expect_status 2 "--check a truncated .xfield"
+expect_error "(truncated)" "--check a truncated .xfield"
+
+if [ "$HDF5" -eq 1 ]; then
+  H5="$DATA/gadget/hdf5_legacy/snap_005.hdf5"
+  run --check "$H5"
+  expect_status 0 "--check an HDF5 snapshot"
+  expect_out "type         in file" "an HDF5 snapshot is checked as one"
+  run --check --format hdf5 "$H5"
+  expect_status 0 "--check --format hdf5"
+  expect_out "/ParticleType1/Coordinates" "--format hdf5 lists the tree"
+  expect_out "GADGET snapshot" "--format hdf5 says what it is"
+  run --check --deep --format hdf5 "$H5"
+  expect_status 0 "--check --deep --format hdf5"
+  head -c 5000 "$H5" >cut.hdf5
+  run --check cut.hdf5
+  expect_status 2 "--check a truncated HDF5 file"
+  expect_error "(truncated)" "--check a truncated HDF5 file"
+fi
+
+if [ "$FITS" -eq 1 ]; then
+  run --check --deep "$DATA/fits/catalogue.fits"
+  expect_status 0 "--check --deep a FITS file"
+  expect_out "GALAXIES" "--check a FITS file"
+  expect_out "ZNULL" "--deep ranges the columns"
+  head -c 10000 "$DATA/fits/catalogue.fits" >cut.fits
+  run --check cut.fits
+  expect_status 2 "--check a truncated FITS file"
+  expect_error "(truncated)" "--check a truncated FITS file"
+fi
+
+run --check --format xfield good.txt
+expect_status 2 "--format that is not what the file is"
+expect_error "not an .xfield file" "--format that is not what the file is"
+
+run --check --columns "x y z" tracers.xfield
+expect_status 2 "--columns on a file that is not ASCII"
+expect_error "go with an ASCII file" "--columns on a file that is not ASCII"
+run --deep template.lua
+expect_status 2 "--deep without --check"
+run --check --format nonsense good.txt
+expect_status 2 "an unknown --format"
+
+# A configuration with --deep reads its input, every row of it.
+cat >deep.lua <<'EOF'
+mode = "box"
+input = { path = "bad.txt", format = "ascii", columns = "x y z",
+  skip_header = 1, box_length = 10 }
+finder = { radii = { 2 }, threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check deep.lua
+expect_status 0 "a configuration without --deep does not read its input"
+run --check --deep deep.lua
+expect_status 2 "a configuration with --deep"
+expect_error "bad.txt:3: 2 columns, format 'x y z' needs 3" "--deep, row 3"
+expect_error "bad.txt:4: column 3 (z): 'abc' is not a number" "--deep, row 4"
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
   exit 1

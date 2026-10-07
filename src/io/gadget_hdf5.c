@@ -121,6 +121,19 @@ static void group_name(
   snprintf(buf, len, "%s%u", f->group_prefix, t);
 }
 
+bool sif__gadget_h5_looks(const char* path) {
+  sif__h5_quiet_t q;
+  sif__h5_quiet_begin(&q);
+  bool found = false;
+  hid_t file = H5Fopen(path, H5F_ACC_RDONLY, H5P_DEFAULT);
+  if (file >= 0) {
+    found = link_exists(file, "Header");
+    H5Fclose(file);
+  }
+  sif__h5_quiet_end(&q);
+  return found;
+}
+
 int sif__gadget_h5_open(
   const char* path, sif_gadget_h5_file_t** out_file, sif_gadget_header_t* h) {
 
