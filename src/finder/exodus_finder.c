@@ -1775,8 +1775,8 @@ typedef struct {
   /*
    * What a survey run adds, all NULL for a box. The random grid is smoothed
    * alongside the data one in a workspace of its own, and `occupied` marks the
-   * grid cells holding at least one random: the footprint, at grid
-   * resolution.
+   * observed grid cells: those the randoms reach, with their chance holes
+   * closed (survey_build_occupancy()).
    */
   sif_grid_t* random_grid;
   const sif_chain_mesh_t* random_mesh; /* borrowed, never freed */
@@ -1847,6 +1847,115 @@ static inline uint32_t survey_node(sif_real p, sif_real inv_l, uint32_t n) {
   return i < n ? i : n - 1;
 }
 
+/*
+ * The closing that fills the footprint's chance holes, see
+ * survey_build_occupancy(). A node inside the footprint stays unobserved only
+ * when a whole window next to it drew no random, about W exp(-W lambda) for a
+ * window of W nodes at lambda randoms a node. The window is the smallest that
+ * expects CLOSING_MIN_RANDOMS at the footprint's mean density, which leaves
+ * fewer than one node in 10^4 unobserved where the selection is ten times
+ * sparser than the mean. CLOSING_MAX_RADIUS bounds it, since a closing over
+ * 2k + 1 nodes also fills real gaps up to 2k nodes wide.
+ */
+#define CLOSING_MIN_RANDOMS 128.0
+#define CLOSING_MAX_RADIUS  4
+
+/*
+ * Randoms per node over the footprint, from m, the randoms per marked node.
+ * The marked nodes miss the ones that drew no random, so for Poisson counts
+ * m = lambda / (1 - exp(-lambda)), which overstates a sparse catalogue; this
+ * solves it back for lambda.
+ */
+static double survey_randoms_per_node(double m) {
+  if (!(m > 1.0))
+    return 0.0;
+  double lo = 0.0, hi = m;
+  for (int i = 0; i < 64; i++) {
+    const double mid = 0.5 * (lo + hi);
+    if (mid < m * (1.0 - exp(-mid)))
+      lo = mid;
+    else
+      hi = mid;
+  }
+  return 0.5 * (lo + hi);
+}
+
+/*
+ * One axis of a box dilation (`erode` clear) or erosion (set) of `src` into
+ * `dst`, over a window of 2k + 1 nodes along `axis`. Nodes past the grid's
+ * faces count as unobserved both ways, so the closing never reaches past the
+ * randoms' outermost nodes and the padding the survey box was sized for still
+ * holds.
+ */
+static void survey_close_pass(const sif_bitmask_t* src, sif_bitmask_t* dst,
+  uint32_t n, int axis, int32_t k, int erode) {
+
+  const uint64_t n2 = (uint64_t)n * n;
+  const uint64_t stride = axis == 0 ? n2 : axis == 1 ? n : 1;
+  /* The other two axes, slower first, that pick out one line. */
+  const uint64_t step_a = axis == 0 ? n : n2;
+  const uint64_t step_b = axis == 2 ? n : 1;
+  const int32_t len = (int32_t)n;
+  const int32_t full = 2 * k + 1;
+
+  sif_bitmask_clear_all(dst);
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t line = 0; line < n2; line++) {
+    const uint64_t base = (line / n) * step_a + (line % n) * step_b;
+
+    /* Set nodes in the window [i - k, i + k], here for i = -1. */
+    int32_t count = 0;
+    for (int32_t j = 0; j < k && j < len; j++)
+      count += sif_bitmask_get(src, base + (uint64_t)j * stride);
+
+    for (int32_t i = 0; i < len; i++) {
+      if (i + k < len)
+        count += sif_bitmask_get(src, base + (uint64_t)(i + k) * stride);
+      if (i - k - 1 >= 0)
+        count -= sif_bitmask_get(src, base + (uint64_t)(i - k - 1) * stride);
+      if (erode ? count == full : count > 0)
+        sif_bitmask_set_atomic(dst, base + (uint64_t)i * stride);
+    }
+  }
+}
+
+/*
+ * Closes the occupancy over a box of 2k + 1 nodes: dilate, then erode. A box
+ * is the product of its sides, so each is three passes along lines rather
+ * than one over a cube, and the two masks take turns as source and
+ * destination, the result landing back in `occupied`.
+ */
+static int survey_close(sif_bitmask_t* occupied, uint32_t n, int32_t k) {
+  sif_bitmask_t* tmp = sif_bitmask_alloc(occupied->n_bits);
+  if (!tmp)
+    return SIF_ERR_ALLOC;
+
+  survey_close_pass(occupied, tmp, n, 0, k, 0);
+  survey_close_pass(tmp, occupied, n, 1, k, 0);
+  survey_close_pass(occupied, tmp, n, 2, k, 0);
+  survey_close_pass(tmp, occupied, n, 0, k, 1);
+  survey_close_pass(occupied, tmp, n, 1, k, 1);
+  survey_close_pass(tmp, occupied, n, 2, k, 1);
+
+  sif_bitmask_free(tmp);
+  return SIF_OK;
+}
+
+/*
+ * The footprint at grid resolution: the nodes the randoms reach, with the
+ * holes they leave by chance filled in.
+ *
+ * A grid fine enough to search on puts only a few randoms in each cell --
+ * sif-exodus's default is a cell per mean data separation, so about
+ * N_random / N_data of them, and fewer where the selection falls off -- and
+ * a cell that draws none is a hole the survey never had. Marked as it is, a
+ * void well inside the footprint reads as partly unobserved, and a candidate
+ * centred in such a cell is dropped. Closing the mask over a window that
+ * expects enough randoms (CLOSING_MIN_RANDOMS) fills them, at the price of
+ * also filling real gaps narrower than the window, which the smoothed fields
+ * do not resolve anyway; the edge stays where the randoms put it.
+ */
 static int survey_build_occupancy(exodus_ctx_t* ctx, const sif_grid_t* grid) {
   const sif_chain_mesh_t* rm = ctx->random_mesh;
 
@@ -1865,6 +1974,34 @@ static int survey_build_occupancy(exodus_ctx_t* ctx, const sif_grid_t* grid) {
 
     sif_bitmask_set_atomic(ctx->occupied, sif__flat_index(n, ix, iy, iz));
   }
+
+  const uint64_t marked = sif_bitmask_count_set(ctx->occupied);
+  if (marked == 0)
+    return SIF_OK;
+
+  const double lambda =
+    survey_randoms_per_node((double)rm->n_particles / (double)marked);
+  int32_t k = 1;
+  while (k < CLOSING_MAX_RADIUS &&
+         lambda * (2 * k + 1) * (2 * k + 1) * (2 * k + 1) < CLOSING_MIN_RANDOMS)
+    k++;
+  const double window = (double)(2 * k + 1) * (2 * k + 1) * (2 * k + 1);
+
+  if (survey_close(ctx->occupied, n, k) != SIF_OK)
+    return SIF_ERR_ALLOC;
+
+  const uint64_t observed = sif_bitmask_count_set(ctx->occupied);
+  SIF_LOG_TRACE(TAG,
+    "footprint: %.3g randoms per grid cell, closed over %d^3 cells: %" PRIu64
+    " cells reached by a random, %" PRIu64 " observed",
+    lambda, 2 * k + 1, marked, observed);
+
+  if (lambda * window < CLOSING_MIN_RANDOMS)
+    SIF_LOG_WARNING(TAG,
+      "randoms: %.3g per grid cell over the footprint, too sparse to fill its "
+      "chance holes (expected at least %.3g): footprints may read below 1 "
+      "inside the survey; use more randoms or a coarser grid",
+      lambda, CLOSING_MIN_RANDOMS / window);
 
   return SIF_OK;
 }

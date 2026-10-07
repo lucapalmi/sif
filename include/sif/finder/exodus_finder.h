@@ -106,9 +106,12 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * mesh, in the same Cartesian frame and the same box. The randoms may follow
  * the survey's n(z) -- they normally do -- and both sets may carry weights;
  * the meshes' total weights set alpha. Where the randoms are is taken as the
- * footprint: a grid cell holding at least one random is observed, any other
- * is not, so the randoms have to be dense enough to put one in every observed
- * cell, including where the selection is sparsest.
+ * footprint: the grid cells holding at least one random, with the holes a
+ * sparse catalogue leaves by chance closed. The closing runs over a box of
+ * 3^3 cells, or wider where the randoms are too few to expect about a hundred
+ * in it (up to 9^3), so it also fills real gaps up to two cells wide -- four
+ * at the widest -- and a warning says when even the widest leaves chance
+ * holes behind.
  *
  * **Geometry.** Nothing wraps around. The survey has to sit inside the box
  * with about the largest search sphere of empty space on every side -- the

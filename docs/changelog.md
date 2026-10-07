@@ -3,6 +3,19 @@
 Current version: v0.2 release 1
 
 
+## Unreleased
+
+### Fixed
+
+- The survey finder's footprint read below 1 for voids well inside the
+  survey. A cell counted as observed only if a random fell in it, and on a
+  search grid (sif-exodus's default is a cell per mean data separation) a
+  random catalogue a few to tens of times the data leaves cells empty by
+  chance, more so where n(z) falls off. The same holes also kept candidate
+  centres out. The footprint is now closed over 3^3 cells, or up to 9^3 where
+  the randoms are too sparse for that, which also fills real gaps that
+  narrow. A warning says when even 9^3 leaves chance holes
+
 ## v0.2.1 -- 30/09/2026
 
 ### Added

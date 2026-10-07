@@ -12,7 +12,8 @@
  * voids carved into the data -- three well inside, one cut by the edge. Run
  * once with uniform selection and once with a density that falls by a factor
  * of 2.5 across the footprint, which the randoms carry and the finder has to
- * divide back out. Then weights on both sides, which must change nothing when
+ * divide back out, and once with randoms only three times the data, sparse
+ * enough to leave chance holes in the footprint. Then weights on both sides, which must change nothing when
  * they only rescale, and the refusals: a survey too close to the box, and a
  * grid that is already a contrast.
  */
@@ -52,6 +53,11 @@ static int failures = 0;
 
 #define N_DATA    100000
 #define N_RANDOMS (10 * N_DATA)
+
+/* Few enough randoms that a grid cell inside the footprint draws none about
+ * once in 600, which a void a few cells across all but always meets: the
+ * footprint has to close those holes, or it reads below 1 well inside. */
+#define N_SPARSE (3 * N_DATA)
 
 static const sif_real radii[] = {30.0f, 24.0f, 19.0f, 15.0f};
 static const uint32_t n_radii = sizeof(radii) / sizeof(radii[0]);
@@ -193,22 +199,22 @@ static int64_t nearest(const sif_catalogue_t* cat, const hole_t* h, double* d) {
   return best;
 }
 
-static void run_case(const char* label, int selection) {
+static void run_case(const char* label, int selection, uint64_t n_randoms) {
   printf("%s\n", label);
 
   sif_real* dx = malloc(N_DATA * sizeof(sif_real));
   sif_real* dy = malloc(N_DATA * sizeof(sif_real));
   sif_real* dz = malloc(N_DATA * sizeof(sif_real));
-  sif_real* rx = malloc(N_RANDOMS * sizeof(sif_real));
-  sif_real* ry = malloc(N_RANDOMS * sizeof(sif_real));
-  sif_real* rz = malloc(N_RANDOMS * sizeof(sif_real));
+  sif_real* rx = malloc(n_randoms * sizeof(sif_real));
+  sif_real* ry = malloc(n_randoms * sizeof(sif_real));
+  sif_real* rz = malloc(n_randoms * sizeof(sif_real));
 
   rng_state = 0x243F6A8885A308D3ULL;
   draw(dx, dy, dz, N_DATA, selection, 1, 0.0f);
-  draw(rx, ry, rz, N_RANDOMS, selection, 0, 0.0f);
+  draw(rx, ry, rz, n_randoms, selection, 0, 0.0f);
 
   tracers_t data = build(dx, dy, dz, N_DATA);
-  tracers_t rand = build(rx, ry, rz, N_RANDOMS);
+  tracers_t rand = build(rx, ry, rz, n_randoms);
   CHECK(data.mesh && rand.mesh, "%s: mesh construction failed", label);
 
   /* Snapshots, for the restoration contract. */
@@ -248,7 +254,7 @@ static void run_case(const char* label, int selection) {
         h, r, 0.9 * inner[h].r, 1.5 * inner[h].r);
 
       if (cat->footprint) {
-        CHECK(cat->footprint[i] > 0.99f && cat->footprint_shell[i] > 0.99f,
+        CHECK(cat->footprint[i] == 1.0f && cat->footprint_shell[i] > 0.99f,
           "%s: inner hole %d is fully observed but reads %.3f / %.3f", label, h,
           (double)cat->footprint[i], (double)cat->footprint_shell[i]);
       }
@@ -648,9 +654,10 @@ int main(void) {
     return 1;
   }
 
-  run_case("uniform selection", 0);
+  run_case("uniform selection", 0, N_RANDOMS);
 #if !SIF_TEST_INSTRUMENTED
-  run_case("radial selection", 1);
+  run_case("radial selection", 1, N_RANDOMS);
+  run_case("sparse randoms", 0, N_SPARSE);
   run_weights();
 #endif
   run_workflow();
