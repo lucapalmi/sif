@@ -36,11 +36,7 @@ Current version: v0.2 release 1
   `SIF_ERR_UNINITIALISED`) instead of silently doing nothing, and
   `pysif.set_setting()` raises. 
 - Without `sif_system_init()`, the library uses OpenMP's own thread count.
-- Errors from the field, grid, chain mesh and catalogue name the argument and
-  the part at fault, with the values: the first particle outside the box and
-  its coordinates, the first non-finite position or sky coordinate, the
-  character a metadata key may not hold, and the size of a failed
-  allocation. Python raises with that message instead of one of its own
+- Improved error messages for Field, Grid, ChainMesh and Catalog
 - `sif_field_refresh_bounds()` and `sif_field_sort_morton()` refuse a field
   with a non-finite position, naming the first
 - `sif_field_wrap_periodic()` takes a third counter, `n_nonfinite`, for the
@@ -50,11 +46,7 @@ Current version: v0.2 release 1
 - `sif_chain_mesh_alloc()` and `sif_grid_alloc()` report the reason they
   failed through `sif_error_status()`
 - The CIC assignment and the chain mesh accept coordinates within a few ULPs
-  of the box faces (a position stored as exactly `box_length` by
-  single-precision rounding, say) and fold them in periodically, with an
-  info line, instead of refusing the field. `Field.wrap()` is now only needed
-  for a snapshot that was never wrapped into the box. The `--check` file
-  checkers apply the same tolerance
+  of the box faces. The `--check` file checkers apply the same tolerance
 - The field functions that return a status are `SIF_NODISCARD`
 
 ### Deprecated
@@ -70,18 +62,10 @@ Current version: v0.2 release 1
 ### Fixed
 
 - The survey finder's footprint read below 1 for voids well inside the
-  survey. A cell counted as observed only if a random fell in it, and on a
-  search grid (sif-exodus's default is a cell per mean data separation) a
-  random catalogue a few to tens of times the data leaves cells empty by
-  chance, more so where n(z) falls off. The same holes also kept candidate
-  centres out. The footprint is now closed over 3^3 cells, or up to 9^3 where
+  survey. The footprint is now closed over 3^3 cells, or up to 9^3 where
   the randoms are too sparse for that, which also fills real gaps that
   narrow. A warning says when even 9^3 leaves chance holes
-- Python exceptions that named the wrong cause: `Grid.assign_cic()` said
-  "nothing to deposit" for a field in sky coordinates, `ChainMesh()` raised
-  one `ValueError` for six causes and for running out of memory,
-  `field_from_numpy()` raised `MemoryError` for empty arrays, and
-  `Grid(n_cells=0)` raised `MemoryError`
+- Python exceptions that named the wrong cause.
 - `sif_chain_mesh_alloc()` returned NULL without a message for an empty
   field or an allocation failure
 - A catalogue metadata table that could not grow was reported as a bad key
