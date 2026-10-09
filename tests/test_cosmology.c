@@ -25,7 +25,6 @@
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
-#include "sif/structures/octree.h"
 
 #include <math.h>
 #include <stdio.h>
@@ -342,7 +341,7 @@ static void test_refusals(void) {
   const sif_real offset[3] = {1.0f, 1.0f, 1.0f};
   const sif_real radii[] = {5.0f};
 
-  CHECK(sif_field_wrap_periodic(f, 100.0f, NULL, NULL) == SIF_ERR_INVALID,
+  CHECK(sif_field_wrap_periodic(f, 100.0f, NULL, NULL, NULL) == SIF_ERR_INVALID,
     "wrap_periodic accepted it");
   CHECK(
     sif_field_translate(f, offset) == SIF_ERR_INVALID, "translate accepted it");
@@ -369,9 +368,8 @@ static void test_refusals(void) {
     "a refused consuming build emptied the field");
   sif_chain_mesh_free(m);
 
-  sif_octree_t* o = sif_octree_alloc(f, 8);
-  CHECK(!o, "octree_alloc accepted it");
-  sif_octree_free(o);
+  CHECK(sif_field_require_morton(f) == SIF_ERR_INVALID,
+    "require_morton accepted it");
 
   sif_real off[3], box;
   CHECK(sif_finder_exodus_survey_box(NULL, f, radii, 1, 32, SIF_DEFAULT, off, &box) ==
@@ -387,7 +385,7 @@ static void test_refusals(void) {
 }
 
 int main(void) {
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK)
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK)
     return 1;
 
   test_distances();
@@ -395,7 +393,7 @@ int main(void) {
   test_catalogue_to_sky();
   test_refusals();
 
-  sif_finalise();
+  sif_system_finalise();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
   return failures != 0;

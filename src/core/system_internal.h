@@ -8,8 +8,8 @@
  * @file system_internal.h
  * @brief Access to the process-global system state. Private to the library.
  *
- * The state itself lives in system.c and is created by sif_init(). Everything
- * here assumes the library has been initialised.
+ * The state itself lives in system.c and is created by sif_system_init().
+ * Everything here assumes it has been.
  */
 
 #ifndef SIF__CORE_SYSTEM_INTERNAL_H
@@ -34,8 +34,8 @@ typedef struct {
    *  which may be lower than the one requested. */
   uint32_t max_threads;
 
-  /** Never NULL in an initialised library: sif_init() fails rather than come
-   *  up without FFTW. */
+  /** Never NULL in an initialised state: sif_system_init() fails rather than
+   *  come up without FFTW. */
   sif_fft_manager_t* fft_mgr;
 
   sif_timer_t total_runtime_timer;
@@ -48,7 +48,7 @@ typedef struct {
  * For call sites that cannot do anything useful without it, which is most of
  * them; they fail with their own status on NULL. It used to end the process
  * instead, which from Python meant an interpreter killed by calling a finder
- * before pysif.init().
+ * before pysif.system_init().
  */
 sif_system_state_t* sif__system_state(void);
 
@@ -73,7 +73,7 @@ int sif__system_thread_num(void);
 
 /**
  * @defgroup settings_lifetime Settings table lifetime
- * @brief Called by sif_init() and sif_finalise() only.
+ * @brief Called by sif_system_init() and sif_system_finalise() only.
  * @{
  */
 

@@ -29,4 +29,11 @@ void sif__error_os_set(int os_error);
  */
 void sif__error_status_set(int status);
 
+/**
+ * @brief Bytes as GiB, for the sizes an allocation failure reports: a size is
+ * what tells a caller whether it asked for too much or the machine has too
+ * little.
+ */
+#define SIF__GIB(bytes) ((double)(bytes) / (1024.0 * 1024.0 * 1024.0))
+
 #endif /* SIF__UTILS_LOGGER_INTERNAL_H */

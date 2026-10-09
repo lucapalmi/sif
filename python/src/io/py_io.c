@@ -144,8 +144,9 @@ PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
    * caller supplies it. */
   if (wrap) {
     int status = SIF_OK;
-    Py_BEGIN_ALLOW_THREADS status =
-      sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL);
+    uint64_t nonfinite = 0;
+    Py_BEGIN_ALLOW_THREADS status = sif_field_wrap_periodic(
+      field, (sif_real)box_length, NULL, NULL, &nonfinite);
     Py_END_ALLOW_THREADS
 
       if (status != SIF_OK) {
@@ -158,6 +159,10 @@ PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
         "wrapped into",
         filepath, box_length);
       PyErr_SetString(PyExc_ValueError, detail);
+      return NULL;
+    }
+    if (py_sif_field_warn_nonfinite(nonfinite) < 0) {
+      sif_field_free(field);
       return NULL;
     }
   }

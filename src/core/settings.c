@@ -154,18 +154,28 @@ static int32_t settings_find(const char* key) {
 }
 
 /*
- * Inserts or overwrites, returning the entry's index or -1 if it could not be
- * stored. Both public entry points go through here, so validation and the
- * dirty flag are decided in exactly one place.
+ * Whether the pair survives a round trip through the file. The format is one
+ * `key = value` per line with no escaping, so a newline anywhere, or an '=' in
+ * a key, would produce a file that no longer reads back as what was written.
+ * Refusing beats corrupting.
+ *
+ * Checked by the public accessors rather than by settings_put(), because the
+ * two of them want different things from a refusal: an error from a set that
+ * did not happen, a warning from a get that still returns its fallback. The
+ * loader cannot produce such a pair -- lines are split at the newline and at
+ * the first '='.
+ */
+static bool settings_representable(const char* key, const char* value) {
+  return !strchr(key, '\n') && !strchr(key, '=') && !strchr(value, '\n');
+}
+
+/*
+ * Inserts or overwrites, returning the entry's index or -1, having logged, if
+ * the table could not grow. Every write goes through here, so the dirty flag
+ * is decided in exactly one place.
  */
 static int32_t settings_put(const char* key, const char* value) {
-  /* The file format is one `key = value` per line with no escaping, so a
-   * newline anywhere, or an '=' in a key, would produce a file that no longer
-   * reads back as what was written. Refusing beats corrupting. */
-  if (strchr(key, '\n') || strchr(key, '=') || strchr(value, '\n')) {
-    SIF_LOG_WARNING("settings", "rejected unrepresentable setting '%s'", key);
-    return -1;
-  }
+  SIF_ASSERT(settings_representable(key, value));
 
   int32_t idx = settings_find(key);
   if (idx >= 0) {
@@ -184,9 +194,8 @@ static int32_t settings_put(const char* key, const char* value) {
     kv_pair_t* grown = realloc(settings, new_capacity * sizeof(kv_pair_t));
     if (!grown) {
       SIF_LOG_ERROR("settings",
-        "cannot grow the table to %u entries; '%s' "
-        "not stored",
-        new_capacity, key);
+        "setting '%s': not stored: table cannot grow to %u entries", key,
+        new_capacity);
       return -1;
     }
     settings = grown;
@@ -343,11 +352,36 @@ void sif__settings_finalise(void) {
 
 /* --- public accessors --- */
 
-void sif_setting_set(const char* key, const char* value) {
-  if (!settings || !key || !value)
-    return;
+int sif_setting_set(const char* key, const char* value) {
+  if (!key || !value) {
+    SIF_LOG_ERROR("settings", "%s: NULL", !key ? "key" : "value");
+    return SIF_ERR_INVALID;
+  }
 
-  settings_put(key, value);
+  /* The table is NULL either before sif_system_init() or after an init whose
+   * allocation of it failed, and only the first is the caller's to fix. */
+  if (!settings) {
+    if (!sif__system_state_safe()) {
+      (void)sif__system_state(); /* logs, and records the status */
+      return SIF_ERR_UNINITIALISED;
+    }
+    SIF_LOG_ERROR("settings",
+      "setting '%s': not stored: no settings table "
+      "(its allocation failed at init)",
+      key);
+    return SIF_ERR_ALLOC;
+  }
+
+  if (!settings_representable(key, value)) {
+    SIF_LOG_ERROR("settings",
+      "setting '%s': not stored: %s, which the config file cannot hold", key,
+      strchr(key, '=')    ? "key contains '='"
+      : strchr(key, '\n') ? "key contains a newline"
+                          : "value contains a newline");
+    return SIF_ERR_INVALID;
+  }
+
+  return settings_put(key, value) < 0 ? SIF_ERR_ALLOC : SIF_OK;
 }
 
 const char* sif_setting_get(const char* key, const char* fallback) {
@@ -362,6 +396,13 @@ const char* sif_setting_get(const char* key, const char* fallback) {
     /* Get-or-create: a caller that had to supply a default has just told us
      * what the setting should be, and recording it is what makes the setting
      * visible in the file instead of living only in the call site. */
+    if (!settings_representable(key, fallback)) {
+      SIF_LOG_WARNING("settings",
+        "setting '%s': fallback not stored: the config file cannot hold it",
+        key);
+      return fallback;
+    }
+
     idx = settings_put(key, fallback);
     if (idx < 0)
       return fallback;

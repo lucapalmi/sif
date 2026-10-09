@@ -8,10 +8,10 @@
  * @file settings.h
  * @brief Persistent key/value runtime settings.
  *
- * The table is process-global, populated by sif_init() from the settings file
- * and written back on sif_finalise() if anything changed. Values may reference
- * environment variables (`$HOME`, `${USER}`), which are expanded on write and
- * stored alongside the raw text.
+ * The table is process-global, populated by sif_system_init() from the
+ * settings file and written back on sif_system_finalise() if anything changed.
+ * Values may reference environment variables (`$HOME`, `${USER}`), which are
+ * expanded on write and stored alongside the raw text.
  *
  * @warning The table is not synchronised. Reads are safe once the settings are
  * populated, but calling sif_setting_set() concurrently with any other access
@@ -68,17 +68,23 @@
  *
  * Keys are truncated at 63 characters, values at 255, with a warning.
  *
- * @param key Setting name. Ignored if NULL, or if called before sif_init().
+ * @param key Setting name.
  * @param value Raw value, possibly containing environment references.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL key or value, or a pair the file
+ * cannot hold (see below); SIF_ERR_ALLOC if the table could not grow;
+ * SIF_ERR_UNINITIALISED before sif_system_init(). The table is unchanged on
+ * failure.
  *
  * @note The file format is one `key = value` per line with no escaping, so a
  * key containing `=` or a newline, or a value containing a newline, would not
- * read back as what was written and is rejected with a warning.
+ * read back as what was written and is refused.
  *
  * @warning Adding a new key may reallocate the table, which invalidates every
  * pointer previously returned by sif_setting_get().
+ *
+ * @note Requires sif_system_init().
  */
-void sif_setting_set(const char* key, const char* value);
+SIF_NODISCARD int sif_setting_set(const char* key, const char* value);
 
 /**
  * @brief Look up a runtime setting, with an optional default.
@@ -97,6 +103,9 @@ void sif_setting_set(const char* key, const char* value);
  * @warning The returned pointer is valid only until the next
  * sif_setting_set(), including the implicit one this function performs when it
  * installs a fallback. Copy the string if it has to outlive that.
+ *
+ * @note Requires sif_system_init(). Called before it, the call returns
+ * @p fallback and stores nothing.
  */
 const char* sif_setting_get(const char* key, const char* fallback);
 

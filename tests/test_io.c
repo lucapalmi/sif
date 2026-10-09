@@ -75,9 +75,12 @@ static sif_field_t* make_field(void) {
   sif_field_t* f = sif_field_alloc(N_P);
   if (!f)
     return NULL;
-  sif_field_reserve_positions(f);
-  sif_field_reserve_velocities(f);
-  sif_field_reserve_weights(f);
+  CHECK(sif_field_reserve_positions(f) == SIF_OK,
+    "sif_field_reserve_positions failed");
+  CHECK(sif_field_reserve_velocities(f) == SIF_OK,
+    "sif_field_reserve_velocities failed");
+  CHECK(sif_field_reserve_weights(f) == SIF_OK,
+    "sif_field_reserve_weights failed");
   for (uint64_t i = 0; i < N_P; i++) {
     f->x[i] = (sif_real)((double)i * 0.31379);
     f->y[i] = (sif_real)((double)i * 1.70021);
@@ -111,9 +114,12 @@ static void test_field_roundtrip(void) {
   CHECK(sif_field_write(FIELD_PATH, f, (double)BOX) == SIF_OK, "write failed");
 
   sif_field_t* g = sif_field_alloc(N_P);
-  sif_field_reserve_positions(g);
-  sif_field_reserve_velocities(g);
-  sif_field_reserve_weights(g);
+  CHECK(sif_field_reserve_positions(g) == SIF_OK,
+    "sif_field_reserve_positions failed");
+  CHECK(sif_field_reserve_velocities(g) == SIF_OK,
+    "sif_field_reserve_velocities failed");
+  CHECK(sif_field_reserve_weights(g) == SIF_OK,
+    "sif_field_reserve_weights failed");
 
   CHECK(sif_field_read_into(g, FIELD_PATH) == SIF_OK, "read failed");
 
@@ -160,9 +166,12 @@ static void test_field_corruption(void) {
   corrupt_payload(FIELD_PATH, 40);
 
   sif_field_t* g = sif_field_alloc(N_P);
-  sif_field_reserve_positions(g);
-  sif_field_reserve_velocities(g);
-  sif_field_reserve_weights(g);
+  CHECK(sif_field_reserve_positions(g) == SIF_OK,
+    "sif_field_reserve_positions failed");
+  CHECK(sif_field_reserve_velocities(g) == SIF_OK,
+    "sif_field_reserve_velocities failed");
+  CHECK(sif_field_reserve_weights(g) == SIF_OK,
+    "sif_field_reserve_weights failed");
   CHECK(sif_field_read_into(g, FIELD_PATH) == SIF_ERR_IO,
     "a flipped payload bit should fail the checksum");
   sif_field_free(g);
@@ -513,8 +522,10 @@ static void test_profiles_roundtrip(void) {
     CHECK(0, "field allocation failed");
     return;
   }
-  sif_field_reserve_positions(f);
-  sif_field_reserve_velocities(f);
+  CHECK(sif_field_reserve_positions(f) == SIF_OK,
+    "sif_field_reserve_positions failed");
+  CHECK(sif_field_reserve_velocities(f) == SIF_OK,
+    "sif_field_reserve_velocities failed");
 
   for (uint64_t i = 0; i < N_P; i++) {
     f->x[i] = (sif_real)fmod((double)i * 7.31379, (double)BOX);
@@ -1493,8 +1504,8 @@ static void test_xfield_check(void) {
 }
 
 int main(void) {
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -1524,7 +1535,7 @@ int main(void) {
   remove(PROF_PATH);
   remove(PROF_HALF_PATH);
 
-  sif_finalise();
+  sif_system_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

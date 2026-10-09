@@ -48,7 +48,7 @@
  * path, at `<path>.<group>.txt`, logs a warning naming that file and returns
  * SIF_OK: the run that produced the data does not lose it to a build option.
  * A reader returns #SIF_ERR_UNSUPPORTED (or NULL), since there is nothing to
- * fall back to. sif_init() logs which kind of build this is.
+ * fall back to. sif_system_init() logs which kind of build this is.
  */
 
 #ifndef SIF_IO_HDF5_IO_H

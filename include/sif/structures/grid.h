@@ -91,7 +91,8 @@ typedef struct {
  * non-zero.
  * @param box_length Physical side length of the box. Must be positive.
  * @return The grid, owned by the caller and released with sif_grid_free().
- * NULL on allocation failure or invalid geometry.
+ * NULL on invalid geometry or allocation failure, with sif_error_status() at
+ * SIF_ERR_INVALID or SIF_ERR_ALLOC.
  */
 SIF_NODISCARD sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length);
 
@@ -109,14 +110,18 @@ void sif_grid_free(sif_grid_t* grid);
  * the field carries them, otherwise every particle counts as one.
  *
  * Every particle coordinate must lie in [0, box_length); the call is rejected
- * otherwise. sif_field_wrap_periodic() is the way to satisfy that for a
- * periodic snapshot whose coordinates have drifted onto the boundary.
+ * otherwise. A coordinate within a few ULPs of a face -- stored as exactly
+ * box_length by single-precision rounding, say -- is accepted and deposited
+ * as folded periodically; the field itself is not changed. For a periodic
+ * snapshot that was never wrapped into the box, sif_field_wrap_periodic().
  *
  * @param grid Destination grid, overwritten.
  * @param field Particle field to deposit. Read only.
- * @return SIF_OK; SIF_ERR_INVALID for a NULL argument or a field with no
- * particles (one a consuming mesh has emptied, say); SIF_ERR_RANGE when any
- * particle lies outside the box, with the count in the log; SIF_ERR_ALLOC.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, a grid with no cell
+ * values, or a field with no particles (one a consuming mesh has emptied,
+ * say), no positions, or sky coordinates; SIF_ERR_RANGE when any particle lies
+ * outside the box, with the count and the first one in the message;
+ * SIF_ERR_ALLOC.
  * On any failure the grid is left exactly as it was -- it is not zeroed, and
  * its sif_grid_t::content does not change -- so check the status rather than
  * the cells.

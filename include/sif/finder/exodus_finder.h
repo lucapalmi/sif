@@ -84,6 +84,9 @@
  * failure. A run that fails partway returns NULL rather than the voids found
  * so far, with the grid restored as on success; sif_error_message() says
  * why.
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
 SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
@@ -152,6 +155,9 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * @return Newly allocated catalogue, with its footprint columns, released
  * with sif_catalogue_free(); NULL on invalid input, a survey too close to the
  * box faces, or failure, as for sif_finder_exodus().
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
 SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,

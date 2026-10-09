@@ -3,7 +3,7 @@
 Current version: v0.2 release 1
 
 
-## Unreleased
+## v0.2.2 -- 9/10/2026
 
 ### Added
 
@@ -20,6 +20,52 @@ Current version: v0.2 release 1
   library, with a summary written to a stream
 - `sif_gadget_is_snapshot()`: whether a path names a GADGET snapshot, asked
   without logging
+- `SIF_ERR_UNINITIALISED`: what a call that needs `sif_system_init()` fails
+  with without it (through `sif_error_status()` for those returning a
+  pointer). Python raises `RuntimeError`; the finders used to raise
+  `ValueError`
+
+### Changed
+
+- `sif_init()` / `sif_finalise()` are now `sif_system_init()` /
+  `sif_system_finalise()` (Python: `pysif.system_init()` /
+  `pysif.system_finalise()`). Only the finders,
+  `sif_delta_moments_grid()`, `sif_delta_distribution_grid()` and the
+  settings accessors need them.
+- `sif_setting_set()` returns a status (`SIF_ERR_INVALID`, `SIF_ERR_ALLOC`,
+  `SIF_ERR_UNINITIALISED`) instead of silently doing nothing, and
+  `pysif.set_setting()` raises. 
+- Without `sif_system_init()`, the library uses OpenMP's own thread count.
+- Errors from the field, grid, chain mesh and catalogue name the argument and
+  the part at fault, with the values: the first particle outside the box and
+  its coordinates, the first non-finite position or sky coordinate, the
+  character a metadata key may not hold, and the size of a failed
+  allocation. Python raises with that message instead of one of its own
+- `sif_field_refresh_bounds()` and `sif_field_sort_morton()` refuse a field
+  with a non-finite position, naming the first
+- `sif_field_wrap_periodic()` takes a third counter, `n_nonfinite`, for the
+  NaN and infinite coordinates it cannot repair (pass NULL to ignore it).
+  `Field.wrap()` returns it as `'nonfinite'` and raises a `RuntimeWarning`
+  when it is not zero, as does `read_field(..., wrap=True)`
+- `sif_chain_mesh_alloc()` and `sif_grid_alloc()` report the reason they
+  failed through `sif_error_status()`
+- The CIC assignment and the chain mesh accept coordinates within a few ULPs
+  of the box faces (a position stored as exactly `box_length` by
+  single-precision rounding, say) and fold them in periodically, with an
+  info line, instead of refusing the field. `Field.wrap()` is now only needed
+  for a snapshot that was never wrapped into the box. The `--check` file
+  checkers apply the same tolerance
+- The field functions that return a status are `SIF_NODISCARD`
+
+### Deprecated
+
+- `sif_init()`, `sif_finalise()`, `pysif.init()` and `pysif.finalise()` still
+  work, with a warning, and will be removed in the next release
+
+### Removed
+
+- Shewchuk's geometric predicates (`vendor/predicates`)
+- The octree (`sif_octree_*`, `pysif.Octree`), which nothing used
 
 ### Fixed
 
@@ -31,6 +77,17 @@ Current version: v0.2 release 1
   centres out. The footprint is now closed over 3^3 cells, or up to 9^3 where
   the randoms are too sparse for that, which also fills real gaps that
   narrow. A warning says when even 9^3 leaves chance holes
+- Python exceptions that named the wrong cause: `Grid.assign_cic()` said
+  "nothing to deposit" for a field in sky coordinates, `ChainMesh()` raised
+  one `ValueError` for six causes and for running out of memory,
+  `field_from_numpy()` raised `MemoryError` for empty arrays, and
+  `Grid(n_cells=0)` raised `MemoryError`
+- `sif_chain_mesh_alloc()` returned NULL without a message for an empty
+  field or an allocation failure
+- A catalogue metadata table that could not grow was reported as a bad key
+- `sif_chain_mesh_alloc_consume()` documented that a refused field is
+  emptied; it is left as it was. A failure after the handover now warns that
+  the field was emptied
 
 ## v0.2.1 -- 30/09/2026
 

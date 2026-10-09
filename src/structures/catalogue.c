@@ -8,6 +8,7 @@
 
 #include <ctype.h>
 #include <math.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -15,6 +16,7 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "structures/catalogue_internal.h"
+#include "utils/logger_internal.h"
 
 /*
  * Number of sif_real views packed into the arena: cx, cy, cz, radii.
@@ -34,6 +36,12 @@
 static inline uint64_t catalogue_stride(uint64_t capacity) {
   const uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
   return (capacity + align_elements - 1) & ~(align_elements - 1);
+}
+
+/* Bytes of the main arena for `capacity` voids, for the messages that report
+ * a failure to allocate one. */
+static inline uint64_t catalogue_block_bytes(uint64_t capacity) {
+  return CATALOGUE_N_VIEWS * catalogue_stride(capacity) * sizeof(sif_real);
 }
 
 /*
@@ -112,8 +120,10 @@ static int catalogue_resize(sif_catalogue_t* catalogue, uint64_t new_capacity) {
 
   if (!new_block) {
     SIF_LOG_ERROR("void_catalogue",
-      "failed to resize from %" PRIu64 " to %" PRIu64 " voids",
-      catalogue->capacity, new_capacity);
+      "catalogue: cannot resize from %" PRIu64 " to %" PRIu64
+      " voids (%.2f GiB); the catalogue is unchanged",
+      catalogue->capacity, new_capacity,
+      SIF__GIB(catalogue_block_bytes(new_capacity)));
     return SIF_ERR_ALLOC;
   }
 
@@ -163,7 +173,7 @@ sif_catalogue_t* sif_catalogue_alloc(uint64_t initial_capacity) {
 
   sif_catalogue_t* cat = malloc(sizeof(sif_catalogue_t));
   if (!cat) {
-    SIF_LOG_ERROR("void_catalogue", "failed to allocate void catalogue (%zu bytes)",
+    SIF_LOG_ERROR("void_catalogue", "catalogue: cannot allocate (%zu bytes)",
       sizeof(sif_catalogue_t));
     return NULL;
   }
@@ -182,8 +192,8 @@ sif_catalogue_t* sif_catalogue_alloc(uint64_t initial_capacity) {
 
   if (!cat->_block) {
     SIF_LOG_ERROR("void_catalogue",
-      "failed to allocate void catalogue arena for %" PRIu64 " voids",
-      initial_capacity);
+      "catalogue: cannot allocate room for %" PRIu64 " voids (%.2f GiB)",
+      initial_capacity, SIF__GIB(catalogue_block_bytes(initial_capacity)));
     free(cat);
     return NULL;
   }
@@ -211,8 +221,10 @@ void sif_catalogue_free(sif_catalogue_t* catalogue) {
 int sif_catalogue_append(
   sif_catalogue_t* catalogue, sif_real x, sif_real y, sif_real z, sif_real r) {
 
-  if (!catalogue)
+  if (!catalogue) {
+    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
     return SIF_ERR_INVALID;
+  }
 
   /* Doubling, so a finder appending one void at a time pays an amortised
    * constant per append rather than a copy of the whole catalogue. A finder
@@ -242,8 +254,10 @@ int sif_catalogue_append(
 }
 
 int sif_catalogue_trim(sif_catalogue_t* catalogue) {
-  if (!catalogue)
+  if (!catalogue) {
+    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
     return SIF_ERR_INVALID;
+  }
 
   /* An empty catalogue is a legitimate result, not an error. Trim it to the
    * minimum usable allocation rather than warning about it. */
@@ -255,13 +269,11 @@ int sif_catalogue_trim(sif_catalogue_t* catalogue) {
     return SIF_OK;
   }
 
+  /* Not fatal: the catalogue is still correct, just larger than necessary,
+   * and the resize has said so. */
   int status = catalogue_resize(catalogue, target);
-  if (status != SIF_OK) {
-    /* Not fatal: the catalogue is still correct, just larger than necessary. */
-    SIF_LOG_WARNING(
-      "void_catalogue", "could not trim catalogue, keeping current allocation");
+  if (status != SIF_OK)
     return status;
-  }
 
   SIF_LOG_TRACE(
     "void_catalogue", "trimmed catalogue to %" PRIu64 " voids", catalogue->n_voids);
@@ -269,8 +281,10 @@ int sif_catalogue_trim(sif_catalogue_t* catalogue) {
 }
 
 int sif_catalogue_reserve_footprint(sif_catalogue_t* catalogue) {
-  if (!catalogue)
+  if (!catalogue) {
+    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
     return SIF_ERR_INVALID;
+  }
 
   if (catalogue->_footprint_block)
     return SIF_OK;
@@ -279,8 +293,11 @@ int sif_catalogue_reserve_footprint(sif_catalogue_t* catalogue) {
   sif_real* block = catalogue_footprint_alloc(catalogue->capacity, &fp, &fp_shell);
   if (!block) {
     SIF_LOG_ERROR("void_catalogue",
-      "failed to allocate the footprint columns for %" PRIu64 " voids",
-      catalogue->capacity);
+      "catalogue: cannot allocate the footprint columns for %" PRIu64
+      " voids (%.2f GiB)",
+      catalogue->capacity,
+      SIF__GIB(CATALOGUE_N_FOOTPRINT_VIEWS *
+               catalogue_stride(catalogue->capacity) * sizeof(sif_real)));
     return SIF_ERR_ALLOC;
   }
 
@@ -297,11 +314,15 @@ int sif_catalogue_reserve_footprint(sif_catalogue_t* catalogue) {
 }
 
 int sif_catalogue_translate(sif_catalogue_t* catalogue, const sif_real offset[3]) {
-  if (!catalogue || !offset)
+  if (!catalogue || !offset) {
+    SIF_LOG_ERROR(
+      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "offset");
     return SIF_ERR_INVALID;
+  }
   if (catalogue->units != SIF_COORDINATES_CARTESIAN) {
     SIF_LOG_ERROR("void_catalogue",
-      "the catalogue holds sky coordinates; a translation would move angles");
+      "catalogue: sky coordinates (ra, dec, z), not positions; a translation "
+      "would move angles");
     return SIF_ERR_INVALID;
   }
 
@@ -316,11 +337,12 @@ int sif_catalogue_translate(sif_catalogue_t* catalogue, const sif_real offset[3]
 
 int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosmo) {
   if (!catalogue || !cosmo) {
-    SIF_LOG_ERROR("void_catalogue", "invalid catalogue or cosmology");
+    SIF_LOG_ERROR(
+      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "cosmology");
     return SIF_ERR_INVALID;
   }
   if (catalogue->units != SIF_COORDINATES_CARTESIAN) {
-    SIF_LOG_ERROR("void_catalogue", "the catalogue is already on the sky");
+    SIF_LOG_ERROR("void_catalogue", "catalogue: already in sky coordinates");
     return SIF_ERR_INVALID;
   }
 
@@ -328,18 +350,24 @@ int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosm
   const uint64_t n = catalogue->n_voids;
   double d_max = 0.0;
   uint64_t bad = 0;
+  uint64_t first = UINT64_MAX;
   for (uint64_t i = 0; i < n; i++) {
     const double x = catalogue->cx[i], y = catalogue->cy[i], z = catalogue->cz[i];
     const double d = sqrt(x * x + y * y + z * z);
-    if (!isfinite(d))
+    if (!isfinite(d)) {
+      if (!bad)
+        first = i;
       bad++;
-    else if (d > d_max)
+    } else if (d > d_max) {
       d_max = d;
+    }
   }
   if (bad) {
     SIF_LOG_ERROR("void_catalogue",
-      "cannot convert: %" PRIu64 " of %" PRIu64 " centres are not finite", bad,
-      n);
+      "catalogue: %" PRIu64 " of %" PRIu64 " centres not finite (first: void "
+      "%" PRIu64 " at (%g, %g, %g)); nothing converted",
+      bad, n, first, (double)catalogue->cx[first],
+      (double)catalogue->cy[first], (double)catalogue->cz[first]);
     return SIF_ERR_INVALID;
   }
 
@@ -368,8 +396,9 @@ int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosm
   catalogue->units = SIF_COORDINATES_SKY;
 
   SIF_LOG_INFO("void_catalogue",
-    "converted %" PRIu64 " void centres to the sky, out to D_C = %g Mpc/h", n,
-    d_max);
+    "catalogue: %" PRIu64 " void centres converted to the sky, out to D_C = %g "
+    "Mpc/h",
+    n, d_max);
   return SIF_OK;
 }
 
@@ -405,18 +434,58 @@ bool sif__catalogue_meta_reserved(const char* key) {
   return false;
 }
 
-/* The key in lower case, into `out`, or false for one that is not allowed. */
-static bool meta_key(const char* key, char out[META_KEY_MAX + 1]) {
-  if (!key || !(isalpha((unsigned char)key[0]) || key[0] == '_'))
-    return false;
+/*
+ * Why `key` cannot name a value, or NULL if it can: one reason, the first
+ * that applies, written into `why`. The lower-cased key goes into `out`.
+ */
+static const char* meta_key_problem(
+  const char* key, char out[META_KEY_MAX + 1], char* why, size_t why_cap) {
+
+  if (!key)
+    return "key is NULL";
+  if (!key[0])
+    return "key is empty";
+
   size_t i = 0;
   for (; key[i]; i++) {
-    if (i == META_KEY_MAX || !(isalnum((unsigned char)key[i]) || key[i] == '_'))
-      return false;
-    out[i] = (char)tolower((unsigned char)key[i]);
+    const unsigned char c = (unsigned char)key[i];
+    if (i == META_KEY_MAX) {
+      snprintf(why, why_cap, "key is %zu characters long (at most %d)",
+        strlen(key), META_KEY_MAX);
+      return why;
+    }
+    if (i == 0 && isdigit(c)) {
+      snprintf(why, why_cap,
+        "key starts with a digit ('%c'); it must start with a letter or '_'",
+        c);
+      return why;
+    }
+    if (!(isalnum(c) || c == '_')) {
+      if (isprint(c))
+        snprintf(why, why_cap,
+          "key has '%c' at character %zu (expected letters, digits and '_')",
+          c, i + 1);
+      else
+        snprintf(why, why_cap,
+          "key has byte 0x%02x at character %zu (expected letters, digits and "
+          "'_')",
+          c, i + 1);
+      return why;
+    }
+    out[i] = (char)tolower(c);
   }
   out[i] = '\0';
-  return !sif__catalogue_meta_reserved(out);
+
+  if (sif__catalogue_meta_reserved(out))
+    return "key is reserved by the catalogue file formats (n, n_voids, "
+           "coordinates, and the FITS structural keywords)";
+  return NULL;
+}
+
+/* The key in lower case, into `out`, or false for one that is not allowed. */
+static bool meta_key(const char* key, char out[META_KEY_MAX + 1]) {
+  char why[128];
+  return meta_key_problem(key, out, why, sizeof why) == NULL;
 }
 
 bool sif__catalogue_meta_key_ok(const char* key) {
@@ -437,43 +506,65 @@ static int meta_find(const sif_catalogue_t* cat, const char* key) {
 }
 
 /* The entry for a key, new at the end or the one it already has, emptied of
- * any string it held. NULL, with the reason logged, if the key is refused. */
-static sif_catalogue_meta_entry_t* meta_slot(
-  sif_catalogue_t* cat, const char* key) {
-  char k[META_KEY_MAX + 1];
-  if (!cat || !meta_key(key, k)) {
-    SIF_LOG_ERROR("void_catalogue",
-      "\"%s\" cannot name a catalogue value: it has to be an identifier of at "
-      "most %d characters, and not one the file formats use themselves",
-      key ? key : "(null)", META_KEY_MAX);
-    return NULL;
+ * any string it held, into *slot. SIF_ERR_INVALID for a key that is refused,
+ * SIF_ERR_ALLOC if the table could not grow; logged either way. */
+static int meta_slot(sif_catalogue_t* cat, const char* key,
+  sif_catalogue_meta_entry_t** slot) {
+
+  if (!cat) {
+    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
+    return SIF_ERR_INVALID;
   }
+
+  char k[META_KEY_MAX + 1];
+  char why[128];
+  const char* problem = meta_key_problem(key, k, why, sizeof why);
+  if (problem) {
+    if (!key)
+      SIF_LOG_ERROR("void_catalogue", "catalogue value: %s", problem);
+    else
+      SIF_LOG_ERROR("void_catalogue", "catalogue value \"%.*s%s\": %s",
+        META_KEY_MAX, key, strlen(key) > META_KEY_MAX ? "..." : "", problem);
+    return SIF_ERR_INVALID;
+  }
+
   const int at = meta_find(cat, k);
   if (at >= 0) {
     sif_catalogue_meta_entry_t* e = &cat->_meta[at];
     free(e->text);
     e->text = NULL;
-    return e;
+    *slot = e;
+    return SIF_OK;
   }
+
   sif_catalogue_meta_entry_t* grown =
     realloc(cat->_meta, (cat->_n_meta + 1) * sizeof(*grown));
-  if (!grown)
-    return NULL;
+  if (!grown) {
+    SIF_LOG_ERROR("void_catalogue",
+      "catalogue value \"%s\": cannot grow the table to %u entries", k,
+      cat->_n_meta + 1);
+    return SIF_ERR_ALLOC;
+  }
   cat->_meta = grown;
   sif_catalogue_meta_entry_t* e = &cat->_meta[cat->_n_meta];
   memset(e, 0, sizeof *e);
   e->key = strdup(k);
-  if (!e->key)
-    return NULL;
+  if (!e->key) {
+    SIF_LOG_ERROR(
+      "void_catalogue", "catalogue value \"%s\": cannot copy the key", k);
+    return SIF_ERR_ALLOC;
+  }
   cat->_n_meta++;
-  return e;
+  *slot = e;
+  return SIF_OK;
 }
 
 int sif_catalogue_meta_int_set(
   sif_catalogue_t* catalogue, const char* key, int64_t value) {
-  sif_catalogue_meta_entry_t* e = meta_slot(catalogue, key);
-  if (!e)
-    return SIF_ERR_INVALID;
+  sif_catalogue_meta_entry_t* e = NULL;
+  const int status = meta_slot(catalogue, key, &e);
+  if (status != SIF_OK)
+    return status;
   e->kind = SIF_CATALOGUE_META_INT;
   e->i = value;
   e->d = (double)value;
@@ -483,13 +574,16 @@ int sif_catalogue_meta_int_set(
 int sif_catalogue_meta_real_set(
   sif_catalogue_t* catalogue, const char* key, double value) {
   if (!isfinite(value)) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue value %s is not finite (%g)",
+    SIF_LOG_ERROR("void_catalogue",
+      "catalogue value \"%s\": %g is not finite (the file formats cannot hold "
+      "it)",
       key ? key : "(null)", value);
     return SIF_ERR_INVALID;
   }
-  sif_catalogue_meta_entry_t* e = meta_slot(catalogue, key);
-  if (!e)
-    return SIF_ERR_INVALID;
+  sif_catalogue_meta_entry_t* e = NULL;
+  const int status = meta_slot(catalogue, key, &e);
+  if (status != SIF_OK)
+    return status;
   e->kind = SIF_CATALOGUE_META_REAL;
   e->d = value;
   e->i = 0;
@@ -498,20 +592,32 @@ int sif_catalogue_meta_real_set(
 
 int sif_catalogue_meta_string_set(
   sif_catalogue_t* catalogue, const char* key, const char* value) {
-  if (!value || strpbrk(value, "\n\r\"")) {
+  if (!value) {
+    SIF_LOG_ERROR(
+      "void_catalogue", "catalogue value \"%s\": NULL", key ? key : "(null)");
+    return SIF_ERR_INVALID;
+  }
+  const char* bad = strpbrk(value, "\n\r\"");
+  if (bad) {
     SIF_LOG_ERROR("void_catalogue",
-      "catalogue value %s: a string may not be NULL or hold a newline or a "
-      "double quote",
-      key ? key : "(null)");
+      "catalogue value \"%s\": contains %s at character %zu (the file formats "
+      "cannot hold it)",
+      key ? key : "(null)", *bad == '"' ? "a double quote" : "a line break",
+      (size_t)(bad - value) + 1);
     return SIF_ERR_INVALID;
   }
   char* copy = strdup(value);
-  if (!copy)
+  if (!copy) {
+    SIF_LOG_ERROR("void_catalogue",
+      "catalogue value \"%s\": cannot copy %zu characters",
+      key ? key : "(null)", strlen(value));
     return SIF_ERR_ALLOC;
-  sif_catalogue_meta_entry_t* e = meta_slot(catalogue, key);
-  if (!e) {
+  }
+  sif_catalogue_meta_entry_t* e = NULL;
+  const int status = meta_slot(catalogue, key, &e);
+  if (status != SIF_OK) {
     free(copy);
-    return SIF_ERR_INVALID;
+    return status;
   }
   e->kind = SIF_CATALOGUE_META_STRING;
   e->text = copy;
@@ -519,8 +625,11 @@ int sif_catalogue_meta_string_set(
 }
 
 int sif_catalogue_meta_remove(sif_catalogue_t* catalogue, const char* key) {
-  if (!catalogue || !key)
+  if (!catalogue || !key) {
+    SIF_LOG_ERROR(
+      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "key");
     return SIF_ERR_INVALID;
+  }
   const int at = meta_find(catalogue, key);
   if (at < 0)
     return SIF_OK;

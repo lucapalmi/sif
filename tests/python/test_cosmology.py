@@ -100,7 +100,8 @@ def test_conversion_follows_pyrecon():
 
 def test_conversion_refusals_leave_the_field():
     f = sky([10.0, 20.0], [0.0, 95.0], [0.5, 0.6])
-    with pytest.raises(ValueError, match="declination"):
+    with pytest.raises(ValueError,
+                       match=r"1 dec outside \[-90, 90\].*first: particle 1"):
         f.convert_sky_coordinates(0.3)
     assert f.units == "sky" and f.y[1] == np.float32(95.0)
 
@@ -123,10 +124,9 @@ def sky_field():
     lambda f: f.refresh_bounds(),
     lambda f: pysif.Grid(16, 100.0).assign_cic(f),
     lambda f: pysif.ChainMesh(4, 100.0, f),
-    lambda f: pysif.Octree(f),
     lambda f: pysif.finders.survey_box(f, np.array([5.0], pysif.real), 32),
 ], ids=["wrap", "translate", "sort_morton", "refresh_bounds", "assign_cic",
-        "ChainMesh", "Octree", "survey_box"])
+        "ChainMesh", "survey_box"])
 def test_sky_field_refused(sky_field, action):
     with pytest.raises(ValueError, match="sky coordinates"):
         action(sky_field)

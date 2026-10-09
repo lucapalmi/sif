@@ -12,8 +12,9 @@
 #   cmake --build build
 #   ctest --test-dir build --output-on-failure
 
-# Tests call sif_init(), which creates and writes to $HOME/.sif. Point HOME at
-# the build tree so a test run never touches the developer's home directory.
+# Tests call sif_system_init(), which creates and writes to $HOME/.sif. Point
+# HOME at the build tree so a test run never touches the developer's home
+# directory.
 set(SIF_TEST_HOME "${CMAKE_CURRENT_BINARY_DIR}/test_home")
 file(MAKE_DIRECTORY "${SIF_TEST_HOME}")
 
@@ -22,7 +23,6 @@ set(SIF_TESTS
   test_structures   # bitmask, catalogue, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
   test_io           # .xfield/.xgrid round trips, checksums, ASCII and raw binary
-  test_octree       # build integrity + nearest neighbour vs brute force
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count
   test_tessellation # sampled Voronoi volumes, and the profiles they give

@@ -89,8 +89,8 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  if (sif_init(&cfg) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -548,7 +548,7 @@ int main(void) {
   sif_tessellation_free(tess);
   sif_chain_mesh_free(mesh);
   sif_field_free(f);
-  sif_finalise();
+  sif_system_finalise();
 
   return failures ? 1 : 0;
 }

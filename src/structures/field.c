@@ -11,6 +11,7 @@
 #include "model/cosmology_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "utils/logger_internal.h"
 
 #include <inttypes.h>
 #include <math.h>
@@ -21,7 +22,7 @@ sif_field_t* sif_field_alloc(uint64_t n_particles) {
   sif_field_t* field = malloc(sizeof(sif_field_t));
   if (!field) {
     SIF_LOG_ERROR(
-      "field", "failed to allocate field (%zu bytes)", sizeof(sif_field_t));
+      "field", "field: cannot allocate (%zu bytes)", sizeof(sif_field_t));
     return NULL;
   }
 
@@ -78,9 +79,12 @@ static int field_reserve_block(uint64_t n_particles, sif_real** block,
 
   const uint64_t padded_n = sif_field_padded_n(n_particles);
 
-  sif_real* fresh = sif_malloc_aligned(3 * padded_n * sizeof(sif_real));
+  const uint64_t bytes = 3 * padded_n * sizeof(sif_real);
+  sif_real* fresh = sif_malloc_aligned(bytes);
   if (!fresh) {
-    SIF_LOG_ERROR("field", "failed to allocate the %s block", what);
+    SIF_LOG_ERROR("field",
+      "field: cannot allocate the %s arrays (%" PRIu64 " particles, %.2f GiB)",
+      what, n_particles, SIF__GIB(bytes));
     return SIF_ERR_ALLOC;
   }
 
@@ -92,11 +96,55 @@ static int field_reserve_block(uint64_t n_particles, sif_real** block,
   return SIF_OK;
 }
 
-int sif_field_reserve_positions(sif_field_t* field) {
-  if (!field || field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid or empty field");
+/* Weights are one array, not a block of three, so they get their own. */
+static sif_real* field_alloc_weights(uint64_t n_particles) {
+  const uint64_t bytes = n_particles * sizeof(sif_real);
+  sif_real* w = sif_malloc_aligned(bytes);
+  if (!w)
+    SIF_LOG_ERROR("field",
+      "field: cannot allocate the weights (%" PRIu64 " particles, %.2f GiB)",
+      n_particles, SIF__GIB(bytes));
+  return w;
+}
+
+int sif__field_check(const sif_field_t* field, sif__field_need_t need,
+  const char* tag, const char* name) {
+
+  if (!field) {
+    SIF_LOG_ERROR(tag, "%s: NULL", name);
     return SIF_ERR_INVALID;
   }
+
+  /* The consuming mesh build is named because it is how a field that held
+   * particles a moment ago comes to hold none, and nothing else about the
+   * empty field says so. */
+  if (field->n_particles == 0) {
+    SIF_LOG_ERROR(tag,
+      "%s: 0 particles (none were given, or a consuming chain mesh build took "
+      "them)",
+      name);
+    return SIF_ERR_INVALID;
+  }
+
+  if (need >= SIF__FIELD_NEED_POSITIONS &&
+      (!field->x || !field->y || !field->z)) {
+    SIF_LOG_ERROR(tag,
+      "%s: no positions (%" PRIu64 " particles declared, none assigned or read)",
+      name, field->n_particles);
+    return SIF_ERR_INVALID;
+  }
+
+  if (need >= SIF__FIELD_NEED_CARTESIAN)
+    return sif__field_require_cartesian(field, tag, name);
+
+  return SIF_OK;
+}
+
+int sif_field_reserve_positions(sif_field_t* field) {
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_PARTICLES, "field", "field");
+  if (status != SIF_OK)
+    return status;
 
   if (field->_position_block)
     return SIF_OK;
@@ -106,10 +154,10 @@ int sif_field_reserve_positions(sif_field_t* field) {
 }
 
 int sif_field_reserve_velocities(sif_field_t* field) {
-  if (!field || field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid or empty field");
-    return SIF_ERR_INVALID;
-  }
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_PARTICLES, "field", "field");
+  if (status != SIF_OK)
+    return status;
 
   if (field->_velocity_block)
     return SIF_OK;
@@ -119,33 +167,27 @@ int sif_field_reserve_velocities(sif_field_t* field) {
 }
 
 int sif_field_reserve_weights(sif_field_t* field) {
-  if (!field || field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid or empty field");
-    return SIF_ERR_INVALID;
-  }
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_PARTICLES, "field", "field");
+  if (status != SIF_OK)
+    return status;
 
   if (field->weights)
     return SIF_OK;
 
-  field->weights = sif_malloc_aligned(field->n_particles * sizeof(sif_real));
-  if (!field->weights) {
-    SIF_LOG_ERROR("field", "failed to allocate the weight array");
-    return SIF_ERR_ALLOC;
-  }
-
-  return SIF_OK;
+  field->weights = field_alloc_weights(field->n_particles);
+  return field->weights ? SIF_OK : SIF_ERR_ALLOC;
 }
 
 int sif_field_assign_positions(
   sif_field_t* field, const sif_real* x, const sif_real* y, const sif_real* z) {
 
-  if (!field || !x || !y || !z) {
-    SIF_LOG_ERROR("field", "invalid positions");
-    return SIF_ERR_INVALID;
-  }
-
-  if (field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "cannot assign positions to an empty field");
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_PARTICLES, "field", "field");
+  if (status != SIF_OK)
+    return status;
+  if (!x || !y || !z) {
+    SIF_LOG_ERROR("field", "%s: NULL", !x ? "x" : !y ? "y" : "z");
     return SIF_ERR_INVALID;
   }
 
@@ -198,13 +240,12 @@ static inline int field_needs_permutation(const sif_field_t* field) {
 int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
   const sif_real* vy, const sif_real* vz) {
 
-  if (!field || !vx || !vy || !vz) {
-    SIF_LOG_ERROR("field", "invalid velocities");
-    return SIF_ERR_INVALID;
-  }
-
-  if (field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "cannot assign velocities to an empty field");
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_PARTICLES, "field", "field");
+  if (status != SIF_OK)
+    return status;
+  if (!vx || !vy || !vz) {
+    SIF_LOG_ERROR("field", "%s: NULL", !vx ? "vx" : !vy ? "vy" : "vz");
     return SIF_ERR_INVALID;
   }
 
@@ -247,24 +288,20 @@ int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
 }
 
 int sif_field_assign_weights(sif_field_t* field, const sif_real* weights) {
-  if (!field || !weights) {
-    SIF_LOG_ERROR("field", "invalid weights");
-    return SIF_ERR_INVALID;
-  }
-
-  if (field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "cannot assign weights to an empty field");
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_PARTICLES, "field", "field");
+  if (status != SIF_OK)
+    return status;
+  if (!weights) {
+    SIF_LOG_ERROR("field", "weights: NULL");
     return SIF_ERR_INVALID;
   }
 
   const int permute = field_needs_permutation(field);
 
-  sif_real* new_weights =
-    sif_malloc_aligned(field->n_particles * sizeof(sif_real));
-  if (!new_weights) {
-    SIF_LOG_ERROR("field", "failed to allocate the weight array");
+  sif_real* new_weights = field_alloc_weights(field->n_particles);
+  if (!new_weights)
     return SIF_ERR_ALLOC;
-  }
 
   if (permute) {
     const uint64_t* perm = field->original_indices;
@@ -290,16 +327,18 @@ int sif_field_assign_weights(sif_field_t* field, const sif_real* weights) {
  * to exactly box_length and the value would leave this function still out of
  * range, which is the bug it was called to fix.
  */
-static inline sif_real wrap_coordinate(
-  sif_real v, sif_real box_length, uint64_t* boundary, uint64_t* wrapped) {
+static inline sif_real wrap_coordinate(sif_real v, sif_real box_length,
+  uint64_t* boundary, uint64_t* wrapped, uint64_t* nonfinite) {
 
   if (v >= 0.0f && v < box_length)
     return v;
 
-  /* Leaves NaN untouched and uncounted: it fails both comparisons above and
-   * every one below, and no fold makes it a position. */
-  if (!(v >= 0.0f) && !(v < box_length))
+  /* Leaves NaN and infinities untouched, but counted: no fold makes them a
+   * position, and the caller has to hear that some are still not one. */
+  if (!isfinite(v)) {
+    (*nonfinite)++;
     return v;
+  }
 
   if (v == box_length) {
     (*boundary)++;
@@ -318,30 +357,36 @@ static inline sif_real wrap_coordinate(
 }
 
 int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
-  uint64_t* n_boundary, uint64_t* n_wrapped) {
+  uint64_t* n_boundary, uint64_t* n_wrapped, uint64_t* n_nonfinite) {
 
-  if (!field || !field->x || !field->y || !field->z ||
-      field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid or empty field");
-    return SIF_ERR_INVALID;
-  }
-
-  if (sif__field_require_cartesian(field, "field") != SIF_OK)
-    return SIF_ERR_INVALID;
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "field", "field");
+  if (status != SIF_OK)
+    return status;
 
   if (!(box_length > 0.0f)) {
-    SIF_LOG_ERROR("field", "invalid box length %g", (double)box_length);
+    SIF_LOG_ERROR(
+      "field", "box_length: %g (expected > 0)", (double)box_length);
     return SIF_ERR_INVALID;
   }
 
   uint64_t boundary = 0;
   uint64_t wrapped = 0;
+  uint64_t nonfinite = 0;
+  uint64_t first_nonfinite = UINT64_MAX;
 
-#pragma omp parallel for schedule(static) reduction(+ : boundary, wrapped)
+#pragma omp parallel for schedule(static)                                      \
+  reduction(+ : boundary, wrapped, nonfinite) reduction(min : first_nonfinite)
   for (uint64_t i = 0; i < field->n_particles; i++) {
-    field->x[i] = wrap_coordinate(field->x[i], box_length, &boundary, &wrapped);
-    field->y[i] = wrap_coordinate(field->y[i], box_length, &boundary, &wrapped);
-    field->z[i] = wrap_coordinate(field->z[i], box_length, &boundary, &wrapped);
+    const uint64_t before = nonfinite;
+    field->x[i] =
+      wrap_coordinate(field->x[i], box_length, &boundary, &wrapped, &nonfinite);
+    field->y[i] =
+      wrap_coordinate(field->y[i], box_length, &boundary, &wrapped, &nonfinite);
+    field->z[i] =
+      wrap_coordinate(field->z[i], box_length, &boundary, &wrapped, &nonfinite);
+    if (nonfinite != before && i < first_nonfinite)
+      first_nonfinite = i;
   }
 
   /* Positions moved, so anything derived from them is stale. The Morton order
@@ -354,33 +399,68 @@ int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
 
   if (wrapped > 0) {
     SIF_LOG_WARNING("field",
-      "wrapped %" PRIu64 " coordinates that were genuinely outside [0, %g); "
-      "if this is not a small number, the box length is probably wrong and the "
-      "folded field is meaningless",
+      "field: %" PRIu64 " coordinates outside [0, %g), folded back in (more "
+      "than a few means box_length is wrong, and the folded field is "
+      "meaningless)",
       wrapped, (double)box_length);
   }
 
   if (boundary > 0) {
     SIF_LOG_INFO("field",
-      "folded %" PRIu64 " coordinates sitting exactly on the box edge to 0",
-      boundary);
+      "field: %" PRIu64 " coordinates exactly on the box edge %g, folded to 0",
+      boundary, (double)box_length);
+  }
+
+  if (nonfinite > 0) {
+    const uint64_t f = first_nonfinite;
+    SIF_LOG_WARNING("field",
+      "field: %" PRIu64 " coordinates not finite, left as they are (first: "
+      "particle %" PRIu64 " at (%g, %g, %g)); nothing that bins or bounds "
+      "the field will accept it",
+      nonfinite, f, (double)field->x[f], (double)field->y[f],
+      (double)field->z[f]);
   }
 
   if (n_boundary)
     *n_boundary = boundary;
   if (n_wrapped)
     *n_wrapped = wrapped;
+  if (n_nonfinite)
+    *n_nonfinite = nonfinite;
 
   return SIF_OK;
 }
 
 int sif_field_refresh_bounds(sif_field_t* field) {
-  if (!field || !field->x || field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid or empty field");
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "field", "field");
+  if (status != SIF_OK)
+    return status;
+
+  /* A separate pass rather than a test in the min/max loop below, which has to
+   * stay a plain simd reduction. A NaN there would not fail: fmin skips it and
+   * the bounds come out looking fine, leaving the particle to be quantised
+   * into an arbitrary cell of the Morton curve. */
+  uint64_t nonfinite = 0;
+  uint64_t first = UINT64_MAX;
+#pragma omp parallel for schedule(static) reduction(+ : nonfinite)            \
+  reduction(min : first)
+  for (uint64_t i = 0; i < field->n_particles; i++) {
+    if (!isfinite(field->x[i]) || !isfinite(field->y[i]) ||
+        !isfinite(field->z[i])) {
+      nonfinite++;
+      if (i < first)
+        first = i;
+    }
+  }
+  if (nonfinite > 0) {
+    SIF_LOG_ERROR("field",
+      "field: %" PRIu64 " of %" PRIu64 " positions not finite (first: "
+      "particle %" PRIu64 " at (%g, %g, %g)); no bounds to compute",
+      nonfinite, field->n_particles, first, (double)field->x[first],
+      (double)field->y[first], (double)field->z[first]);
     return SIF_ERR_INVALID;
   }
-  if (sif__field_require_cartesian(field, "field") != SIF_OK)
-    return SIF_ERR_INVALID;
 
   sif_real min_x = SIF_REAL_MAX_VAL, min_y = SIF_REAL_MAX_VAL,
            min_z = SIF_REAL_MAX_VAL;
@@ -412,8 +492,8 @@ int sif_field_refresh_bounds(sif_field_t* field) {
   field->centre[2] = (max_z + min_z) * 0.5f;
 
   /* The bounding *cube*, sized by the widest axis, because the Morton
-   * quantisation and the octree both subdivide a cube -- see the note in
-   * sif_field_sort_morton(). */
+   * quantisation subdivides a cube -- see the note in sif_field_sort_morton().
+   */
   sif_real dx = max_x - min_x;
   sif_real dy = max_y - min_y;
   sif_real dz = max_z - min_z;
@@ -431,8 +511,10 @@ int sif_field_refresh_bounds(sif_field_t* field) {
 }
 
 int sif_field_require_bounds(sif_field_t* field) {
-  if (!field || sif__field_require_cartesian(field, "field") != SIF_OK)
-    return SIF_ERR_INVALID;
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "field", "field");
+  if (status != SIF_OK)
+    return status;
 
   if (field->state_flags & SIF_FIELD_STATE_BOUNDS_VALID)
     return SIF_OK;
@@ -464,9 +546,8 @@ static inline uint64_t spread_bits_3(uint32_t v) {
  * The Morton (Z-order) code: the three quantised coordinates interleaved bit
  * by bit, x in the lowest of each triple.
  *
- * Sorting on this orders points by recursive octant -- which is exactly the
- * order an octree visits its children in, and the whole reason the octree can
- * store a contiguous particle range per node instead of a member list.
+ * Sorting on this orders points by recursive octant, so every octant at every
+ * level is one contiguous range of the sorted arrays.
  */
 static inline uint64_t morton_3d(uint32_t x, uint32_t y, uint32_t z) {
   return spread_bits_3(x) | (spread_bits_3(y) << 1) | (spread_bits_3(z) << 2);
@@ -502,8 +583,10 @@ static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
 
   particle_sort_t* temp = sif_malloc_aligned(n * sizeof(particle_sort_t));
   if (!temp) {
-    SIF_LOG_ERROR(
-      "field", "Failed to allocate temporary array for parallel radix sort");
+    SIF_LOG_ERROR("field",
+      "field: cannot allocate the Morton sort buffer (%" PRIu64
+      " particles, %.2f GiB)",
+      n, SIF__GIB(n * sizeof(particle_sort_t)));
     return SIF_ERR_ALLOC;
   }
 
@@ -522,7 +605,10 @@ static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
   uint64_t* global_offsets = calloc((size_t)n_chunks * 256, sizeof(uint64_t));
 
   if (!global_counts || !global_offsets) {
-    SIF_LOG_ERROR("field", "failed to allocate the radix histograms");
+    SIF_LOG_ERROR("field",
+      "field: cannot allocate the Morton sort histograms (%d chunks, %zu "
+      "bytes)",
+      n_chunks, (size_t)n_chunks * 256 * sizeof(uint64_t) * 2);
     free(global_counts);
     free(global_offsets);
     sif_free_aligned(temp);
@@ -590,28 +676,25 @@ static int radix_sort_morton_parallel(particle_sort_t* array, uint64_t n) {
 }
 
 int sif_field_sort_morton(sif_field_t* field) {
-  if (!field || !field->x || field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid or empty field");
-    return SIF_ERR_INVALID;
-  }
-  if (sif__field_require_cartesian(field, "field") != SIF_OK)
-    return SIF_ERR_INVALID;
+  int status =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "field", "field");
+  if (status != SIF_OK)
+    return status;
   if (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED) {
     return SIF_OK; /* Already sorted! */
   }
 
   /* Quantisation needs bounds that describe the data as it is now. */
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
-  if (sif_field_refresh_bounds(field) != SIF_OK)
-    return SIF_ERR_INVALID;
+  status = sif_field_refresh_bounds(field);
+  if (status != SIF_OK)
+    return status;
 
-  /* Quantise against the field's bounding CUBE, not each axis independently.
-   *
-   * A per-axis normalisation makes the Morton curve split space differently
-   * from the octree, which subdivides a single cube of side 2 * half_span
-   * around centre. When the two disagree, the octants stop being contiguous
-   * along the sorted array and sif_octree_alloc cannot partition. Using the
-   * same cube here makes Morton order exactly depth-first octree order. */
+  /* Quantise against the field's bounding CUBE, not each axis independently:
+   * a per-axis normalisation would stretch the octants into boxes of the
+   * field's aspect ratio, and the order would stop being the depth-first
+   * order of a cube of side 2 * half_span around centre, which is what makes
+   * each octant one contiguous range. */
   sif_real cube_side = 2.0f * field->half_span;
   if (!(cube_side > 0.0f))
     cube_side = 1.0f; /* every particle coincident: any order will do */
@@ -624,7 +707,11 @@ int sif_field_sort_morton(sif_field_t* field) {
   particle_sort_t* sort_array =
     sif_malloc_aligned(field->n_particles * sizeof(particle_sort_t));
   if (!sort_array) {
-    SIF_LOG_ERROR("field", "Failed to allocate sorting array. Out of memory!");
+    SIF_LOG_ERROR("field",
+      "field: cannot allocate the Morton sort keys (%" PRIu64
+      " particles, %.2f GiB)",
+      field->n_particles,
+      SIF__GIB(field->n_particles * sizeof(particle_sort_t)));
     return SIF_ERR_ALLOC;
   }
 
@@ -663,7 +750,14 @@ int sif_field_sort_morton(sif_field_t* field) {
 
   if (!new_pos_block || !new_indices || (field->weights && !new_weights) ||
       (field->vx && !new_vel_block)) {
-    SIF_LOG_ERROR("field", "OOM during morton permutation reallocation.");
+    const uint64_t bytes =
+      3 * padded_n * sizeof(sif_real) * (field->vx ? 2 : 1) +
+      field->n_particles * (sizeof(uint64_t) +
+                             (field->weights ? sizeof(sif_real) : 0));
+    SIF_LOG_ERROR("field",
+      "field: cannot allocate the Morton-ordered copy of the arrays (%" PRIu64
+      " particles, %.2f GiB); the field is unchanged",
+      field->n_particles, SIF__GIB(bytes));
     /* Nothing has been swapped in yet, so releasing the partial allocations
      * leaves the field exactly as it was. */
     sif_free_aligned(new_pos_block);
@@ -735,8 +829,10 @@ int sif_field_sort_morton(sif_field_t* field) {
 }
 
 int sif_field_require_morton(sif_field_t* field) {
-  if (!field || sif__field_require_cartesian(field, "field") != SIF_OK)
-    return SIF_ERR_INVALID;
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "field", "field");
+  if (status != SIF_OK)
+    return status;
 
   if (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED)
     return SIF_OK;
@@ -745,13 +841,14 @@ int sif_field_require_morton(sif_field_t* field) {
 }
 
 int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
-  if (!field || !field->x || !field->y || !field->z ||
-      field->n_particles == 0 || !offset) {
-    SIF_LOG_ERROR("field", "cannot translate an empty field");
+  const int status =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "field", "field");
+  if (status != SIF_OK)
+    return status;
+  if (!offset) {
+    SIF_LOG_ERROR("field", "offset: NULL");
     return SIF_ERR_INVALID;
   }
-  if (sif__field_require_cartesian(field, "field") != SIF_OK)
-    return SIF_ERR_INVALID;
 
   const sif_real ox = offset[0], oy = offset[1], oz = offset[2];
 
@@ -764,8 +861,8 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
 
   /* The bounds moved with the positions. The Morton order is dropped too,
    * though the particles kept their relative places: each coordinate was
-   * rounded on the way, and the octree needs the order to agree with the
-   * quantisation exactly, not approximately. The permutation stays -- the
+   * rounded on the way, and the order has to agree with the quantisation
+   * exactly, not approximately. The permutation stays -- the
    * arrays are still in whatever order a sort left them. */
   field->state_flags &= ~SIF_FIELD_STATE_BOUNDS_VALID;
   field->state_flags &= ~SIF_FIELD_STATE_MORTON_SORTED;
@@ -775,31 +872,83 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]) {
 
 /* --- coordinates --- */
 
-int sif__field_require_cartesian(const sif_field_t* field, const char* tag) {
+int sif__field_require_cartesian(
+  const sif_field_t* field, const char* tag, const char* name) {
   if (field && field->units != SIF_COORDINATES_CARTESIAN) {
     SIF_LOG_ERROR(tag,
-      "the field holds sky coordinates (right ascension, declination, "
-      "redshift), not positions: convert them with "
-      "sif_field_convert_sky_coordinates() first");
+      "%s: sky coordinates (ra, dec, z), not positions; convert them to "
+      "comoving positions first",
+      name);
     return SIF_ERR_INVALID;
   }
+  return SIF_OK;
+}
+
+int sif__field_check_in_box(const sif_real* x, const sif_real* y,
+  const sif_real* z, uint64_t n, sif_real box_length, const char* tag,
+  const char* name, uint64_t* n_edge) {
+
+  const double box = (double)box_length;
+  uint64_t n_bad = 0, edge = 0;
+  uint64_t first = UINT64_MAX;
+
+  /* sif__box_accepts() is false for NaN, which would otherwise cast to a
+   * garbage cell index. */
+#pragma omp parallel for schedule(static) reduction(+ : n_bad, edge)          \
+  reduction(min : first)
+  for (uint64_t i = 0; i < n; i++) {
+    const sif_real px = x[i], py = y[i], pz = z[i];
+    if (px >= 0.0f && px < box_length && py >= 0.0f && py < box_length &&
+        pz >= 0.0f && pz < box_length)
+      continue;
+    if (sif__box_accepts(px, box) && sif__box_accepts(py, box) &&
+        sif__box_accepts(pz, box)) {
+      edge++;
+      continue;
+    }
+    n_bad++;
+    if (i < first)
+      first = i;
+  }
+
+  if (n_bad > 0) {
+    SIF_LOG_ERROR(tag,
+      "%s: %" PRIu64 " of %" PRIu64 " particles outside the box [0, %g) (first: "
+      "particle %" PRIu64 " at (%g, %g, %g)); fold a periodic box back into "
+      "it, or translate a survey into one",
+      name, n_bad, n, (double)box_length, first, (double)x[first],
+      (double)y[first], (double)z[first]);
+    return SIF_ERR_RANGE;
+  }
+
+  if (edge > 0)
+    SIF_LOG_INFO(tag,
+      "%s: %" PRIu64 " particles within rounding (%.2g) of the box faces, "
+      "folded in periodically",
+      name, edge, sif__box_edge_tolerance(box));
+
+  if (n_edge)
+    *n_edge = edge;
   return SIF_OK;
 }
 
 int sif_field_convert_sky_coordinates(
   sif_field_t* field, const sif_cosmology_t* cosmo) {
 
-  if (!field || !cosmo || !field->x || !field->y || !field->z ||
-      field->n_particles == 0) {
-    SIF_LOG_ERROR("field", "invalid field or cosmology for the conversion");
+  /* NEED_POSITIONS, not CARTESIAN: sky coordinates are what this wants. */
+  int status =
+    sif__field_check(field, SIF__FIELD_NEED_POSITIONS, "field", "field");
+  if (status != SIF_OK)
+    return status;
+  if (!cosmo) {
+    SIF_LOG_ERROR("field", "cosmology: NULL");
     return SIF_ERR_INVALID;
   }
   if (field->units != SIF_COORDINATES_SKY) {
     SIF_LOG_ERROR("field",
-      "the field already holds Cartesian positions; converting them would "
-      "read x as a right ascension. Set units to SIF_COORDINATES_SKY for a "
-      "field "
-      "that holds sky coordinates");
+      "field: Cartesian positions, not sky coordinates (converting would read "
+      "x as a right ascension); mark the field as holding sky coordinates if "
+      "its columns are ra, dec, z");
     return SIF_ERR_INVALID;
   }
 
@@ -809,32 +958,43 @@ int sif_field_convert_sky_coordinates(
   const sif_real* ra = field->x;
   const sif_real* dec = field->y;
   const sif_real* red = field->z;
-  uint64_t bad_ra = 0, bad_dec = 0, bad_z = 0;
+  uint64_t bad_ra = 0, bad_dec = 0, bad_z = 0, bad = 0;
+  uint64_t first = UINT64_MAX;
   double z_max = 0.0;
 
 #pragma omp parallel for schedule(static)                                      \
-  reduction(+ : bad_ra, bad_dec, bad_z) reduction(max : z_max)
+  reduction(+ : bad_ra, bad_dec, bad_z, bad) reduction(max : z_max)            \
+  reduction(min : first)
   for (uint64_t i = 0; i < n; i++) {
-    bad_ra += !isfinite(ra[i]);
-    bad_dec += !(dec[i] >= -90.0f && dec[i] <= 90.0f);
-    if (!(red[i] >= 0.0f) || !isfinite(red[i]))
-      bad_z++;
-    else if ((double)red[i] > z_max)
+    const int r = !isfinite(ra[i]);
+    const int d = !(dec[i] >= -90.0f && dec[i] <= 90.0f);
+    const int z = !(red[i] >= 0.0f) || !isfinite(red[i]);
+    bad_ra += r;
+    bad_dec += d;
+    bad_z += z;
+    bad += (r || d || z);
+    if ((r || d || z) && i < first)
+      first = i;
+    if (!z && (double)red[i] > z_max)
       z_max = (double)red[i];
   }
 
-  if (bad_ra || bad_dec || bad_z) {
+  /* The likeliest cause is named last because it is a guess, but it is the
+   * one behind nearly every refusal: columns in another order, or radians. */
+  if (first != UINT64_MAX) {
     SIF_LOG_ERROR("field",
-      "cannot convert: %" PRIu64 " right ascensions not finite, %" PRIu64
-      " declinations outside [-90, 90], %" PRIu64
-      " redshifts negative or not finite, of %" PRIu64
-      ". Are the columns in the order ra, dec, z, and in degrees?",
-      bad_ra, bad_dec, bad_z, n);
+      "field: %" PRIu64 " of %" PRIu64 " sky coordinates unusable: %" PRIu64
+      " ra not finite, %" PRIu64 " dec outside [-90, 90], %" PRIu64
+      " z negative or not finite (first: particle %" PRIu64
+      ", ra %g, dec %g, z %g); expected ra, dec in degrees and z in that "
+      "order",
+      bad, n, bad_ra, bad_dec, bad_z, first, (double)ra[first], (double)dec[first],
+      (double)red[first]);
     return SIF_ERR_INVALID;
   }
 
   sif__distance_table_t table;
-  const int status = sif__distance_table_build(cosmo, z_max, &table);
+  status = sif__distance_table_build(cosmo, z_max, &table);
   if (status != SIF_OK)
     return status;
 
@@ -851,7 +1011,7 @@ int sif_field_convert_sky_coordinates(
   }
 
   SIF_LOG_INFO("field",
-    "converted %" PRIu64 " tracers from the sky, out to z = %g (D_C = %g "
+    "field: %" PRIu64 " tracers converted from the sky, out to z = %g (D_C = %g "
     "Mpc/h)",
     n, z_max, sif__distance_table_eval(&table, z_max));
 

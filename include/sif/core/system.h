@@ -6,11 +6,31 @@
 
 /**
  * @file system.h
- * @brief Library lifetime: initialisation, configuration and teardown.
+ * @brief The system state: FFTW, the settings file, threads and logging.
  *
- * sif_init() must be called before any other entry point and sif_finalise()
- * after the last one. Between them the library holds process-global state: the
- * logger, the thread ceiling, the FFTW plan cache and the settings table.
+ * sif_system_init() brings up the process-global resources a few parts of the
+ * library share, and sif_system_finalise() releases them:
+ *
+ * - FFTW: its threading, the planner quality and the wisdom file
+ * - the settings table, read from and saved to `$HOME/.sif/config`, and the
+ *   cache and wisdom directories it names
+ * - the thread ceiling
+ * - the log level
+ *
+ * It is not a library-wide initialisation. Most of sif works without it:
+ * the containers, I/O, the analytic models and everything else that does not
+ * transform a grid. The functions that do need it say so in their
+ * documentation, with the note "Requires sif_system_init()":
+ *
+ * - FFTW: sif_finder_spherical(), sif_finder_exodus(),
+ *   sif_finder_exodus_survey(), sif_delta_moments_grid() and
+ *   sif_delta_distribution_grid()
+ * - the settings table: sif_setting_set() and sif_setting_get()
+ *
+ * Called without it, they fail with SIF_ERR_UNINITIALISED -- reported through
+ * sif_error_status() by the ones that return a pointer -- except
+ * sif_setting_get(), which returns its fallback. The rest of the library uses
+ * the OpenMP runtime's own thread count and logs at INFO until it is called.
  */
 
 #ifndef SIF_CORE_SYSTEM_H
@@ -60,30 +80,44 @@ typedef struct {
 } sif_config_t;
 
 /**
- * @brief Initialise the library.
+ * @brief Bring up the system state.
  *
- * Brings up the logger, the thread ceiling, the settings table and the FFTW
- * plan cache. Calling it a second time logs a warning, keeps the first
+ * Applies the log level and thread ceiling, loads the settings table and
+ * initialises FFTW. Calling it a second time logs a warning, keeps the first
  * configuration, and returns SIF_OK.
  *
  * @param config Configuration to apply, or NULL for the defaults. It is read
  * once and copied, so neither the struct nor the sub-structs it points at need
  * to outlive the call, and the library never frees them.
- * @return SIF_OK, or SIF_ERR_ALLOC if the library state or FFTW could not be
- * brought up -- in which case nothing is left initialised, and the call may
- * be retried.
+ * @return SIF_OK, or SIF_ERR_ALLOC if the state or FFTW could not be brought
+ * up -- in which case nothing is left initialised, and the call may be
+ * retried.
  *
  * @note Failing to create the cache or wisdom directories is only a warning:
  * the run still does everything that does not need them.
  */
+SIF_NODISCARD int sif_system_init(sif_config_t* config);
+
+/**
+ * @brief Release everything sif_system_init() acquired.
+ *
+ * Saves the settings table if it changed and tears down the FFTW plan cache.
+ * The functions that require sif_system_init() may not be called afterwards
+ * without initialising again.
+ */
+void sif_system_finalise(void);
+
+/**
+ * @brief Deprecated name of sif_system_init(); logs a warning and forwards.
+ */
+SIF_DEPRECATED("use sif_system_init()")
 SIF_NODISCARD int sif_init(sif_config_t* config);
 
 /**
- * @brief Shut the library down, releasing everything sif_init() acquired.
- *
- * Saves the settings table if it changed and tears down the FFTW plan cache.
- * No sif entry point may be called afterwards without initialising again.
+ * @brief Deprecated name of sif_system_finalise(); logs a warning and
+ * forwards.
  */
+SIF_DEPRECATED("use sif_system_finalise()")
 void sif_finalise(void);
 
 /**
@@ -91,12 +125,13 @@ void sif_finalise(void);
  * @brief Ready-made sif_config_t pointers for the common cases.
  *
  * @code
- * if (sif_init(SIF_CONFIG_STANDARD) != SIF_OK)
+ * if (sif_system_init(SIF_CONFIG_STANDARD) != SIF_OK)
  *   return 1;
  * @endcode
  *
  * @warning These expand to compound literals, whose lifetime ends with the
- * enclosing block. Pass one straight to sif_init(); do not store the pointer.
+ * enclosing block. Pass one straight to sif_system_init(); do not store the
+ * pointer.
  * @{
  */
 

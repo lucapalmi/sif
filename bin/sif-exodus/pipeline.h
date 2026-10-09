@@ -33,7 +33,7 @@
  * where it came from: the configuration file fills it, the pipeline only
  * reads it. The library has to be initialised before pipeline_box(); the
  * thread count, log level and FFT tuning are the caller's to apply, since
- * they are sif_init()'s arguments and not the pipeline's.
+ * they are sif_system_init()'s arguments and not the pipeline's.
  */
 
 #ifndef SIF_EXODUS_PIPELINE_H

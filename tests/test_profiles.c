@@ -34,7 +34,7 @@ static double uni(void) {
 #define CHECK_FLAG(cond, msg)                                                  \
   do {                                                                         \
     if (!(cond)) {                                                             \
-      printf("  FAIL: %s\\n", msg);                                            \
+      printf("  FAIL: %s\n", msg);                                             \
       failures++;                                                              \
     }                                                                          \
   } while (0)
@@ -44,8 +44,8 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  if (sif_init(&cfg) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -59,7 +59,10 @@ int main(void) {
   }
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  if (sif_field_assign_positions(f, x, y, z) != SIF_OK) {
+    printf("FAIL: sif_field_assign_positions\n");
+    return 1;
+  }
 
   /* One void at the box centre, and a second one placed so that its search
    * sphere reaches past the box face on a coarse mesh -- which is where a
@@ -227,8 +230,10 @@ int main(void) {
     wgt[i] = (sif_real)2.0;
 
   sif_field_t* fw = sif_field_alloc(N_P);
-  sif_field_assign_positions(fw, x, y, z);
-  sif_field_assign_weights(fw, wgt);
+  CHECK_FLAG(sif_field_assign_positions(fw, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  CHECK_FLAG(sif_field_assign_weights(fw, wgt) == SIF_OK,
+    "sif_field_assign_weights failed");
 
   sif_chain_mesh_t* mesh_w =
     sif_chain_mesh_alloc(n_cells, BOX, fw, SIF_MESH_DROP_INDICES);
@@ -286,8 +291,10 @@ int main(void) {
   }
 
   sif_field_t* fv = sif_field_alloc(N_P);
-  sif_field_assign_positions(fv, x, y, z);
-  sif_field_assign_velocities(fv, vel_x, vel_y, vel_z);
+  CHECK_FLAG(sif_field_assign_positions(fv, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  CHECK_FLAG(sif_field_assign_velocities(fv, vel_x, vel_y, vel_z) == SIF_OK,
+    "sif_field_assign_velocities failed");
 
   sif_chain_mesh_t* mesh_v =
     sif_chain_mesh_alloc(n_cells, BOX, fv, SIF_MESH_DROP_INDICES);
@@ -357,9 +364,12 @@ int main(void) {
   }
 
   sif_field_t* fp = sif_field_alloc(2 * n_pairs);
-  sif_field_assign_positions(fp, px, py, pz);
-  sif_field_assign_velocities(fp, pvx, pvy, pvz);
-  sif_field_assign_weights(fp, pw);
+  CHECK_FLAG(sif_field_assign_positions(fp, px, py, pz) == SIF_OK,
+    "sif_field_assign_positions failed");
+  CHECK_FLAG(sif_field_assign_velocities(fp, pvx, pvy, pvz) == SIF_OK,
+    "sif_field_assign_velocities failed");
+  CHECK_FLAG(sif_field_assign_weights(fp, pw) == SIF_OK,
+    "sif_field_assign_weights failed");
 
   sif_chain_mesh_t* mesh_p =
     sif_chain_mesh_alloc(n_cells, BOX, fp, SIF_MESH_DROP_INDICES);
@@ -428,6 +438,6 @@ int main(void) {
   free(vel_y);
   free(vel_z);
   free(wgt);
-  sif_finalise();
+  sif_system_finalise();
   return failures != 0;
 }

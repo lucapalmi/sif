@@ -58,12 +58,6 @@ terms.
 
 ## Third-party components
 
-**Robust geometric predicates** — sif uses Jonathan
-Richard Shewchuk's implementation of [adaptive-precision floating-point
-arithmetic and incircle/insphere tests](https://www.cs.cmu.edu/~quake/robust.html)
-(Carnegie Mellon University). The accompanying
-`predicates.h` is not part of the original distribution.
-
 **FFTW3** — sif links [FFTW 3](https://www.fftw.org/) for its transforms. FFTW
 is not bundled; it is located at configure time and must be installed
 separately. FFTW is licensed under the GNU General Public License, version 2 or

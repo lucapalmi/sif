@@ -43,6 +43,9 @@
  * SIF_DELTA_KEEP_CIC_WINDOW.
  * @return Newly allocated distribution, released with
  * sif_delta_distribution_free(), or NULL on invalid input or failure.
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
 SIF_NODISCARD sif_delta_distribution_t* sif_delta_distribution_grid(
   const sif_grid_t* grid, const sif_real* radii, uint32_t n_radii,

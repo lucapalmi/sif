@@ -106,7 +106,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
 
   sif_system_state_t* state = sif__system_state();
   if (!state)
-    return SIF_ERR_INVALID;
+    return SIF_ERR_UNINITIALISED;
   ctx->fft_ws = sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
   if (!ctx->fft_ws)
     return SIF_ERR_ALLOC;

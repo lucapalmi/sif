@@ -52,6 +52,7 @@ static int sifChainMesh_init(
                          field, "consume the field into a ChainMesh") < 0)
     return -1;
 
+  sif_error_clear();
   sif_chain_mesh_t* tmp = consume_field
                             ? sif_chain_mesh_alloc_consume(n_cells,
                                 (sif_real)box_length_in, field->field, opt)
@@ -59,9 +60,7 @@ static int sifChainMesh_init(
                                 (sif_real)box_length_in, field->field, opt);
 
   if (!tmp) {
-    PyErr_SetString(PyExc_ValueError,
-      "Failed to build sif.chain_mesh: check n_cells/box_length and that every "
-      "particle lies in [0, box_length)");
+    py_sif_field_raise_binning(sif_error_status(), "ChainMesh");
     return -1;
   }
 

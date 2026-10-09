@@ -13,8 +13,7 @@
 #include "core/system_internal.h"
 #include "io/fits_internal.h"
 #include "io/hdf5_internal.h"
-
-#include "predicates/predicates.h"
+#include "utils/logger_internal.h"
 
 #ifdef _OPENMP
 #  include <omp.h>
@@ -85,15 +84,15 @@ static bool ensure_dir(const char* path) {
 /* --- lifetime --- */
 
 /* The one piece of process-global state in the library. NULL between
- * sif_finalise() and the next sif_init(), which is how both accessors below
- * and the logger tell whether the library is up. */
+ * sif_system_finalise() and the next sif_system_init(), which is how both
+ * accessors below and the logger tell whether it is up. */
 static sif_system_state_t* system_state = NULL;
 
-int sif_init(sif_config_t* config) {
+int sif_system_init(sif_config_t* config) {
   /* Idempotent rather than an error: the library is up, which is what the
    * caller asked for. The configuration of the first call stays in force. */
   if (system_state) {
-    SIF_LOG_WARNING("system", "sif library already initialised");
+    SIF_LOG_WARNING("system", "the system state is already initialised");
     return SIF_OK;
   }
 
@@ -183,18 +182,6 @@ int sif_init(sif_config_t* config) {
     return SIF_ERR_ALLOC;
   }
 
-  /* FFTW's thread count is global and read at plan time, so setting it once
-   * here fixes it for every plan the library makes afterwards. It must come
-   * after the manager, which is what initialises FFTW's threading. */
-  real_fftw_plan_with_nthreads(sif__system_max_threads());
-
-  /* Shewchuk's exact predicates derive their error bounds from the running
-   * machine's floating-point behaviour, once, before any predicate is
-   * evaluated. Nothing evaluates one at the moment -- the tessellation that
-   * did was removed -- but the initialisation has to happen here rather than
-   * at the first call, so it stays. */
-  exactinit();
-
   /* Said at start-up so that a build that came out without HDF5 or cfitsio
    * -- an AUTO configure on a machine where it was not loaded -- is visible
    * in the log of the first run, not discovered at the first call. */
@@ -203,22 +190,23 @@ int sif_init(sif_config_t* config) {
   char fits[64];
   sif__fits_describe(fits, sizeof(fits));
 
-  SIF_LOG_INFO("system", "sif library initialised (threads: %u, %s, %s)",
+  SIF_LOG_INFO("system", "sif system state initialised (threads: %u, %s, %s)",
     system_state->max_threads, hdf5, fits);
 
   SIF_LOG_FLUSH();
   return SIF_OK;
 }
 
-void sif_finalise(void) {
+void sif_system_finalise(void) {
   if (!system_state) {
-    SIF_LOG_WARNING("system", "sif library not currently initialised");
+    SIF_LOG_WARNING("system", "the system state is not initialised");
     return;
   }
 
   sif_timer_stop(&system_state->total_runtime_timer);
   double total_time = sif_timer_elapsed_ms(&system_state->total_runtime_timer);
-  SIF_LOG_INFO("system", "sif library finalised. Total execution time: %.2f s",
+  SIF_LOG_INFO("system",
+    "sif system state finalised. Total execution time: %.2f s",
     total_time / 1000);
 
   /* Flush before tearing anything down: the teardown below can abort the
@@ -235,11 +223,37 @@ void sif_finalise(void) {
   system_state = NULL;
 }
 
+/* --- deprecated names --- */
+
+/* Kept for one release so existing callers keep building. The warning is
+ * logged as well as declared: a caller that builds with deprecation warnings
+ * off, or through the Python bindings, still hears about it. */
+int sif_init(sif_config_t* config) {
+  SIF_LOG_WARNING("system",
+    "sif_init(): deprecated, removed in the next release: call "
+    "sif_system_init()");
+  return sif_system_init(config);
+}
+
+void sif_finalise(void) {
+  SIF_LOG_WARNING("system",
+    "sif_finalise(): deprecated, removed in the next release: call "
+    "sif_system_finalise()");
+  sif_system_finalise();
+}
+
 /* --- accessors --- */
 
 sif_system_state_t* sif__system_state(void) {
-  if (!system_state)
-    SIF_LOG_ERROR("system", "the library is not initialised; call sif_init()");
+  /* Logged and given its status here, the innermost place that knows, so
+   * every caller only has to pass SIF_ERR_UNINITIALISED up -- and a function
+   * that returns a pointer still reports it through sif_error_status(). */
+  if (!system_state) {
+    SIF_LOG_ERROR("system",
+      "system state not initialised: call sif_system_init() first "
+      "(pysif.system_init() in Python)");
+    sif__error_status_set(SIF_ERR_UNINITIALISED);
+  }
 
   return system_state;
 }
@@ -247,11 +261,18 @@ sif_system_state_t* sif__system_state(void) {
 sif_system_state_t* sif__system_state_safe(void) { return system_state; }
 
 int sif__system_max_threads(void) {
-  /* Answering 1 rather than aborting lets a caller size a per-thread buffer
-   * before the library is up, which the logger and the tests both do. */
   if (system_state)
     return (int)system_state->max_threads;
+
+  /* Most of the library runs without the system state, and sizes its
+   * per-thread scratch from this. Answering 1 here used to run all of it on
+   * one thread without a word; the runtime's own ceiling is what a caller that
+   * never asked for anything else expects. */
+#ifdef _OPENMP
+  return omp_get_max_threads();
+#else
   return 1;
+#endif
 }
 
 int sif__system_num_threads(void) {

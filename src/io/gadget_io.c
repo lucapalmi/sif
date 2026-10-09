@@ -20,6 +20,7 @@
 
 #include "io/gadget_internal.h"
 #include "io/internal.h"
+#include "structures/field_internal.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 #include "utils/logger_internal.h"
@@ -1022,7 +1023,7 @@ static int check_file_values(snap_file_t* sf, double box, type_stats_t* ts,
         for (int k = 0; k < 3; k++) {
           const double v = pos[3 * j + k];
           sif__io_stats_add(&ts[t].pos[k], v);
-          out |= box > 0 && !(v >= 0 && v < box);
+          out |= box > 0 && !sif__box_accepts(v, box);
         }
         ts[t].outside += out;
         if (masses) {

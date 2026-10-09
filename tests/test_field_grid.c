@@ -10,7 +10,6 @@
 #include "sif/core/system.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
-#include "sif/structures/octree.h"
 #include "sif/utils/align.h"
 
 #include <math.h>
@@ -68,7 +67,8 @@ static void test_velocity_permutation(void) {
   }
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   CHECK(sif_field_sort_morton(f) == SIF_OK, "sort_morton failed");
   CHECK((f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) != 0, "flag not set");
@@ -130,7 +130,8 @@ static void test_move_after_sort_keeps_permutation(void) {
 
   for (int how = 0; how < 2; how++) {
     sif_field_t* f = sif_field_alloc(N_P);
-    sif_field_assign_positions(f, x, y, z);
+    CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+      "sif_field_assign_positions failed");
     CHECK(sif_field_sort_morton(f) == SIF_OK, "sort_morton failed");
 
     if (how == 0) {
@@ -151,7 +152,7 @@ static void test_move_after_sort_keeps_permutation(void) {
        * something and drops the flag. */
       f->x[N_P / 2] = -1.0f;
       CHECK(
-        sif_field_wrap_periodic(f, BOX, NULL, NULL) == SIF_OK, "wrap failed");
+        sif_field_wrap_periodic(f, BOX, NULL, NULL, NULL) == SIF_OK, "wrap failed");
     }
 
     CHECK((f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) == 0,
@@ -191,7 +192,8 @@ static void test_sort_permutes_everything(void) {
   make_positions(x, y, z);
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
   CHECK(sif_field_assign_velocities(f, x, y, z) == SIF_OK,
     "assign_velocities failed");
   CHECK(sif_field_sort_morton(f) == SIF_OK, "sort failed");
@@ -231,24 +233,19 @@ static void test_require_helpers(void) {
   make_positions(x, y, z);
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   CHECK(sif_field_require_bounds(f) == SIF_OK, "require_bounds failed");
   CHECK(sif_field_require_bounds(f) == SIF_OK, "require_bounds not idempotent");
   CHECK(f->max_p[0] > f->min_p[0], "bounds look wrong");
 
-  /* The octree used to hard-fail on an unsorted field; it must now sort it. */
+  /* require_morton sorts an unsorted field, and is a no-op on a sorted one. */
   CHECK((f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) == 0,
     "field should not be sorted yet");
-
-  sif_octree_t* tree = sif_octree_alloc(f, 16);
-  CHECK(tree != NULL, "octree build should succeed on an unsorted field now");
-  if (tree) {
-    CHECK((f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) != 0,
-      "octree build should have sorted the field");
-    sif_octree_free(tree);
-  }
-
+  CHECK(sif_field_require_morton(f) == SIF_OK, "require_morton failed");
+  CHECK((f->state_flags & SIF_FIELD_STATE_MORTON_SORTED) != 0,
+    "require_morton should have sorted the field");
   CHECK(sif_field_require_morton(f) == SIF_OK, "require_morton not idempotent");
 
   sif_field_free(f);
@@ -272,8 +269,10 @@ static void test_cic_mass(void) {
     m[i] = 2.0f; /* uniform but != 1, so ignoring weights is detectable */
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
-  sif_field_assign_weights(f, m);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  CHECK(sif_field_assign_weights(f, m) == SIF_OK,
+    "sif_field_assign_weights failed");
 
   const uint32_t n = 16;
   sif_grid_t* g = sif_grid_alloc(n, BOX);
@@ -328,7 +327,8 @@ static void test_cic_tiling_is_invisible(void) {
   make_positions(x, y, z);
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   const uint32_t n = 16;
   const uint64_t total = (uint64_t)n * n * n;
@@ -339,7 +339,8 @@ static void test_cic_tiling_is_invisible(void) {
   sif_real* reference = malloc(total * sizeof(sif_real));
 
   for (int t = 0; t < 4; t++) {
-    sif_setting_set("cic_tile_particles", tilings[t]);
+    CHECK(sif_setting_set("cic_tile_particles", tilings[t]) == SIF_OK,
+      "setting cic_tile_particles failed");
 
     sif_grid_t* g = sif_grid_alloc(n, BOX);
     CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
@@ -373,7 +374,9 @@ static void test_cic_tiling_is_invisible(void) {
     sif_grid_free(g);
   }
 
-  sif_setting_set("cic_tile_particles", SIF__CIC_TILE_PARTICLES_DEFAULT);
+  CHECK(sif_setting_set("cic_tile_particles",
+          SIF__CIC_TILE_PARTICLES_DEFAULT) == SIF_OK,
+    "restoring cic_tile_particles failed");
 
   free(reference);
   sif_field_free(f);
@@ -409,14 +412,17 @@ static void test_cic_cache_keys_on_content(void) {
 
   /* The cache is opt-in; HOME points into the build tree for the test run, so
    * this writes nothing outside it. */
-  sif_setting_set("grid_cache_enabled", "1");
+  CHECK(sif_setting_set("grid_cache_enabled", "1") == SIF_OK,
+    "enabling the grid cache failed");
 
   const uint32_t n = 16;
   const uint64_t total = (uint64_t)n * n * n;
 
   sif_field_t* f1 = sif_field_alloc(N_P);
-  sif_field_assign_positions(f1, x, y, z);
-  sif_field_assign_weights(f1, m1);
+  CHECK(sif_field_assign_positions(f1, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  CHECK(sif_field_assign_weights(f1, m1) == SIF_OK,
+    "sif_field_assign_weights failed");
 
   sif_grid_t* g1 = sif_grid_alloc(n, BOX);
   CHECK(sif_grid_assign_cic(g1, f1) == SIF_OK, "CIC assignment failed");
@@ -426,8 +432,10 @@ static void test_cic_cache_keys_on_content(void) {
     sum1 += (double)g1->values[i];
 
   sif_field_t* f2 = sif_field_alloc(N_P);
-  sif_field_assign_positions(f2, x, y, z);
-  sif_field_assign_weights(f2, m2);
+  CHECK(sif_field_assign_positions(f2, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  CHECK(sif_field_assign_weights(f2, m2) == SIF_OK,
+    "sif_field_assign_weights failed");
 
   sif_grid_t* g2 = sif_grid_alloc(n, BOX);
   CHECK(sif_grid_assign_cic(g2, f2) == SIF_OK, "CIC assignment failed");
@@ -452,7 +460,8 @@ static void test_cic_cache_keys_on_content(void) {
       identical = 0;
   CHECK(identical, "a cache hit did not reproduce the grid bit for bit");
 
-  sif_setting_set("grid_cache_enabled", "0");
+  CHECK(sif_setting_set("grid_cache_enabled", "0") == SIF_OK,
+    "disabling the grid cache failed");
 
   sif_grid_free(g1_again);
   sif_grid_free(g2);
@@ -477,7 +486,8 @@ static void test_cic_rejects_out_of_box(void) {
   x[7] = BOX + 5.0f; /* used to underflow the local slab index */
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   sif_grid_t* g = sif_grid_alloc(16, BOX);
 
@@ -510,7 +520,8 @@ static void test_cic_rejects_out_of_box(void) {
 
   /* And a field that is fine deposits, with SIF_OK. */
   x[7] = 1.0f;
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
   CHECK(sif_grid_assign_cic(g, f) == SIF_OK && g->content == SIF_GRID_DENSITY,
     "a valid field should deposit");
 
@@ -552,13 +563,14 @@ static void test_wrap_periodic(void) {
   y[33] = -BOX * 1.5f;
 
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   /* A stale bounds cache must not survive the move. */
   CHECK(sif_field_require_bounds(f) == SIF_OK, "require_bounds failed");
 
   uint64_t boundary = 0, wrapped = 0;
-  CHECK(sif_field_wrap_periodic(f, BOX, &boundary, &wrapped) == SIF_OK,
+  CHECK(sif_field_wrap_periodic(f, BOX, &boundary, &wrapped, NULL) == SIF_OK,
     "wrap_periodic failed");
 
   CHECK(boundary == 2, "expected 2 boundary folds, got %llu",
@@ -606,19 +618,49 @@ static void test_wrap_periodic(void) {
 
   /* Idempotent: a field already inside the box is left alone. */
   boundary = wrapped = 1;
-  CHECK(sif_field_wrap_periodic(f, BOX, &boundary, &wrapped) == SIF_OK,
+  CHECK(sif_field_wrap_periodic(f, BOX, &boundary, &wrapped, NULL) == SIF_OK,
     "second wrap failed");
   CHECK(boundary == 0 && wrapped == 0,
     "wrapping an in-box field should move nothing, got %llu/%llu",
     (unsigned long long)boundary, (unsigned long long)wrapped);
 
-  CHECK(sif_field_wrap_periodic(f, 0.0f, NULL, NULL) == SIF_ERR_INVALID,
+  CHECK(sif_field_wrap_periodic(f, 0.0f, NULL, NULL, NULL) == SIF_ERR_INVALID,
     "a non-positive box should be rejected");
 
   sif_field_free(f);
   free(x);
   free(y);
   free(z);
+  printf("  ok\n");
+}
+
+/*
+ * A NaN or infinite coordinate cannot be wrapped. It is left alone and
+ * counted, so the caller can tell a wrap that made the field usable from one
+ * that could not -- and it does not disturb the other two counts.
+ */
+static void test_wrap_counts_nonfinite(void) {
+  printf("wrap_periodic: non-finite coordinates\n");
+
+  sif_real x[3] = {NAN, 150.0f, 1.0f}, y[3] = {1.0f, 1.0f, INFINITY},
+           z[3] = {1.0f, 1.0f, 1.0f};
+  sif_field_t* f = sif_field_alloc(3);
+  CHECK(f && sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "field setup failed");
+
+  uint64_t boundary = 9, wrapped = 9, nonfinite = 9;
+  CHECK(f && sif_field_wrap_periodic(f, BOX, &boundary, &wrapped, &nonfinite) ==
+               SIF_OK,
+    "wrap_periodic failed");
+  CHECK(nonfinite == 2, "expected 2 non-finite, got %llu",
+    (unsigned long long)nonfinite);
+  CHECK(wrapped == 1 && boundary == 0,
+    "non-finite coordinates leaked into the other counts (%llu, %llu)",
+    (unsigned long long)wrapped, (unsigned long long)boundary);
+  CHECK(f && isnan(f->x[0]) && isinf(f->y[2]),
+    "non-finite coordinates should be left as they are");
+
+  sif_field_free(f);
   printf("  ok\n");
 }
 
@@ -670,10 +712,10 @@ static void test_grid_content_tag(void) {
 int main(void) {
   /* Needed by the cache test and nothing else here: the grid cache is driven
    * through the settings table, which does not exist until the library is
-   * initialised -- so without this sif_setting_set() is a silent no-op and
-   * the cache test passes without ever enabling the cache. */
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+   * initialised -- so without this sif_setting_set() fails and the cache
+   * test cannot enable the cache. */
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -686,9 +728,10 @@ int main(void) {
   test_cic_cache_keys_on_content();
   test_cic_rejects_out_of_box();
   test_wrap_periodic();
+  test_wrap_counts_nonfinite();
   test_grid_content_tag();
 
-  sif_finalise();
+  sif_system_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

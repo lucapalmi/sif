@@ -61,6 +61,9 @@
  * released once its contents are in the FFT workspace, and the workspace's is
  * handed back at the end. The contents are restored, the pointer is not, so a
  * pointer cached from before the call dangles afterwards.
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
 SIF_NODISCARD sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,

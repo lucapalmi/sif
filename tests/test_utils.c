@@ -17,6 +17,7 @@
  */
 
 #include "sif/core/macros.h"
+#include "sif/core/settings.h"
 #include "sif/core/system.h"
 #include "sif/utils/align.h"
 #include "sif/utils/array.h"
@@ -436,16 +437,46 @@ static void test_timer(void) {
   CHECK(sif_timer_elapsed_ms(NULL) == -1.0, "a NULL timer should report -1.0");
 }
 
+/* What the config file cannot hold is refused with a status, not dropped. */
+static void test_settings(void) {
+  printf("settings\n");
+
+  CHECK(sif_setting_set("test_key", "a value") == SIF_OK, "plain set failed");
+  CHECK(strcmp(sif_setting_get("test_key", NULL), "a value") == 0,
+    "a set value should read back");
+
+  CHECK(sif_setting_set(NULL, "x") == SIF_ERR_INVALID,
+    "a NULL key should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("test_key", NULL) == SIF_ERR_INVALID,
+    "a NULL value should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("a=b", "x") == SIF_ERR_INVALID,
+    "a key with '=' should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("a\nb", "x") == SIF_ERR_INVALID,
+    "a key with a newline should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("test_key", "x\ny") == SIF_ERR_INVALID,
+    "a value with a newline should be SIF_ERR_INVALID");
+  CHECK(strcmp(sif_setting_get("test_key", NULL), "a value") == 0,
+    "a refused set should leave the table unchanged");
+
+  /* A fallback the file cannot hold is still returned, just not stored. */
+  CHECK(strcmp(sif_setting_get("test_other", "x\ny"), "x\ny") == 0,
+    "an unstorable fallback should still be returned");
+  CHECK(sif_setting_get("test_other", NULL) == NULL,
+    "an unstorable fallback should not be stored");
+
+  printf("  ok\n");
+}
+
 int main(void) {
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
   /* A second call keeps the first configuration and reports success: the
    * library is up, which is all the caller asked for. */
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
-    printf("FAIL: a second sif_init should return SIF_OK\n");
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: a second sif_system_init should return SIF_OK\n");
     return 1;
   }
 
@@ -458,8 +489,9 @@ int main(void) {
   test_random();
   test_sort();
   test_timer();
+  test_settings();
 
-  sif_finalise();
+  sif_system_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

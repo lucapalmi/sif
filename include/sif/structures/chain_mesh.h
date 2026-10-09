@@ -32,8 +32,10 @@
  *
  * @note The mesh is anchored at the origin: all particle coordinates, and all
  * query coordinates, must lie in [0, box_length) on every axis. This is
- * enforced at construction time. Callers working in a shifted frame have to
- * translate into box-local coordinates first.
+ * enforced at construction time, except within a few ULPs of the faces, where
+ * a coordinate is folded in periodically (it is rounding, not data). Callers
+ * working in a shifted frame have to translate into box-local coordinates
+ * first.
  */
 typedef struct {
   /** Cells per side. */
@@ -125,10 +127,16 @@ typedef struct {
  * @param n_cells Cells per side.
  * @param box_length Physical side length of the box.
  * @param field Particle field to bin. Every coordinate must be in
- * [0, box_length); the call fails if any particle lies outside.
+ * [0, box_length); the call fails if any particle lies outside, beyond a few
+ * ULPs of the faces. Those within are folded in periodically in the mesh's
+ * copy -- or, by sif_chain_mesh_alloc_consume(), in the columns it takes.
  * @param opt Honours #SIF_MESH_DROP_INDICES. #SIF_DEFAULT keeps everything.
  * @return The mesh, owned by the caller and released with
- * sif_chain_mesh_free(). NULL on invalid input or allocation failure.
+ * sif_chain_mesh_free(). NULL on invalid input or allocation failure, with
+ * sif_error_status() at SIF_ERR_INVALID (a NULL or empty field, one without
+ * positions or in sky coordinates, a zero n_cells or a box_length that is not
+ * positive), SIF_ERR_RANGE (a particle outside the box; the message names the
+ * first) or SIF_ERR_ALLOC.
  */
 SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
   sif_real box_length, const sif_field_t* field, sif_option opt);
@@ -154,12 +162,15 @@ SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc(uint32_t n_cells,
  * and must still release with sif_field_free().
  * @param opt As sif_chain_mesh_alloc().
  * @return The mesh, owned by the caller and released with
- * sif_chain_mesh_free(). NULL on invalid input or allocation failure.
+ * sif_chain_mesh_free(). NULL on failure, with sif_error_status() as for
+ * sif_chain_mesh_alloc().
  *
- * @warning The field is emptied whether or not this succeeds. A failure part
- * way through has already taken the storage, and handing back a field pointing
- * at memory the mesh now owns would be worse than handing back an empty one.
- * Use sif_chain_mesh_alloc() where the field has to survive the call.
+ * @warning A refused input leaves the field as it was, and so does running out
+ * of memory before the storage changes hands. Any failure after that empties
+ * the field anyway, with a warning saying so: the build has already taken the
+ * storage, and handing back a field pointing at memory the mesh now owns would
+ * be worse than handing back an empty one. Use sif_chain_mesh_alloc() where
+ * the field has to survive the call.
  */
 SIF_NODISCARD sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
   uint32_t n_cells, sif_real box_length, sif_field_t* field, sif_option opt);
@@ -180,8 +191,9 @@ void sif_chain_mesh_free(sif_chain_mesh_t* mesh);
  * @param mesh The mesh. Must carry sif_chain_mesh_t::original_indices, so not
  * one built with #SIF_MESH_DROP_INDICES.
  * @param px,py,pz Query point, in [0, box_length) on every axis.
- * @return Index into the original field, or UINT64_MAX if the mesh is empty or
- * cannot name its particles.
+ * @return Index into the original field, or UINT64_MAX, logged, for a NULL
+ * mesh or one built with #SIF_MESH_DROP_INDICES, which cannot name its
+ * particles.
  */
 uint64_t sif_chain_mesh_find_nearest_open(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);
@@ -195,8 +207,9 @@ uint64_t sif_chain_mesh_find_nearest_open(
  * @param mesh The mesh. Must carry sif_chain_mesh_t::original_indices, so not
  * one built with #SIF_MESH_DROP_INDICES.
  * @param px,py,pz Query point, in [0, box_length) on every axis.
- * @return Index into the original field, or UINT64_MAX if the mesh is empty or
- * cannot name its particles.
+ * @return Index into the original field, or UINT64_MAX, logged, for a NULL
+ * mesh or one built with #SIF_MESH_DROP_INDICES, which cannot name its
+ * particles.
  */
 uint64_t sif_chain_mesh_find_nearest_pbc(
   const sif_chain_mesh_t* mesh, sif_real px, sif_real py, sif_real pz);

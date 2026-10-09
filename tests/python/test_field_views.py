@@ -68,9 +68,8 @@ def test_view_outlives_the_field(field):
 
 @pytest.mark.parametrize("action", [
     lambda f, c: f.sort_morton(),
-    lambda f, c: pysif.Octree(f),  # unsorted, so building sorts it
     lambda f, c: pysif.ChainMesh(4, BOX, f, consume_field=True),
-], ids=["sort_morton", "octree", "chain-mesh-consume"])
+], ids=["sort_morton", "chain-mesh-consume"])
 def test_reallocation_refused_while_viewed(field, columns, action):
     x = field.x
     want = x.copy()
@@ -86,7 +85,6 @@ def test_reallocation_refused_while_viewed(field, columns, action):
 def test_harmless_operations_allowed_while_viewed(field):
     field.sort_morton()
     w = field.weights
-    pysif.Octree(field)             # already sorted: nothing reallocated
     pysif.ChainMesh(4, BOX, field)  # copies the field, leaves it be
     field.wrap(BOX)
     assert np.all(w == 2.0)

@@ -398,11 +398,6 @@ typedef float sif_real;
 #  define SIF_PRI_REAL "%.9g"
 #  define SIF_SCN_REAL "%f"
 
-/* Selects the float entry points in the vendored predicates. The leading
- * underscores break this guide's naming rules deliberately: the name is read
- * by vendor/predicates/predicates.c, and upstream's spelling wins there. */
-#  define __PREDICATES_USE_FLOAT
-
 #endif
 
 /** @brief Pi at sif_real precision.
@@ -458,10 +453,14 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 /** @brief Check the arguments against a printf format: argument @p f is the
  * format, the variadic ones start at @p a. */
 #  define SIF_PRINTF_LIKE(f, a) __attribute__((format(printf, f, a)))
+/** @brief Warn at every call site that the function is on its way out, with
+ * @p msg saying what replaces it. */
+#  define SIF_DEPRECATED(msg) __attribute__((deprecated(msg)))
 
 #else
 
 #  define SIF_PRINTF_LIKE(f, a)
+#  define SIF_DEPRECATED(msg)
 #  define SIF_NODISCARD
 #  define SIF_PURE_FUNCTION
 #  define SIF_HOT_LOOP
@@ -547,6 +546,12 @@ static inline uint32_t sif__ctz_u32(uint32_t x) {
  * rebuild with.
  */
 #define SIF_ERR_UNSUPPORTED (-5)
+/**
+ * The call needs the system state and sif_system_init() has not been called
+ * (or sif_system_finalise() has). Which calls need it is listed in
+ * `sif/core/system.h`.
+ */
+#define SIF_ERR_UNINITIALISED (-6)
 /** @} */
 
 /* ------------------------------------------------------------------ */

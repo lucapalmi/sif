@@ -31,9 +31,10 @@ static int sifGrid_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
     return -1;
   }
 
+  sif_error_clear();
   sif_grid_t* tmp = sif_grid_alloc(n_cells, (sif_real)box_length_in);
   if (!tmp) {
-    PyErr_SetString(PyExc_MemoryError, "Failed to allocate sif.grid");
+    py_sif_raise(sif_error_status(), "Grid");
     return -1;
   }
 
@@ -43,32 +44,6 @@ static int sifGrid_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
 }
 
 /* --- Pythonic Methods --- */
-
-/*
- * A CIC deposit's status as an exception, or 0 for success. The C side names
- * the reason in its log; this is what makes it reach a Python caller at all.
- */
-static int raise_for_cic_status(int status) {
-  switch (status) {
-  case SIF_OK:
-    return 0;
-  case SIF_ERR_RANGE:
-    PyErr_SetString(PyExc_ValueError,
-      "some particles lie outside [0, box_length) and cannot be deposited: "
-      "fold a periodic snapshot with Field.wrap(), or move a survey into its "
-      "box with Field.translate() (see pysif.finders.survey_box())");
-    return -1;
-  case SIF_ERR_ALLOC:
-    PyErr_SetString(
-      PyExc_MemoryError, "out of memory depositing the field onto the grid");
-    return -1;
-  default:
-    PyErr_SetString(PyExc_ValueError,
-      "nothing to deposit: the field holds no particles (a ChainMesh built "
-      "with consume_field=True empties it)");
-    return -1;
-  }
-}
 
 static PyObject* sifGrid_assign_cic(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
@@ -89,11 +64,12 @@ static PyObject* sifGrid_assign_cic(
   /* A full pass over the field and a scatter over the grid: worth the GIL at
    * the particle counts this is for, as for the tessellation deposit. */
   int status;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status =
     sif_grid_assign_cic(self->grid, py_field->field);
   Py_END_ALLOW_THREADS
 
-    if (raise_for_cic_status(status) < 0) return NULL;
+    if (status != SIF_OK) return py_sif_field_raise_binning(status, "assign_cic");
 
   Py_RETURN_NONE;
 }
@@ -134,11 +110,13 @@ static PyObject* sifGrid_assign_cic_tessellation(
   }
 
   int status;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status =
     sif_grid_assign_cic_tessellation(self->grid, py_tess->tess);
   Py_END_ALLOW_THREADS
 
-    if (raise_for_cic_status(status) < 0) return NULL;
+    if (status != SIF_OK) return py_sif_field_raise_binning(
+      status, "assign_cic_tessellation");
 
   Py_RETURN_NONE;
 }
@@ -147,22 +125,10 @@ static PyObject* sifGrid_to_density_contrast(
   PyObject* self_obj, PyObject* args) {
   sifGridObject* self = (sifGridObject*)self_obj;
 
-  /* Checked here as well as in C so the message can say which of the two
-   * refusals it was: the status alone does not separate a second conversion
-   * from a grid with nothing in it. */
-  if (self->grid->content == SIF_GRID_DENSITY_CONTRAST) {
-    PyErr_SetString(PyExc_ValueError,
-      "this grid already holds a density contrast; converting again would "
-      "renormalise by a mean of zero");
-    return NULL;
-  }
-
-  if (sif_grid_to_density_contrast(self->grid) != SIF_OK) {
-    PyErr_SetString(PyExc_ValueError,
-      "the grid's mean density is not positive, so there is nothing to "
-      "normalise by: deposit a field onto it with assign_cic() first");
-    return NULL;
-  }
+  sif_error_clear();
+  const int status = sif_grid_to_density_contrast(self->grid);
+  if (status != SIF_OK)
+    return py_sif_raise(status, "to_density_contrast");
 
   Py_RETURN_NONE;
 }

@@ -163,7 +163,8 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
   /* --- spherical finder --- */
   {
     sif_field_t* f = sif_field_alloc(N_P);
-    sif_field_assign_positions(f, x, y, z);
+    CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+      "sif_field_assign_positions failed");
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
     CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
     CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
@@ -205,7 +206,8 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
   /* --- exodus finder --- */
   {
     sif_field_t* f = sif_field_alloc(N_P);
-    sif_field_assign_positions(f, x, y, z);
+    CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+      "sif_field_assign_positions failed");
     sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
     CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
     CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
@@ -247,9 +249,11 @@ static void run_case(const char* label, sif_option opts, sif_real overlap) {
 static sif_field_t* weighted_field(
   const sif_real* x, const sif_real* y, const sif_real* z, const sif_real* w) {
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
   if (w)
-    sif_field_assign_weights(f, w);
+    CHECK(sif_field_assign_weights(f, w) == SIF_OK,
+      "sif_field_assign_weights failed");
   return f;
 }
 
@@ -414,7 +418,8 @@ static void run_refusals(void) {
   sif_real* z = malloc(N_P * sizeof(sif_real));
   make_field(x, y, z);
   sif_field_t* f = sif_field_alloc(N_P);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
   sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
   CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
   CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
@@ -487,8 +492,8 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  if (sif_init(&cfg) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -507,6 +512,6 @@ int main(void) {
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
 
-  sif_finalise();
+  sif_system_finalise();
   return failures != 0;
 }

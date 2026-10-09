@@ -4,7 +4,7 @@
 # This file is part of sif. See COPYING for the full license text.
 
 cmake_minimum_required(VERSION 3.15)
-project(sif VERSION 0.2.1 LANGUAGES C)
+project(sif VERSION 0.2.2 LANGUAGES C)
 
 # Configuration
 set(CMAKE_C_STANDARD 99)
@@ -145,7 +145,7 @@ message(STATUS "FFTW threading backend: ${SIF_FFTW_THREADING}")
 #   AUTO - used when found, skipped otherwise. Convenient, and exactly as
 #          dependent on the machine as it sounds: a cluster build where the
 #          HDF5 module was not loaded comes out without it. The status line
-#          below says which, and sif_init() logs it again at run time.
+#          below says which, and sif_system_init() logs it again at run time.
 #
 # Only a serial HDF5 is accepted. A parallel build needs MPI headers and the
 # MPI compiler wrappers everywhere HDF5's own headers are seen, and sif is not
@@ -269,7 +269,6 @@ set(SOURCES
     src/structures/tessellation.c
     src/structures/cell_linked_list.c
     src/structures/field.c
-    src/structures/octree.c
     src/structures/bitmask.c
     src/structures/delta_distribution.c
     src/structures/delta_moments.c
@@ -318,20 +317,6 @@ set(SOURCES
   # library
     src/core/system.c
     src/core/settings.c
-
-  # vendor
-    vendor/predicates/predicates.c
-)
-
-# Disable fast math for exact arithmetic
-set(PREDICATES_FLAGS "-fno-fast-math -ffp-contract=off")
-
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)")
-  string(APPEND PREDICATES_FLAGS " -mno-fma")
-endif()
-
-set_source_files_properties(vendor/predicates/predicates.c
-    PROPERTIES COMPILE_FLAGS "${PREDICATES_FLAGS}"
 )
 
 
@@ -373,7 +358,6 @@ target_include_directories(sif
   PRIVATE
     ${FFTW3_INCLUDE}
     src
-    vendor
 )
 
 # HDF5 is private to the sources that use it: no public sif header includes

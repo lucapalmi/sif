@@ -25,12 +25,12 @@ FITS = Path(__file__).resolve().parent.parent / "data" / "fits"
 # Silent by default. The failure tests provoke errors on purpose, and the C
 # log is flushed at exit rather than with the test that wrote it, so it would
 # only add noise. PYSIF_TEST_LOG_LEVEL=2 brings it back when debugging.
-pysif.init(skip_tuning=True,
-           log_level=int(os.environ.get("PYSIF_TEST_LOG_LEVEL", "5")))
+pysif.system_init(skip_tuning=True,
+                  log_level=int(os.environ.get("PYSIF_TEST_LOG_LEVEL", "5")))
 
 
 def pytest_unconfigure(config):
-    pysif.finalise()
+    pysif.system_finalise()
 
 
 def _has_hdf5():

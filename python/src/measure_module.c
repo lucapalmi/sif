@@ -114,6 +114,7 @@ static PyMethodDef measure_methods[] = {
     "The same seed and grid size give the identical surrogate here and in\n"
     "delta_moments_grid(), which is what lets a PDF and a set of moments\n"
     "describe one field.\n\n"
+    "Requires pysif.system_init().\n\n"
     "Args:\n"
     "    grid: Density contrast field.\n"
     "    radii: Smoothing radii, each at least two cells and at most half\n"
@@ -129,7 +130,10 @@ static PyMethodDef measure_methods[] = {
     "    keep_cic_window: Skip deconvolving the CIC assignment window. Set\n"
     "        this only for a grid that was not built by CIC.\n\n"
     "Returns:\n"
-    "    DeltaDistribution: One PDF per radius."},
+    "    DeltaDistribution: One PDF per radius.\n\n"
+    "Raises:\n"
+    "    RuntimeError: If pysif.system_init() has not been called, or the\n"
+    "        computation failed (the sif log says why)."},
 
   {"delta_moments_grid", (PyCFunction)py_sif_delta_moments_grid,
     METH_VARARGS | METH_KEYWORDS,
@@ -139,6 +143,7 @@ static PyMethodDef measure_methods[] = {
     "Measure the spectral moments of a gridded density field.\n\n"
     "Pass window='gaussian' when order >= 2 has to be meaningful: the\n"
     "top-hat sum is cut off by the grid, not by the field.\n\n"
+    "Requires pysif.system_init().\n\n"
     "Args:\n"
     "    grid: Density contrast field.\n"
     "    radii: Smoothing radii; see delta_distribution_grid().\n"
@@ -152,7 +157,10 @@ static PyMethodDef measure_methods[] = {
     "        delta_distribution_grid().\n"
     "    keep_cic_window: Skip deconvolving the CIC assignment window.\n\n"
     "Returns:\n"
-    "    DeltaMoments: sigma_0..sigma_order at every radius."},
+    "    DeltaMoments: sigma_0..sigma_order at every radius.\n\n"
+    "Raises:\n"
+    "    RuntimeError: If pysif.system_init() has not been called, or the\n"
+    "        computation failed (the sif log says why)."},
 
   {NULL, NULL, 0, NULL}};
 

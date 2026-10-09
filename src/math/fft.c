@@ -63,7 +63,7 @@ void sif__fft_manager_finalise(sif_fft_manager_t* mgr) {
   /* NOTE: this tears down FFTW state process-wide, not just sif's. Anything
    * else in the same process using FFTW loses its plans and accumulated
    * wisdom. Acceptable while sif owns FFTW initialisation, but it is the
-   * reason sif_finalise must not be called from a library context. */
+   * reason sif_system_finalise must not be called from a library context. */
   real_fftw_cleanup_threads();
   real_fftw_cleanup();
   free(mgr);
@@ -388,7 +388,11 @@ int sif__fft_workspace_init_backward(
    * anyway, because the two-step is what makes "did we have to measure?"
    * answerable -- and there is nothing to write back for a plan that came out
    * of the file.
+   *
+   * The thread count is set here as well as for the forward plan, so neither
+   * depends on the other having been planned first.
    */
+  real_fftw_plan_with_nthreads(sif__system_max_threads());
   ws->backward_plan = real_fftw_plan_dft_c2r_3d(ws->n_cells, ws->n_cells,
     ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy,
     ws->plan_flags | FFTW_WISDOM_ONLY);

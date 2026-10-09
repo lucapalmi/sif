@@ -138,9 +138,10 @@ PyObject* pysif_field_from_numpy(
       column_from_numpy(ws_obj, "weights", n, &cols[W]) < 0)
     goto fail;
 
+  sif_error_clear();
   field = sif_field_alloc((uint64_t)n);
   if (!field) {
-    PyErr_SetString(PyExc_MemoryError, "failed to allocate the field");
+    py_sif_raise(SIF_ERR_ALLOC, "field_from_numpy");
     goto fail;
   }
 
@@ -153,8 +154,7 @@ PyObject* pysif_field_from_numpy(
 #undef COL
 
   if (status != SIF_OK) {
-    PyErr_SetString(
-      PyExc_MemoryError, "failed to copy particles into the field");
+    py_sif_raise(status, "field_from_numpy");
     goto fail;
   }
   field->units = radec ? SIF_COORDINATES_SKY : SIF_COORDINATES_CARTESIAN;
@@ -191,24 +191,24 @@ static PyObject* sifField_wrap(
   if (py_sif_field_check_cartesian(self, "wrap it") < 0)
     return NULL;
 
-  uint64_t boundary = 0, wrapped = 0;
+  uint64_t boundary = 0, wrapped = 0, nonfinite = 0;
   int status = SIF_OK;
+  sif_error_clear();
 
   /* One pass over every coordinate: worth dropping the GIL at the particle
    * counts this is meant for. */
   Py_BEGIN_ALLOW_THREADS status = sif_field_wrap_periodic(
-    self->field, (sif_real)box_length, &boundary, &wrapped);
+    self->field, (sif_real)box_length, &boundary, &wrapped, &nonfinite);
   Py_END_ALLOW_THREADS
 
-    if (status != SIF_OK) {
-    PyErr_SetString(PyExc_ValueError,
-      "failed to wrap the field: it must hold positions and box_length must "
-      "be positive");
-    return NULL;
-  }
+    if (status != SIF_OK) return py_sif_raise(status, "wrap");
 
-  return Py_BuildValue("{s:K,s:K}", "boundary", (unsigned long long)boundary,
-    "wrapped", (unsigned long long)wrapped);
+  if (py_sif_field_warn_nonfinite(nonfinite) < 0)
+    return NULL;
+
+  return Py_BuildValue("{s:K,s:K,s:K}", "boundary",
+    (unsigned long long)boundary, "wrapped", (unsigned long long)wrapped,
+    "nonfinite", (unsigned long long)nonfinite);
 }
 
 static PyObject* sifField_translate(
@@ -223,11 +223,11 @@ static PyObject* sifField_translate(
     return NULL;
 
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
-  if (sif_field_translate(((sifFieldObject*)self_obj)->field, offset) !=
-      SIF_OK) {
-    PyErr_SetString(PyExc_ValueError, "cannot translate an empty field");
-    return NULL;
-  }
+  sif_error_clear();
+  const int status =
+    sif_field_translate(((sifFieldObject*)self_obj)->field, offset);
+  if (status != SIF_OK)
+    return py_sif_raise(status, "translate");
 
   Py_RETURN_NONE;
 }
@@ -239,13 +239,10 @@ static PyObject* sifField_sort_morton(PyObject* self_obj, PyObject* args) {
       py_sif_field_check_cartesian(self, "sort it") < 0)
     return NULL;
 
+  sif_error_clear();
   const int status = sif_field_sort_morton(self->field);
-  if (status == SIF_ERR_ALLOC)
-    return PyErr_NoMemory();
-  if (status != SIF_OK) {
-    PyErr_SetString(PyExc_ValueError, "cannot sort an empty field");
-    return NULL;
-  }
+  if (status != SIF_OK)
+    return py_sif_raise(status, "sort_morton");
 
   Py_RETURN_NONE;
 }
@@ -255,11 +252,10 @@ static PyObject* sifField_refresh_bounds(PyObject* self_obj, PyObject* args) {
 
   if (py_sif_field_check_cartesian(self, "bound it") < 0)
     return NULL;
-  if (sif_field_refresh_bounds(self->field) != SIF_OK) {
-    PyErr_SetString(
-      PyExc_ValueError, "cannot bound an empty or positionless field");
-    return NULL;
-  }
+  sif_error_clear();
+  const int status = sif_field_refresh_bounds(self->field);
+  if (status != SIF_OK)
+    return py_sif_raise(status, "refresh_bounds");
 
   Py_RETURN_NONE;
 }
@@ -281,11 +277,32 @@ int py_sif_field_check_cartesian(sifFieldObject* self, const char* action) {
   if (self->field->units == SIF_COORDINATES_CARTESIAN)
     return 0;
   PyErr_Format(PyExc_ValueError,
-    "cannot %s: the field holds sky coordinates (right ascension, "
-    "declination, redshift), not positions; call convert_sky_coordinates() "
-    "first",
+    "field: sky coordinates (ra, dec, z), not positions; convert them with "
+    "Field.convert_sky_coordinates() before you %s",
     action);
   return -1;
+}
+
+int py_sif_field_warn_nonfinite(uint64_t n_nonfinite) {
+  if (n_nonfinite == 0)
+    return 0;
+  return PyErr_WarnFormat(PyExc_RuntimeWarning, 1,
+    "field: %llu coordinates not finite, left as they are; Grid.assign_cic(), "
+    "ChainMesh() and anything else that bins or bounds the field will refuse "
+    "it",
+    (unsigned long long)n_nonfinite);
+}
+
+PyObject* py_sif_field_raise_binning(int status, const char* what) {
+  if (status == SIF_ERR_RANGE && sif_error_message()[0]) {
+    PyErr_Format(PyExc_ValueError,
+      "%s (in pysif: Field.wrap(box_length) for a periodic snapshot, "
+      "Field.translate(offset) for a survey, with the offset from "
+      "pysif.finders.survey_box())",
+      sif_error_message());
+    return NULL;
+  }
+  return py_sif_raise(status, what);
 }
 
 /* --- Sky coordinates --- */
@@ -307,13 +324,10 @@ static PyObject* sifField_convert_sky_coordinates(
   if (py_sif_cosmology_from(omega_m, omega_de, omega_r, w0, wa, &cosmo) < 0)
     return NULL;
 
+  /* The one refusal checked here rather than left to the C side, whose
+   * remedy names the C spelling of the units. */
   sif_field_t* f = self->field;
-  if (f->n_particles == 0 || !f->x) {
-    PyErr_SetString(
-      PyExc_ValueError, "the field holds no positions to convert");
-    return NULL;
-  }
-  if (f->units != SIF_COORDINATES_SKY) {
+  if (f->units != SIF_COORDINATES_SKY && f->x) {
     PyErr_SetString(PyExc_ValueError,
       "the field already holds Cartesian positions; converting them would "
       "read x as a right ascension. Set units='sky' for a field that holds "
@@ -324,29 +338,22 @@ static PyObject* sifField_convert_sky_coordinates(
   /* The largest redshift, for the message if the cosmology cannot reach it;
    * the C side works it out again, and checks every coordinate. */
   double z_max = 0.0;
-  for (uint64_t i = 0; i < f->n_particles; i++)
+  for (uint64_t i = 0; f->z && i < f->n_particles; i++)
     if ((double)f->z[i] > z_max)
       z_max = (double)f->z[i];
 
   int status;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status = sif_field_convert_sky_coordinates(f, &cosmo);
   Py_END_ALLOW_THREADS
 
     switch (status) {
   case SIF_OK:
     Py_RETURN_NONE;
-  case SIF_ERR_ALLOC:
-    return PyErr_NoMemory();
   case SIF_ERR_RANGE:
     return py_sif_cosmology_range_error(z_max);
   default:
-    PyErr_SetString(PyExc_ValueError,
-      "some coordinates cannot be converted -- a declination outside "
-      "[-90, 90], a negative or non-finite redshift, or a non-finite right "
-      "ascension; the log has the counts, and the field is unchanged. Are x, "
-      "y, z the right ascension, the declination and the redshift, in "
-      "degrees?");
-    return NULL;
+    return py_sif_raise(status, "convert_sky_coordinates");
   }
 }
 
@@ -459,7 +466,7 @@ static PyGetSetDef sifField_getset[] = {
     "str: What the positions are: 'cartesian', or 'sky' for right\n"
     "ascension and declination (degrees) and redshift held in x, y, z.\n"
     "A sky field is refused by everything that reads positions as lengths\n"
-    "-- grids, meshes, octrees, wrap(), translate(), sort_morton() -- until\n"
+    "-- grids, meshes, wrap(), translate(), sort_morton() -- until\n"
     "convert_sky_coordinates() turns it into positions. Setting it only\n"
     "relabels the arrays; it does not convert them.",
     NULL},
@@ -549,13 +556,19 @@ static PyMethodDef sifField_methods[] = {
     "        history out to the largest redshift."},
   {"wrap", (PyCFunction)sifField_wrap, METH_VARARGS | METH_KEYWORDS,
     "wrap(box_length) -> dict\n\n"
-    "Fold every coordinate into [0, box_length) periodically, in place.\n"
-    "Returns {'boundary': n, 'wrapped': n}: 'boundary' counts coordinates\n"
-    "that sat exactly on the box edge, which is the single-precision\n"
-    "rounding artifact this exists for, and 'wrapped' counts coordinates\n"
-    "that were genuinely outside. A large 'wrapped' means the box length is\n"
-    "wrong and the folded field is meaningless -- check it rather than\n"
-    "proceeding. Only correct for a field that is periodic in this box."},
+    "Fold every coordinate into [0, box_length) periodically, in place.\n\n"
+    "Not needed for rounding: Grid.assign_cic() and ChainMesh() accept\n"
+    "coordinates within a few ULPs of the box faces -- a coordinate stored\n"
+    "as exactly box_length, say -- and fold them themselves. This is for a\n"
+    "periodic snapshot whose coordinates were never wrapped into the box.\n\n"
+    "Returns {'boundary': n, 'wrapped': n, 'nonfinite': n}: 'boundary'\n"
+    "counts coordinates that sat exactly on the box edge, and 'wrapped'\n"
+    "coordinates that were genuinely outside. A large 'wrapped' means the\n"
+    "box length is wrong and the folded field is meaningless -- check it\n"
+    "rather than proceeding. 'nonfinite' counts NaN and infinite\n"
+    "coordinates, which no wrap repairs: they are left as they are, with a\n"
+    "RuntimeWarning, and the field will be refused by anything that bins\n"
+    "it. Only correct for a field that is periodic in this box."},
   {"translate", (PyCFunction)sifField_translate, METH_VARARGS | METH_KEYWORDS,
     "translate(offset)\n"
     "--\n\n"
@@ -570,7 +583,7 @@ static PyMethodDef sifField_methods[] = {
     "--\n\n"
     "Reorder the particles along a 3D Morton curve, in place.\n\n"
     "Puts particles that are close in space close in memory, which is what\n"
-    "the octree requires and what makes the neighbour queries fast. The\n"
+    "makes walking them in space order cache-friendly. The\n"
     "permutation is kept, so velocities and weights assigned afterwards are\n"
     "matched to their own particles automatically."},
   {"refresh_bounds", (PyCFunction)sifField_refresh_bounds, METH_NOARGS,
@@ -602,9 +615,9 @@ PyTypeObject sifFieldType = {
     "field's own arrays, in its current particle order -- which\n"
     "sort_morton() changes. They see in-place changes (wrap(),\n"
     "translate()). While any view is alive, whatever would reallocate or\n"
-    "take the arrays raises BufferError instead: sort_morton(), building\n"
-    "an Octree over an unsorted field, and ChainMesh(...,\n"
-    "consume_field=True). Delete the views first, or keep copies\n"
+    "take the arrays raises BufferError instead: sort_morton() and\n"
+    "ChainMesh(..., consume_field=True). Delete the views first, or keep\n"
+    "copies\n"
     "(numpy.array(field.x)).\n\n"
     "units says what x, y and z hold: 'cartesian' positions, or 'sky' --\n"
     "right ascension, declination and redshift.\n\n"

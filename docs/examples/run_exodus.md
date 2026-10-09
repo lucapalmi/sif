@@ -15,12 +15,12 @@ of exodus: Python, C, and the Lua configuration file of the **sif-exodus** progr
 import numpy as np
 import pysif
 
-# initialise the library
+# bring up the system state: the finder needs it
 # log_level 2 (info, the default) prints one line for each rung of
 # the finder; 0 (trace) prints everything the library does, and
 # higher levels print out only warnings and errors
 # in this case, we don't need further configuration
-pysif.init(log_level=2)
+pysif.system_init(log_level=2)
 
 # first, load the data into a pysif.Field structure
 # in this example, we consider a Gadget snapshot, and read its
@@ -89,10 +89,10 @@ catalogue = pysif.finders.exodus(
     consume_grid=True
 )
 
-# we finally save the catalogue and finalise the library
+# we finally save the catalogue and release the system state
 pysif.io.write_catalogue_ascii(filepath="path/to/voids.txt", catalogue=catalogue)
 
-pysif.finalise()
+pysif.system_finalise()
 ```
 ::::
 
@@ -119,12 +119,12 @@ int main(void) {
   sif_catalogue_t* catalogue = NULL;
   int status = -1;
 
-  // initialise the library
+  // bring up the system state: the finder needs it
   // SIF_CONFIG_STANDARD logs at info level, which prints one line for
   // each rung of the finder; SIF_CONFIG_VERBOSE prints everything the
   // library does, SIF_CONFIG_QUIET only warnings and errors
   // in this case, we don't need further configuration
-  if (sif_init(SIF_CONFIG_STANDARD) != SIF_OK)
+  if (sif_system_init(SIF_CONFIG_STANDARD) != SIF_OK)
     return 1;
 
   // first, load the data into a sif_field_t structure
@@ -148,7 +148,7 @@ int main(void) {
   // this call corrects for possible rounding errors
   // in the particle positions, ensuring that they all lay inside the box
   // (subsequent functions will fail if this is not the case)
-  if (sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL) !=
+  if (sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL, NULL) !=
       SIF_OK)
     goto done;
 
@@ -208,7 +208,7 @@ int main(void) {
   if (!catalogue)
     goto done;
 
-  // we finally save the catalogue and finalise the library
+  // we finally save the catalogue and release the system state
   status = sif_catalogue_write_ascii("path/to/voids.txt", catalogue);
 
 done:
@@ -217,7 +217,7 @@ done:
   sif_free_aligned(search_radii);
   sif_grid_free(grid);
   sif_field_free(field);
-  sif_finalise();
+  sif_system_finalise();
   return status == SIF_OK ? 0 : 1;
 }
 ```
@@ -286,8 +286,8 @@ sif-exodus exodus.lua
 import numpy as np
 import pysif
 
-# initialise the library, as for a simulation
-pysif.init(log_level=2)
+# bring up the system state (the finder needs it), as for a simulation
+pysif.system_init(log_level=2)
 
 # first, load the galaxies and the randoms into two pysif.Field
 # structures, from FITS tables holding right ascension, declination (in
@@ -392,7 +392,7 @@ catalogue.set_metadata("threshold", threshold)
 catalogue.set_metadata("omega_m", cosmology["omega_m"])
 pysif.io.write_catalogue_fits("path/to/voids.fits", catalogue)
 
-pysif.finalise()
+pysif.system_finalise()
 ```
 ::::
 
@@ -423,8 +423,8 @@ int main(void) {
   sif_catalogue_t* catalogue = NULL;
   int status = -1;
 
-  // initialise the library, as for a simulation
-  if (sif_init(SIF_CONFIG_STANDARD) != SIF_OK)
+  // bring up the system state (the finder needs it), as for a simulation
+  if (sif_system_init(SIF_CONFIG_STANDARD) != SIF_OK)
     return 1;
 
   // first, load the galaxies and the randoms into two sif_field_t
@@ -557,7 +557,7 @@ done:
   sif_free_aligned(search_radii);
   sif_field_free(randoms);
   sif_field_free(data);
-  sif_finalise();
+  sif_system_finalise();
   return status == SIF_OK ? 0 : 1;
 }
 ```

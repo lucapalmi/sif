@@ -12,8 +12,8 @@ velocity profiles of a generic void catalogue, in both C and Python.
 import numpy as np
 import pysif
 
-# initialise the library
-pysif.init(log_level=2)
+# no pysif.system_init() here: reading files and measuring profiles do
+# not need it, only the finders and the grid-based delta statistics do
 
 # first, load the voids. this can be any catalogue produced by any finder,
 # it's just a list of centres and radii
@@ -56,16 +56,13 @@ profiles = pysif.measure.profiles(
 )
 
 # we finally save the profiles, together with the catalogue they were
-# measured from, and finalise the library
+# measured from
 pysif.io.write_profiles_ascii("path/to/profiles.txt", profiles, catalogue)
-
-pysif.finalise()
 ```
 ::::
 
 ::::{tab-item} C
 ```c
-#include "sif/core/system.h"
 #include "sif/io/catalogue_io.h"
 #include "sif/io/gadget_io.h"
 #include "sif/io/profiles_io.h"
@@ -82,9 +79,8 @@ int main(void) {
   sif_velocity_profiles_t* vel = NULL;
   int status = -1;
 
-  // initialise the library
-  if (sif_init(SIF_CONFIG_STANDARD) != SIF_OK)
-    return 1;
+  // no sif_system_init() here: reading files and measuring profiles do not
+  // need it, only the finders and the grid-based delta statistics do
 
   // first, load the voids. this can be any catalogue produced by any finder,
   // it's just a list of centres and radii
@@ -104,7 +100,7 @@ int main(void) {
     goto done;
 
   // correct for float rounding errors
-  if (sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL) !=
+  if (sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL, NULL) !=
       SIF_OK)
     goto done;
 
@@ -136,7 +132,7 @@ int main(void) {
     goto done;
 
   // we finally save the profiles, together with the catalogue they were
-  // measured from, and finalise the library
+  // measured from
   status = sif_profiles_write_ascii("path/to/profiles.txt", dens, vel, catalogue);
 
 done:
@@ -145,7 +141,6 @@ done:
   sif_chain_mesh_free(mesh);
   sif_field_free(field);
   sif_catalogue_free(catalogue);
-  sif_finalise();
   return status == SIF_OK ? 0 : 1;
 }
 ```

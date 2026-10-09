@@ -32,9 +32,10 @@ static int sifCatalogue_init(PyObject* self_obj, PyObject* args, PyObject* kwds)
     return -1;
   }
 
+  sif_error_clear();
   sif_catalogue_t* tmp = sif_catalogue_alloc(initial_capacity);
   if (!tmp) {
-    PyErr_SetString(PyExc_MemoryError, "Failed to allocate sif.catalogue");
+    py_sif_raise(SIF_ERR_ALLOC, "Catalogue");
     return -1;
   }
 
@@ -264,9 +265,10 @@ PyObject* pysif_catalogue_from_numpy(
       column(fps, "footprint_shell", n, &cols[FPS]) < 0)
     goto done;
 
+  sif_error_clear();
   cat = sif_catalogue_alloc((uint64_t)n);
   if (!cat || (cols[FP] && sif_catalogue_reserve_footprint(cat) != SIF_OK)) {
-    PyErr_NoMemory();
+    py_sif_raise(SIF_ERR_ALLOC, "catalogue_from_numpy");
     goto done;
   }
   const size_t bytes = (size_t)n * sizeof(sif_real);
@@ -354,12 +356,11 @@ static PyObject* sifCatalogue_translate(
     return NULL;
 
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
-  if (sif_catalogue_translate(((sifCatalogueObject*)self_obj)->catalogue, offset) !=
-      SIF_OK) {
-    PyErr_SetString(PyExc_ValueError,
-      "cannot translate: the catalogue holds sky coordinates");
-    return NULL;
-  }
+  sif_error_clear();
+  const int status = sif_catalogue_translate(
+    ((sifCatalogueObject*)self_obj)->catalogue, offset);
+  if (status != SIF_OK)
+    return py_sif_raise(status, "translate");
   Py_RETURN_NONE;
 }
 
@@ -379,20 +380,15 @@ static PyObject* sifCatalogue_to_sky(
     return NULL;
 
   sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
-  if (cat->units != SIF_COORDINATES_CARTESIAN) {
-    PyErr_SetString(PyExc_ValueError, "the catalogue is already on the sky");
-    return NULL;
-  }
 
   int status;
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS status = sif_catalogue_to_sky(cat, &cosmo);
   Py_END_ALLOW_THREADS
 
     switch (status) {
   case SIF_OK:
     Py_RETURN_NONE;
-  case SIF_ERR_ALLOC:
-    return PyErr_NoMemory();
   case SIF_ERR_RANGE:
     PyErr_SetString(PyExc_ValueError,
       "a void centre is farther from the origin than this cosmology reaches "
@@ -400,10 +396,7 @@ static PyObject* sifCatalogue_to_sky(
       "Mpc/h?");
     return NULL;
   default:
-    PyErr_SetString(PyExc_ValueError,
-      "some centres cannot be converted (not finite); the log has the count, "
-      "and the catalogue is unchanged");
-    return NULL;
+    return py_sif_raise(status, "to_sky");
   }
 }
 
@@ -417,6 +410,7 @@ static PyObject* sifCatalogue_set_metadata(
   sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
 
   int status;
+  sif_error_clear();
   if (value == Py_None) {
     status = sif_catalogue_meta_remove(cat, key);
   } else if (PyLong_Check(value)) { /* bool included, as 1 or 0 */
@@ -436,14 +430,8 @@ static PyObject* sifCatalogue_set_metadata(
       PyExc_TypeError, "value must be an int, a float, a str or None");
     return NULL;
   }
-  if (status == SIF_ERR_ALLOC)
-    return PyErr_NoMemory();
   if (status != SIF_OK)
-    return PyErr_Format(PyExc_ValueError,
-      "cannot set %s: a key is an identifier of at most 64 characters and not "
-      "one the file formats use (n, n_voids, coordinates, FITS structure); a "
-      "string holds no newline or double quote; a float is finite",
-      key);
+    return py_sif_raise(status, "set_metadata");
   Py_RETURN_NONE;
 }
 

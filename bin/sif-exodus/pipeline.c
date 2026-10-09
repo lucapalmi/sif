@@ -432,12 +432,11 @@ int pipeline_box(const exodus_params_t* p) {
     goto done;
   const double box = r.box;
 
-  /* Always. What it is for is rounding: a coordinate stored in single
-   * precision lands on the far face of the box as often as not, and the CIC
-   * and the mesh both refuse it there. The library says what it folded, and
-   * warns if a coordinate was genuinely outside the box rather than on its
-   * face. */
-  status = sif_field_wrap_periodic(field, (sif_real)box, NULL, NULL);
+  /* Always. The CIC and the mesh fold a coordinate within rounding of a face
+   * themselves; this is for a snapshot written with coordinates past the box,
+   * which some codes do. The library says what it folded, and warns if a
+   * coordinate was genuinely outside the box, or not finite. */
+  status = sif_field_wrap_periodic(field, (sif_real)box, NULL, NULL, NULL);
   if (status != SIF_OK)
     goto done;
 

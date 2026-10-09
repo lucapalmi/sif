@@ -69,7 +69,7 @@ int sif_field_write(
 
   /* The format has nowhere to say what the positions are, so a field of sky
    * coordinates would read back as one of Cartesian positions. */
-  if (sif__field_require_cartesian(field, "xfield") != SIF_OK)
+  if (sif__field_require_cartesian(field, "xfield", "field") != SIF_OK)
     return SIF_ERR_INVALID;
 
   FILE* file = fopen(filepath, "wb");
@@ -471,7 +471,7 @@ int sif_field_check_xfield(const char* filepath, bool deep, FILE* report) {
             v = fv;
           }
           sif__io_stats_add(&stats[a], v);
-          if (a < 3 && !(v >= 0.0 && v < h.box_length))
+          if (a < 3 && !sif__box_accepts(v, h.box_length))
             outside[a]++;
           if (a == 6 && v < 0.0)
             negative++;

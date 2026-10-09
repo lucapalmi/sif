@@ -60,7 +60,9 @@ static inline PyObject* py_sif_wrap_borrowed(
  * operating-system error, chosen by its errno as open() would
  * (FileNotFoundError, PermissionError, IsADirectoryError); MemoryError for
  * SIF_ERR_ALLOC, ValueError for SIF_ERR_INVALID and SIF_ERR_RANGE,
- * RuntimeError for SIF_ERR_UNSUPPORTED; OSError for the rest, a file that is
+ * RuntimeError for SIF_ERR_UNSUPPORTED and SIF_ERR_UNINITIALISED -- the state
+ * of the process, not the arguments, is what is wrong -- and OSError for the
+ * rest, a file that is
  * not what it should be. For a reader that returns a pointer, @p status is
  * sif_error_status(), whose SIF_OK (it did not say) reads as SIF_ERR_IO.
  *
@@ -91,7 +93,7 @@ static inline PyObject* py_sif_raise(int status, const char* what) {
     type = PyExc_MemoryError;
   else if (status == SIF_ERR_INVALID || status == SIF_ERR_RANGE)
     type = PyExc_ValueError;
-  else if (status == SIF_ERR_UNSUPPORTED)
+  else if (status == SIF_ERR_UNSUPPORTED || status == SIF_ERR_UNINITIALISED)
     type = PyExc_RuntimeError;
   PyErr_SetString(type, msg);
   return NULL;

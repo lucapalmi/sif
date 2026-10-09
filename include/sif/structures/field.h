@@ -61,11 +61,10 @@
  * @brief Quantise one coordinate onto the field's bounding-cube grid.
  *
  * Bit (SIF_MORTON_BITS - 1 - d) of the result answers "is this point in the
- * upper half at subdivision level d". Everything that subdivides space the way
- * sif_field_sort_morton() does -- notably the octree -- must go through this
- * function, so the two agree exactly instead of approximately. Recomputing an
- * equivalent float comparison independently is what used to put particles in
- * the wrong octree cell.
+ * upper half at subdivision level d". Anything that subdivides space the way
+ * sif_field_sort_morton() does must go through this function, so the two agree
+ * exactly instead of approximately: recomputing an equivalent float comparison
+ * independently puts particles near a split in the wrong half.
  *
  * @param p Coordinate to quantise.
  * @param origin The low corner of the bounding cube (centre - half_span).
@@ -174,19 +173,19 @@ void sif_field_free(sif_field_t* field);
  *
  * @return SIF_OK, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC on failure.
  */
-int sif_field_reserve_positions(sif_field_t* field);
+SIF_NODISCARD int sif_field_reserve_positions(sif_field_t* field);
 
 /**
  * @brief Allocate the velocity arrays without filling them.
  * @see sif_field_reserve_positions
  */
-int sif_field_reserve_velocities(sif_field_t* field);
+SIF_NODISCARD int sif_field_reserve_velocities(sif_field_t* field);
 
 /**
  * @brief Allocate the weight array without filling it.
  * @see sif_field_reserve_positions
  */
-int sif_field_reserve_weights(sif_field_t* field);
+SIF_NODISCARD int sif_field_reserve_weights(sif_field_t* field);
 
 /**
  * @brief Copy positions into the field.
@@ -200,7 +199,7 @@ int sif_field_reserve_weights(sif_field_t* field);
  * @note Invalidates the bounds and the Morton order, and drops the permutation
  * a previous sort had recorded: it no longer describes this data.
  */
-int sif_field_assign_positions(
+SIF_NODISCARD int sif_field_assign_positions(
   sif_field_t* field, const sif_real* x, const sif_real* y, const sif_real* z);
 
 /**
@@ -217,7 +216,7 @@ int sif_field_assign_positions(
  * permuted into the field's current order on the way in, so that every particle
  * keeps its own velocity.
  */
-int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
+SIF_NODISCARD int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
   const sif_real* vy, const sif_real* vz);
 
 /**
@@ -229,21 +228,23 @@ int sif_field_assign_velocities(sif_field_t* field, const sif_real* vx,
  *
  * @note Same permutation rule as sif_field_assign_velocities().
  */
-int sif_field_assign_weights(sif_field_t* field, const sif_real* weights);
+SIF_NODISCARD int sif_field_assign_weights(sif_field_t* field, const sif_real* weights);
 
 /**
  * @brief Fold every coordinate into [0, box_length) periodically.
  *
  * Everything that bins the field -- the CIC assignment, the chain mesh --
- * requires coordinates strictly inside the box, and rejects the field
- * otherwise. The common reason a periodic snapshot fails that check is not bad
- * data but rounding: in single precision the representable values near the box
- * edge are spaced ~1e-4 apart at a box of 2000, so any coordinate within half
- * that of the edge lands on exactly box_length when it is stored. Those
- * particles are one ULP from the origin, not out of bounds.
+ * requires coordinates inside the box, and rejects the field otherwise. It
+ * does not need this for rounding: in single precision the representable
+ * values near the box edge are spaced ~1e-4 apart at a box of 2000, so a
+ * coordinate within half that of the edge is stored as exactly box_length, and
+ * the binning accepts and folds anything within a few ULPs of either face
+ * itself. This is for a periodic snapshot whose coordinates were never
+ * wrapped into the box at all.
  *
  * Wrapping is only ever correct for a field that really is periodic in this
- * box, so it is never applied implicitly; call this when you know it is.
+ * box, so beyond rounding it is never applied implicitly; call this when you
+ * know it is.
  *
  * The two populations are counted separately because they mean different
  * things. A handful of boundary folds is the expected rounding artifact. A
@@ -255,14 +256,16 @@ int sif_field_assign_weights(sif_field_t* field, const sif_real* weights);
  * @param box_length The periodic box the field lives in.
  * @param n_boundary Optional; coordinates that sat exactly on box_length.
  * @param n_wrapped Optional; coordinates that were genuinely outside the box.
+ * @param n_nonfinite Optional; coordinates that are NaN or infinite. They
+ * cannot be repaired here and are left alone, with a warning naming the
+ * first; the binning and bounding functions refuse such a field, so a count
+ * above zero means the field is not usable as it is.
  * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field or a
  * non-positive box.
- *
- * @note NaN cannot be repaired here and is left alone; the binning validators
- * reject it, and it is counted in neither total.
  */
-int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
-  uint64_t* n_boundary, uint64_t* n_wrapped);
+SIF_NODISCARD int sif_field_wrap_periodic(sif_field_t* field,
+  sif_real box_length, uint64_t* n_boundary, uint64_t* n_wrapped,
+  uint64_t* n_nonfinite);
 
 /**
  * @brief Shift every position by @p offset.
@@ -280,7 +283,7 @@ int sif_field_wrap_periodic(sif_field_t* field, sif_real box_length,
  * previous sort, which still describes the arrays, so velocities and weights
  * assigned afterwards still land on their own particles.
  */
-int sif_field_translate(sif_field_t* field, const sif_real offset[3]);
+SIF_NODISCARD int sif_field_translate(sif_field_t* field, const sif_real offset[3]);
 
 /**
  * @brief Recompute the bounding box and centre, unconditionally.
@@ -289,9 +292,11 @@ int sif_field_translate(sif_field_t* field, const sif_real offset[3]);
  * refresh -- after writing into `field->x` directly, for instance, which the
  * field cannot notice.
  *
- * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field.
+ * @return SIF_OK, or SIF_ERR_INVALID on an empty or positionless field, one
+ * in sky coordinates, or one with a position that is not finite (the message
+ * names the first).
  */
-int sif_field_refresh_bounds(sif_field_t* field);
+SIF_NODISCARD int sif_field_refresh_bounds(sif_field_t* field);
 
 /**
  * @brief Ensure the field has a valid bounding box, computing it if needed.
@@ -301,7 +306,7 @@ int sif_field_refresh_bounds(sif_field_t* field);
  *
  * @return SIF_OK if the bounds are valid on return, an error code otherwise.
  */
-int sif_field_require_bounds(sif_field_t* field);
+SIF_NODISCARD int sif_field_require_bounds(sif_field_t* field);
 
 /**
  * @brief Sort the field arrays in memory along a 3D Morton curve.
@@ -311,24 +316,23 @@ int sif_field_require_bounds(sif_field_t* field);
  * spatial queries walk contiguous ranges. The permutation is recorded in
  * sif_field_t::original_indices.
  *
- * @return SIF_OK, SIF_ERR_INVALID on an empty field, SIF_ERR_ALLOC on failure
- * -- in which case the field is left unmodified.
+ * @return SIF_OK; SIF_ERR_INVALID as for sif_field_refresh_bounds();
+ * SIF_ERR_ALLOC. The field is left unmodified on failure.
  *
  * @note On success the field owns its positions and indices regardless of how
  * they were assigned: the permuted copy cannot alias the caller's arrays.
  */
-int sif_field_sort_morton(sif_field_t* field);
+SIF_NODISCARD int sif_field_sort_morton(sif_field_t* field);
 
 /**
  * @brief Ensure the field is Morton-sorted, sorting it if needed.
  *
- * Consumers that structurally depend on Morton order -- the octree, which
- * stores contiguous particle ranges per node -- should call this instead of
- * testing the flag and failing.
+ * Consumers that structurally depend on Morton order should call this instead
+ * of testing the flag and failing.
  *
  * @return SIF_OK if the field is Morton-sorted on return, an error otherwise.
  */
-int sif_field_require_morton(sif_field_t* field);
+SIF_NODISCARD int sif_field_require_morton(sif_field_t* field);
 
 /**
  * @brief Turn sky coordinates into comoving Cartesian positions, in place.

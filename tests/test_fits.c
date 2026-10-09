@@ -889,7 +889,7 @@ static void test_products(void) {
 #endif /* SIF_HAVE_FITS */
 
 int main(void) {
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK)
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK)
     return 1;
 
 #ifdef SIF_HAVE_FITS
@@ -932,7 +932,7 @@ int main(void) {
   sif_catalogue_free(cat);
 #endif
 
-  sif_finalise();
+  sif_system_finalise();
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
   return failures != 0;

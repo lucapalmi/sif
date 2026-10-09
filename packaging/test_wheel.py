@@ -35,7 +35,7 @@ import pysif
 
 warnings.simplefilter("error")  # a text fallback would mean HDF5 is missing
 
-pysif.init()
+pysif.system_init()
 
 rng = np.random.default_rng(1)
 N, L = 100_000, 200.0

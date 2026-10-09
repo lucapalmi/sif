@@ -425,8 +425,8 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_ERROR};
-  if (sif_init(&cfg) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -436,7 +436,7 @@ int main(void) {
   test_multiplicity_continuity();
   test_svdw_vdn_ratio();
 
-  sif_finalise();
+  sif_system_finalise();
 
   if (failures) {
     printf("\n%d check(s) failed\n", failures);

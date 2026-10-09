@@ -24,7 +24,8 @@ extern PyObject* py_sif_init_finders(void);
  * GLOBAL LIBRARY FUNCTIONS
  * ========================================================================== */
 
-static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
+static PyObject* py_sif_system_init(
+  PyObject* module, PyObject* args, PyObject* kwds) {
   /* Default values */
   int threads = 0;
   int skip_tuning = 0;
@@ -47,9 +48,9 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
 
   /* Where the C library used to end the process, and now reports instead:
    * the interpreter survives a failed init and can say why. */
-  if (sif_init(&config) != SIF_OK) {
+  if (sif_system_init(&config) != SIF_OK) {
     PyErr_SetString(PyExc_MemoryError,
-      "sif could not initialise: the library state or FFTW could not be "
+      "sif could not initialise: the system state or FFTW could not be "
       "allocated");
     return NULL;
   }
@@ -57,9 +58,30 @@ static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
   Py_RETURN_NONE;
 }
 
-static PyObject* py_sif_finalise(PyObject* module, PyObject* args) {
-  sif_finalise();
+static PyObject* py_sif_system_finalise(PyObject* module, PyObject* args) {
+  sif_system_finalise();
   Py_RETURN_NONE;
+}
+
+/* The old names, kept for one release. FutureWarning rather than
+ * DeprecationWarning: the people calling these are writing analysis scripts,
+ * not libraries, and DeprecationWarning is hidden from them by default. */
+static PyObject* py_sif_init(PyObject* module, PyObject* args, PyObject* kwds) {
+  if (PyErr_WarnEx(PyExc_FutureWarning,
+        "pysif.init(): deprecated, removed in the next release: call "
+        "pysif.system_init()",
+        1) < 0)
+    return NULL;
+  return py_sif_system_init(module, args, kwds);
+}
+
+static PyObject* py_sif_finalise(PyObject* module, PyObject* args) {
+  if (PyErr_WarnEx(PyExc_FutureWarning,
+        "pysif.finalise(): deprecated, removed in the next release: call "
+        "pysif.system_finalise()",
+        1) < 0)
+    return NULL;
+  return py_sif_system_finalise(module, args);
 }
 
 static PyObject* py_sif_setting_set(
@@ -73,7 +95,10 @@ static PyObject* py_sif_setting_set(
     return NULL;
   }
 
-  sif_setting_set(key, value);
+  sif_error_clear();
+  const int status = sif_setting_set(key, value);
+  if (status != SIF_OK)
+    return py_sif_raise(status, "set_setting");
 
   Py_RETURN_NONE;
 }
@@ -104,24 +129,40 @@ static PyObject* py_sif_setting_get(
  * ========================================================================== */
 
 static PyMethodDef sif_module_methods[] = {
-  {"init", (PyCFunction)py_sif_init, METH_VARARGS | METH_KEYWORDS,
-    "init(threads=0, skip_tuning=False, log_level=2)\n"
+  {"system_init", (PyCFunction)py_sif_system_init,
+    METH_VARARGS | METH_KEYWORDS,
+    "system_init(threads=0, skip_tuning=False, log_level=2)\n"
     "--\n\n"
-    "Start the library. Call this before anything else.\n\n"
-    "Brings up the logger, the thread ceiling, the settings table and the\n"
-    "FFTW plan cache. Calling it twice warns and does nothing.\n\n"
+    "Bring up the system state: FFTW, the settings table, the thread\n"
+    "ceiling and the log level. Calling it twice warns and does nothing.\n\n"
+    "Only some of pysif needs it: the finders (finders.spherical,\n"
+    "finders.exodus, finders.exodus_survey) and\n"
+    "measure.delta_moments_grid and measure.delta_distribution_grid, which\n"
+    "transform a grid, and get_setting and set_setting. Called without it,\n"
+    "those raise RuntimeError (get_setting returns its fallback instead).\n"
+    "Everything else works without it, using OpenMP's own thread count and\n"
+    "logging at info level.\n\n"
     "Args:\n"
     "    threads: Thread ceiling; 0 leaves OpenMP's own default.\n"
     "    skip_tuning: Take FFTW's estimated plan instead of tuning. Faster\n"
     "        to start, slower to transform; worth setting for short runs.\n"
     "    log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none.\n"
     "        0 is the verbose mode: everything, timings included."},
+  {"system_finalise", (PyCFunction)py_sif_system_finalise, METH_NOARGS,
+    "system_finalise()\n"
+    "--\n\n"
+    "Release everything system_init() acquired.\n\n"
+    "Saves the settings table if it changed and tears down the FFTW plan\n"
+    "cache. The functions that need system_init() may not be called\n"
+    "afterwards without initialising again."},
+  {"init", (PyCFunction)py_sif_init, METH_VARARGS | METH_KEYWORDS,
+    "init(threads=0, skip_tuning=False, log_level=2)\n"
+    "--\n\n"
+    "Deprecated name of system_init(); warns and forwards."},
   {"finalise", (PyCFunction)py_sif_finalise, METH_NOARGS,
     "finalise()\n"
     "--\n\n"
-    "Shut the library down, releasing everything init() acquired.\n\n"
-    "Saves the settings table if it changed and tears down the FFTW plan\n"
-    "cache. Nothing else may be called afterwards without init()."},
+    "Deprecated name of system_finalise(); warns and forwards."},
   {"field_from_numpy", (PyCFunction)pysif_field_from_numpy,
     METH_VARARGS | METH_KEYWORDS,
     "field_from_numpy(x=None, y=None, z=None, *, ra=None, dec=None, "
@@ -184,15 +225,21 @@ static PyMethodDef sif_module_methods[] = {
     "Settings live in a file under $HOME/.sif and survive between runs.\n"
     "Values may reference environment variables ($HOME, ${USER}), which are\n"
     "expanded when set rather than when read.\n\n"
+    "Requires pysif.system_init().\n\n"
     "Args:\n"
     "    key: Setting name.\n"
-    "    value: Value to store."},
+    "    value: Value to store.\n\n"
+    "Raises:\n"
+    "    ValueError: If the key contains '=' or a newline, or the value a\n"
+    "        newline: the settings file could not hold it.\n"
+    "    RuntimeError: If system_init() has not been called."},
   {"get_setting", (PyCFunction)py_sif_setting_get, METH_VARARGS | METH_KEYWORDS,
     "get_setting(key, fallback=None)\n"
     "--\n\n"
     "Read a persistent runtime setting.\n\n"
     "If the key is absent and a fallback is given, the fallback is stored\n"
     "under that key and returned, so the next call finds it.\n\n"
+    "Requires pysif.system_init().\n\n"
     "Args:\n"
     "    key: Setting name.\n"
     "    fallback: Value to install and return if the key is absent.\n\n"

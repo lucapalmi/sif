@@ -42,6 +42,9 @@
  * SIF_DELTA_KEEP_CIC_WINDOW.
  * @return Newly allocated moment set, released with
  * sif_delta_moments_free(), or NULL on invalid input or failure.
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
 SIF_NODISCARD sif_delta_moments_t* sif_delta_moments_grid(
   const sif_grid_t* grid, const sif_real* radii, uint32_t n_radii,

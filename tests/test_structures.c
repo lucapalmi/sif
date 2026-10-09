@@ -5,16 +5,21 @@
  */
 
 /* Smoke test for the four reworked data structures. */
+#include "sif/core/settings.h"
 #include "sif/finder/spherical_finder.h"
+#include "sif/measure/delta_moments.h"
 #include "sif/structures/bitmask.h"
 #include "sif/structures/catalogue.h"
 #include "sif/structures/cell_linked_list.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
+#include "sif/utils/logger.h"
 
+#include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "test_util.h"
 
@@ -285,7 +290,8 @@ static void test_chain_mesh(void) {
       }
 
   sif_field_t* field = sif_field_alloc(n_p);
-  sif_field_assign_positions(field, x, y, z);
+  CHECK(sif_field_assign_positions(field, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   sif_chain_mesh_t* mesh = sif_chain_mesh_alloc(8, box, field, SIF_DEFAULT);
   CHECK(mesh != NULL, "alloc returned NULL for a valid field");
@@ -404,7 +410,8 @@ static void test_chain_mesh(void) {
    * the wrong slots and this catches it immediately.
    */
   sif_field_t* victim = sif_field_alloc(n_p);
-  sif_field_assign_positions(victim, x, y, z);
+  CHECK(sif_field_assign_positions(victim, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   sif_chain_mesh_t* consumed =
     sif_chain_mesh_alloc_consume(8, box, victim, SIF_DEFAULT);
@@ -479,12 +486,16 @@ static void test_chain_mesh(void) {
     sif_chain_mesh_free(plain);
 
     sif_field_t* wf = sif_field_alloc(n_p);
-    sif_field_assign_positions(wf, x, y, z);
-    sif_field_assign_weights(wf, w);
+    CHECK(sif_field_assign_positions(wf, x, y, z) == SIF_OK,
+      "sif_field_assign_positions failed");
+    CHECK(sif_field_assign_weights(wf, w) == SIF_OK,
+      "sif_field_assign_weights failed");
 
     sif_field_t* wf_victim = sif_field_alloc(n_p);
-    sif_field_assign_positions(wf_victim, x, y, z);
-    sif_field_assign_weights(wf_victim, w);
+    CHECK(sif_field_assign_positions(wf_victim, x, y, z) == SIF_OK,
+      "sif_field_assign_positions failed");
+    CHECK(sif_field_assign_weights(wf_victim, w) == SIF_OK,
+      "sif_field_assign_weights failed");
 
     sif_chain_mesh_t* built[2] = {
       sif_chain_mesh_alloc(8, box, wf, SIF_DEFAULT),
@@ -549,12 +560,13 @@ static void test_chain_mesh(void) {
 }
 
 /*
- * This suite never calls sif_init(), which makes it the place to check what
- * an entry point that needs the library does without it: fail with its own
- * status. It used to end the process, taking a Python interpreter with it.
+ * This suite never calls sif_system_init(), which makes it the place to check
+ * what an entry point that needs the system state does without it: fail with
+ * SIF_ERR_UNINITIALISED, returned or recorded for sif_error_status(). It used
+ * to end the process, taking a Python interpreter with it.
  */
 static void test_uninitialised(void) {
-  printf("entry points before sif_init\n");
+  printf("entry points before sif_system_init\n");
 
   sif_grid_t* g = sif_grid_alloc(16, 100.0f);
   CHECK(g != NULL, "grid allocation failed");
@@ -564,17 +576,200 @@ static void test_uninitialised(void) {
     g->content = SIF_GRID_DENSITY_CONTRAST;
 
     const sif_real radii[] = {20.0f, 15.0f};
+    sif_error_clear();
     sif_catalogue_t* cat = sif_finder_spherical(g, radii, 2, -0.2f, 0.0f, 0);
     CHECK(cat == NULL,
-      "a finder run before sif_init() should fail, not return a catalogue");
+      "a finder run before sif_system_init() should fail, not return a "
+      "catalogue");
+    CHECK(sif_error_status() == SIF_ERR_UNINITIALISED,
+      "a finder run before sif_system_init() should record "
+      "SIF_ERR_UNINITIALISED");
     sif_catalogue_free(cat);
+
+    sif_error_clear();
+    sif_delta_moments_t* m = sif_delta_moments_grid(g, radii, 2, 2, 0, 1, 0);
+    CHECK(m == NULL, "delta moments before sif_system_init() should fail");
+    CHECK(sif_error_status() == SIF_ERR_UNINITIALISED,
+      "delta moments before sif_system_init() should record "
+      "SIF_ERR_UNINITIALISED");
+    sif_delta_moments_free(m);
+
     sif_grid_free(g);
   }
+
+  CHECK(sif_setting_set("key", "value") == SIF_ERR_UNINITIALISED,
+    "sif_setting_set() before sif_system_init() should return "
+    "SIF_ERR_UNINITIALISED");
+  CHECK(strcmp(sif_setting_get("key", "fallback"), "fallback") == 0,
+    "sif_setting_get() before sif_system_init() should return its fallback");
+  printf("  ok\n");
+}
+
+/*
+ * The constructors that return a pointer record why they failed, so a caller
+ * -- the Python bindings, most of all -- can tell a refusal from running out
+ * of memory, and the message names the part that was wrong.
+ */
+static void test_error_reasons(void) {
+  printf("error reasons\n");
+
+  sif_error_clear();
+  CHECK(sif_grid_alloc(0, 100.0f) == NULL, "a zero-cell grid should fail");
+  CHECK(sif_error_status() == SIF_ERR_INVALID && error_has("n_cells: 0"),
+    "a zero-cell grid: status %d, message '%s'", sif_error_status(),
+    sif_error_message());
+
+  /* Particle 1 is outside the box; the message has to name it. */
+  sif_real x[3] = {1.0f, 150.0f, 3.0f}, y[3] = {1, 2, 3}, z[3] = {1, 2, 3};
+  sif_field_t* f = sif_field_alloc(3);
+  CHECK(f && sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "field setup failed");
+
+  sif_error_clear();
+  CHECK(sif_chain_mesh_alloc(4, 100.0f, f, SIF_DEFAULT) == NULL,
+    "a mesh over a particle outside the box should fail");
+  CHECK(sif_error_status() == SIF_ERR_RANGE &&
+          error_has("1 of 3 particles outside the box") &&
+          error_has("first: particle 1 at (150, 2, 2)"),
+    "out of box: status %d, message '%s'", sif_error_status(),
+    sif_error_message());
+
+  /* Refused before the handover: the consuming build leaves the field. */
+  sif_error_clear();
+  CHECK(sif_chain_mesh_alloc_consume(4, 100.0f, f, SIF_DEFAULT) == NULL,
+    "a consuming mesh over a particle outside the box should fail");
+  CHECK(f->n_particles == 3 && f->x != NULL,
+    "a refused consuming build should leave the field as it was");
+
+  sif_grid_t* g = sif_grid_alloc(4, 100.0f);
+  sif_error_clear();
+  CHECK(g && sif_grid_assign_cic(g, f) == SIF_ERR_RANGE &&
+          error_has("first: particle 1"),
+    "deposit out of box: message '%s'", sif_error_message());
+
+  /* An empty field, which is what a consuming build leaves behind. */
+  sif_field_t* empty = sif_field_alloc(0);
+  sif_error_clear();
+  CHECK(g && sif_grid_assign_cic(g, empty) == SIF_ERR_INVALID &&
+          error_has("field: 0 particles"),
+    "deposit of an empty field: message '%s'", sif_error_message());
+
+  sif_error_clear();
+  CHECK(sif_chain_mesh_alloc(4, 100.0f, empty, SIF_DEFAULT) == NULL &&
+          sif_error_status() == SIF_ERR_INVALID &&
+          error_has("field: 0 particles"),
+    "a mesh over an empty field: status %d, message '%s'",
+    sif_error_status(), sif_error_message());
+
+  sif_error_clear();
+  CHECK(g && sif_grid_to_density_contrast(g) == SIF_ERR_RANGE &&
+          error_has("nothing has been deposited"),
+    "contrast of an empty grid: message '%s'", sif_error_message());
+
+  sif_grid_free(g);
+  sif_field_free(empty);
+  sif_field_free(f);
+
+  /* A metadata key is refused with the reason, and a failure to grow the
+   * table is no longer reported as a bad key. */
+  sif_catalogue_t* cat = sif_catalogue_alloc(1);
+  sif_error_clear();
+  CHECK(cat && sif_catalogue_meta_int_set(cat, "my-key", 1) == SIF_ERR_INVALID &&
+          error_has("key has '-' at character 3"),
+    "bad metadata key: message '%s'", sif_error_message());
+  sif_catalogue_free(cat);
+
+  printf("  ok\n");
+}
+
+/* Two ULPs of `v` up or down: within the binning's tolerance at any box. */
+static sif_real ulps_off(sif_real v, int up) {
+  const sif_real to = up ? SIF_REAL_MAX_VAL : -SIF_REAL_MAX_VAL;
+  return SIF_REAL_NEXT_AFTER(SIF_REAL_NEXT_AFTER(v, to), to);
+}
+
+/*
+ * Coordinates within rounding of a box face are binned as their periodic
+ * fold, without a wrap; anything further out is still refused.
+ */
+static void test_box_edge_rounding(void) {
+  printf("box edge rounding\n");
+
+  const sif_real box = 100.0f;
+
+  /* Particle 0 on the upper face, 1 just past it, 2 just below 0. */
+  sif_real ex[3] = {box, ulps_off(box, 1), ulps_off(0.0f, 0)};
+  sif_real ey[3] = {10.0f, box, 20.0f}, ez[3] = {30.0f, 40.0f, 0.0f};
+  /* Their folds, which is what a wrap would have produced. */
+  sif_real fx[3], fy[3], fz[3];
+  for (int i = 0; i < 3; i++) {
+    fx[i] = ex[i] >= box ? ex[i] - box : ex[i] < 0 ? ex[i] + box : ex[i];
+    fy[i] = ey[i] >= box ? ey[i] - box : ey[i];
+    fz[i] = ez[i];
+    if (fx[i] >= box)
+      fx[i] = 0.0f;
+  }
+
+  sif_field_t* edge = sif_field_alloc(3);
+  sif_field_t* folded = sif_field_alloc(3);
+  CHECK(edge && folded &&
+          sif_field_assign_positions(edge, ex, ey, ez) == SIF_OK &&
+          sif_field_assign_positions(folded, fx, fy, fz) == SIF_OK,
+    "field setup failed");
+
+  sif_grid_t* ge = sif_grid_alloc(8, box);
+  sif_grid_t* gf = sif_grid_alloc(8, box);
+  CHECK(ge && sif_grid_assign_cic(ge, edge) == SIF_OK,
+    "a deposit within rounding of the faces was refused: %s",
+    sif_error_message());
+  CHECK(gf && sif_grid_assign_cic(gf, folded) == SIF_OK, "folded deposit");
+  CHECK(ge && gf &&
+          memcmp(ge->values, gf->values, ge->total_cells * sizeof(sif_real)) ==
+            0,
+    "the edge particles should deposit exactly as their folds do");
+  CHECK(edge->x[0] == box, "the deposit should leave the field unchanged");
+
+  /* The copying mesh folds its copy; the field keeps its values. */
+  sif_chain_mesh_t* m = sif_chain_mesh_alloc(4, box, edge, SIF_DEFAULT);
+  CHECK(m != NULL, "a mesh within rounding of the faces was refused: %s",
+    sif_error_message());
+  for (uint64_t i = 0; m && i < m->n_particles; i++)
+    CHECK(m->x[i] >= 0.0f && m->x[i] < box && m->y[i] >= 0.0f &&
+            m->y[i] < box && m->z[i] >= 0.0f && m->z[i] < box,
+      "mesh slot %llu not folded into the box", (unsigned long long)i);
+  sif_chain_mesh_free(m);
+
+  /* The consuming one folds the columns it takes. */
+  m = sif_chain_mesh_alloc_consume(4, box, edge, SIF_DEFAULT);
+  CHECK(m != NULL, "a consuming mesh within rounding was refused");
+  for (uint64_t i = 0; m && i < m->n_particles; i++)
+    CHECK(m->x[i] >= 0.0f && m->x[i] < box && m->y[i] >= 0.0f &&
+            m->y[i] < box,
+      "consumed mesh slot %llu not folded", (unsigned long long)i);
+  sif_chain_mesh_free(m);
+
+  /* Past the tolerance is a wrong box, not rounding. */
+  sif_real px[1] = {box * 1.001f}, py[1] = {1.0f}, pz[1] = {1.0f};
+  sif_field_t* past = sif_field_alloc(1);
+  CHECK(past && sif_field_assign_positions(past, px, py, pz) == SIF_OK,
+    "field setup failed");
+  sif_error_clear();
+  CHECK(gf && sif_grid_assign_cic(gf, past) == SIF_ERR_RANGE &&
+          error_has("outside the box"),
+    "a particle 0.1%% past the box should still be refused");
+
+  sif_field_free(past);
+  sif_grid_free(ge);
+  sif_grid_free(gf);
+  sif_field_free(edge);
+  sif_field_free(folded);
   printf("  ok\n");
 }
 
 int main(void) {
   test_uninitialised();
+  test_box_edge_rounding();
+  test_error_reasons();
   test_bitmask_atomic();
   test_catalogue();
   test_cll();

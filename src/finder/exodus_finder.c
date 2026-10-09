@@ -2014,7 +2014,7 @@ static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
   sif_system_state_t* state = sif__system_state();
   if (!state) {
     *ws_out = NULL;
-    return SIF_ERR_INVALID;
+    return SIF_ERR_UNINITIALISED;
   }
   sif_fft_workspace_t* ws =
     sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
@@ -2645,8 +2645,8 @@ int sif_finder_exodus_survey_box(const sif_field_t* data,
       data->n_particles == 0 ? "no particles" : "no positions");
     return SIF_ERR_INVALID;
   }
-  if (sif__field_require_cartesian(randoms, TAG) != SIF_OK ||
-      (data && sif__field_require_cartesian(data, TAG) != SIF_OK))
+  if (sif__field_require_cartesian(randoms, TAG, "randoms") != SIF_OK ||
+      (data && sif__field_require_cartesian(data, TAG, "data") != SIF_OK))
     return SIF_ERR_INVALID;
 
   /* Below this the grid cell is too large a share of the box for any padding

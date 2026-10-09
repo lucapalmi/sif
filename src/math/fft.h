@@ -11,8 +11,8 @@
  *
  * Two objects, with different lifetimes. The manager owns the process-global
  * FFTW state -- the plan cache and its wisdom file -- and lives from
- * sif_init() to sif_finalise(). A workspace owns the buffers and plans for one
- * grid size and is created and destroyed around a piece of work.
+ * sif_system_init() to sif_system_finalise(). A workspace owns the buffers and
+ * plans for one grid size and is created and destroyed around a piece of work.
  *
  * The transforms are real-to-complex, so the Fourier-space array holds only
  * half the modes; the rest follow by Hermitian symmetry and are never stored.

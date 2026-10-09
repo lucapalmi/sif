@@ -138,9 +138,10 @@ void sif__log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
   if (level >= N_LEVELS)
     level = N_LEVELS - 1;
 
-  /* The safe accessor, because logging before sif_init() has to work -- it is
-   * how the failures during init itself get reported. INFO is the assumed
-   * floor until the configured one exists. */
+  /* The safe accessor, because logging before sif_system_init() has to work:
+   * most of the library runs without it, and it is how the failures during
+   * init itself get reported. INFO is the assumed floor until the configured
+   * one exists. */
   const sif_system_state_t* state = sif__system_state_safe();
   const uint8_t runtime_level =
     state ? state->logger.level : SIF_LOG_LEVEL_INFO;

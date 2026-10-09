@@ -234,12 +234,12 @@ int main(int argc, char** argv) {
     /* The library's own log carries the problems; its chatter stays out of
      * the report. */
     sif_config_t check_lib = {.log_level = SIF_LOG_LEVEL_WARNING};
-    if (sif_init(&check_lib) != SIF_OK) {
+    if (sif_system_init(&check_lib) != SIF_OK) {
       fputs("sif-exodus: could not initialise the library\n", stderr);
       return 1;
     }
     const int code = inspect_file(config_path, kind, &io);
-    sif_finalise();
+    sif_system_finalise();
     return code;
   }
 
@@ -257,14 +257,14 @@ int main(int argc, char** argv) {
       .log_level = config.run.log_level > SIF_LOG_LEVEL_WARNING
                      ? config.run.log_level
                      : SIF_LOG_LEVEL_WARNING};
-    if (needs_lib && sif_init(&check_lib) != SIF_OK) {
+    if (needs_lib && sif_system_init(&check_lib) != SIF_OK) {
       fputs("sif-exodus: could not initialise the library\n", stderr);
       config_free(&config);
       return 1;
     }
     const int ok = config_check(&config, config_path, true, io.deep);
     if (needs_lib)
-      sif_finalise();
+      sif_system_finalise();
     fputs(config.resolved, stdout);
     fflush(stdout);
     config_free(&config);
@@ -278,7 +278,7 @@ int main(int argc, char** argv) {
   sif_omp_config_t omp = {.n_threads = config.run.n_threads};
   sif_config_t lib = {
     .fft_config = &fft, .omp_config = &omp, .log_level = config.run.log_level};
-  if (sif_init(&lib) != SIF_OK) {
+  if (sif_system_init(&lib) != SIF_OK) {
     fputs("sif-exodus: could not initialise the library\n", stderr);
     config_free(&config);
     return 1;
@@ -287,7 +287,7 @@ int main(int argc, char** argv) {
   /* The same check as --check, before anything is read: what it finds wrong
    * would stop the run later anyway, after the expensive part. */
   if (config_check(&config, config_path, false, false) != 0) {
-    sif_finalise();
+    sif_system_finalise();
     config_free(&config);
     return 2;
   }
@@ -296,7 +296,7 @@ int main(int argc, char** argv) {
                        ? pipeline_survey(&config.params)
                        : pipeline_box(&config.params);
 
-  sif_finalise();
+  sif_system_finalise();
   config_free(&config);
   return status == SIF_OK ? 0 : 1;
 }

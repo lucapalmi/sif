@@ -277,7 +277,7 @@ static void test_tuning_cap_and_wisdom(void) {
   mkdir(dir, 0777);
   remove(expected);
 
-  /* The ceiling is a setting, and sif_setting_set() is a no-op until the table
+  /* The ceiling is a setting, and sif_setting_set() fails until the table
    * exists. The rest of this file talks to the fft wrapper directly, so bring
    * up just the settings and take them down again -- into the test directory,
    * so nothing lands in a real config file. */
@@ -285,7 +285,8 @@ static void test_tuning_cap_and_wisdom(void) {
 
   /* 1. Capped: the workspace must estimate even though tuning was asked for,
    *    and must leave no wisdom behind. */
-  sif_setting_set("fft_tuning_max_gib", "0");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "0") == SIF_OK,
+    "setting fft_tuning_max_gib to 0 failed");
   sif_fft_manager_t* mgr =
     sif__fft_manager_init(false /* wants MEASURE */, dir);
   sif_fft_workspace_t* ws = sif__fft_workspace_alloc(mgr, n);
@@ -309,7 +310,8 @@ static void test_tuning_cap_and_wisdom(void) {
 
   /* 2. Uncapped: the same workspace tunes, and now the file is worth writing.
    */
-  sif_setting_set("fft_tuning_max_gib", "1024");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "1024") == SIF_OK,
+    "setting fft_tuning_max_gib to 1024 failed");
   mgr = sif__fft_manager_init(false, dir);
   ws = sif__fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed without the cap");
@@ -354,7 +356,8 @@ static void test_tuning_cap_and_wisdom(void) {
   const long size_one = file_size(expected);
   CHECK(size_one > 0, "wisdom file is empty after one size");
 
-  sif_setting_set("fft_tuning_max_gib", "1024");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "1024") == SIF_OK,
+    "setting fft_tuning_max_gib to 1024 failed");
   mgr = sif__fft_manager_init(false, dir);
   ws = sif__fft_workspace_alloc(mgr, n + 8);
   if (ws) {
@@ -385,7 +388,8 @@ static void test_tuning_cap_and_wisdom(void) {
     "the accumulated wisdom file no longer imports");
 
   /* 3. A malformed ceiling must read as the default, never as "no limit". */
-  sif_setting_set("fft_tuning_max_gib", "not-a-number");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "not-a-number") == SIF_OK,
+    "setting fft_tuning_max_gib to not-a-number failed");
   mgr = sif__fft_manager_init(false, NULL);
   ws = sif__fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed with a malformed ceiling");

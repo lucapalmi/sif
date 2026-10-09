@@ -5,7 +5,9 @@
 
 """sif: cosmic void finding and analysis.
 
-Call init() before anything else and finalise() when done.
+The finders, the grid-based delta statistics and the settings need
+system_init() first, and system_finalise() when done; everything else
+works without it.
 
 The data structures live here in the package root -- Field, Grid,
 Catalogue and the rest -- and the operations on them are grouped

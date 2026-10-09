@@ -22,7 +22,6 @@
 #include "structures/py_delta_moments.h"
 #include "structures/py_field.h"
 #include "structures/py_grid.h"
-#include "structures/py_octree.h"
 #include "structures/py_size_function.h"
 #include "structures/py_tessellation.h"
 
@@ -41,7 +40,6 @@ static const struct {
   {"DeltaMoments", &sifDeltaMomentsType},
   {"Field", &sifFieldType},
   {"Grid", &sifGridType},
-  {"Octree", &sifOctreeType},
   {"SizeFunction", &sifSizeFunctionType},
   {"Tessellation", &sifTessellationType},
 };

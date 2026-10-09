@@ -57,7 +57,7 @@ sif_<domain>_<thing>[_<qualifier>]
 ```
 
 **`domain`** is the concrete thing the function belongs to — a data structure
-(`field`, `grid`, `octree`, `catalogue`, `chain_mesh`, `bitmask`), a formalism
+(`field`, `grid`, `catalogue`, `chain_mesh`, `bitmask`), a formalism
 (`bbks`, `ep`, `svdw`), or a subsystem (`finder`, `profiles`, `io`,
 `prng`, `timer`). It is *not* the directory: the header lives in
 `include/sif/structures/field.h`, but the domain is `field`, not
@@ -262,7 +262,7 @@ typedef that merely renames a scalar does not:
 
 ```c
 typedef struct { ... } sif_field_t;        /* composite → _t   */
-typedef struct { ... } sif_octree_node_t;
+typedef struct { ... } sif_chain_mesh_t;
 typedef enum { ... } sif_filter_type_t;
 
 typedef float sif_real;                    /* scalar alias → no suffix */
@@ -486,8 +486,9 @@ same reason it must never carry a side effect.
 ## 6. Portability
 
 **A function that takes no arguments is declared `(void)`, never `()`.** In C
-the empty parameter list means *unspecified*, not *none*, so `sif_finalise()`
-would accept `sif_finalise(1, 2, 3)` without a diagnostic.
+the empty parameter list means *unspecified*, not *none*, so
+`sif_system_finalise()` would accept `sif_system_finalise(1, 2, 3)` without a
+diagnostic.
 
 C99, no compiler extensions outside `macros.h`. Anything compiler-specific
 (`__attribute__`, builtins, pragmas) is wrapped in a `SIF_*` macro there with a
@@ -506,8 +507,8 @@ result depend on scheduling — a reduction whose answer changes with thread cou
 is a bug, not a rounding detail.
 
 Note that the release build uses `-ffast-math`, so code that depends on exact
-IEEE-754 semantics needs its own compilation flags, as
-`vendor/predicates/predicates.c` does in `CMakeLists.txt`.
+IEEE-754 semantics needs its own compilation flags, set on that source file
+with `set_source_files_properties` in `CMakeLists.txt`.
 
 ---
 

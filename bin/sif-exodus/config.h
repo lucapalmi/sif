@@ -45,7 +45,7 @@ typedef struct {
   /* What the pipeline runs on. Its pointers point into the storage below. */
   exodus_params_t params;
 
-  /* What main() hands sif_init(). */
+  /* What main() hands sif_system_init(). */
   struct {
     /* 0 leaves the OpenMP default. */
     uint32_t n_threads;

@@ -6,6 +6,7 @@
 
 #include "sif/structures/grid.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -17,6 +18,7 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "structures/field_internal.h"
+#include "utils/logger_internal.h"
 
 #include <stdio.h>
 #include <sys/stat.h>
@@ -45,17 +47,22 @@ sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length) {
    * undefined. A box_length of zero is quieter and worse: every allocation
    * succeeds and cell_length is 0, so the grid looks usable right up to the
    * first division by it. */
-  if (n_cells == 0 || !(box_length > (sif_real)0.0)) {
-    SIF_LOG_ERROR("grid",
-      "invalid geometry (n_cells=%u, box_length=%g); both must be positive",
-      n_cells, (double)box_length);
+  if (n_cells == 0) {
+    SIF_LOG_ERROR("grid", "n_cells: 0 (expected > 0)");
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+  if (!(box_length > (sif_real)0.0)) {
+    SIF_LOG_ERROR("grid", "box_length: %g (expected > 0)", (double)box_length);
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
   sif_grid_t* grid = malloc(sizeof(sif_grid_t));
   if (!grid) {
     SIF_LOG_ERROR(
-      "grid", "failed to allocate grid struct (%zu bytes)", sizeof(sif_grid_t));
+      "grid", "grid: cannot allocate (%zu bytes)", sizeof(sif_grid_t));
+    sif__error_status_set(SIF_ERR_ALLOC);
     return NULL;
   }
 
@@ -70,7 +77,9 @@ sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length) {
   grid->content = SIF_GRID_EMPTY;
   grid->values = sif_calloc_aligned(grid->total_cells, sizeof(sif_real));
   if (!grid->values) {
-    SIF_LOG_ERROR("grid", "failed to allocate the cell array");
+    SIF_LOG_ERROR("grid", "grid: cannot allocate %u^3 cells (%.2f GiB)",
+      n_cells, SIF__GIB(grid->total_cells * sizeof(sif_real)));
+    sif__error_status_set(SIF_ERR_ALLOC);
     free(grid);
     return NULL;
   }
@@ -140,8 +149,11 @@ SIF_PURE_FUNCTION static inline uint64_t grid_slab_flat_index(
  */
 static grid_slab_t* grid_slabs_alloc(uint32_t n_cells, int n_threads) {
   grid_slab_t* slabs = malloc(n_threads * sizeof(grid_slab_t));
-  if (!slabs)
+  if (!slabs) {
+    SIF_LOG_ERROR("grid_cic", "grid: cannot allocate %d CIC slab headers",
+      n_threads);
     return NULL;
+  }
 
   uint64_t total_slab_cells = 0;
   uint64_t align_elements = SIF_CACHE_LINE / sizeof(sif_real);
@@ -159,9 +171,15 @@ static grid_slab_t* grid_slabs_alloc(uint32_t n_cells, int n_threads) {
     total_slab_cells += slab_cells;
   }
 
-  /* Zeroed, because the deposit loop accumulates into it. */
+  /* Zeroed, because the deposit loop accumulates into it. The size is the
+   * grid again plus a plane per slab, which is the number that surprises: it
+   * is why a grid that fits can still fail to be assigned. */
   sif_real* arena = sif_calloc_aligned(total_slab_cells, sizeof(sif_real));
   if (!arena) {
+    SIF_LOG_ERROR("grid_cic",
+      "grid: cannot allocate the CIC slabs (%d slabs over %u^3 cells, %.2f "
+      "GiB on top of the grid itself)",
+      n_threads, n_cells, SIF__GIB(total_slab_cells * sizeof(sif_real)));
     free(slabs);
     return NULL;
   }
@@ -262,38 +280,6 @@ static void grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
 }
 
 /*
- * The CIC scatter derives a particle's slab twice, once when counting and once
- * when depositing, and the two derivations must agree. They only do for
- * coordinates inside the box, so reject anything else up front rather than
- * letting the deposit pass underflow its local slab index.
- */
-static int grid_validate_positions(const sif_real* xs, const sif_real* ys,
-  const sif_real* zs, uint64_t n_particles, sif_real box_length) {
-
-  uint64_t n_bad = 0;
-
-#pragma omp parallel for schedule(static) reduction(+ : n_bad)
-  for (uint64_t p = 0; p < n_particles; p++) {
-    if (!(xs[p] >= 0.0f && xs[p] < box_length) ||
-        !(ys[p] >= 0.0f && ys[p] < box_length) ||
-        !(zs[p] >= 0.0f && zs[p] < box_length)) {
-      n_bad++;
-    }
-  }
-
-  if (n_bad > 0) {
-    SIF_LOG_ERROR("grid_cic",
-      "%" PRIu64 " of %" PRIu64
-      " particles lie outside [0, %g) and cannot be assigned; wrap or shift "
-      "the field into box-local coordinates first",
-      n_bad, n_particles, (double)box_length);
-    return SIF_ERR_RANGE;
-  }
-
-  return SIF_OK;
-}
-
-/*
  * Cell index along one axis. Shared by the counting, scatter and deposit
  * passes so the three can never disagree about which slab owns a particle.
  * The >= N branch only fires on the exact upper edge after rounding, and
@@ -323,7 +309,8 @@ static inline uint32_t cic_cell_x(sif_real x, sif_real inv_cell, uint32_t N) {
 static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
   const sif_real* xs, const sif_real* ys, const sif_real* zs,
   const sif_real* weights, uint64_t tile_lo, uint64_t tile_hi, uint64_t* counts,
-  uint64_t* sorted, uint32_t N, sif_real idx, uint32_t base_width) {
+  uint64_t* sorted, uint32_t N, sif_real idx, uint32_t base_width,
+  sif_real box) {
 
   const int n_chunks = GRID_CIC_CHUNKS;
   const uint64_t tile_n = tile_hi - tile_lo;
@@ -340,7 +327,7 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
       (start + chunk_size > tile_hi) ? tile_hi : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
-      uint32_t ix = cic_cell_x(xs[p], idx, N);
+      uint32_t ix = cic_cell_x(sif__box_fold(xs[p], box), idx, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
       counts[(uint64_t)c * n_slabs + target_slab]++;
     }
@@ -376,7 +363,7 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
       (start + chunk_size > tile_hi) ? tile_hi : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
-      uint32_t ix = cic_cell_x(xs[p], idx, N);
+      uint32_t ix = cic_cell_x(sif__box_fold(xs[p], box), idx, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
 
       uint64_t flat_idx = (uint64_t)c * n_slabs + target_slab;
@@ -410,9 +397,12 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
        * arrays in roughly increasing order rather than jumping about. */
       uint64_t orig_p = sorted[p];
 
-      const sif_real cx = xs[orig_p] * idx;
-      const sif_real cy = ys[orig_p] * idx;
-      const sif_real cz = zs[orig_p] * idx;
+      /* Folded, as in passes 1 and 3: a coordinate within rounding of a face
+       * was accepted by the validator, and all three passes have to see it at
+       * the same place. A no-op for every coordinate already in the box. */
+      const sif_real cx = sif__box_fold(xs[orig_p], box) * idx;
+      const sif_real cy = sif__box_fold(ys[orig_p], box) * idx;
+      const sif_real cz = sif__box_fold(zs[orig_p], box) * idx;
 
       /* The same >= N fallback cic_cell_x applies, spelled out here because
        * the fractional part is needed anyway. The two must agree exactly: this
@@ -498,7 +488,7 @@ static uint64_t grid_cic_tile_size(void) {
   if (!raw || end == raw || !(v >= 1.0)) {
     v = strtod(SIF__CIC_TILE_PARTICLES_DEFAULT, NULL);
     SIF_LOG_WARNING("grid_cic",
-      "cic_tile_particles is not a positive number ('%s'); using %.0f",
+      "setting cic_tile_particles: '%s' is not a positive number; using %.0f",
       raw ? raw : "(unset)", v);
   }
 
@@ -520,10 +510,8 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   n_slabs = ((int)N < n_slabs) ? (int)N : n_slabs;
 
   grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
-  if (!slabs) {
-    SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
+  if (!slabs)
     return SIF_ERR_ALLOC;
-  }
 
   uint64_t tile_n = grid_cic_tile_size();
   if (tile_n > n_particles)
@@ -536,8 +524,10 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   uint64_t* sorted_indices = malloc(tile_n * sizeof(uint64_t));
 
   if (!counts || !sorted_indices) {
-    SIF_LOG_ERROR("grid_cic", "failed to allocate the counting-sort scratch");
-    SIF_LOG_WARNING("grid_cic", "aborting particle assignment");
+    SIF_LOG_ERROR("grid_cic",
+      "grid: cannot allocate the CIC sort scratch (%" PRIu64
+      " particles per tile, %.2f GiB); lower the cic_tile_particles setting",
+      tile_n, SIF__GIB(tile_n * sizeof(uint64_t)));
     free(counts);
     free(sorted_indices);
     grid_slabs_free(slabs, n_slabs);
@@ -556,7 +546,7 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
     const uint64_t hi = (lo + tile_n > n_particles) ? n_particles : lo + tile_n;
 
     grid_cic_deposit_tile(slabs, n_slabs, xs, ys, zs, weights, lo, hi, counts,
-      sorted_indices, N, idx, base_width);
+      sorted_indices, N, idx, base_width, grid->box_length);
   }
 
   grid_cic_reduce_ghost_cells(slabs, n_slabs);
@@ -740,25 +730,27 @@ static grid_key_t grid_cache_key(
 }
 
 int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
-  if (!grid || !field || !grid->values) {
-    SIF_LOG_ERROR("grid_cic", "invalid grid or field");
+  if (!grid || !grid->values) {
+    SIF_LOG_ERROR("grid_cic", "grid: %s", !grid ? "NULL" : "no cell values");
     return SIF_ERR_INVALID;
   }
 
   /* An empty field would deposit nothing and come back a grid of zeros, which
    * no later step can tell from a real one until a mean of zero divides
    * something. A field emptied by sif_chain_mesh_alloc_consume() is the usual
-   * way to get here. */
-  if (field->n_particles == 0 || !field->x || !field->y || !field->z) {
-    SIF_LOG_ERROR("grid_cic", "the field holds no particles to deposit");
-    return SIF_ERR_INVALID;
-  }
+   * way to get here, and the check says so. */
+  const int checked =
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "grid_cic", "field");
+  if (checked != SIF_OK)
+    return checked;
 
-  if (sif__field_require_cartesian(field, "grid_cic") != SIF_OK)
-    return SIF_ERR_INVALID;
-
-  const int valid = grid_validate_positions(
-    field->x, field->y, field->z, field->n_particles, grid->box_length);
+  /* The CIC scatter derives a particle's slab twice, once when counting and
+   * once when depositing, and the two derivations only agree for coordinates
+   * inside the box -- so anything else is refused here rather than letting the
+   * deposit pass underflow its local slab index. Coordinates within rounding
+   * of a face are let through and folded as the deposit reads them. */
+  const int valid = sif__field_check_in_box(field->x, field->y, field->z,
+    field->n_particles, grid->box_length, "grid_cic", "field", NULL);
   if (valid != SIF_OK)
     return valid;
 
@@ -774,14 +766,15 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
      * far larger than cache -- it is a small fraction of what a hit saves. */
     key = grid_cache_key(grid, field);
 
-    /* sif_init() puts cache_directory in the settings table and creates it, so
-     * this is the one source of truth; re-deriving $HOME/.sif/grid_cache here
-     * would be a second copy of that default, free to drift from the first. */
+    /* sif_system_init() puts cache_directory in the settings table and creates
+     * it, so this is the one source of truth; re-deriving $HOME/.sif/grid_cache
+     * here would be a second copy of that default, free to drift from the
+     * first. */
     const char* cache_dir = sif_setting_get("cache_directory", NULL);
     if (!cache_dir) {
       SIF_LOG_WARNING("grid_cic",
-        "the grid cache is enabled but cache_directory is unset; computing "
-        "without it");
+        "grid cache: enabled, but the cache_directory setting is unset; "
+        "computing without it");
     } else {
       snprintf(final_path, sizeof(final_path), "%s/grid_%016llx%016llx.xgrid",
         cache_dir, (unsigned long long)key.b, (unsigned long long)key.a);
@@ -822,12 +815,18 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
 
   if (sif__grid_write_keyed(tmp_path, grid, source_key) == SIF_OK) {
     if (rename(tmp_path, final_path) == 0) {
-      SIF_LOG_TRACE("grid_cic", "cached computed grid to .xgrid file");
+      SIF_LOG_TRACE("grid_cic", "%s: grid cached", final_path);
     } else {
+      SIF_LOG_WARNING("grid_cic",
+        "%s: grid computed but not cached: cannot rename %s into place: %s",
+        final_path, tmp_path, strerror(errno));
       remove(tmp_path);
     }
   } else {
-    SIF_LOG_WARNING("grid_cic", "could not write .xgrid to cache directory.");
+    SIF_LOG_WARNING("grid_cic",
+      "%s: grid computed but not cached: the write failed (see the error "
+      "above)",
+      tmp_path);
     remove(tmp_path);
   }
 
@@ -838,8 +837,8 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
 }
 
 int sif_grid_to_density_contrast(sif_grid_t* grid) {
-  if (!grid || !grid->values || grid->total_cells == 0) {
-    SIF_LOG_ERROR("grid", "invalid or empty grid");
+  if (!grid || !grid->values) {
+    SIF_LOG_ERROR("grid", "grid: %s", !grid ? "NULL" : "no cell values");
     return SIF_ERR_INVALID;
   }
 
@@ -849,7 +848,9 @@ int sif_grid_to_density_contrast(sif_grid_t* grid) {
    * SIF_GRID_EMPTY is left alone: that is a grid the caller filled itself, and
    * only the caller knows what is in it. */
   if (grid->content == SIF_GRID_DENSITY_CONTRAST) {
-    SIF_LOG_ERROR("grid", "this grid already holds a density contrast");
+    SIF_LOG_ERROR("grid",
+      "grid: already a density contrast (converting again would divide by a "
+      "mean of about 0)");
     return SIF_ERR_INVALID;
   }
 
@@ -863,9 +864,15 @@ int sif_grid_to_density_contrast(sif_grid_t* grid) {
 
   const double rho_mean = total_mass / (double)total_cells;
 
+  /* The likely causes differ by sign, so the message names the one that
+   * fits: zero is a grid nothing was deposited onto, negative is negative
+   * weights, NaN is a non-finite value somewhere in the cells. */
   if (!(rho_mean > 0.0)) {
     SIF_LOG_ERROR("grid",
-      "mean density is %g, cannot normalise to an overdensity field", rho_mean);
+      "grid: mean density %g (expected > 0)%s", rho_mean,
+      rho_mean == 0.0 ? "; nothing has been deposited onto it"
+      : rho_mean < 0.0 ? "; negative weights outweigh the positive ones"
+                       : "; some cell values are not finite");
     return SIF_ERR_RANGE;
   }
 

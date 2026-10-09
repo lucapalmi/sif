@@ -850,8 +850,8 @@ static void test_fallback(void) {
 #endif
 
 int main(void) {
-  if (sif_init(SIF_CONFIG_QUIET) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -868,7 +868,7 @@ int main(void) {
 #endif
 
   (void)file_exists;
-  sif_finalise();
+  sif_system_finalise();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

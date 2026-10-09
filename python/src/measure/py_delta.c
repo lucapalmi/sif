@@ -76,12 +76,15 @@ PyObject* py_sif_delta_distribution_grid(
   sif_delta_distribution_t* tmp = NULL;
 
   /* Release the GIL allowing seamless multi-threading in the C backend */
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS tmp = sif_delta_distribution_grid(c_grid, c_radii,
     (uint32_t)n_radii, n_bins, delta_bounds, (uint64_t)seed, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
+  if (!tmp && sif_error_status() == SIF_ERR_UNINITIALISED)
+    return py_sif_raise(SIF_ERR_UNINITIALISED, "delta_distribution_grid");
   if (!tmp) {
     PyErr_SetString(PyExc_RuntimeError,
       "Failed to compute the delta distribution; see the sif log for the "
@@ -133,6 +136,7 @@ PyObject* py_sif_delta_moments_grid(
 
   sif_delta_moments_t* tmp = NULL;
 
+  sif_error_clear();
   Py_BEGIN_ALLOW_THREADS tmp =
     sif_delta_moments_grid(c_grid, c_radii, (uint32_t)n_radii, (uint8_t)order,
       (uint64_t)n_tracers, (uint64_t)seed, options);
@@ -140,6 +144,8 @@ PyObject* py_sif_delta_moments_grid(
 
     Py_DECREF(radii_arr);
 
+  if (!tmp && sif_error_status() == SIF_ERR_UNINITIALISED)
+    return py_sif_raise(SIF_ERR_UNINITIALISED, "delta_moments_grid");
   if (!tmp) {
     PyErr_SetString(PyExc_RuntimeError,
       "Failed to compute the moments from the field; see the sif log for the "

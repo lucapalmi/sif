@@ -152,12 +152,14 @@ static tracers_t build_weighted(const sif_real* x, const sif_real* y,
   const sif_real* z, uint64_t n, sif_real weight) {
 
   sif_field_t* f = sif_field_alloc(n);
-  sif_field_assign_positions(f, x, y, z);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
   if (weight > 0.0f) {
     sif_real* w = malloc(n * sizeof(sif_real));
     for (uint64_t i = 0; i < n; i++)
       w[i] = weight;
-    sif_field_assign_weights(f, w);
+    CHECK(sif_field_assign_weights(f, w) == SIF_OK,
+      "sif_field_assign_weights failed");
     free(w);
   }
 
@@ -415,9 +417,11 @@ static void run_workflow(void) {
   }
 
   sif_field_t* fd = sif_field_alloc(N_DATA);
-  sif_field_assign_positions(fd, dx, dy, dz);
+  CHECK(sif_field_assign_positions(fd, dx, dy, dz) == SIF_OK,
+    "sif_field_assign_positions failed");
   sif_field_t* fr = sif_field_alloc(N_RANDOMS);
-  sif_field_assign_positions(fr, rx, ry, rz);
+  CHECK(sif_field_assign_positions(fr, rx, ry, rz) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   sif_real offset[3], box = 0.0f;
   CHECK(sif_finder_exodus_survey_box(
@@ -544,9 +548,11 @@ static void run_survey_box(void) {
   x[0] = r_lo - 10.0f;
 
   sif_field_t* fd = sif_field_alloc(n);
-  sif_field_assign_positions(fd, x, y, z);
+  CHECK(sif_field_assign_positions(fd, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
   sif_field_t* fr = sif_field_alloc(4 * n);
-  sif_field_assign_positions(fr, rx, ry, rz);
+  CHECK(sif_field_assign_positions(fr, rx, ry, rz) == SIF_OK,
+    "sif_field_assign_positions failed");
 
   /* The padding survey_check_margin() asks for, with mesh cells no larger
    * than the search sphere and the default search factor. */
@@ -649,8 +655,8 @@ int main(void) {
   sif_config_t cfg = {.fft_config = &fftcfg,
     .omp_config = NULL,
     .log_level = SIF_LOG_LEVEL_WARNING};
-  if (sif_init(&cfg) != SIF_OK) {
-    printf("FAIL: sif_init\n");
+  if (sif_system_init(&cfg) != SIF_OK) {
+    printf("FAIL: sif_system_init\n");
     return 1;
   }
 
@@ -667,6 +673,6 @@ int main(void) {
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");
 
-  sif_finalise();
+  sif_system_finalise();
   return failures != 0;
 }
