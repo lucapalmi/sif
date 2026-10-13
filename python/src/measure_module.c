@@ -8,6 +8,7 @@
 #include "measure/py_delta.h"
 #include "measure/py_profiles.h"
 #include "measure/py_size_function.h"
+#include "measure/py_survey_volume.h"
 
 static PyMethodDef measure_methods[] = {
   {"size_function_catalogue", (PyCFunction)py_sif_size_function_catalogue,
@@ -48,6 +49,35 @@ static PyMethodDef measure_methods[] = {
     "    method: 'mean', 'median' or 'stitch'.\n\n"
     "Returns:\n"
     "    SizeFunction: The merged size function."},
+
+  {"survey_volume", (PyCFunction)py_sif_survey_volume,
+    METH_VARARGS | METH_KEYWORDS,
+    "survey_volume(randoms, observer=None)\n"
+    "--\n\n"
+    "The comoving volume of a survey's footprint, from its randoms.\n\n"
+    "The footprint is taken to be separable -- one angular mask, seen out\n"
+    "to the same range of distances in every direction -- which is how\n"
+    "survey randoms are made. The volume is then\n"
+    "Omega * (r_max**3 - r_min**3) / 3, with r_min and r_max the randoms'\n"
+    "nearest and furthest distances and Omega the mask's solid angle,\n"
+    "measured from the randoms' directions with the edges and holes\n"
+    "resolved statistically. Unbiased against shapes of known volume to\n"
+    "within its scatter: about 0.3% at 10**4 randoms, 0.1% at 10**5 and\n"
+    "0.02% at 10**6.\n\n"
+    "A catalogue whose radial range changes across the sky -- regions with\n"
+    "different redshift cuts -- breaks the assumption; that is reported in\n"
+    "a warning, and such regions are measured one call each. Weights are\n"
+    "ignored: this is the geometric volume.\n\n"
+    "Args:\n"
+    "    randoms: Field of the randoms, in comoving Cartesian coordinates.\n"
+    "    observer: Where the observer is, in the same frame. Default: the\n"
+    "        origin, where Field's sky conversion puts it. Pass it if the\n"
+    "        randoms have been moved since.\n\n"
+    "Returns:\n"
+    "    float: The volume, in the cube of the positions' unit.\n\n"
+    "Raises:\n"
+    "    ValueError: For sky coordinates, a position that is not finite,\n"
+    "        or too few randoms to resolve the mask."},
 
   {"profiles", (PyCFunction)py_sif_profiles, METH_VARARGS | METH_KEYWORDS,
     "profiles(catalogue, mesh, n_bins, ext=5.0, compute_velocity=False, "

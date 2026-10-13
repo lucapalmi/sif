@@ -49,7 +49,7 @@ static int failures = 0;
 /* Mesh resolution for the exodus finder. The finder used to pick this
  * itself; now that the caller owns the mesh, sif_finder_suggest_mesh_cells
  * does, which also keeps this test honest about the recommended path. */
-#define MESH_CELLS sif_finder_suggest_mesh_cells(N_P, BOX, radii[0])
+#define MESH_CELLS sif_finder_suggest_mesh_cells(N_P, BOX, radii[0], 0)
 
 static uint64_t rng_state = 0x243F6A8885A308D3ULL;
 static double next_uniform(void) {
@@ -403,6 +403,193 @@ static void run_weighted_cases(void) {
   printf("  ok\n");
 }
 
+/* --- the radius, recomputed --- */
+
+static int cmp_double(const void* a, const void* b) {
+  const double x = *(const double*)a, y = *(const double*)b;
+  return (x > y) - (x < y);
+}
+
+/*
+ * The radius by definition, from every particle in the box: the outermost
+ * particle distance d in (rung, r_search] at which the particles strictly
+ * inside -- the one on the surface not counted -- are at most (1 + t) times
+ * the mean count of a sphere of radius d. Nothing here shares code with the
+ * finder's histogram walk, which is what the comparison is for. Returns -1
+ * when no distance in the range qualifies.
+ */
+static double brute_force_radius(const sif_real* x, const sif_real* y,
+  const sif_real* z, double cx, double cy, double cz, double rung,
+  double r_search, double threshold, double* scratch) {
+
+  const double half = 0.5 * (double)BOX;
+  uint64_t n_core = 0, n_shell = 0;
+
+  for (uint64_t p = 0; p < N_P; p++) {
+    double dx = fabs((double)x[p] - cx);
+    double dy = fabs((double)y[p] - cy);
+    double dz = fabs((double)z[p] - cz);
+    dx = dx > half ? (double)BOX - dx : dx;
+    dy = dy > half ? (double)BOX - dy : dy;
+    dz = dz > half ? (double)BOX - dz : dz;
+    const double d = sqrt(dx * dx + dy * dy + dz * dz);
+    if (d <= rung)
+      n_core++;
+    else if (d <= r_search)
+      scratch[n_shell++] = d;
+  }
+  qsort(scratch, n_shell, sizeof(double), cmp_double);
+
+  /* In double: SIF_PI is a sif_real, and M_PI is not C99. */
+  const double pi = 3.14159265358979323846;
+  const double k = (1.0 + threshold) * (double)N_P /
+                   ((double)BOX * (double)BOX * (double)BOX) * 4.0 / 3.0 * pi;
+  for (uint64_t i = n_shell; i-- > 0;) {
+    const double d = scratch[i];
+    if ((double)(n_core + i) <= k * d * d * d)
+      return d;
+  }
+  return -1.0;
+}
+
+/*
+ * One rung at a time, so that each void's search range is known exactly, and
+ * every radius in the catalogue checked against brute_force_radius(). A
+ * radius is a particle distance, so the two agree to float rounding or the
+ * walk is wrong -- the bin skipping, the refinement window, the periodic
+ * images. The search factors move r_search and with it the histogram.
+ */
+static void run_radius_oracle(void) {
+  printf("radius against brute force\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  double* scratch = malloc(N_P * sizeof(double));
+  make_field(x, y, z);
+
+  const struct {
+    sif_real rung;
+    sif_option opt;
+    double factor;
+  } cases[] = {
+    {16.0f, 0, 1.5},
+    {20.0f, SIF_FINDER_SEARCH_2_00, 2.0},
+    {13.0f, SIF_FINDER_SEARCH_1_25, 1.25},
+  };
+
+  for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+    sif_field_t* f = sif_field_alloc(N_P);
+    CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+      "sif_field_assign_positions failed");
+    sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
+    CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
+    CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
+    sif_chain_mesh_t* mesh =
+      sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+    sif_field_free(f);
+
+    const sif_real rung[] = {cases[c].rung};
+    sif_catalogue_t* cat =
+      sif_finder_exodus(g, mesh, rung, 1, -0.7f, 0.0f, cases[c].opt);
+    CHECK(cat && cat->n_voids > 0, "rung %.0f: no voids to check",
+      (double)cases[c].rung);
+
+    /* The same reach the finder computes for a first rung. */
+    const double r0 = (double)cases[c].rung;
+    const double r_search = r0 + fmax((cases[c].factor - 1.0) * r0, 3.0 * CELL);
+
+    for (uint64_t i = 0; cat && i < cat->n_voids; i++) {
+      const double want = brute_force_radius(x, y, z, (double)cat->cx[i],
+        (double)cat->cy[i], (double)cat->cz[i], r0, r_search, -0.7, scratch);
+      const double got = (double)cat->radii[i];
+      CHECK(want > 0.0 && fabs(got - want) <= 1e-5 * want,
+        "rung %.0f, void %llu at (%g, %g, %g): r = %.6f, brute force %.6f", r0,
+        (unsigned long long)i, (double)cat->cx[i], (double)cat->cy[i],
+        (double)cat->cz[i], got, want);
+    }
+
+    sif_catalogue_free(cat);
+    sif_chain_mesh_free(mesh);
+    sif_grid_free(g);
+  }
+
+  free(scratch);
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
+/* --- what the catalogue must not depend on --- */
+
+static sif_catalogue_t* exodus_with_mesh(const sif_real* x, const sif_real* y,
+  const sif_real* z, uint32_t mesh_cells) {
+
+  sif_field_t* f = sif_field_alloc(N_P);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  sif_grid_t* g = sif_grid_alloc(N_GRID, BOX);
+  CHECK(sif_grid_assign_cic(g, f) == SIF_OK, "CIC assignment failed");
+  CHECK(sif_grid_to_density_contrast(g) == SIF_OK, "density contrast failed");
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(mesh_cells, BOX, f, SIF_MESH_DROP_INDICES);
+  sif_field_free(f);
+
+  sif_catalogue_t* cat =
+    mesh ? sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f, 0) : NULL;
+
+  sif_chain_mesh_free(mesh);
+  sif_grid_free(g);
+  return cat;
+}
+
+/*
+ * The mesh only indexes the particles and the speculative batches only group
+ * the candidates, so neither may change a single bit of the catalogue. The
+ * thread count is fixed at sif_system_init(), so the single-threaded run
+ * brings the system down and up again around it, and restores the original
+ * configuration afterwards.
+ */
+static void run_invariance(sif_config_t* cfg) {
+  printf("mesh and thread invariance\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  make_field(x, y, z);
+
+  sif_catalogue_t* ref = exodus_with_mesh(x, y, z, MESH_CELLS);
+
+  /* From the coarsest mesh the search sphere allows to several times the
+   * suggestion: the walk's cost moves, the answer may not. */
+  const uint32_t meshes[] = {4, 7, 2 * MESH_CELLS, 4 * MESH_CELLS};
+  for (size_t i = 0; i < sizeof(meshes) / sizeof(meshes[0]); i++) {
+    char label[32];
+    snprintf(label, sizeof(label), "mesh %u", meshes[i]);
+    sif_catalogue_t* cat = exodus_with_mesh(x, y, z, meshes[i]);
+    check_same_catalogue(label, cat, ref);
+    sif_catalogue_free(cat);
+  }
+
+  sif_omp_config_t one = {.n_threads = 1};
+  sif_config_t serial = *cfg;
+  serial.omp_config = &one;
+  sif_system_finalise();
+  CHECK(sif_system_init(&serial) == SIF_OK, "re-init with one thread failed");
+  sif_catalogue_t* cat = exodus_with_mesh(x, y, z, MESH_CELLS);
+  check_same_catalogue("1 thread", cat, ref);
+  sif_catalogue_free(cat);
+  sif_system_finalise();
+  CHECK(sif_system_init(cfg) == SIF_OK, "re-init with defaults failed");
+
+  sif_catalogue_free(ref);
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
 /* --- refusals --- */
 
 /*
@@ -487,6 +674,70 @@ static void run_refusals(void) {
   printf("  ok\n");
 }
 
+/*
+ * Cell size to grid cells: rounded up, except where the size divides the box
+ * and float rounding alone would push the count one over.
+ */
+static void run_grid_cells(void) {
+  printf("grid cells\n");
+
+  const struct {
+    uint64_t n;
+    sif_real box, cell;
+    sif_finder_units_t units;
+    uint32_t want;
+    sif_real volume;
+  } cases[] = {
+    {0, 200.0f, 6.25f, SIF_FINDER_UNITS_PHYSICAL, 32},
+    {0, 200.0f, 6.0f, SIF_FINDER_UNITS_PHYSICAL, 34}, /* 33.3, up */
+    /* 1000 / 11 rounds down in float, and 1000 over it is 11.0000003 */
+    {0, 1000.0f, 1000.0f / 11.0f, SIF_FINDER_UNITS_PHYSICAL, 11},
+    {0, 200.0f, 500.0f, SIF_FINDER_UNITS_PHYSICAL, 1},
+    {256ull * 256 * 256, 1000.0f, 1.0f, SIF_FINDER_UNITS_MPS, 256},
+    {256ull * 256 * 256, 1000.0f, 0.5f, SIF_FINDER_UNITS_MPS, 512},
+    {1000ull * 1000 * 1000, 2000.0f, 1.0f, SIF_FINDER_UNITS_MPS, 1000},
+    {N_P, BOX, 1.0f, SIF_FINDER_UNITS_MPS, 40}, /* 60000^(1/3) = 39.1 */
+    /* Tracers in an eighth of the box: half the separation, twice the
+     * cells. */
+    {256ull * 256 * 256, 1000.0f, 1.0f, SIF_FINDER_UNITS_MPS, 512, 1.25e8f},
+    /* The volume is only read for mps. */
+    {0, 200.0f, 6.25f, SIF_FINDER_UNITS_PHYSICAL, 32, -1.0f},
+  };
+  for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+    const uint32_t got = sif_finder_grid_cells_from_size(
+      cases[i].n, cases[i].box, cases[i].cell, cases[i].units, cases[i].volume);
+    CHECK(got == cases[i].want, "case %zu: %u cells, expected %u", i, got,
+      cases[i].want);
+  }
+
+  const struct {
+    uint64_t n;
+    sif_real box, cell;
+    sif_finder_units_t units;
+    const char* reason;
+    sif_real volume;
+  } bad[] = {
+    {N_P, 0.0f, 1.0f, SIF_FINDER_UNITS_MPS, "box_length: 0"},
+    {N_P, BOX, -1.0f, SIF_FINDER_UNITS_MPS, "cell_size: -1"},
+    {N_P, BOX, (sif_real)NAN, SIF_FINDER_UNITS_MPS, "cell_size: nan"},
+    {N_P, BOX, (sif_real)INFINITY, SIF_FINDER_UNITS_PHYSICAL, "cell_size: inf"},
+    {0, BOX, 1.0f, SIF_FINDER_UNITS_MPS, "n_particles: 0"},
+    {N_P, BOX, 1.0f, (sif_finder_units_t)7, "units: 7"},
+    {N_P, BOX, 1e-8f, SIF_FINDER_UNITS_PHYSICAL, "cells per side"},
+    {N_P, BOX, 1.0f, SIF_FINDER_UNITS_MPS, "volume: -1", -1.0f},
+    {N_P, BOX, 1.0f, SIF_FINDER_UNITS_MPS, "volume: nan", (sif_real)NAN},
+  };
+  for (size_t i = 0; i < sizeof(bad) / sizeof(bad[0]); i++) {
+    sif_error_clear();
+    const uint32_t got = sif_finder_grid_cells_from_size(
+      bad[i].n, bad[i].box, bad[i].cell, bad[i].units, bad[i].volume);
+    CHECK(got == 0 && error_has(bad[i].reason), "refusal %zu: %u cells, '%s'",
+      i, got, sif_error_message());
+  }
+
+  printf("  ok\n");
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -507,7 +758,12 @@ int main(void) {
 #endif
 
   run_weighted_cases();
+  run_radius_oracle();
+#if !SIF_TEST_INSTRUMENTED
+  run_invariance(&cfg);
+#endif
   run_refusals();
+  run_grid_cells();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

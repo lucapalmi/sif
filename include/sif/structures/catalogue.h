@@ -151,9 +151,9 @@ int sif_catalogue_trim(sif_catalogue_t* catalogue);
 /**
  * @brief Shift every void centre by @p offset.
  *
- * The way back out of the box a survey was searched in: pass the negated
- * offset that sif_field_translate() moved the survey in by, and the centres
- * return to the caller's own frame. Radii and footprints are unchanged.
+ * Radii and footprints are unchanged. sif_finder_exodus_survey() already
+ * returns its voids in the caller's own frame, so this is for catalogues
+ * moved some other way.
  *
  * @param catalogue The catalogue, modified in place.
  * @param offset Added to cx, cy and cz respectively.
@@ -172,9 +172,9 @@ int sif_catalogue_translate(sif_catalogue_t* catalogue, const sif_real offset[3]
  * #SIF_COORDINATES_SKY.
  *
  * The observer has to be at the origin, as sif_field_convert_sky_coordinates()
- * puts it: a catalogue found in a survey box is moved back first, with
- * sif_catalogue_translate() and the negated offset. Converted with the cosmology
- * the tracers were, a centre comes back to the sky within single precision.
+ * puts it -- which is where sif_finder_exodus_survey() returns its voids,
+ * whatever box the survey was searched in. Converted with the cosmology the
+ * tracers were, a centre comes back to the sky within single precision.
  *
  * Radii are left as they are, comoving lengths in Mpc/h: a void's size is not
  * an angle. Footprints are untouched.

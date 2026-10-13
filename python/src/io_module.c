@@ -100,9 +100,11 @@ static PyMethodDef io_methods[] = {
     "    skip_lines: Header lines to skip.\n\n"
     "Returns:\n"
     "    Field: The loaded field.\n\n"
-    "Note:\n"
-    "    A column that does not parse as a number reads as 0.0 rather than\n"
-    "    raising, so check that format matches the file."},
+    "Raises:\n"
+    "    ValueError: For a malformed format.\n"
+    "    OSError: For a file that is missing or holds no data row, or a\n"
+    "        malformed row -- fewer columns than the format, or a value it\n"
+    "        reads that is not a number -- named by its line."},
 
   {"read_field_binary", (PyCFunction)pysif_read_field_binary,
     METH_VARARGS | METH_KEYWORDS,

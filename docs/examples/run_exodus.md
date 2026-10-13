@@ -36,14 +36,18 @@ field, box_length = pysif.io.read_gadget(
     "path/to/snapshot", ptype=1, length="mpc"
 )
 
-# this instruction corrects for possible rounding errors
-# in the particle positions, ensuring that they all lay inside the box
-# (subsequent functions will fail if this is not the case)
+# fold back into the box any position that lies outside it, as some
+# codes write them: the grid and the chain mesh refuse such positions
 field.wrap(box_length=box_length)
 
 # now, we construct the grid and assign the particles with
-# the CiC scheme
-n_cells = 512                            # change at will
+# the CiC scheme. the number of cells can be given directly, or
+# from the size of a cell: here one per mean particle separation
+# (units="physical" takes a size in Mpc/h instead)
+n_cells = 512                            # change at will, or:
+# n_cells = pysif.finders.grid_cells_from_size(
+#     n_particles=field.n_particles, box_length=box_length, cell_size=1.0
+# )
 grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 grid.assign_cic(field=field)
 
@@ -145,15 +149,17 @@ int main(void) {
   if (!field)
     goto done;
 
-  // this call corrects for possible rounding errors
-  // in the particle positions, ensuring that they all lay inside the box
-  // (subsequent functions will fail if this is not the case)
+  // fold back into the box any position that lies outside it, as some
+  // codes write them: the grid and the chain mesh refuse such positions
   if (sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL, NULL) !=
       SIF_OK)
     goto done;
 
   // now, we construct the grid and assign the particles with
-  // the CiC scheme
+  // the CiC scheme. the number of cells can be given directly, or from
+  // the size of a cell, as sif_finder_grid_cells_from_size(
+  //   field->n_particles, box_length, 1.0f, SIF_FINDER_UNITS_MPS, 0)
+  // does for one cell per mean particle separation
   const uint32_t n_cells = 512; // change at will
   grid = sif_grid_alloc(n_cells, (sif_real)box_length);
   if (!grid || sif_grid_assign_cic(grid, field) != SIF_OK)
@@ -180,10 +186,11 @@ int main(void) {
   if (!search_radii)
     goto done;
 
-  // 0 means that no mesh can hold a search sphere this large: the
-  // largest radius is too big for the box
+  // the last argument, 0, says the particles fill the whole box. a
+  // result of 0 means that no mesh can hold a search sphere this large:
+  // the largest radius is too big for the box
   const uint32_t n_cells_mesh = sif_finder_suggest_mesh_cells(
-    field->n_particles, (sif_real)box_length, (sif_real)r_max);
+    field->n_particles, (sif_real)box_length, (sif_real)r_max, 0);
   if (n_cells_mesh == 0)
     goto done;
 
@@ -249,13 +256,12 @@ input = {
   length = "mpc",
 }
 
--- the grid is left at its default: one cell per mean particle
--- separation (mps). the smallest radius should span at least two grid
--- cells, so in units of the mps the ladder starts at 2, and grows by
--- 3% a rung
+-- radii are in the box's units (Mpc/h here). the grid is left at its
+-- default, one cell per mean particle separation, which --check reports:
+-- the smallest radius should span at least two grid cells, so start the
+-- ladder at twice that. it grows by 3% a rung
 finder = {
-  radii = ladder(2, 15, 0.03),
-  radii_units = "mps",
+  radii = ladder(10, 60, 0.03),
   threshold = -0.7,
 }
 
@@ -319,18 +325,30 @@ cosmology = dict(omega_m=0.31, w0=-1.0, wa=0.0)
 data.convert_sky_coordinates(**cosmology)
 randoms.convert_sky_coordinates(**cosmology)
 
+# the volume the survey covers, measured from the randoms. Measured here,
+# while the observer is still at the origin (after the translation below,
+# pass observer=offset instead)
+footprint_volume = pysif.measure.survey_volume(randoms)
+
 # now the search radii. in a survey they also decide how much empty space the
 # survey needs around it. We use the real datatype to ensure compatibility
 search_radii = np.geomspace(10, 60, 60, dtype=pysif.real)
 
 # we now compute the offset and the box length that pad the survey volume
 # in the box, to ensure the boundary conditions do not apply.
-# They depend on the extent of the data and the randoms, the search radii
-# and the number of cells in the grid
-n_cells = 512                     # change at will
+# They depend on the extent of the data and the randoms and on the search
+# radii. The box allows for any grid whose cells are no larger than the
+# smallest radius
 offset, box_length = pysif.finders.survey_box(
-    randoms=randoms, radii=search_radii, n_cells=n_cells, data=data
+    data=data, randoms=randoms, radii=search_radii
 )
+n_cells = 512                     # change at will, keeping cells <= 10
+# or from the size of a cell, here one per mean separation of the data
+# inside the footprint (the volume it gives the separation from):
+# n_cells = pysif.finders.grid_cells_from_size(
+#     n_particles=data.n_particles, box_length=box_length, cell_size=1.0,
+#     volume=footprint_volume
+# )
 
 # we now apply the offset
 data.translate(offset)
@@ -346,15 +364,15 @@ random_grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 random_grid.assign_cic(field=randoms)
 
 # now the chain meshes, one for each catalogue. The optimal number of
-# cells is computed from the random footprint.
+# cells is computed for each catalogue's density inside the footprint
 max_radius = float(search_radii.max())
-n_cells_data = pysif.finders.suggest_mesh_cells_survey(
-    n_particles=data.n_particles, random_grid=random_grid,
-    max_radius=max_radius
+n_cells_data = pysif.finders.suggest_mesh_cells(
+    n_particles=data.n_particles, box_length=box_length,
+    max_radius=max_radius, volume=footprint_volume
 )
-n_cells_randoms = pysif.finders.suggest_mesh_cells_survey(
-    n_particles=randoms.n_particles, random_grid=random_grid,
-    max_radius=max_radius
+n_cells_randoms = pysif.finders.suggest_mesh_cells(
+    n_particles=randoms.n_particles, box_length=box_length,
+    max_radius=max_radius, volume=footprint_volume
 )
 
 # as for a simulation, the meshes consume the fields to save memory,
@@ -375,13 +393,11 @@ catalogue = pysif.finders.exodus_survey(
     random_grid=random_grid,
     data_mesh=data_mesh,
     random_mesh=random_mesh,
+    offset=offset,          # the voids come back in the catalogues' frame
     radii=search_radii,
     threshold=threshold,
     consume_grid=True
 )
-
-# move the voids back to the frame of the catalogues
-catalogue.translate(-offset)
 
 # optionally, we can translate the voids positions in sky coordinates
 catalogue.to_sky(**cosmology)
@@ -402,6 +418,7 @@ pysif.system_finalise()
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/io/fits_io.h"
+#include "sif/measure/survey_volume.h"
 #include "sif/model/cosmology.h"
 #include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
@@ -463,6 +480,13 @@ int main(void) {
       sif_field_convert_sky_coordinates(randoms, &cosmology) != SIF_OK)
     goto done;
 
+  // the volume the survey covers, measured from the randoms. measured
+  // here, while the observer is still at the origin (after the
+  // translation below, pass the offset as the observer instead)
+  sif_real footprint_volume;
+  if (sif_survey_volume(randoms, NULL, &footprint_volume) != SIF_OK)
+    goto done;
+
   // now the search radii: 60 of them, evenly spaced in log (numpy's
   // geomspace). in a survey they also decide how much empty space the
   // survey needs around it. we use sif_real to ensure compatibility
@@ -475,14 +499,19 @@ int main(void) {
 
   // we now compute the offset and the box length that pad the survey
   // volume in the box, to ensure the boundary conditions do not apply.
-  // they depend on the extent of the data and the randoms, the
-  // search radii and the number of cells in the grid.
-  // SIF_DEFAULT is the search factor the finder will run with
-  const uint32_t n_cells = 512; // change at will
+  // they depend on the extent of the data and the randoms and on the
+  // search radii; the box allows for any grid whose cells are no larger
+  // than the smallest radius. SIF_DEFAULT is the search factor the finder
+  // will run with
   sif_real offset[3], box_length;
-  if (sif_finder_exodus_survey_box(data, randoms, search_radii, n_radii, n_cells,
+  if (sif_finder_exodus_survey_box(data, randoms, search_radii, n_radii,
         SIF_DEFAULT, offset, &box_length) != SIF_OK)
     goto done;
+  // change at will, keeping cells <= 10, or from the size of a cell, as
+  // sif_finder_grid_cells_from_size(data->n_particles, box_length, 1.0f,
+  //   SIF_FINDER_UNITS_MPS, footprint_volume)
+  // does for one cell per mean separation of the data in the footprint
+  const uint32_t n_cells = 512;
 
   // we now apply the offset
   if (sif_field_translate(data, offset) != SIF_OK ||
@@ -500,11 +529,11 @@ int main(void) {
     goto done;
 
   // now the chain meshes, one for each catalogue. the optimal number of
-  // cells is computed from the random footprint
-  const uint32_t n_cells_data = sif_finder_suggest_mesh_cells_survey(
-    data->n_particles, random_grid, (sif_real)r_max);
-  const uint32_t n_cells_randoms = sif_finder_suggest_mesh_cells_survey(
-    randoms->n_particles, random_grid, (sif_real)r_max);
+  // cells is computed for each catalogue's density inside the footprint
+  const uint32_t n_cells_data = sif_finder_suggest_mesh_cells(
+    data->n_particles, box_length, (sif_real)r_max, footprint_volume);
+  const uint32_t n_cells_randoms = sif_finder_suggest_mesh_cells(
+    randoms->n_particles, box_length, (sif_real)r_max, footprint_volume);
   if (n_cells_data == 0 || n_cells_randoms == 0)
     goto done;
 
@@ -525,15 +554,11 @@ int main(void) {
   // now we can run exodus
   const sif_real threshold = -0.7f;
   const sif_real overlap_fraction = 0.0f;
+  // given the offset, the voids come back in the catalogues' frame
   catalogue = sif_finder_exodus_survey(data_grid, random_grid, data_mesh,
-    random_mesh, search_radii, n_radii, threshold, overlap_fraction,
+    random_mesh, offset, search_radii, n_radii, threshold, overlap_fraction,
     SIF_FINDER_CONSUME_GRID);
   if (!catalogue)
-    goto done;
-
-  // move the voids back to the frame of the catalogues
-  const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
-  if (sif_catalogue_translate(catalogue, back) != SIF_OK)
     goto done;
 
   // optionally, we can translate the voids positions in sky coordinates
@@ -596,7 +621,11 @@ input = {
 }
 
 -- the box around the survey, its padding and the offset into it are
--- worked out from the randoms; the grid spans that box
+-- worked out from the data and the randoms; the grid spans that box.
+-- left out, it is one cell per mean separation of the data inside the
+-- footprint, whose volume is measured from the randoms (a Cartesian
+-- survey whose footprint is not one sky mask over one range of
+-- distances gives it as input.footprint_volume)
 grid = { n_cells = 512 }
 
 finder = {

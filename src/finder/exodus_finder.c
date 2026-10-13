@@ -2468,8 +2468,8 @@ static void mesh_extent(
  *   - A candidate sits on the grid node nearest to observed space, up to half
  *     a grid cell further out than the randoms themselves: plus a grid cell.
  */
-static int survey_check_margin(
-  const sif_chain_mesh_t* mesh, const char* what, sif_real margin) {
+static int survey_check_margin(const sif_chain_mesh_t* mesh, const char* what,
+  sif_real margin, const char* hint) {
 
   sif_real lo[3], hi[3];
   mesh_extent(mesh, lo, hi);
@@ -2479,9 +2479,9 @@ static int survey_check_margin(
     if (lo[k] < margin || hi[k] > box - margin) {
       SIF_LOG_ERROR(TAG,
         "%s: span [%g, %g] on axis %d of a box of %g, %g from its face "
-        "(needs %g of padding on every side, as survey_box sizes it)",
+        "(needs %g of padding on every side%s)",
         what, (double)lo[k], (double)hi[k], k, (double)box,
-        (double)SIF_REAL_MIN(lo[k], box - hi[k]), (double)margin);
+        (double)SIF_REAL_MIN(lo[k], box - hi[k]), (double)margin, hint);
       return SIF_ERR_RANGE;
     }
   }
@@ -2491,8 +2491,9 @@ static int survey_check_margin(
 
 sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
-  const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
-  sif_real threshold, sif_real overlap_fraction, sif_option options) {
+  const sif_chain_mesh_t* random_mesh, const sif_real offset[3],
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_real overlap_fraction, sif_option options) {
 
   const char* missing = !data_grid             ? "data grid: NULL"
                         : !data_grid->values   ? "data grid: no values"
@@ -2514,6 +2515,14 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
         TAG, radii, n_radii, threshold, overlap_fraction) != SIF_OK) {
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
+  }
+  for (int k = 0; offset && k < 3; k++) {
+    if (!isfinite(offset[k])) {
+      SIF_LOG_ERROR(
+        TAG, "offset[%d]: %g, expected finite", k, (double)offset[k]);
+      sif__error_status_set(SIF_ERR_INVALID);
+      return NULL;
+    }
   }
 
   /* The contrast is formed here, against the randoms, so a grid that has
@@ -2569,14 +2578,39 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
     SIF_REAL_MAX(r_search, 0.5f * (r_search + mesh_cell)) +
     data_grid->cell_length;
 
-  if (survey_check_margin(random_mesh, "randoms", margin) != SIF_OK ||
-      survey_check_margin(data_mesh, "data", margin) != SIF_OK) {
+  /* survey_box() sizes the padding for grid cells up to the smallest radius;
+   * a coarser grid is the likeliest reason it falls short, so say so. */
+  sif_real r_min = radii[0];
+  for (uint32_t i = 1; i < n_radii; i++)
+    r_min = SIF_REAL_MIN(r_min, radii[i]);
+  char hint[192] = ", as survey_box sizes it";
+  if (data_grid->cell_length > r_min)
+    snprintf(hint, sizeof(hint),
+      "; survey_box allows for grid cells up to the smallest radius, %g, and "
+      "these are %g",
+      (double)r_min, (double)data_grid->cell_length);
+
+  if (survey_check_margin(random_mesh, "randoms", margin, hint) != SIF_OK ||
+      survey_check_margin(data_mesh, "data", margin, hint) != SIF_OK) {
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
-  return exodus_run(data_grid, data_mesh, radii, n_radii, threshold,
-    overlap_fraction, options, random_grid, random_mesh);
+  sif_catalogue_t* cat = exodus_run(data_grid, data_mesh, radii, n_radii,
+    threshold, overlap_fraction, options, random_grid, random_mesh);
+
+  /* Back to the caller's frame, so that a forgotten step cannot leave the
+   * voids where the box put them. */
+  if (cat && offset) {
+    const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
+    const int status = sif_catalogue_translate(cat, back);
+    if (status != SIF_OK) {
+      sif_catalogue_free(cat);
+      sif__error_status_set(status);
+      return NULL;
+    }
+  }
+  return cat;
 }
 
 /*
@@ -2626,35 +2660,34 @@ static int survey_field_extent(
 
 int sif_finder_exodus_survey_box(const sif_field_t* data,
   const sif_field_t* randoms, const sif_real* radii, uint32_t n_radii,
-  uint32_t n_cells, sif_option opt, sif_real offset[3],
-  sif_real* box_length) {
+  sif_option opt, sif_real offset[3], sif_real* box_length) {
 
-  if (!randoms || !randoms->x || !randoms->y || !randoms->z ||
-      randoms->n_particles == 0 || !radii || n_radii == 0 || !offset ||
-      !box_length) {
+  const char* fields[2] = {"data", "randoms"};
+  const sif_field_t* given[2] = {data, randoms};
+  for (int i = 0; i < 2; i++) {
+    const sif_field_t* f = given[i];
+    if (!f || !f->x || !f->y || !f->z || f->n_particles == 0) {
+      SIF_LOG_ERROR(TAG, "%s: %s", fields[i],
+        !f                    ? "NULL"
+        : f->n_particles == 0 ? "no particles"
+                              : "no positions");
+      return SIF_ERR_INVALID;
+    }
+    if (sif__field_require_cartesian(f, TAG, fields[i]) != SIF_OK)
+      return SIF_ERR_INVALID;
+  }
+  if (!radii || n_radii == 0 || !offset || !box_length) {
     SIF_LOG_ERROR(TAG, "%s",
-      !randoms || !randoms->x || !randoms->y || !randoms->z
-        ? "randoms: no positions"
-      : randoms->n_particles == 0 ? "randoms: no particles"
-      : !radii || n_radii == 0    ? "radii: none given"
-                                  : "offset, box_length: NULL");
+      !radii || n_radii == 0 ? "radii: none given"
+                             : "offset, box_length: NULL");
     return SIF_ERR_INVALID;
   }
-  if (data && (!data->x || !data->y || !data->z || data->n_particles == 0)) {
-    SIF_LOG_ERROR(TAG, "data: %s",
-      data->n_particles == 0 ? "no particles" : "no positions");
-    return SIF_ERR_INVALID;
-  }
-  if (sif__field_require_cartesian(randoms, TAG, "randoms") != SIF_OK ||
-      (data && sif__field_require_cartesian(data, TAG, "data") != SIF_OK))
-    return SIF_ERR_INVALID;
-
-  /* Below this the grid cell is too large a share of the box for any padding
-   * to settle: every cell added to the box widens the margin it needs by more
-   * than the cell. */
-  if (n_cells < 16) {
-    SIF_LOG_ERROR(TAG, "n_cells %u: a survey box needs at least 16", n_cells);
-    return SIF_ERR_INVALID;
+  for (uint32_t i = 0; i < n_radii; i++) {
+    if (!(radii[i] > 0.0f) || !isfinite(radii[i])) {
+      SIF_LOG_ERROR(
+        TAG, "radii[%u] = %g: not a positive radius", i, (double)radii[i]);
+      return SIF_ERR_INVALID;
+    }
   }
 
   /*
@@ -2669,56 +2702,55 @@ int sif_finder_exodus_survey_box(const sif_field_t* data,
   if (survey_field_extent(randoms, "randoms", lo, hi) != SIF_OK)
     return SIF_ERR_INVALID;
 
-  if (data) {
-    const sif_real r_lo[3] = {lo[0], lo[1], lo[2]};
-    const sif_real r_hi[3] = {hi[0], hi[1], hi[2]};
-    if (survey_field_extent(data, "data", lo, hi) != SIF_OK)
-      return SIF_ERR_INVALID;
+  const sif_real r_lo[3] = {lo[0], lo[1], lo[2]};
+  const sif_real r_hi[3] = {hi[0], hi[1], hi[2]};
+  if (survey_field_extent(data, "data", lo, hi) != SIF_OK)
+    return SIF_ERR_INVALID;
 
-    sif_real beyond = 0.0f;
-    for (int k = 0; k < 3; k++)
-      beyond = SIF_REAL_MAX(beyond,
-        SIF_REAL_MAX(r_lo[k] - lo[k], hi[k] - r_hi[k]));
-    if (beyond > 0.0f)
-      SIF_LOG_WARNING(TAG,
-        "the data reach %g past the randoms' bounding box; the box is sized "
-        "around both, but tracers outside the randoms are outside the "
-        "footprint",
-        (double)beyond);
-  }
+  sif_real beyond = 0.0f;
+  for (int k = 0; k < 3; k++)
+    beyond =
+      SIF_REAL_MAX(beyond, SIF_REAL_MAX(r_lo[k] - lo[k], hi[k] - r_hi[k]));
+  if (beyond > 0.0f)
+    SIF_LOG_WARNING(TAG,
+      "the data reach %g past the randoms' bounding box; the box is sized "
+      "around both, but tracers outside the randoms are outside the "
+      "footprint",
+      (double)beyond);
 
   sif_real extent = 0.0f;
   for (int k = 0; k < 3; k++)
     extent = SIF_REAL_MAX(extent, hi[k] - lo[k]);
 
-  sif_real r_max = radii[0];
-  for (uint32_t i = 1; i < n_radii; i++)
+  sif_real r_min = radii[0], r_max = radii[0];
+  for (uint32_t i = 1; i < n_radii; i++) {
+    r_min = SIF_REAL_MIN(r_min, radii[i]);
     r_max = SIF_REAL_MAX(r_max, radii[i]);
+  }
 
   /*
    * The box has to leave, on every side, the margin survey_check_margin()
    * asks for:
    *
-   *   margin = r_search + cell,
-   *   r_search = r_max + max((f - 1) r_max, 3 cell),  cell = L / n,
+   *   margin = r_search + cell,  r_search = r_max + max((f - 1) r_max, 3 cell),
    *
-   * and the cell is set by the box being solved for. Written out, L = extent +
-   * 2 s margin(L) is the larger of two straight lines in L, one for each
-   * branch of the max, both with slope below 1 -- so it has exactly one
-   * solution, the larger of the two lines' own, and no iteration is needed.
+   * with cell the grid's. The grid is chosen after the box, so the margin is
+   * taken at the largest cell it allows for, the smallest radius: a grid any
+   * coarser cannot resolve that radius at all. A finer grid gets more padding
+   * than it needs, r_min + max(0, 3 r_min - (f - 1) r_max) at most -- r_min
+   * for a ladder spanning a factor of 6 at f = 1.5, against a margin of at
+   * least 1.5 r_max -- and nothing has to be solved for: the box no longer
+   * depends on the grid.
    *
    * This assumes mesh cells no larger than the search sphere, which a mesh
-   * sized for either finder always is; the finder checks again with the
-   * meshes it is actually given.
+   * sized for either finder always is; the finder checks again with the grid
+   * and meshes it is actually given.
    */
   const sif_real f = (sif_real)sif__finder_search_factor(opt);
-  const sif_real s = SURVEY_BOX_SLACK;
-  const sif_real n = (sif_real)n_cells;
-
-  const sif_real L_factor =
-    (extent + 2.0f * s * f * r_max) / (1.0f - 2.0f * s / n);
-  const sif_real L_cells = (extent + 2.0f * s * r_max) / (1.0f - 8.0f * s / n);
-  const sif_real L = SIF_REAL_MAX(L_factor, L_cells);
+  const sif_real cell = r_min;
+  const sif_real margin =
+    r_max + SIF_REAL_MAX((f - 1.0f) * r_max, 3.0f * cell) + cell;
+  const sif_real L = extent + 2.0f * SURVEY_BOX_SLACK * margin;
 
   /* Centred: the axis that set the box gets exactly the margin, the others
    * more. */
@@ -3185,41 +3217,70 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
   return result;
 }
 
-uint32_t sif_finder_suggest_mesh_cells_survey(
-  uint64_t n_particles, const sif_grid_t* random_grid, sif_real max_radius) {
+/*
+ * box / cell, rounded up -- except that a ratio within GRID_CELLS_SLACK of an
+ * integer is taken as that integer. A cell meant to divide the box rarely
+ * does so exactly once it has been through sif_real: 1 mps on a 256^3 box is
+ * box / cbrt(16777216), and a cube root a few ulps short would turn 256 cells
+ * into 257. Float rounding is ~1e-7 a step; 1e-5 covers a chain of them and
+ * is still far below any cell size anyone asks for on purpose.
+ */
+#define GRID_CELLS_SLACK 1e-5
 
-  if (n_particles == 0 || !random_grid || !random_grid->values) {
-    SIF_LOG_ERROR(TAG, "%s",
-      n_particles == 0 ? "n_particles: 0"
-      : !random_grid   ? "random grid: NULL"
-                       : "random grid: no values");
+uint32_t sif_finder_grid_cells_from_size(uint64_t n_particles,
+  sif_real box_length, sif_real cell_size, sif_finder_units_t units,
+  sif_real volume) {
+
+  /* classify_weight() tests the bits, so a NaN or an infinity is refused
+   * under -ffast-math too; zero passes it and is caught by the sign test. */
+  if (classify_weight(box_length) != WEIGHT_OK || !(box_length > 0.0f)) {
+    SIF_LOG_ERROR(
+      TAG, "box_length: %g, expected positive and finite", (double)box_length);
     return 0;
   }
-  if (random_grid->content != SIF_GRID_DENSITY) {
-    SIF_LOG_ERROR(TAG, "random grid: holds %s, not the randoms' CIC density",
-      random_grid->content == SIF_GRID_DENSITY_CONTRAST ? "a density contrast"
-                                                        : "nothing");
+  if (classify_weight(cell_size) != WEIGHT_OK || !(cell_size > 0.0f)) {
+    SIF_LOG_ERROR(
+      TAG, "cell_size: %g, expected positive and finite", (double)cell_size);
+    return 0;
+  }
+  if (units != SIF_FINDER_UNITS_PHYSICAL && units != SIF_FINDER_UNITS_MPS) {
+    SIF_LOG_ERROR(TAG,
+      "units: %d, expected SIF_FINDER_UNITS_PHYSICAL or "
+      "SIF_FINDER_UNITS_MPS",
+      (int)units);
+    return 0;
+  }
+  if (units == SIF_FINDER_UNITS_MPS && n_particles == 0) {
+    SIF_LOG_ERROR(TAG, "n_particles: 0, a cell size in mps needs tracers");
+    return 0;
+  }
+  if (units == SIF_FINDER_UNITS_MPS && classify_weight(volume) != WEIGHT_OK) {
+    SIF_LOG_ERROR(TAG,
+      "volume: %g, expected positive and finite, or 0 for the "
+      "box",
+      (double)volume);
     return 0;
   }
 
-  /* The footprint, as the cells any random reached. */
-  uint64_t occupied = 0;
-  const sif_real* v = random_grid->values;
-#pragma omp parallel for schedule(static) reduction(+ : occupied)
-  for (uint64_t c = 0; c < random_grid->total_cells; c++)
-    occupied += v[c] > 0.0f;
+  double cell = (double)cell_size;
+  if (units == SIF_FINDER_UNITS_MPS) {
+    const double box = (double)box_length;
+    const double v = volume > 0.0f ? (double)volume : box * box * box;
+    cell *= cbrt(v / (double)n_particles);
+  }
 
-  if (occupied == 0) {
-    SIF_LOG_ERROR(TAG, "random grid: no randoms (every cell is empty)");
+  const double ratio = (double)box_length / cell;
+  const double n = ceil(ratio * (1.0 - GRID_CELLS_SLACK));
+
+  if (n > (double)UINT32_MAX) {
+    SIF_LOG_ERROR(TAG,
+      "cell_size: %g of a %g box is %.3g cells per side "
+      "(expected at most %" PRIu32 ")",
+      cell, (double)box_length, n, UINT32_MAX);
     return 0;
   }
 
-  /* The count the whole box would hold at the footprint's density. */
-  const double filled =
-    (double)n_particles * (double)random_grid->total_cells / (double)occupied;
-  const uint64_t n_equiv =
-    filled >= 1.8e19 ? UINT64_MAX : (uint64_t)ceil(filled);
-
-  return sif_finder_suggest_mesh_cells(
-    n_equiv, random_grid->box_length, max_radius);
+  return n < 1.0 ? 1u : (uint32_t)n;
 }
+
+#undef GRID_CELLS_SLACK

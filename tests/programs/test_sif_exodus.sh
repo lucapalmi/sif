@@ -144,6 +144,21 @@ expect_error "gird: is not a section (did you mean grid?)" "typos"
 expect_error "finder.treshold: unknown key (did you mean threshold?)" "typos"
 expect_error "finder.threshold: missing" "typos"
 
+# A key an older sif-exodus took is told apart from a typo.
+cat >units.lua <<'EOF'
+mode = "box"
+input = "tracers.xfield"
+finder = { radii = { 1, 2 }, radii_units = "mps", threshold = -0.7 }
+output = "voids.txt"
+EOF
+run --check units.lua
+expect_status 2 "a removed key"
+expect_error "finder.radii_units: removed: radii are in the positions' own" \
+  "a removed key"
+if grep -q "unknown key" err.txt; then
+  fail "a removed key reported as unknown"
+fi
+
 echo 'io.open("x", "w")' >sandbox.lua
 run --check sandbox.lua
 expect_status 2 "io in the sandbox"
@@ -437,7 +452,7 @@ input = {
   data = { path = "xyz_data.txt", format = "ascii", columns = "x y z" },
   random = { path = "xyz_randoms.txt", format = "ascii", columns = "x y z" },
 }
-mesh = { n_cells_data = 12, n_cells_random = 16 }
+mesh = { n_cells_data = 16, n_cells_random = 20 }
 finder = { radii = { 25, 20 }, threshold = -0.7 }
 output = "cartesian_voids.txt"
 run = { log_level = "warning" }
@@ -446,17 +461,69 @@ run cartesian.lua
 expect_status 0 "a Cartesian survey"
 grep -q '^#cx cy cz r footprint footprint_shell$' cartesian_voids.txt ||
   fail "a Cartesian survey: the voids are not in Cartesian coordinates"
-grep -q '^#random_mesh_n_cells=16$' cartesian_voids.txt ||
+grep -q '^#random_mesh_n_cells=20$' cartesian_voids.txt ||
   fail "a Cartesian survey: mesh.n_cells_random was not used"
 
 # A mesh coarser than the search sphere breaks the padding the box has.
-sed 's/n_cells_data = 12/n_cells_data = 4/' cartesian.lua >coarse.lua
+sed 's/n_cells_data = 16/n_cells_data = 4/' cartesian.lua >coarse.lua
 run coarse.lua
 expect_status 1 "a mesh too coarse for the survey box"
 expect_error "mesh.n_cells_data = 4 makes cells of" "a mesh too coarse for the survey box"
 run --check coarse.lua
 expect_status 2 "--check: a mesh too coarse for the survey box"
 expect_error "mesh.n_cells_data = 4 makes cells of" "a mesh too coarse for the survey box"
+
+# The slab is no lightcone around the origin, so its volume is not
+# measurable from the randoms, and they say so; given, it is taken as it is,
+# and nothing is measured.
+run --check cartesian.lua
+expect_error "radial range differs across the sky" "a slab measured"
+awk '/^mesh = /{ print "input.footprint_volume = 2.5e6" } { print }' \
+  cartesian.lua >given.lua
+run --check given.lua
+expect_status 0 "a given footprint volume"
+expect_error "footprint: 2.5e+06 (Mpc/h)^3 (as given)" "a given footprint volume"
+if grep -q "radial range differs" err.txt; then
+  fail "a given footprint volume was measured anyway"
+fi
+grep -q "footprint_volume = 2500000" out.txt ||
+  fail "a given footprint volume is missing from the resolved configuration"
+
+# The observer: Cartesian only, three finite numbers, and kept.
+awk '/^mesh = /{ print "input.observer = { 1, 2, 3 }" } { print }' \
+  cartesian.lua >observer.lua
+run --check observer.lua
+expect_status 0 "an observer"
+grep -q "observer = { 1, 2, 3 }" out.txt ||
+  fail "the observer is missing from the resolved configuration"
+awk '/^mesh = /{ print "input.observer = { 1, 2 }" } { print }' \
+  cartesian.lua >observer_bad.lua
+run --check observer_bad.lua
+expect_status 2 "an observer of two numbers"
+expect_error "input.observer: must be three numbers" "an observer of two numbers"
+awk '/^finder = /{ print "input.observer = { 1, 2, 3 }" } { print }' \
+  survey.lua >observer_sky.lua
+run --check observer_sky.lua
+expect_status 2 "an observer on the sky"
+expect_error "input.observer: not used: sky coordinates put the observer" \
+  "an observer on the sky"
+awk '/^mesh = /{ print "input.footprint_volume = -1" } { print }' \
+  cartesian.lua >volume_bad.lua
+run --check volume_bad.lua
+expect_status 2 "a negative footprint volume"
+expect_error "input.footprint_volume: must be positive, got -1" \
+  "a negative footprint volume"
+
+# A grid coarser than the smallest radius, which the survey box does not
+# allow for: refused before the run, by the run and by --check alike.
+awk '/^mesh = /{ print "grid = { n_cells = 8 }" } { print }' cartesian.lua \
+  >coarse_grid.lua
+run coarse_grid.lua
+expect_status 1 "a grid too coarse for the survey box"
+expect_error "grid.n_cells = 8: cells of" "a grid too coarse for the survey box"
+run --check coarse_grid.lua
+expect_status 2 "--check: a grid too coarse for the survey box"
+expect_error "grid.n_cells = 8: cells of" "a grid too coarse for the survey box"
 
 # What a survey configuration can get wrong.
 cat >survey_bad.lua <<'EOF'

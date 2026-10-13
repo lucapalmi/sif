@@ -10,13 +10,41 @@
 #include "structures/py_chain_mesh.h"
 #include "structures/py_field.h"
 #include "structures/py_grid.h"
+#include <math.h>
 #include <numpy/arrayobject.h>
 #include <stdio.h>
+#include <string.h>
 
 #include "sif/core/macros.h"
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/finder/spherical_finder.h"
+
+/*
+ * The optional volume the sizing helpers take: None for the whole box, or the
+ * volume the tracers occupy. 0 means the box to the C side, so it is refused
+ * here rather than read as a second way to say None.
+ *
+ * @return 0 with *out set (0 for None), -1 with an exception.
+ */
+static int volume_argument(PyObject* obj, double* out) {
+  *out = 0.0;
+  if (obj == Py_None)
+    return 0;
+
+  const double v = PyFloat_AsDouble(obj);
+  if (v == -1.0 && PyErr_Occurred())
+    return -1;
+  if (!(v > 0.0) || !isfinite(v)) {
+    char detail[128];
+    snprintf(detail, sizeof(detail),
+      "volume: %g, expected positive and finite (None for the box)", v);
+    PyErr_SetString(PyExc_ValueError, detail);
+    return -1;
+  }
+  *out = v;
+  return 0;
+}
 
 /* --- Mesh Sizing Helper --- */
 PyObject* py_sif_finder_suggest_mesh_cells(
@@ -25,13 +53,19 @@ PyObject* py_sif_finder_suggest_mesh_cells(
   unsigned long long n_particles;
   double box_length;
   double max_radius = 0.0;
+  PyObject* volume_obj = Py_None;
 
-  static char* kwlist[] = {"n_particles", "box_length", "max_radius", NULL};
+  static char* kwlist[] = {
+    "n_particles", "box_length", "max_radius", "volume", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "Kd|d", kwlist, &n_particles, &box_length, &max_radius)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Kd|dO", kwlist, &n_particles,
+        &box_length, &max_radius, &volume_obj)) {
     return NULL;
   }
+
+  double volume;
+  if (volume_argument(volume_obj, &volume) < 0)
+    return NULL;
 
   /* The C helper folds every failure into a 0 return, which as a Python value
    * is a footgun: it would reach ChainMesh and fail there with an unrelated
@@ -59,8 +93,8 @@ PyObject* py_sif_finder_suggest_mesh_cells(
     return NULL;
   }
 
-  const uint32_t n_cells = sif_finder_suggest_mesh_cells(
-    (uint64_t)n_particles, (sif_real)box_length, (sif_real)max_radius);
+  const uint32_t n_cells = sif_finder_suggest_mesh_cells((uint64_t)n_particles,
+    (sif_real)box_length, (sif_real)max_radius, (sif_real)volume);
 
   if (n_cells == 0) {
     PyErr_SetString(
@@ -71,54 +105,45 @@ PyObject* py_sif_finder_suggest_mesh_cells(
   return PyLong_FromUnsignedLong(n_cells);
 }
 
-/* --- Survey Mesh Sizing Helper --- */
-PyObject* py_sif_finder_suggest_mesh_cells_survey(
+/* --- Grid Sizing Helper --- */
+PyObject* py_sif_finder_grid_cells_from_size(
   PyObject* self, PyObject* args, PyObject* kwds) {
 
   unsigned long long n_particles;
-  PyObject* grid_obj = NULL;
-  double max_radius = 0.0;
+  double box_length;
+  double cell_size;
+  const char* units = "mps";
+  PyObject* volume_obj = Py_None;
 
-  static char* kwlist[] = {"n_particles", "random_grid", "max_radius", NULL};
+  static char* kwlist[] = {
+    "n_particles", "box_length", "cell_size", "units", "volume", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "KO!|d", kwlist, &n_particles,
-        &sifGridType, &grid_obj, &max_radius))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "Kdd|sO", kwlist, &n_particles,
+        &box_length, &cell_size, &units, &volume_obj))
     return NULL;
 
-  const sif_grid_t* grid = ((sifGridObject*)grid_obj)->grid;
+  double volume;
+  if (volume_argument(volume_obj, &volume) < 0)
+    return NULL;
 
-  /* The C helper folds every failure into 0; each is told apart here, as in
-   * suggest_mesh_cells(). */
-  char detail[256];
-  if (n_particles == 0) {
-    PyErr_SetString(PyExc_ValueError, "need n_particles > 0");
-    return NULL;
-  }
-  if (grid->content != SIF_GRID_DENSITY) {
-    PyErr_SetString(PyExc_ValueError,
-      grid->content == SIF_GRID_DENSITY_CONTRAST
-        ? "random_grid holds a density contrast; the survey finder and this "
-          "helper take the randoms' CIC density, before to_density_contrast()"
-        : "random_grid is empty: deposit the randoms with assign_cic() first");
-    return NULL;
-  }
-  if (max_radius > 0.0 && 2.0 * max_radius >= (double)grid->box_length) {
-    snprintf(detail, sizeof(detail),
-      "a search sphere of %g (twice max_radius) does not fit in a box of %g",
-      2.0 * max_radius, (double)grid->box_length);
-    PyErr_SetString(PyExc_ValueError, detail);
+  /* The same spellings sif-exodus takes for its radii. */
+  sif_finder_units_t u;
+  if (strcmp(units, "mps") == 0)
+    u = SIF_FINDER_UNITS_MPS;
+  else if (strcmp(units, "physical") == 0)
+    u = SIF_FINDER_UNITS_PHYSICAL;
+  else {
+    PyErr_Format(
+      PyExc_ValueError, "units: '%s', expected 'mps' or 'physical'", units);
     return NULL;
   }
 
-  uint32_t n_cells;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS n_cells = sif_finder_suggest_mesh_cells_survey(
-    (uint64_t)n_particles, grid, (sif_real)max_radius);
-  Py_END_ALLOW_THREADS
-
-    if (n_cells == 0) {
-    return py_sif_raise(SIF_ERR_INVALID, "suggest_mesh_cells_survey");
-  }
+  const uint32_t n_cells =
+    sif_finder_grid_cells_from_size((uint64_t)n_particles, (sif_real)box_length,
+      (sif_real)cell_size, u, (sif_real)volume);
+  if (n_cells == 0)
+    return py_sif_raise(SIF_ERR_INVALID, "grid_cells_from_size");
 
   return PyLong_FromUnsignedLong(n_cells);
 }
@@ -312,21 +337,24 @@ PyObject* py_sif_finder_exodus_survey(
 
   PyObject *data_grid_obj = NULL, *random_grid_obj = NULL;
   PyObject *data_mesh_obj = NULL, *random_mesh_obj = NULL, *radii_obj = NULL;
+  double ox, oy, oz;
   double threshold;
   double overlap_frac = 0.0;
   int consume_grid = 0;
   double search_factor = 1.5;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
-    "random_mesh", "radii", "threshold", "overlap_fraction", "consume_grid",
-    "search_factor", NULL};
+    "random_mesh", "offset", "radii", "threshold", "overlap_fraction",
+    "consume_grid", "search_factor", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!Od|dpd", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd", kwlist,
         &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
-        &radii_obj, &threshold, &overlap_frac, &consume_grid, &search_factor)) {
+        &ox, &oy, &oz, &radii_obj, &threshold, &overlap_frac, &consume_grid,
+        &search_factor)) {
     return NULL;
   }
+  const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
 
   /* One grid passed as both would be smoothed twice in two workspaces, and
    * restored twice over itself. */
@@ -361,8 +389,8 @@ PyObject* py_sif_finder_exodus_survey(
   sif_catalogue_t* res = NULL;
   sif_error_clear();
   Py_BEGIN_ALLOW_THREADS res = sif_finder_exodus_survey(data_grid, random_grid,
-    data_mesh, random_mesh, radii_data, (uint32_t)n_radii, (sif_real)threshold,
-    (sif_real)overlap_frac, options);
+    data_mesh, random_mesh, offset, radii_data, (uint32_t)n_radii,
+    (sif_real)threshold, (sif_real)overlap_frac, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -377,20 +405,13 @@ PyObject* py_sif_finder_exodus_survey(
 PyObject* py_sif_finder_survey_box(
   PyObject* self, PyObject* args, PyObject* kwds) {
 
-  PyObject *randoms_obj = NULL, *radii_obj = NULL, *data_obj = Py_None;
-  unsigned int n_cells;
+  PyObject *data_obj = NULL, *randoms_obj = NULL, *radii_obj = NULL;
   double search_factor = 1.5;
 
-  static char* kwlist[] = {
-    "randoms", "radii", "n_cells", "search_factor", "data", NULL};
+  static char* kwlist[] = {"data", "randoms", "radii", "search_factor", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OI|dO", kwlist,
-        &sifFieldType, &randoms_obj, &radii_obj, &n_cells, &search_factor,
-        &data_obj)) {
-    return NULL;
-  }
-  if (data_obj != Py_None && !PyObject_TypeCheck(data_obj, &sifFieldType)) {
-    PyErr_SetString(PyExc_TypeError, "data must be a Field or None");
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O|d", kwlist, &sifFieldType,
+        &data_obj, &sifFieldType, &randoms_obj, &radii_obj, &search_factor)) {
     return NULL;
   }
 
@@ -398,28 +419,24 @@ PyObject* py_sif_finder_survey_box(
   if (search_factor_option(search_factor, &options) < 0)
     return NULL;
   if (py_sif_field_check_cartesian(
-        (sifFieldObject*)randoms_obj, "size a survey box around it") < 0)
-    return NULL;
-  if (data_obj != Py_None &&
+        (sifFieldObject*)data_obj, "size a survey box around it") < 0 ||
       py_sif_field_check_cartesian(
-        (sifFieldObject*)data_obj, "size a survey box around it") < 0)
+        (sifFieldObject*)randoms_obj, "size a survey box around it") < 0)
     return NULL;
 
   PyArrayObject* radii_arr = radii_from_object(radii_obj);
   if (!radii_arr)
     return NULL;
 
+  const sif_field_t* data = ((sifFieldObject*)data_obj)->field;
   const sif_field_t* randoms = ((sifFieldObject*)randoms_obj)->field;
-  const sif_field_t* data =
-    data_obj == Py_None ? NULL : ((sifFieldObject*)data_obj)->field;
   sif_real offset[3];
   sif_real box_length = 0.0f;
 
   sif_error_clear();
   const int status = sif_finder_exodus_survey_box(data, randoms,
     (const sif_real*)PyArray_DATA(radii_arr),
-    (uint32_t)PyArray_SHAPE(radii_arr)[0], (uint32_t)n_cells, options, offset,
-    &box_length);
+    (uint32_t)PyArray_SHAPE(radii_arr)[0], options, offset, &box_length);
   Py_DECREF(radii_arr);
 
   if (status != SIF_OK)

@@ -13,6 +13,7 @@
 #include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
 #include "sif/io/hdf5_io.h"
+#include "sif/measure/survey_volume.h"
 #include "sif/model/cosmology.h"
 #include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
@@ -368,24 +369,18 @@ static int write_output(
 
 /* --- the pipelines ----------------------------------------------------- */
 
-/* The ladder in the box's units, which is what the finder and the catalogue
- * work in, and its ends into r. r->mps has to be known. NULL if out of
- * memory. */
+/* The ladder as the finder takes it, a copy it may keep, and its ends into
+ * r. NULL if out of memory. */
 static sif_real* box_ladder(const exodus_params_t* p, run_facts_t* r) {
-  const double scale = p->finder.radii_units == EXODUS_RADII_MPS ? r->mps : 1.0;
   sif_real* radii = malloc(p->finder.n_radii * sizeof(sif_real));
   if (!radii)
     return NULL;
-  for (uint32_t i = 0; i < p->finder.n_radii; i++)
-    radii[i] = (sif_real)(p->finder.radii[i] * scale);
+  memcpy(radii, p->finder.radii, p->finder.n_radii * sizeof(sif_real));
   r->r_min = r->r_max = radii[0];
   for (uint32_t i = 1; i < p->finder.n_radii; i++) {
     r->r_min = fmin(r->r_min, radii[i]);
     r->r_max = fmax(r->r_max, radii[i]);
   }
-  if (p->finder.radii_units == EXODUS_RADII_MPS)
-    SIF_LOG_INFO(TAG, "radii: %g to %g mean separations, %g to %g in the box",
-      r->r_min / scale, r->r_max / scale, (double)r->r_min, (double)r->r_max);
   return radii;
 }
 
@@ -482,7 +477,7 @@ int pipeline_box(const exodus_params_t* p) {
   r.mesh_cells = p->mesh.n_cells;
   if (r.mesh_cells == 0) {
     r.mesh_cells =
-      sif_finder_suggest_mesh_cells(r.n_tracers, (sif_real)box, r.r_max);
+      sif_finder_suggest_mesh_cells(r.n_tracers, (sif_real)box, r.r_max, 0);
     if (r.mesh_cells == 0) {
       SIF_LOG_ERROR(TAG,
         "the largest radius, %g, needs a search sphere wider than the box",
@@ -540,96 +535,44 @@ done:
 
 /* --- survey ------------------------------------------------------------ */
 
-/* Cells per side of the grid the footprint is measured on. Coarse on
- * purpose: a cell counts as observed if any random reaches it, so it has to
- * be wide enough that the randoms leave no observed cell empty, even where
- * the selection is sparsest. */
-#define FOOTPRINT_CELLS 128
-
 /*
- * The footprint's comoving volume: the cells of a grid over the randoms'
- * bounding cube that any random reaches, by their CIC deposit. It is what
- * turns the data's count into a density, and so into the mean separation
- * the default grid and a ladder in mps are measured in. CIC spreads each
- * random over eight cells, so the volume comes out a little large -- by
- * about a cell along the footprint's boundary.
- *
- * The randoms are moved into the grid and back, which leaves them where they
- * were to within a rounding.
- */
-static int footprint_volume(sif_field_t* randoms, double* volume) {
-  if (sif_field_refresh_bounds(randoms) != SIF_OK) {
-    SIF_LOG_ERROR(TAG, "the randoms have no positions");
-    return SIF_ERR_INVALID;
-  }
-  double extent = 0.0;
-  for (int k = 0; k < 3; k++)
-    extent = fmax(extent, randoms->max_p[k] - randoms->min_p[k]);
-  if (!(extent > 0.0) || !isfinite(extent)) {
-    SIF_LOG_ERROR(TAG, "the randoms span no volume");
-    return SIF_ERR_INVALID;
-  }
-
-  /* Two empty cells on the low side, and at least as many on the high one,
-   * so the deposit never reaches a face and wraps. */
-  const double cell = extent / (FOOTPRINT_CELLS - 4);
-  sif_real there[3], back[3];
-  for (int k = 0; k < 3; k++) {
-    there[k] = (sif_real)(2.0 * cell - randoms->min_p[k]);
-    back[k] = -there[k];
-  }
-
-  sif_grid_t* grid =
-    sif_grid_alloc(FOOTPRINT_CELLS, (sif_real)(FOOTPRINT_CELLS * cell));
-  if (!grid)
-    return SIF_ERR_ALLOC;
-  int status = sif_field_translate(randoms, there);
-  if (status == SIF_OK)
-    status = sif_grid_assign_cic(grid, randoms);
-  const int moved_back = sif_field_translate(randoms, back);
-  if (status == SIF_OK)
-    status = moved_back;
-
-  uint64_t observed = 0;
-  if (status == SIF_OK)
-    for (uint64_t i = 0; i < grid->total_cells; i++)
-      observed += grid->values[i] > 0;
-  sif_grid_free(grid);
-
-  *volume = (double)observed * cell * cell * cell;
-  return status;
-}
-
-/*
- * The grid's cells per side, and the padded box the survey is searched in,
- * with the offset that moves it there. A grid given in the configuration is
- * taken as it is; the default is one cell per mean separation. The box
- * depends on the cells -- its padding has a cell in it -- and the cells on
- * the box, so the default is found by going back and forth until the two
- * agree, which takes a step or two: the padding is mostly the search sphere.
+ * The padded box the survey is searched in, with the offset that moves it
+ * there, and the grid's cells per side. The box allows for grid cells up to
+ * the smallest radius. A grid given in the configuration is taken as it is,
+ * and refused here if it is any coarser -- before anything expensive, rather
+ * than by the finder at the end; the default is one cell per mean separation
+ * of the box survey_box() chose, or per smallest radius if that is finer.
  */
 static int survey_geometry(const exodus_params_t* p, const sif_field_t* data,
-  const sif_field_t* randoms,
-  const sif_real* radii, sif_option search, double mps, uint32_t* n_cells,
-  sif_real offset[3], sif_real* box) {
+  const sif_field_t* randoms, const sif_real* radii, sif_option search,
+  double mps, uint32_t* n_cells, sif_real offset[3], sif_real* box) {
 
-  uint32_t n = p->grid.n_cells ? p->grid.n_cells : 64;
-  for (int step = 0;; step++) {
-    if (sif_finder_exodus_survey_box(data, randoms, radii, p->finder.n_radii, n,
-          search, offset, box) != SIF_OK) {
-      SIF_LOG_ERROR(TAG, "no box can hold the survey with a %u^3 grid", n);
-      return SIF_ERR_INVALID;
-    }
-    if (p->grid.n_cells || step == 8)
-      break;
+  if (sif_finder_exodus_survey_box(
+        data, randoms, radii, p->finder.n_radii, search, offset, box) != SIF_OK)
+    return SIF_ERR_INVALID;
 
-    const double target = ceil(GRID_CELLS_PER_SEPARATION * *box / mps);
-    const uint32_t next =
+  double r_min = radii[0];
+  for (uint32_t i = 1; i < p->finder.n_radii; i++)
+    r_min = fmin(r_min, radii[i]);
+  const double fewest = ceil((double)*box / r_min);
+
+  uint32_t n = p->grid.n_cells;
+  if (n == 0) {
+    const double target =
+      fmax(ceil(GRID_CELLS_PER_SEPARATION * *box / mps), fewest);
+    n =
       fft_friendly(target > GRID_MIN_CELLS ? (uint32_t)target : GRID_MIN_CELLS);
-    if (next == n)
-      break;
-    n = next;
   }
+
+  const double cell = (double)*box / n;
+  if (cell > r_min) {
+    SIF_LOG_ERROR(TAG,
+      "grid.n_cells = %u: cells of %g over the survey box of %g, larger than "
+      "the smallest radius %g (expected n_cells >= %u)",
+      n, cell, (double)*box, r_min, (unsigned)fewest);
+    return SIF_ERR_INVALID;
+  }
+
   *n_cells = n;
   return SIF_OK;
 }
@@ -704,13 +647,24 @@ static int survey_prepare(const exodus_params_t* p, sif_option search,
       "fewer randoms than tracers: the footprint and the mean density are "
       "only as good as the randoms, which are normally many times the data");
 
-  /* 2. Footprint and box. The footprint gives the data's mean separation,
-   * which a ladder in mps is measured in and the default grid is sized by;
-   * the ladder and the grid then give the padded box. */
+  /* 2. Footprint and box. The footprint's volume gives the data's mean
+   * separation, which the default grid is sized by, and the density the
+   * meshes are. Unless given, it is measured here, before the move into the
+   * box, while the observer is where the configuration says. The ladder
+   * then gives the padded box. */
   sif_timer_start(&t);
-  status = footprint_volume(randoms, &r.footprint_volume);
-  if (status != SIF_OK)
-    goto fail;
+  if (p->survey.footprint_volume > 0.0) {
+    r.footprint_volume = p->survey.footprint_volume;
+    SIF_LOG_INFO(TAG, "footprint: %g, as given", r.footprint_volume);
+  } else {
+    const sif_real observer[3] = {(sif_real)p->survey.observer[0],
+      (sif_real)p->survey.observer[1], (sif_real)p->survey.observer[2]};
+    sif_real volume;
+    status = sif_survey_volume(randoms, observer, &volume);
+    if (status != SIF_OK)
+      goto fail;
+    r.footprint_volume = volume;
+  }
   r.mps = cbrt(r.footprint_volume / (double)r.n_tracers);
 
   radii = box_ladder(p, &r);
@@ -830,19 +784,16 @@ int pipeline_survey_plan(const exodus_params_t* p, survey_plan_t* plan) {
   plan->r_max = r.r_max;
   plan->grid_cells = r.grid_cells;
 
-  /* The meshes as sif_finder_suggest_mesh_cells_survey() sizes them, from
-   * the footprint measured here rather than the run's own random grid: the
-   * same rule, on a coarser count of the footprint, so a cell or so apart
-   * at most. */
-  const double filled = (double)r.box * r.box * r.box / r.footprint_volume;
+  /* The meshes as the run sizes them: for each set's density inside the
+   * footprint. */
   const uint64_t counts[2] = {r.n_tracers, r.n_randoms};
   const uint32_t given[2] = {p->mesh.n_cells, p->mesh.n_cells_random};
   uint32_t* cells[2] = {&plan->mesh_cells, &plan->random_mesh_cells};
   for (int i = 0; i < 2; i++)
-    *cells[i] = given[i] ? given[i]
-                         : sif_finder_suggest_mesh_cells(
-                             (uint64_t)ceil((double)counts[i] * filled),
-                             (sif_real)r.box, r.r_max);
+    *cells[i] = given[i]
+                  ? given[i]
+                  : sif_finder_suggest_mesh_cells(counts[i], (sif_real)r.box,
+                      r.r_max, (sif_real)r.footprint_volume);
   if (plan->mesh_cells == 0 || plan->random_mesh_cells == 0) {
     SIF_LOG_ERROR(TAG,
       "the largest radius, %g, needs a search sphere wider than the box",
@@ -925,16 +876,17 @@ int pipeline_survey(const exodus_params_t* p) {
       (1024.0 * 1024.0 * 1024.0),
     seconds_since(&t));
 
-  /* 4. Meshes, each sized for its own density inside the footprint, which
-   * is read off the random grid. They take the fields' storage over. */
+  /* 4. Meshes, each sized for its own density inside the footprint. They
+   * take the fields' storage over. */
   sif_timer_start(&t);
-  r.mesh_cells = p->mesh.n_cells ? p->mesh.n_cells
-                                 : sif_finder_suggest_mesh_cells_survey(
-                                     r.n_tracers, random_grid, r.r_max);
-  r.random_mesh_cells =
-    p->mesh.n_cells_random
-      ? p->mesh.n_cells_random
-      : sif_finder_suggest_mesh_cells_survey(r.n_randoms, random_grid, r.r_max);
+  r.mesh_cells = p->mesh.n_cells
+                   ? p->mesh.n_cells
+                   : sif_finder_suggest_mesh_cells(
+                       r.n_tracers, box, r.r_max, (sif_real)r.footprint_volume);
+  r.random_mesh_cells = p->mesh.n_cells_random
+                          ? p->mesh.n_cells_random
+                          : sif_finder_suggest_mesh_cells(r.n_randoms, box,
+                              r.r_max, (sif_real)r.footprint_volume);
   if (r.mesh_cells == 0 || r.random_mesh_cells == 0) {
     SIF_LOG_ERROR(TAG,
       "the largest radius, %g, needs a search sphere wider than the box",
@@ -971,7 +923,7 @@ int pipeline_survey(const exodus_params_t* p) {
   /* 5. Finder. */
   sif_timer_start(&t);
   cat = sif_finder_exodus_survey(data_grid, random_grid, data_mesh, random_mesh,
-    radii, p->finder.n_radii, (sif_real)p->finder.threshold,
+    offset, radii, p->finder.n_radii, (sif_real)p->finder.threshold,
     (sif_real)p->finder.overlap_fraction, SIF_FINDER_CONSUME_GRID | search);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);
@@ -986,15 +938,14 @@ int pipeline_survey(const exodus_params_t* p) {
   SIF_LOG_INFO(
     TAG, "finder: %" PRIu64 " voids (%.2f s)", cat->n_voids, seconds_since(&t));
 
-  /* 6. Catalogue: out of the box into the inputs' frame -- the observer at
-   * the origin -- and onto the sky, if asked. */
+  /* 6. Catalogue: the finder has put it back in the inputs' frame -- the
+   * observer at the origin -- so onto the sky, if asked. */
   sif_timer_start(&t);
-  const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
-  status = sif_catalogue_translate(cat, back);
-  if (status == SIF_OK && p->survey.sky)
+  if (p->survey.sky) {
     status = sif_catalogue_to_sky(cat, &p->survey.cosmology);
-  if (status != SIF_OK)
-    goto done;
+    if (status != SIF_OK)
+      goto done;
+  }
   status = write_output(p, &r, cat);
   if (status != SIF_OK)
     goto done;

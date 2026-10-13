@@ -19,10 +19,18 @@ input = {
   -- sky: the columns are ra and dec (in degrees) and the redshift z,
   -- taken to comoving Mpc/h with the cosmology, and the voids are written
   -- back on the sky. cartesian: they are x y z, comoving, with the
-  -- observer at the origin, and so are the voids.
+  -- observer at the origin unless observer says otherwise, and so are the
+  -- voids.
   coordinates = "sky",
   -- Sky only. Flat unless omega_de is given.
   cosmology = { omega_m = 0.31, omega_r = 0, w0 = -1, wa = 0 },
+  -- Cartesian only: where the observer is, if not at the origin.
+  -- observer = { 0, 0, 0 },
+  -- The footprint's volume, in (Mpc/h)^3, which sets the mean separation
+  -- and so the default grid and meshes. Measured from the randoms unless
+  -- given, which takes one angular mask seen over one range of distances;
+  -- give it for a footprint of any other shape.
+  -- footprint_volume = 1e9,
 
   -- The data and the randoms, each read as a box's input is: path,
   -- format, and the settings of that format (sif-exodus --template box
@@ -56,12 +64,11 @@ mesh = {
 }
 
 finder = {
-  -- ladder(r_min, r_max, step): log-spaced, 5% apart here. Also
-  -- linspace(a, b, n) and geomspace(a, b, n), or any list of numbers.
+  -- In comoving Mpc/h. ladder(r_min, r_max, step): log-spaced, 5% apart
+  -- here. Also linspace(a, b, n) and geomspace(a, b, n), or any list of
+  -- numbers. The smallest should span two grid cells or more, and must
+  -- span one: the box is padded for cells no larger.
   radii = ladder(10, 40, 0.05),
-  -- physical (comoving Mpc/h) | mps (mean separations of the data
-  -- inside the footprint)
-  radii_units = "physical",
   threshold = -0.7,          -- the density contrast a void is grown to
   overlap_fraction = 0,      -- of the smaller radius; 0: no overlap
   search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2

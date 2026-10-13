@@ -15,11 +15,11 @@ PyObject* py_sif_finder_spherical(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_suggest_mesh_cells(
   PyObject* self, PyObject* args, PyObject* kwds);
-PyObject* py_sif_finder_suggest_mesh_cells_survey(
-  PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_exodus_survey(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_survey_box(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* py_sif_finder_grid_cells_from_size(
   PyObject* self, PyObject* args, PyObject* kwds);
 
 #endif /* SIF_PY_FINDERS_PY_FINDERS_H */

@@ -851,22 +851,36 @@ static inline int32_t wrap_idx_pbc(int32_t idx, int32_t n_cells) {
   return idx;
 }
 
+/*
+ * Distance from p to one cell's slab on one axis, through the nearest image:
+ * the separation from the slab's centre, folded as dist2_pbc() folds, less
+ * half a cell. Folding is 1-Lipschitz, so this never exceeds the folded
+ * separation of anything the slab holds -- which is what makes it safe to
+ * prune on.
+ *
+ * Clamping p onto the slab first and folding afterwards, as this used to,
+ * measures to the far side of a cell that sits across the face from p: at
+ * p = 0.1 in a box of 100, the cell [90, 100) came out 10 away rather than
+ * 0.1, and was skipped while it held the nearest tracer.
+ */
+static inline sif_real axis_gap_pbc(
+  sif_real p, int32_t n, sif_real cell_len, sif_real box_len) {
+
+  sif_real d = SIF_REAL_ABS(p - ((sif_real)n + 0.5f) * cell_len);
+  d = (d > box_len * 0.5f) ? (box_len - d) : d;
+  d -= cell_len * 0.5f;
+  return (d > 0.0f) ? d : 0.0f;
+}
+
 static inline sif_real point_to_cell_dist2_pbc(sif_real px, sif_real py,
   sif_real pz, int32_t nx, int32_t ny, int32_t nz, sif_real cell_len,
   sif_real box_len) {
 
-  sif_real min_x = nx * cell_len;
-  sif_real max_x = min_x + cell_len;
-  sif_real min_y = ny * cell_len;
-  sif_real max_y = min_y + cell_len;
-  sif_real min_z = nz * cell_len;
-  sif_real max_z = min_z + cell_len;
+  const sif_real dx = axis_gap_pbc(px, nx, cell_len, box_len);
+  const sif_real dy = axis_gap_pbc(py, ny, cell_len, box_len);
+  const sif_real dz = axis_gap_pbc(pz, nz, cell_len, box_len);
 
-  sif_real closest_x = (px < min_x) ? min_x : ((px > max_x) ? max_x : px);
-  sif_real closest_y = (py < min_y) ? min_y : ((py > max_y) ? max_y : py);
-  sif_real closest_z = (pz < min_z) ? min_z : ((pz > max_z) ? max_z : pz);
-
-  return dist2_pbc(px - closest_x, py - closest_y, pz - closest_z, box_len);
+  return dx * dx + dy * dy + dz * dz;
 }
 
 /* Tests every particle of one cell against the running best. */

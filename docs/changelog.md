@@ -1,7 +1,48 @@
 # Changelog
 
-Current version: v0.2 release 1
+Current version: v0.3 release 0
 
+
+## v0.3.0 -- 13/10/2026
+
+### Added
+
+- `sif_survey_volume()` (`pysif.measure.survey_volume()`): compute survey 
+   volumes from randoms
+- `sif_finder_grid_cells_from_size()` (`pysif.finders.grid_cells_from_size()`):
+  grid cells per side from a cell size, in physical units or mean separations
+- `sif-exodus`: `input.observer`, for a Cartesian survey whose observer is
+  not at the origin, and `input.footprint_volume`, to give the volume.
+
+### Changed
+
+- `sif_finder_suggest_mesh_cells()` takes the volume the tracers occupy (0,
+  or `volume=None` in Python, for the box); pass a survey's footprint volume
+- `survey_box(data, randoms, radii, search_factor=1.5)`: the data are
+  required and the grid's cells are no longer needed. The box allows for any
+  grid with cells up to the smallest radius; the finder refuses a coarser one
+- `exodus_survey()` takes the `offset` from `survey_box()`, right after the
+  meshes, and returns the voids in the caller's frame: no more
+  `catalogue.translate(-offset)`
+- `sif-exodus`: the footprint volume comes from `sif_survey_volume()`. The
+  old measure was off by tens of per cent for sparse randoms or thin
+  footprints
+- `sif-exodus`: a configured grid coarser than the smallest radius is
+  refused before the run starts
+- Python: `Catalogue.radii`, `footprint` and `footprint_shell` are read-only
+  views
+
+### Removed
+
+- `sif_finder_suggest_mesh_cells_survey()` (`suggest_mesh_cells_survey()`):
+  `suggest_mesh_cells()` with the footprint volume replaces it
+- `sif-exodus`: `finder.radii_units`. Radii are in the positions' units; a
+  configuration that still sets it is told so
+
+### Fixed
+
+- The chain mesh's periodic nearest-neighbour search could skip the cell
+  holding the nearest tracer when it sat across a box face
 
 ## v0.2.2 -- 9/10/2026
 

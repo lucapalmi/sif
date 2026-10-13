@@ -64,15 +64,6 @@ typedef enum {
   EXODUS_INPUT_HDF5
 } exodus_input_kind_t;
 
-/* What the radii are measured in. */
-typedef enum {
-  /* The units of the box, which are the catalogue's. */
-  EXODUS_RADII_PHYSICAL,
-  /* Mean tracer separations, box / N^(1/3) -- on a survey, the data's
-   * inside the footprint: scaled to the box's units once the fields have
-   * been read, and recorded that way in the catalogue. */
-  EXODUS_RADII_MPS
-} exodus_radii_units_t;
 
 /* The format the catalogue is written in. */
 typedef enum {
@@ -189,6 +180,14 @@ typedef struct {
      * inputs were in or were converted to. The configuration sets it from
      * input.coordinates, so the voids come out as the inputs went in. */
     bool sky;
+    /* Where the observer is, in the inputs' frame: the origin, unless a
+     * Cartesian survey says otherwise. The footprint's volume is measured
+     * as seen from here. */
+    double observer[3];
+    /* The footprint's volume as given, or 0 to measure it from the randoms
+     * -- which takes one angular mask seen over one range of distances, so
+     * a footprint of any other shape gives its volume here. */
+    double footprint_volume;
   } survey;
 
   /* --- density grid --------------------------------------------------- */
@@ -202,9 +201,9 @@ typedef struct {
   /* --- chain mesh ----------------------------------------------------- */
   struct {
     /* Cells per side -- a survey's data mesh -- where 0 takes
-     * sif_finder_suggest_mesh_cells(), or on a survey
-     * sif_finder_suggest_mesh_cells_survey(). Only speed and memory depend
-     * on it, never the catalogue. */
+     * sif_finder_suggest_mesh_cells(), on a survey for the density inside
+     * the footprint. Only speed and memory depend on it, never the
+     * catalogue. */
     uint32_t n_cells;
     /* Survey only: the randoms' mesh, the same way. */
     uint32_t n_cells_random;
@@ -212,10 +211,9 @@ typedef struct {
 
   /* --- finder --------------------------------------------------------- */
   struct {
-    /* The radius ladder, in any order, in `radii_units`. */
+    /* The radius ladder, in any order, in the positions' units. */
     const sif_real* radii;
     uint32_t n_radii;
-    exodus_radii_units_t radii_units;
     /* Density contrast a void is grown to; negative. */
     double threshold;
     /* Allowed overlap, as a fraction of the smaller void's radius. */

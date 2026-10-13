@@ -30,6 +30,7 @@ set(PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/measure/py_size_function.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/measure/py_profiles.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/measure/py_delta.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/measure/py_survey_volume.c
 
     # IO Submodule
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_io.c

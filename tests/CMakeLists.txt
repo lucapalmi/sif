@@ -33,6 +33,7 @@ set(SIF_TESTS
   test_ep_emu       # the emulator against its Python reference, and invariants
   test_finders      # end-to-end: both finders on a synthetic field
   test_survey       # end-to-end: the survey finder on a synthetic footprint
+  test_survey_volume # footprint volumes against shapes of known volume
   test_hdf5         # the HDF5 catalogue file, or its text fallback
   test_gadget       # GADGET snapshots, all formats, from tests/data/gadget
   test_cosmology    # comoving distances, sky coordinates, and their refusals

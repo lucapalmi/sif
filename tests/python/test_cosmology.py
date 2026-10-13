@@ -124,7 +124,7 @@ def sky_field():
     lambda f: f.refresh_bounds(),
     lambda f: pysif.Grid(16, 100.0).assign_cic(f),
     lambda f: pysif.ChainMesh(4, 100.0, f),
-    lambda f: pysif.finders.survey_box(f, np.array([5.0], pysif.real), 32),
+    lambda f: pysif.finders.survey_box(f, f, np.array([5.0], pysif.real)),
 ], ids=["wrap", "translate", "sort_morton", "refresh_bounds", "assign_cic",
         "ChainMesh", "survey_box"])
 def test_sky_field_refused(sky_field, action):

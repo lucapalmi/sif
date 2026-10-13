@@ -70,10 +70,10 @@ mesh = {
 }
 
 finder = {
-  -- ladder(r_min, r_max, step): log-spaced, 5% apart here. Also
-  -- linspace(a, b, n) and geomspace(a, b, n), or any list of numbers.
+  -- In the box's units. ladder(r_min, r_max, step): log-spaced, 5% apart
+  -- here. Also linspace(a, b, n) and geomspace(a, b, n), or any list of
+  -- numbers. The smallest should span two grid cells or more.
   radii = ladder(10, 40, 0.05),
-  radii_units = "physical",  -- physical (the box's) | mps (mean separations)
   threshold = -0.7,          -- the density contrast a void is grown to
   overlap_fraction = 0,      -- of the smaller radius; 0: no overlap
   search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2

@@ -71,23 +71,15 @@ static PyObject* sifCatalogue_get_radii(PyObject* self_obj, void* closure) {
 
   npy_intp dims[1] = {self->catalogue->n_voids};
 
-  /* Create an array referencing the underlying C memory (Zero-Copy) */
-  PyObject* array =
-    PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, self->catalogue->radii);
-  if (!array)
-    return NULL;
-
-  /* Tie the lifecycle of the array to the catalogue object */
-  Py_INCREF(self_obj);
-  PyArray_SetBaseObject((PyArrayObject*)array, self_obj);
-
-  return array;
+  /* Zero-copy and read-only, as the field's views are: the catalogue is
+   * changed through its methods, not through the arrays. */
+  return py_sif_wrap_borrowed(self_obj, 1, dims, self->catalogue->radii);
 }
 
 /*
- * A footprint column, zero-copy like radii, or None for a catalogue that has
- * none. Safe as a view: nothing reachable from Python grows a catalogue, so
- * the buffer cannot move under it.
+ * A footprint column, a read-only view like radii, or None for a catalogue
+ * that has none. Safe as a view: nothing reachable from Python grows a
+ * catalogue, so the buffer cannot move under it.
  */
 static PyObject* catalogue_optional_column(PyObject* self_obj, sif_real* col) {
   sifCatalogueObject* self = (sifCatalogueObject*)self_obj;
@@ -95,13 +87,7 @@ static PyObject* catalogue_optional_column(PyObject* self_obj, sif_real* col) {
     Py_RETURN_NONE;
 
   npy_intp dims[1] = {self->catalogue->n_voids};
-  PyObject* array = PyArray_SimpleNewFromData(1, dims, NPY_REAL_T, col);
-  if (!array)
-    return NULL;
-
-  Py_INCREF(self_obj);
-  PyArray_SetBaseObject((PyArrayObject*)array, self_obj);
-  return array;
+  return py_sif_wrap_borrowed(self_obj, 1, dims, col);
 }
 
 static PyObject* sifCatalogue_get_footprint(PyObject* self_obj, void* closure) {
@@ -173,13 +159,19 @@ static PyGetSetDef sifCatalogue_getset[] = {
     "right ascension, declination (degrees) and redshift -- after to_sky().",
     NULL},
   {"centres", sifCatalogue_get_centres, NULL,
-    "Nx3 NumPy array of void centres (x, y, z)", NULL},
-  {"radii", sifCatalogue_get_radii, NULL, "1D NumPy array of void radii", NULL},
+    "Nx3 NumPy array of void centres (x, y, z, or ra, dec, z on the sky),\n"
+    "a copy.",
+    NULL},
+  {"radii", sifCatalogue_get_radii, NULL,
+    "1D NumPy array of void radii, a read-only view of the catalogue's own\n"
+    "array (no copy).",
+    NULL},
   {"n_voids", sifCatalogue_get_n_voids, NULL,
     "The number of voids in the catalogue", NULL},
   {"footprint", sifCatalogue_get_footprint, NULL,
-    "1D NumPy array: the fraction of each void's sphere inside the survey\n"
-    "footprint, or None for a catalogue with no footprint (a periodic box).\n"
+    "1D NumPy array, a read-only view: the fraction of each void's sphere\n"
+    "inside the survey footprint, or None for a catalogue with no footprint\n"
+    "(a periodic box).\n"
     "-1 marks a void nobody measured it for.",
     NULL},
   {"footprint_shell", sifCatalogue_get_footprint_shell, NULL,
@@ -455,13 +447,14 @@ static PyMethodDef sifCatalogue_methods[] = {
     "(or ra, dec, z, r on the sky), and footprint, footprint_shell when the\n"
     "catalogue has them. pandas.DataFrame(cat.to_numpy()) and\n"
     "astropy.table.Table(cat.to_numpy()) take it as it is."},
-  {"translate", (PyCFunction)sifCatalogue_translate, METH_VARARGS | METH_KEYWORDS,
+  {"translate", (PyCFunction)sifCatalogue_translate,
+    METH_VARARGS | METH_KEYWORDS,
     "translate(offset)\n"
     "--\n\n"
     "Shift every void centre by offset, in place.\n\n"
-    "The way back out of the box a survey was searched in: pass the negated\n"
-    "offset survey_box() returned, and the centres return to your own frame.\n"
-    "Radii and footprints are unchanged.\n\n"
+    "Radii and footprints are unchanged. finders.exodus_survey() already\n"
+    "returns its voids in your own frame, so this is for catalogues moved\n"
+    "some other way.\n\n"
     "Args:\n"
     "    offset: Three numbers, added to x, y and z.\n\n"
     "Raises:\n"
@@ -475,10 +468,11 @@ static PyMethodDef sifCatalogue_methods[] = {
     "direction from the origin, in degrees (right ascension in [0, 360)),\n"
     "and the redshift at its comoving distance from the origin. units is\n"
     "then 'sky', and every writer writes the catalogue that way.\n\n"
-    "The observer has to be at the origin: move a catalogue found in a\n"
-    "survey box back first, with translate(-offset). Converted with the\n"
-    "cosmology the tracers were, a centre comes back to the sky within\n"
-    "single precision. Radii stay comoving lengths, in Mpc/h.\n\n"
+    "The observer has to be at the origin, which is where\n"
+    "finders.exodus_survey() returns its voids, whatever box the survey was\n"
+    "searched in. Converted with the cosmology the tracers were, a centre\n"
+    "comes back to the sky within single precision. Radii stay comoving\n"
+    "lengths, in Mpc/h.\n\n"
     "Args:\n"
     "    omega_m, omega_de, omega_r, w0, wa: The cosmology, as for\n"
     "        Field.convert_sky_coordinates().\n\n"

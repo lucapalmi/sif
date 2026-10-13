@@ -26,7 +26,7 @@ field, box_length = pysif.io.read_gadget(
     "path/to/snapshot", ptype=1, velocities="peculiar", length="mpc"
 )
 
-# correct for float rounding errors
+# fold back into the box any position that lies outside it
 field.wrap(box_length=box_length)
 
 # now the chain mesh, which is used to query the tracers efficiently
@@ -99,7 +99,7 @@ int main(void) {
   if (!field)
     goto done;
 
-  // correct for float rounding errors
+  // fold back into the box any position that lies outside it
   if (sif_field_wrap_periodic(field, (sif_real)box_length, NULL, NULL, NULL) !=
       SIF_OK)
     goto done;
@@ -147,6 +147,92 @@ done:
 
 It builds with the same `CMakeLists.txt` as the {doc}`exodus example
 <run_exodus>`.
+::::
+
+:::::
+
+## Weighting the velocity profiles
+
+Each velocity bin is the mean radial velocity of the tracers in its shell.
+What that mean is weighted by depends on two things: the velocity option and
+the mesh the profiles are measured from.
+
+| Mesh built from | Velocity option | Velocity profile |
+|---|---|---|
+| Tracers | number (the default) | Number-weighted, $\sum v / N$ |
+| Tracers with masses as weights | weighted | Mass-weighted, $\sum m v / \sum m$ |
+| Tessellation samples | number (the default) | Volume-weighted |
+
+The option is `weighted_velocity=` in Python, and
+`SIF_PROFILES_VELOCITY_NUMBER` / `SIF_PROFILES_VELOCITY_WEIGHTED` in C. On a
+mesh without weights it changes nothing.
+
+Volume weighting comes from the mesh, not from the option. A tessellation
+throws random samples through the box, and each one takes the velocity of
+the nearest tracer. Each sample stands for the same volume, so the plain
+mean over the samples in a shell is the volume-weighted velocity. Leave the
+option on number here: the weighted mean would weight by tracer weights
+again and stop being a volume average.
+
+Densities don't use the option. They are weighted whenever the mesh carries
+weights.
+
+:::::{tab-set}
+
+::::{tab-item} Python
+```python
+# mass-weighted: read the particle masses into the weights, then weight
+# the velocities by them
+field, box_length = pysif.io.read_gadget(
+    "path/to/snapshot", ptype=1, velocities="peculiar", masses=True,
+    length="mpc"
+)
+# ... wrap the field and build the mesh as above ...
+profiles = pysif.measure.profiles(
+    catalogue=catalogue, mesh=mesh, n_bins=30, ext=3.0,
+    compute_velocity=True, weighted_velocity=True
+)
+
+# volume-weighted: tessellate the tracer mesh and measure from the samples,
+# keeping the default number-weighted mean
+tess = pysif.Tessellation(mesh, seed=42)
+sample_mesh = tess.mesh(
+    n_cells=pysif.measure.profiles_suggest_mesh_cells(tess.n_samples)
+)
+profiles = pysif.measure.profiles(
+    catalogue=catalogue, mesh=sample_mesh, n_bins=30, ext=3.0,
+    compute_velocity=True, differential=True
+)
+```
+::::
+
+::::{tab-item} C
+```c
+// mass-weighted: read with SIF_GADGET_MASS_READ instead of
+// SIF_GADGET_MASS_SKIP, build the mesh as above, then
+const sif_option opt_mass = SIF_PBC_PERIODIC | SIF_PROFILES_DIFFERENTIAL |
+                            SIF_PROFILES_VELOCITY_WEIGHTED;
+
+// volume-weighted: tessellate the tracer mesh and measure from the samples,
+// keeping the number-weighted mean
+sif_tessellation_t* tess = sif_tessellation_alloc(
+  mesh, SIF_TESSELLATION_DEFAULT_SAMPLES, 42, SIF_PBC_PERIODIC);
+if (!tess)
+  goto done;
+sif_chain_mesh_t* sample_mesh = sif_chain_mesh_alloc_tessellation(tess,
+  sif_profiles_suggest_mesh_cells(tess->n_samples), SIF_MESH_DROP_INDICES);
+sif_tessellation_free(tess);
+if (!sample_mesh)
+  goto done;
+
+const sif_option opt_vol = SIF_PBC_PERIODIC | SIF_PROFILES_DIFFERENTIAL |
+                           SIF_PROFILES_VELOCITY_NUMBER;
+const int rc = sif_profiles(catalogue, sample_mesh, ext, n_bins, opt_vol,
+  &dens, &vel);
+sif_chain_mesh_free(sample_mesh);
+if (rc != SIF_OK)
+  goto done;
+```
 ::::
 
 :::::

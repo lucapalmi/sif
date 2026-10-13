@@ -372,7 +372,7 @@ static void test_refusals(void) {
     "require_morton accepted it");
 
   sif_real off[3], box;
-  CHECK(sif_finder_exodus_survey_box(NULL, f, radii, 1, 32, SIF_DEFAULT, off, &box) ==
+  CHECK(sif_finder_exodus_survey_box(f, f, radii, 1, SIF_DEFAULT, off, &box) ==
           SIF_ERR_INVALID,
     "survey_box accepted it");
 

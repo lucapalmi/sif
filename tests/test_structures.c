@@ -316,15 +316,97 @@ static void test_chain_mesh(void) {
     }
     CHECK(wrong == 0, "%d self-queries returned the wrong particle", wrong);
 
-    /* A point just past the far face is nearest to a particle at the near
-     * face under PBC. */
+    /* A point just short of the far face is 0.01 from the lattice point at the
+     * origin through the face, and 6.24 from the last row on its own side. */
     uint64_t wrapped =
       sif_chain_mesh_find_nearest_pbc(mesh, box - 0.01f, 0.0f, 0.0f);
     CHECK(wrapped < n_p, "pbc query past the far face failed");
-    CHECK(x[wrapped] == 0.0f || x[wrapped] == (sif_real)(15 * 6.25),
-      "pbc query did not pick a boundary particle (x=%g)", (double)x[wrapped]);
+    CHECK(wrapped < n_p && x[wrapped] == 0.0f,
+      "pbc query did not reach through the face (x=%g)",
+      wrapped < n_p ? (double)x[wrapped] : -1.0);
 
     sif_chain_mesh_free(mesh);
+  }
+
+  /* Off-lattice queries against a brute force, on sparse random tracers so the
+   * nearest one is often several cells away and across a face. The cell
+   * pruning has to be a lower bound through the periodic images; measuring a
+   * cell across the face to its far side skipped the cell holding the answer
+   * for ~5-20% of queries here. */
+  {
+    const uint64_t n_r = 200;
+    sif_real* rx = malloc(n_r * sizeof(sif_real));
+    sif_real* ry = malloc(n_r * sizeof(sif_real));
+    sif_real* rz = malloc(n_r * sizeof(sif_real));
+    uint64_t st = 0x9E3779B97F4A7C15ULL;
+
+#define UNI()                                                                  \
+  (st = st * 6364136223846793005ULL + 1442695040888963407ULL,                  \
+    (sif_real)((double)(st >> 11) / 9007199254740992.0) * box)
+
+    for (uint64_t i = 0; i < n_r; i++) {
+      rx[i] = UNI();
+      ry[i] = UNI();
+      rz[i] = UNI();
+    }
+
+    sif_field_t* rf = sif_field_alloc(n_r);
+    CHECK(sif_field_assign_positions(rf, rx, ry, rz) == SIF_OK,
+      "sif_field_assign_positions failed");
+
+    const uint32_t res[3] = {3, 8, 16};
+    for (int r = 0; r < 3; r++) {
+      sif_chain_mesh_t* rm = sif_chain_mesh_alloc(res[r], box, rf, SIF_DEFAULT);
+      CHECK(rm != NULL, "alloc returned NULL for a valid field");
+      if (!rm)
+        continue;
+
+      int bad_pbc = 0, bad_open = 0;
+      for (int q = 0; q < 2000; q++) {
+        const double px = UNI(), py = UNI(), pz = UNI();
+        double best_p = INFINITY, best_o = INFINITY;
+
+        for (uint64_t i = 0; i < n_r; i++) {
+          double dx = rx[i] - px, dy = ry[i] - py, dz = rz[i] - pz;
+          const double d2o = dx * dx + dy * dy + dz * dz;
+          dx -= box * round(dx / box);
+          dy -= box * round(dy / box);
+          dz -= box * round(dz / box);
+          const double d2p = dx * dx + dy * dy + dz * dz;
+          best_p = d2p < best_p ? d2p : best_p;
+          best_o = d2o < best_o ? d2o : best_o;
+        }
+
+        const uint64_t gp = sif_chain_mesh_find_nearest_pbc(
+          rm, (sif_real)px, (sif_real)py, (sif_real)pz);
+        const uint64_t go = sif_chain_mesh_find_nearest_open(
+          rm, (sif_real)px, (sif_real)py, (sif_real)pz);
+
+        double dx = rx[gp] - px, dy = ry[gp] - py, dz = rz[gp] - pz;
+        dx -= box * round(dx / box);
+        dy -= box * round(dy / box);
+        dz -= box * round(dz / box);
+        if (dx * dx + dy * dy + dz * dz > best_p * (1.0 + 1e-5) + 1e-9)
+          bad_pbc++;
+
+        dx = rx[go] - px, dy = ry[go] - py, dz = rz[go] - pz;
+        if (dx * dx + dy * dy + dz * dz > best_o * (1.0 + 1e-5) + 1e-9)
+          bad_open++;
+      }
+#undef UNI
+
+      CHECK(bad_pbc == 0, "%u^3 mesh: %d of 2000 pbc queries missed the nearest",
+        res[r], bad_pbc);
+      CHECK(bad_open == 0,
+        "%u^3 mesh: %d of 2000 open queries missed the nearest", res[r],
+        bad_open);
+      sif_chain_mesh_free(rm);
+    }
+
+    sif_field_free(rf);
+    free(rx);
+    free(ry);
+    free(rz);
   }
 
   /* The map back to the field is not optional: it is the only thing that makes

@@ -144,6 +144,11 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * @param data_mesh The data, in a chain mesh over the same box.
  * @param random_mesh The randoms, in a chain mesh over the same box. Its
  * cells need not match the data mesh's; size it for the randoms.
+ * @param offset What the survey was moved into the box by, as
+ * sif_finder_exodus_survey_box() gave it, or NULL for a survey that was not
+ * moved. The voids are moved back by it, so they come out in the caller's
+ * own frame -- where sif_catalogue_to_sky() needs them, with the observer at
+ * the origin.
  * @param radii Array of smoothing radii.
  * @param n_radii Number of radii.
  * @param threshold Density contrast a void is grown to, against the randoms,
@@ -152,52 +157,59 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * @param opt Finder options: SIF_FINDER_CONSUME_GRID (both grids),
  * SIF_FINDER_KEEP_CIC_WINDOW and SIF_FINDER_SEARCH_*.
  *
- * @return Newly allocated catalogue, with its footprint columns, released
- * with sif_catalogue_free(); NULL on invalid input, a survey too close to the
- * box faces, or failure, as for sif_finder_exodus().
+ * @return Newly allocated catalogue, with its footprint columns, in the
+ * caller's frame, released with sif_catalogue_free(); NULL on invalid input
+ * (an offset that is not finite included), a survey too close to the box
+ * faces, or failure, as for sif_finder_exodus().
  *
  * @note Requires sif_system_init(). Called without it, returns NULL with
  * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
 SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
-  const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
-  sif_real threshold, sif_real overlap_fraction, sif_option opt);
+  const sif_chain_mesh_t* random_mesh, const sif_real offset[3],
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_real overlap_fraction, sif_option opt);
 
 /**
  * @brief The box a survey has to be searched in, and the offset that moves it
  * there.
  *
  * sif_finder_exodus_survey() needs empty padding around the survey, about the
- * largest search sphere on every side, and how much depends on the radii, the
- * SIF_FINDER_SEARCH_* factor and the grid cell -- which depends on the box.
- * This works all of that out from the tracers: a cubic box, just large enough,
- * with the survey centred in it. Pass the data as well as the randoms: the
- * finder checks the padding around both, and the outermost galaxies can sit
- * a little past the outermost randoms, which sample the edge of the
- * footprint only so finely.
+ * largest search sphere on every side, and how much depends on the radii and
+ * the SIF_FINDER_SEARCH_* factor. This works it out from the tracers: a cubic
+ * box, just large enough, with the survey centred in it. The data are
+ * required as well as the randoms: the finder checks the padding around both,
+ * and the outermost galaxies can sit a little past the outermost randoms,
+ * which sample the edge of the footprint only so finely.
+ *
+ * The padding also depends on the grid cell, and the box is chosen before
+ * the grid is. So it is sized for any grid whose cells are no larger than the
+ * smallest radius -- every grid that resolves the smallest radius at all.
+ * Against a grid of negligible cells that costs
+ * `r_min + max(0, 3 r_min - (f - 1) r_max)` of extra padding a side, f the
+ * search factor: r_min for any ladder spanning a factor of 6 or more at the
+ * default factor. A coarser grid is refused by the finder, which says how
+ * much padding it would need.
  *
  * The workflow it belongs to:
  *
  * @code
  * sif_real offset[3], box;
- * sif_finder_exodus_survey_box(data, randoms, radii, n_radii, n_cells, opt,
- *   offset, &box);
+ * sif_finder_exodus_survey_box(data, randoms, radii, n_radii, opt, offset,
+ *   &box);
  * sif_field_translate(data, offset);
  * sif_field_translate(randoms, offset);
- * // grids of n_cells over box, meshes over box, then:
- * sif_catalogue_t* cat = sif_finder_exodus_survey(...);
- * const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
- * sif_catalogue_translate(cat, back);
+ * // grids and meshes over box, then, with the voids back in the
+ * // caller's frame:
+ * sif_catalogue_t* cat = sif_finder_exodus_survey(data_grid, random_grid,
+ *   data_mesh, random_mesh, offset, radii, n_radii, threshold, 0.0f, opt);
  * @endcode
  *
- * @param data The data catalogue, in the caller's Cartesian frame, or NULL to
- * size the box around the randoms alone. Only read.
+ * @param data The data catalogue, in the caller's Cartesian frame. Only read.
  * @param randoms The random catalogue, in the same frame. Only read.
- * @param radii The radii the finder will be run with.
+ * @param radii The radii the finder will be run with, each positive.
  * @param n_radii Number of radii.
- * @param n_cells Cells per side of the grids that will be built over the
- * box; at least 16.
  * @param opt The options the finder will be run with, for the
  * SIF_FINDER_SEARCH_* factor.
  * @param[out] offset What to add to every position, data and randoms alike.
@@ -205,14 +217,14 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  * @return SIF_OK, or SIF_ERR_INVALID on bad arguments or a coordinate that
  * is not finite.
  *
- * @note Run the finder with the same radii, options and n_cells, or the
- * padding may no longer be enough; the finder checks and says so. The box is
- * sized for meshes whose cells are no larger than the search sphere, which is
- * what sif_finder_suggest_mesh_cells() gives.
+ * @note Run the finder with the same radii and options, or the padding may
+ * no longer be enough; the finder checks and says so. The box is sized for
+ * meshes whose cells are no larger than the search sphere, which is what
+ * sif_finder_suggest_mesh_cells() gives.
  */
 SIF_NODISCARD int sif_finder_exodus_survey_box(const sif_field_t* data,
   const sif_field_t* randoms, const sif_real* radii, uint32_t n_radii,
-  uint32_t n_cells, sif_option opt, sif_real offset[3], sif_real* box_length);
+  sif_option opt, sif_real offset[3], sif_real* box_length);
 
 /** @brief Particles per mesh cell that exodus runs fastest at. The cost
  * splits between per-cell overhead, which grows as the mesh is refined, and
@@ -243,29 +255,44 @@ SIF_NODISCARD int sif_finder_exodus_survey_box(const sif_field_t* data,
  * particle run measured about 1.3x slower than at this resolution, and a
  * coarser mesh costs considerably more than that.
  *
+ * The rule sizes the cells for the density the tracers are at. In a periodic
+ * box they fill the box; in a survey box they fill only the footprint, and
+ * the padding around it is empty by construction. Sized from the box average
+ * there, a mesh would put several times the intended number of tracers in
+ * every cell the survey covers -- the only cells that cost anything -- so
+ * pass the footprint's volume, from sif_survey_volume(), and call once for
+ * each mesh, the data's and the randoms', with that set's own count.
+ *
  * @param n_particles Number of tracers the mesh will hold.
  * @param box_length Physical side length, which must match the grid's
  * @param max_radius Largest smoothing radius the run will use. The search
  * sphere it implies has to fit inside the mesh, which puts a floor under the
  * resolution; pass 0 to skip that constraint.
+ * @param volume The volume the tracers occupy, or 0 for the whole box.
  *
- * @return n_cells to hand to sif_chain_mesh_alloc, or 0 if the geometry is
- * unusable, since no mesh can hold a search sphere wider than the box.
+ * @return n_cells to hand to sif_chain_mesh_alloc, or 0 for invalid input (no
+ * tracers, a box or volume that is not positive and finite) or a geometry no
+ * mesh can serve, since none can hold a search sphere wider than the box.
  */
-static inline uint32_t sif_finder_suggest_mesh_cells(
-  uint64_t n_particles, sif_real box_length, sif_real max_radius) {
+static inline uint32_t sif_finder_suggest_mesh_cells(uint64_t n_particles,
+  sif_real box_length, sif_real max_radius, sif_real volume) {
 
-  if (n_particles == 0 || !(box_length > 0.0f))
+  if (n_particles == 0 || !(box_length > 0.0f) || !isfinite(box_length) ||
+      !(volume >= 0.0f) || !isfinite(volume))
     return 0;
 
-  double n = cbrt((double)n_particles / SIF_FINDER_MESH_PARTICLES_PER_CELL);
+  /* The count the whole box would hold at the tracers' own density. */
+  const double box = (double)box_length;
+  const double filled = volume > 0.0f
+                          ? (double)n_particles * box * box * box / volume
+                          : (double)n_particles;
+  double n = cbrt(filled / SIF_FINDER_MESH_PARTICLES_PER_CELL);
 
   /* The traversal wraps a cell index with a single step, so the stencil for the
    * widest search sphere has to fit inside the mesh. That is a floor on the
    * resolution, not a ceiling: it is the coarse meshes that fail. */
   if (max_radius > 0.0f) {
     const double r_search = 2.0 * (double)max_radius;
-    const double box = (double)box_length;
 
     if (r_search >= box)
       return 0;
@@ -283,36 +310,40 @@ static inline uint32_t sif_finder_suggest_mesh_cells(
   return (uint32_t)n;
 }
 
+/** @brief The unit a length is given in. */
+typedef enum {
+  /** The box's own length unit. */
+  SIF_FINDER_UNITS_PHYSICAL = 0,
+  /** Mean tracer separation, (volume / n_particles)^(1/3). */
+  SIF_FINDER_UNITS_MPS
+} sif_finder_units_t;
+
 /**
- * @brief Suggested chain-mesh resolution for sif_finder_exodus_survey().
+ * @brief Grid cells per side that make each cell a given size.
  *
- * sif_finder_suggest_mesh_cells() sizes a mesh for tracers that fill the box,
- * which in a survey box they do not: they occupy the footprint, and the
- * padding around it is empty by construction. Sized from the box average, a
- * mesh would put several times the intended number of tracers in every cell
- * the survey covers -- the only cells that cost anything. This sizes it for
- * the density inside the footprint instead: the same rule, applied to the
- * count the box would hold if it were filled at that density.
+ * The density grid is the finder's resolution: its smallest radius should
+ * span two cells at least, so a grid of one cell per mean separation suits a
+ * ladder that starts at two separations. This turns a cell size into the
+ * n_cells sif_grid_alloc() takes, rounding up so that the cells are never
+ * larger than asked for. A size that divides the box to within rounding
+ * error -- 1 mps on a 256^3 box, say -- gives that exact count.
  *
- * The footprint is read off the randoms' grid, as the share of its cells that
- * any random reached. CIC spreads each random over eight cells, so that share
- * slightly overstates the footprint -- by about a cell along its boundary --
- * and the suggestion errs a little coarse, which costs speed and never the
- * result: the catalogue is the same at any mesh resolution.
+ * The count is not snapped to an FFT-friendly size; do that separately if
+ * the transform's speed matters.
  *
- * Call it once for each mesh -- the data's and the randoms' -- with that
- * set's own count and the same random grid.
- *
- * @param n_particles Number of tracers the mesh will hold.
- * @param random_grid The randoms' CIC density, from sif_grid_assign_cic() --
- * NOT a density contrast -- over the box the meshes will span.
- * @param max_radius Largest smoothing radius the run will use; see
- * sif_finder_suggest_mesh_cells().
- * @return n_cells to hand to sif_chain_mesh_alloc(), or 0 for invalid input
- * (no tracers, a grid that holds no randoms or a density contrast) or a
- * geometry no mesh can serve.
+ * @param n_particles Number of tracers; read only for SIF_FINDER_UNITS_MPS.
+ * @param box_length Side of the box the grid spans.
+ * @param cell_size Wanted cell side, in `units`; positive and finite.
+ * @param units SIF_FINDER_UNITS_PHYSICAL or SIF_FINDER_UNITS_MPS.
+ * @param volume The volume the tracers occupy, which sets the mean
+ * separation, or 0 for the whole box; read only for SIF_FINDER_UNITS_MPS. In
+ * a survey box the tracers fill only the footprint: pass its volume, from
+ * sif_survey_volume(), or the separation comes out inflated by the padding.
+ * @return n_cells to hand to sif_grid_alloc(), or 0 for invalid input or a
+ * count that does not fit in 32 bits; sif_error_message() says which.
  */
-SIF_NODISCARD uint32_t sif_finder_suggest_mesh_cells_survey(
-  uint64_t n_particles, const sif_grid_t* random_grid, sif_real max_radius);
+SIF_NODISCARD uint32_t sif_finder_grid_cells_from_size(uint64_t n_particles,
+  sif_real box_length, sif_real cell_size, sif_finder_units_t units,
+  sif_real volume);
 
 #endif /* SIF_FINDER_EXODUS_FINDER_H */

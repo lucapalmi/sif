@@ -4,7 +4,7 @@
 # This file is part of sif. See COPYING for the full license text.
 
 cmake_minimum_required(VERSION 3.15)
-project(sif VERSION 0.2.2 LANGUAGES C)
+project(sif VERSION 0.3.0 LANGUAGES C)
 
 # Configuration
 set(CMAKE_C_STANDARD 99)
@@ -282,6 +282,7 @@ set(SOURCES
   # measure
     src/measure/profiles.c
     src/measure/size_function.c
+    src/measure/survey_volume.c
     src/measure/delta_common.c
     src/measure/delta_distribution.c
     src/measure/delta_moments.c

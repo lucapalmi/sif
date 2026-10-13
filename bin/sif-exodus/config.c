@@ -65,8 +65,8 @@ static const char* const INPUT_KEYS[] = {"path", "format", "box_length",
 /* A box's input holds one input, and its box. */
 static const char* const BOX_INPUT_KEYS[] = {"box_length", NULL};
 /* A survey's holds two, and what they share. */
-static const char* const SURVEY_INPUT_KEYS[] = {
-  "data", "random", "coordinates", "cosmology", NULL};
+static const char* const SURVEY_INPUT_KEYS[] = {"data", "random", "coordinates",
+  "cosmology", "observer", "footprint_volume", NULL};
 static const char* const COSMOLOGY_KEYS[] = {
   "omega_m", "omega_de", "omega_r", "w0", "wa", NULL};
 /* The columns of a fits or hdf5 table: positions, or sky coordinates. */
@@ -102,7 +102,6 @@ static const char* const COORDINATES[] = {"sky", "cartesian", NULL};
 static const char* const INPUT_FORMATS[] = {
   "xfield", "ascii", "binary", "gadget", "fits", "hdf5", NULL};
 static const char* const OUTPUT_FORMATS[] = {"hdf5", "ascii", "fits", NULL};
-static const char* const RADII_UNITS[] = {"physical", "mps", NULL};
 static const char* const LAYOUTS[] = {"rows", "blocks", NULL};
 static const char* const PRECISIONS[] = {"float32", "float64", NULL};
 static const char* const ENDIANS[] = {"native", "little", "big", NULL};
@@ -532,7 +531,6 @@ static void set_defaults(exodus_config_t* c) {
   p->randoms = p->input;
   p->survey.sky = true;
 
-  p->finder.radii_units = EXODUS_RADII_PHYSICAL;
   p->finder.overlap_fraction = 0.0;
   p->finder.search_factor = 1.5;
   p->output.kind = EXODUS_OUTPUT_HDF5;
@@ -1120,6 +1118,36 @@ static void read_cosmology(reader_t* r, int t, exodus_config_t* c) {
   lua_settop(L, ct - 1);
 }
 
+/* input.observer: three numbers, for a Cartesian survey whose observer is
+ * not at the origin. On the sky the conversion puts it there. */
+static void read_observer(reader_t* r, int t, exodus_config_t* c) {
+  const char* path = "input.observer";
+  lua_State* L = r->L;
+
+  const int type = field(L, t, "observer");
+  const int ot = lua_gettop(L);
+  if (type == LUA_TNIL) {
+    /* the origin */
+  } else if (on_sky(c)) {
+    report(r, path,
+      "not used: sky coordinates put the observer at the origin; it is for "
+      "coordinates = \"cartesian\"");
+  } else if (type != LUA_TTABLE || lua_rawlen(L, ot) != 3) {
+    report(r, path, "must be three numbers, as observer = { x, y, z }");
+  } else {
+    for (int k = 0; k < 3; k++) {
+      const int et = lua_rawgeti(L, ot, k + 1);
+      const double v = et == LUA_TNUMBER ? lua_tonumber(L, -1) : NAN;
+      if (et != LUA_TNUMBER || !isfinite(v))
+        report(r, path, "must be three finite numbers; entry %d is not", k + 1);
+      else
+        c->params.survey.observer[k] = v;
+      lua_pop(L, 1);
+    }
+  }
+  lua_settop(L, ot - 1);
+}
+
 /* A survey's input: the data and the randoms, each read like a box's input,
  * and what they share -- the coordinates and the cosmology. */
 static void read_survey_input(reader_t* r, int t, exodus_config_t* c) {
@@ -1160,8 +1188,8 @@ static void read_survey_input(reader_t* r, int t, exodus_config_t* c) {
           "unknown key (did you mean %s?)", guess);
       else
         report(r, at(w, sizeof w, "input", key),
-          "unknown key; a survey's input takes data, random, coordinates and "
-          "cosmology");
+          "unknown key; a survey's input takes data, random, coordinates, "
+          "cosmology, observer and footprint_volume");
     }
     lua_pop(L, 1);
   }
@@ -1170,6 +1198,15 @@ static void read_survey_input(reader_t* r, int t, exodus_config_t* c) {
   if (get_enum(r, t, "input", "coordinates", COORDINATES, &i))
     p->survey.sky = i == 0;
   read_cosmology(r, t, c);
+  read_observer(r, t, c);
+
+  double volume;
+  if (get_number(r, t, "input", "footprint_volume", &volume)) {
+    if (volume > 0.0)
+      p->survey.footprint_volume = volume;
+    else
+      report(r, "input.footprint_volume", "must be positive, got %g", volume);
+  }
 
   for (int k = 0; k < 2; k++) {
     const int type = field(L, t, k == 0 ? "data" : "random");
@@ -1353,8 +1390,14 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
   check_keys(r, t, "finder", FINDER_KEYS);
   read_radii(r, t, c);
 
-  if (get_enum(r, t, "finder", "radii_units", RADII_UNITS, &i))
-    p->finder.radii_units = (exodus_radii_units_t)i;
+  /* Still a known key, so that a configuration written for an older
+   * sif-exodus is told what changed rather than that the key is unknown. */
+  if (field(r->L, t, "radii_units") != LUA_TNIL)
+    report(r, "finder.radii_units",
+      "removed: radii are in the positions' own units (Mpc/h for a survey); "
+      "drop the key, and give a ladder of mean separations multiplied by the "
+      "mean separation --check reports");
+  lua_pop(r->L, 1);
 
   if (get_number(r, t, "finder", "threshold", &x)) {
     if (x > -1.0 && x < 0.0)
@@ -1749,6 +1792,19 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
       }
       fputs(" },\n", out);
     }
+    const double* o = p->survey.observer;
+    if (o[0] != 0.0 || o[1] != 0.0 || o[2] != 0.0) {
+      fputs("  observer = {", out);
+      for (int k = 0; k < 3; k++) {
+        format_double(num, sizeof num, o[k]);
+        fprintf(out, "%s %s", k ? "," : "", num);
+      }
+      fputs(" },\n", out);
+    }
+    if (p->survey.footprint_volume > 0.0) {
+      format_double(num, sizeof num, p->survey.footprint_volume);
+      fprintf(out, "  footprint_volume = %s,\n", num);
+    }
     const exodus_input_t* sets[2] = {&p->input, &p->randoms};
     for (int k = 0; k < 2; k++) {
       fprintf(out, "  %s = {\n", k == 0 ? "data" : "random");
@@ -1783,8 +1839,7 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     fprintf(out, "%s%s%s", i % 6 == 0 ? "\n    " : " ", num,
       i + 1 < p->finder.n_radii ? "," : ",\n  ");
   }
-  fprintf(
-    out, "},\n  radii_units = \"%s\",\n", RADII_UNITS[p->finder.radii_units]);
+  fputs("},\n", out);
   format_double(num, sizeof num, p->finder.threshold);
   fprintf(out, "  threshold = %s,\n", num);
   format_double(num, sizeof num, p->finder.overlap_fraction);
@@ -2338,16 +2393,12 @@ static void check_survey(
       "fewer randoms than tracers: the footprint and the mean density are "
       "only as good as the randoms");
   check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
-    "footprint: %.4g (Mpc/h)^3, mean separation %g; searched in a box of %g",
-    plan.footprint_volume, plan.mps, plan.box);
+    "footprint: %.4g (Mpc/h)^3%s, mean separation %g; searched in a box of %g",
+    plan.footprint_volume,
+    p->survey.footprint_volume > 0.0 ? " (as given)" : "", plan.mps, plan.box);
 
-  if (p->finder.radii_units == EXODUS_RADII_MPS)
-    check_say(ch, SIF_LOG_LEVEL_INFO, NULL,
-      "radii: %u, from %g to %g (%g to %g mean separations)", p->finder.n_radii,
-      plan.r_min, plan.r_max, plan.r_min / plan.mps, plan.r_max / plan.mps);
-  else
-    check_say(ch, SIF_LOG_LEVEL_INFO, NULL, "radii: %u, from %g to %g",
-      p->finder.n_radii, plan.r_min, plan.r_max);
+  check_say(ch, SIF_LOG_LEVEL_INFO, NULL, "radii: %u, from %g to %g",
+    p->finder.n_radii, plan.r_min, plan.r_max);
 
   const double cell = plan.box / plan.grid_cells;
   check_say(ch, SIF_LOG_LEVEL_INFO, NULL, "grid: %u^3 cells of %g%s",
@@ -2403,27 +2454,15 @@ int config_check(
     check_say(&ch, SIF_LOG_LEVEL_INFO, NULL,
       "input: box %g; the tracers are counted when read", box);
 
-  /* 2. The radii in the box's units, which mean separations need N for. */
+  /* 2. The radii. */
   double r_min = 0.0, r_max = 0.0;
-  if (p->finder.radii_units == EXODUS_RADII_PHYSICAL || mps > 0.0) {
-    const double scale = p->finder.radii_units == EXODUS_RADII_MPS ? mps : 1.0;
-    r_min = r_max = p->finder.radii[0] * scale;
-    for (uint32_t i = 1; i < p->finder.n_radii; i++) {
-      r_min = fmin(r_min, p->finder.radii[i] * scale);
-      r_max = fmax(r_max, p->finder.radii[i] * scale);
-    }
+  for (uint32_t i = 0; p->finder.radii && i < p->finder.n_radii; i++) {
+    r_min = i ? fmin(r_min, p->finder.radii[i]) : p->finder.radii[i];
+    r_max = i ? fmax(r_max, p->finder.radii[i]) : p->finder.radii[i];
   }
-  if (summary && r_max > 0.0 && p->finder.radii_units == EXODUS_RADII_MPS)
-    check_say(&ch, SIF_LOG_LEVEL_INFO, NULL,
-      "radii: %u, from %g to %g (%g to %g mean separations)", p->finder.n_radii,
-      r_min, r_max, r_min / mps, r_max / mps);
-  else if (summary && r_max > 0.0)
+  if (summary && r_max > 0.0)
     check_say(&ch, SIF_LOG_LEVEL_INFO, NULL, "radii: %u, from %g to %g",
       p->finder.n_radii, r_min, r_max);
-  else if (summary)
-    check_say(&ch, SIF_LOG_LEVEL_INFO, NULL,
-      "radii: %u, in mean separations, sized once the tracers are counted",
-      p->finder.n_radii);
 
   /* 3. Grid and mesh, as the run will size them. */
   const uint32_t grid = p->grid.n_cells
@@ -2432,8 +2471,8 @@ int config_check(
   uint32_t mesh = p->mesh.n_cells;
   if (box > 0.0 && r_max > 0.0) {
     /* Whatever the count, a search sphere wider than the box is fatal. */
-    const uint32_t suggested =
-      sif_finder_suggest_mesh_cells(n ? n : 1, (sif_real)box, (sif_real)r_max);
+    const uint32_t suggested = sif_finder_suggest_mesh_cells(
+      n ? n : 1, (sif_real)box, (sif_real)r_max, 0);
     if (suggested == 0)
       check_say(&ch, SIF_LOG_LEVEL_ERROR, "finder.radii",
         "the largest radius, %g, needs a search sphere wider than the box "

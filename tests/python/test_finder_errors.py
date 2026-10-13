@@ -70,12 +70,40 @@ def test_survey_without_padding(tracers, mesh):
     rand.assign_cic(field=tracers)
     rmesh = pysif.ChainMesh(16, BOX, tracers)
     with pytest.raises(ValueError, match="of padding on every side"):
-        pysif.finders.exodus_survey(data, rand, mesh, rmesh, radii(8), -0.7)
+        pysif.finders.exodus_survey(data, rand, mesh, rmesh, (0, 0, 0),
+                                    radii(8), -0.7)
 
 
 def test_survey_box_refusals(tracers):
-    with pytest.raises(ValueError, match="n_cells 8: a survey box needs at least 16"):
-        pysif.finders.survey_box(tracers, radii(8), 8)
+    with pytest.raises(ValueError, match=r"radii\[1\] = -3: not a positive"):
+        pysif.finders.survey_box(tracers, tracers, radii(8, -3))
     bad = pysif.field_from_numpy(radii(1, np.nan), radii(1, 2), radii(1, 2))
     with pytest.raises(ValueError, match="randoms: 1 of 2 with a coordinate"):
-        pysif.finders.survey_box(bad, radii(8), 64)
+        pysif.finders.survey_box(tracers, bad, radii(8))
+    with pytest.raises(TypeError):
+        pysif.finders.survey_box(None, tracers, radii(8))
+
+
+def test_grid_cells_from_size():
+    # One cell per mean separation is the default unit.
+    assert pysif.finders.grid_cells_from_size(256**3, 1000.0, 1.0) == 256
+    assert pysif.finders.grid_cells_from_size(256**3, 1000.0, 0.5, units="mps") == 512
+    assert pysif.finders.grid_cells_from_size(0, 200.0, 6.0, units="physical") == 34
+
+
+@pytest.mark.parametrize("args, kwargs, error, message", [
+    ((N, BOX, 1.0), {"units": "phys"}, ValueError,
+     "units: 'phys', expected 'mps' or 'physical'"),
+    ((N, BOX, 0.0), {}, ValueError, "cell_size: 0"),
+    ((0, BOX, 1.0), {}, ValueError, "n_particles: 0"),
+])
+def test_grid_cells_from_size_refusals(args, kwargs, error, message):
+    with pytest.raises(error, match=message):
+        pysif.finders.grid_cells_from_size(*args, **kwargs)
+
+
+@pytest.mark.parametrize("offset", [5.0, (1.0, 2.0), ("a", 0.0, 0.0)])
+def test_survey_bad_offset(grid, mesh, offset):
+    with pytest.raises(TypeError):
+        pysif.finders.exodus_survey(grid, grid, mesh, mesh, offset, radii(8),
+                                    -0.7)

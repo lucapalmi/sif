@@ -17,7 +17,7 @@ These are some of its many features:
 
 installation
 examples/index
-concepts/index
+guide/index
 python/index
 api/index
 changelog
@@ -35,6 +35,20 @@ changelog
 Installing the library
 :::
 
+:::{grid-item-card} Loading fields
+:link: guide/fields
+:link-type: doc
+
+Every way to create a field, and how to prepare it
+:::
+
+:::{grid-item-card} Catalogues
+:link: guide/catalogues
+:link-type: doc
+
+Reading, writing and handling void catalogues
+:::
+
 :::{grid-item-card} Running **exodus**
 :link: examples/run_exodus
 :link-type: doc
@@ -50,7 +64,7 @@ Template files to compute void profiles
 :::
 
 :::{grid-item-card} How **exodus** works
-:link: concepts/exodus
+:link: guide/exodus
 :link-type: doc
 
 Description of the **exodus** algorithm

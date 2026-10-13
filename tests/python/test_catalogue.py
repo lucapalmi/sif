@@ -41,6 +41,24 @@ def test_from_and_to_numpy():
                                           "footprint_shell")
 
 
+def test_column_views_are_read_only():
+    cat = pysif.catalogue_from_numpy(CX, CY, CZ, R, footprint=np.ones(N),
+                                     footprint_shell=np.ones(N))
+    for view in (cat.radii, cat.footprint, cat.footprint_shell):
+        assert not view.flags.writeable
+        with pytest.raises(ValueError):
+            view[0] = 0
+    # centres is a copy: writing to it leaves the catalogue alone.
+    centres = cat.centres
+    centres[0, 0] = -1
+    assert cat.centres[0, 0] == pysif.real(CX[0])
+
+    # A view keeps the catalogue alive.
+    radii = cat.radii
+    del cat
+    np.testing.assert_array_equal(radii, R.astype(pysif.real))
+
+
 @pytest.mark.parametrize("kwargs, error", [
     (dict(cx=CX, cy=CY, cz=CZ), ValueError),                  # no radius
     (dict(cx=CX, cy=CY, z=CZ, r=R), ValueError),              # mixed names

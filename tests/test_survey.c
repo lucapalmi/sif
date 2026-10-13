@@ -167,8 +167,8 @@ static tracers_t build_weighted(const sif_real* x, const sif_real* y,
   t.grid = sif_grid_alloc(N_GRID, (sif_real)BOX);
   CHECK(sif_grid_assign_cic(t.grid, f) == SIF_OK, "CIC assignment failed");
   t.mesh = sif_chain_mesh_alloc(
-    sif_finder_suggest_mesh_cells(n, (sif_real)BOX, radii[0]), (sif_real)BOX, f,
-    SIF_MESH_DROP_INDICES);
+    sif_finder_suggest_mesh_cells(n, (sif_real)BOX, radii[0], 0), (sif_real)BOX,
+    f, SIF_MESH_DROP_INDICES);
   sif_field_free(f);
   return t;
 }
@@ -226,8 +226,8 @@ static void run_case(const char* label, int selection, uint64_t n_randoms) {
   memcpy(data_before, data.grid->values, cells * sizeof(sif_real));
   memcpy(rand_before, rand.grid->values, cells * sizeof(sif_real));
 
-  sif_catalogue_t* cat = sif_finder_exodus_survey(data.grid, rand.grid, data.mesh,
-    rand.mesh, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
+  sif_catalogue_t* cat = sif_finder_exodus_survey(data.grid, rand.grid,
+    data.mesh, rand.mesh, NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
 
   CHECK(cat != NULL, "%s: the survey finder returned NULL", label);
   if (cat) {
@@ -345,7 +345,7 @@ static void run_weights(void) {
     tracers_t rand =
       build_weighted(rx, ry, rz, N_RANDOMS, weighted ? 0.5f : 0.0f);
     cat[weighted] = sif_finder_exodus_survey(data.grid, rand.grid, data.mesh,
-      rand.mesh, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
+      rand.mesh, NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
     release(&data);
     release(&rand);
   }
@@ -425,7 +425,7 @@ static void run_workflow(void) {
 
   sif_real offset[3], box = 0.0f;
   CHECK(sif_finder_exodus_survey_box(
-          fd, fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
+          fd, fr, radii, n_radii, SIF_DEFAULT, offset, &box) == SIF_OK,
     "the box helper failed");
 
   CHECK(sif_field_translate(fd, offset) == SIF_OK &&
@@ -438,40 +438,44 @@ static void run_workflow(void) {
   CHECK(sif_grid_assign_cic(gr, fr) == SIF_OK, "CIC assignment failed");
 
   /* Sized for the density inside the footprint, which is what the box
-   * average would badly understate. The helper reads the footprint off the
-   * random grid; by hand, it is the ball the randoms were drawn in. The two
-   * have to agree to within the cell or so CIC adds along the boundary --
-   * and the helper's reading, if anything, is the larger volume. */
-  const uint32_t cells_d =
-    sif_finder_suggest_mesh_cells_survey(N_DATA, gr, radii[0]);
-  const uint32_t cells_r =
-    sif_finder_suggest_mesh_cells_survey(N_RANDOMS, gr, radii[0]);
-
+   * average would badly understate: the same rule, on the count the box would
+   * hold if it were filled at that density. */
   const double foot_vol = (4.0 / 3.0) * 3.14159265358979 * pow(FOOT_R, 3);
   const double box_vol = (double)box * (double)box * (double)box;
+  const uint32_t cells_d =
+    sif_finder_suggest_mesh_cells(N_DATA, box, radii[0], (sif_real)foot_vol);
+  const uint32_t cells_r =
+    sif_finder_suggest_mesh_cells(N_RANDOMS, box, radii[0], (sif_real)foot_vol);
+
   const uint32_t by_hand = sif_finder_suggest_mesh_cells(
-    (uint64_t)(N_RANDOMS * box_vol / foot_vol), box, radii[0]);
-  CHECK(cells_r > 0 && cells_r <= by_hand && cells_r >= 0.85 * by_hand,
-    "survey mesh sizing: %u cells, against %u from the footprint's volume",
+    (uint64_t)(N_RANDOMS * box_vol / foot_vol), box, radii[0], 0);
+  CHECK(cells_r > 0 && cells_r == by_hand,
+    "survey mesh sizing: %u cells, against %u from the filled-box count",
     cells_r, by_hand);
   CHECK(cells_d > 0 && cells_d <= cells_r,
     "survey mesh sizing: the data (%u cells) are sparser than the randoms "
     "(%u cells)",
     cells_d, cells_r);
 
-  printf("  mesh cells: data %u, randoms %u (by hand %u, box average %u)\n",
-    cells_d, cells_r, by_hand,
-    sif_finder_suggest_mesh_cells(N_RANDOMS, box, radii[0]));
-
-  /* A box-filling suggestion would have been much coarser. */
-  CHECK(cells_r > sif_finder_suggest_mesh_cells(N_RANDOMS, box, radii[0]),
+  const uint32_t box_average =
+    sif_finder_suggest_mesh_cells(N_RANDOMS, box, radii[0], 0);
+  printf("  mesh cells: data %u, randoms %u (box average %u)\n", cells_d,
+    cells_r, box_average);
+  CHECK(cells_r > box_average,
     "survey mesh sizing is no finer than the box average's");
 
-  /* What it refuses: no tracers, and a grid that is not the randoms' density. */
-  CHECK(sif_finder_suggest_mesh_cells_survey(0, gr, radii[0]) == 0,
-    "survey mesh sizing accepted no tracers");
-  CHECK(sif_finder_suggest_mesh_cells_survey(N_DATA, gd, 2.0f * box) == 0,
-    "survey mesh sizing accepted a search sphere wider than the box");
+  /* What it refuses: no tracers, a volume that is not one, and a search
+   * sphere wider than the box. */
+  CHECK(
+    sif_finder_suggest_mesh_cells(0, box, radii[0], (sif_real)foot_vol) == 0,
+    "mesh sizing accepted no tracers");
+  CHECK(
+    sif_finder_suggest_mesh_cells(N_DATA, box, radii[0], -1.0f) == 0 &&
+      sif_finder_suggest_mesh_cells(N_DATA, box, radii[0], (sif_real)NAN) == 0,
+    "mesh sizing accepted a negative or NaN volume");
+  CHECK(sif_finder_suggest_mesh_cells(
+          N_DATA, box, 2.0f * box, (sif_real)foot_vol) == 0,
+    "mesh sizing accepted a search sphere wider than the box");
 
   sif_chain_mesh_t* md =
     sif_chain_mesh_alloc(cells_d, box, fd, SIF_MESH_DROP_INDICES);
@@ -480,15 +484,13 @@ static void run_workflow(void) {
   sif_field_free(fd);
   sif_field_free(fr);
 
+  /* Given the offset, the finder hands the voids back in the caller's
+   * frame. */
   sif_catalogue_t* cat = sif_finder_exodus_survey(
-    gd, gr, md, mr, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
+    gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
   CHECK(cat != NULL, "the finder refused the box the helper chose");
 
   if (cat) {
-    const sif_real back[3] = {-offset[0], -offset[1], -offset[2]};
-    CHECK(
-      sif_catalogue_translate(cat, back) == SIF_OK, "translating back failed");
-
     const double cell = (double)box / N_GRID;
     for (int h = 0; h < N_INNER; h++) {
       const hole_t in_frame = {inner[h].x + frame[0], inner[h].y + frame[1],
@@ -555,34 +557,69 @@ static void run_survey_box(void) {
     "sif_field_assign_positions failed");
 
   /* The padding survey_check_margin() asks for, with mesh cells no larger
-   * than the search sphere and the default search factor. */
-  const sif_real r_max = radii[0];
+   * than the search sphere, the default search factor, and grid cells as
+   * large as the box allows for: the smallest radius. */
+  sif_real r_min = radii[0], r_max = radii[0];
+  for (uint32_t i = 1; i < n_radii; i++) {
+    r_min = SIF_REAL_MIN(r_min, radii[i]);
+    r_max = SIF_REAL_MAX(r_max, radii[i]);
+  }
+  const sif_real margin =
+    r_max + SIF_REAL_MAX(0.5f * r_max, 3.0f * r_min) + r_min;
+
   sif_real offset[3], box = 0.0f;
-
   CHECK(sif_finder_exodus_survey_box(
-          NULL, fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
-    "the box helper failed on the randoms alone");
-  sif_real cell = box / N_GRID;
-  sif_real margin = r_max + SIF_REAL_MAX(0.5f * r_max, 3.0f * cell) + cell;
-  CHECK(x[0] + offset[0] < margin,
-    "the outlier should fall in the padding of a box sized on the randoms "
-    "(%g, margin %g)",
-    (double)(x[0] + offset[0]), (double)margin);
-
-  CHECK(sif_finder_exodus_survey_box(
-          fd, fr, radii, n_radii, N_GRID, SIF_DEFAULT, offset, &box) == SIF_OK,
+          fd, fr, radii, n_radii, SIF_DEFAULT, offset, &box) == SIF_OK,
     "the box helper failed on data and randoms");
-  cell = box / N_GRID;
-  margin = r_max + SIF_REAL_MAX(0.5f * r_max, 3.0f * cell) + cell;
   CHECK(x[0] + offset[0] >= margin,
-    "a box sized on both should pad the outlier (%g, margin %g)",
+    "the box should pad the outlier, which is past every random (%g, margin "
+    "%g)",
     (double)(x[0] + offset[0]), (double)margin);
 
-  /* A coordinate that is not a number is refused, not skipped. */
+  /* The data are required, and a coordinate that is not a number is
+   * refused, not skipped. */
+  sif_error_clear();
+  CHECK(sif_finder_exodus_survey_box(NULL, fr, radii, n_radii, SIF_DEFAULT,
+          offset, &box) == SIF_ERR_INVALID &&
+          error_has("data: NULL"),
+    "no data should be refused: '%s'", sif_error_message());
+  const sif_real keep = fd->y[1];
   fd->y[1] = NAN;
-  CHECK(sif_finder_exodus_survey_box(fd, fr, radii, n_radii, N_GRID,
-          SIF_DEFAULT, offset, &box) == SIF_ERR_INVALID,
+  CHECK(sif_finder_exodus_survey_box(
+          fd, fr, radii, n_radii, SIF_DEFAULT, offset, &box) == SIF_ERR_INVALID,
     "a NaN in the data should be refused");
+  fd->y[1] = keep;
+
+  /* A grid coarser than the box allows for: the finder refuses it, and says
+   * that is why. */
+  CHECK(sif_field_translate(fd, offset) == SIF_OK &&
+          sif_field_translate(fr, offset) == SIF_OK,
+    "translation failed");
+  const uint32_t coarse = (uint32_t)(box / (1.25f * r_min));
+  sif_grid_t* gd = sif_grid_alloc(coarse, box);
+  sif_grid_t* gr = sif_grid_alloc(coarse, box);
+  CHECK(gd && gr && sif_grid_assign_cic(gd, fd) == SIF_OK &&
+          sif_grid_assign_cic(gr, fr) == SIF_OK,
+    "CIC assignment failed");
+  sif_chain_mesh_t* md =
+    sif_chain_mesh_alloc(sif_finder_suggest_mesh_cells(n, box, r_max, 0), box,
+      fd, SIF_MESH_DROP_INDICES);
+  sif_chain_mesh_t* mr =
+    sif_chain_mesh_alloc(sif_finder_suggest_mesh_cells(4 * n, box, r_max, 0),
+      box, fr, SIF_MESH_DROP_INDICES);
+  sif_error_clear();
+  sif_catalogue_t* cat = md && mr ? sif_finder_exodus_survey(gd, gr, md, mr,
+                                      offset, radii, n_radii, -0.7f, 0.0f, 0)
+                                  : NULL;
+  CHECK(!cat && error_has("survey_box allows for grid cells up to the "
+                          "smallest radius"),
+    "a grid of %g cells should be refused as too coarse: '%s'",
+    (double)(box / coarse), sif_error_message());
+  sif_catalogue_free(cat);
+  sif_chain_mesh_free(md);
+  sif_chain_mesh_free(mr);
+  sif_grid_free(gd);
+  sif_grid_free(gr);
 
   sif_field_free(fd);
   sif_field_free(fr);
@@ -617,7 +654,7 @@ static void run_refusals(void) {
 
   sif_error_clear();
   CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
-          radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
+          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
     "a survey without padding should be refused");
   CHECK(error_has("randoms: span [") && error_has("of padding on every side") &&
           sif_error_status() == SIF_ERR_INVALID,
@@ -628,16 +665,24 @@ static void run_refusals(void) {
     "density contrast failed");
   sif_error_clear();
   CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
-          radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
+          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
     "a density contrast should be refused as the data grid");
   CHECK(error_has("data grid: holds a density contrast"), "contrast: '%s'",
     sif_error_message());
 
   sif_error_clear();
-  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, NULL, radii,
-          n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
+  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, NULL, NULL,
+          radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
     "a missing random mesh should be refused");
   CHECK(error_has("random mesh: NULL"), "no mesh: '%s'", sif_error_message());
+
+  const sif_real bad_offset[3] = {0.0f, (sif_real)NAN, 0.0f};
+  sif_error_clear();
+  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
+          bad_offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL &&
+          error_has("offset[1]: nan, expected finite"),
+    "an offset that is not finite should be refused: '%s'",
+    sif_error_message());
 
   release(&data);
   release(&rand);
