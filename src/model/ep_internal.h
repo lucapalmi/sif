@@ -140,11 +140,12 @@ int sif__ep_features_fill_diag(sif_ep_features_t* f, const sif_real* radii,
 /**
  * @brief Per-bin integrated hazard of the up-crossing rate, n - 1 entries.
  *
- * Integrates the LOG-LINEAR interpolant of the rate across each bin rather
- * than the rate itself. The rate carries exp(-nu^2/2) and so varies
- * exponentially across a bin; a trapezoid on that makes the answer depend on
- * how finely the caller sampled the radii, which is exactly what this whole
- * model exists to avoid.
+ * Integrates exp of a cubic interpolant of ln(rate) across each bin, at four
+ * Gauss-Legendre nodes, rather than the rate itself. The rate carries
+ * exp(-nu^2/2) and so varies exponentially across a bin; a trapezoid on that,
+ * or even the log-linear rule, makes the answer depend on how finely the
+ * caller sampled the radii, which is exactly what this whole model exists to
+ * avoid. Needs n >= 4.
  */
 void sif__ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam);
 

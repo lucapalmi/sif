@@ -8,7 +8,7 @@
  * The emulated multiplicity function: the semi-analytic up-crossing baseline,
  * corrected per bin by a small trained network.
  *
- * The baseline and the eight features below are shared verbatim with the code
+ * The baseline and the nine features below are shared verbatim with the code
  * the network was fitted against (tools/ep_model.py). That is the whole
  * correctness argument for this file: a feature computed a little differently
  * here is not an approximation of the trained model, it is a different model.
@@ -44,10 +44,16 @@ enum {
   F_LAG,
   F_CUM_LAM,
   F_NU_ORIGIN,
+  F_GAMMA2_BACK,
   F_COUNT
 };
 
-/* The lookback: nu where the variance was half its current value. */
+_Static_assert(F_COUNT == SIF_EP_EMU_N_IN,
+  "ep_emu.c computes a different number of features than the generated "
+  "weights expect; regenerate ep_emu_weights.h with tools/ep_export_c.py");
+
+/* The lookback: nu and gamma^2 where the variance was half its current
+ * value. */
 #define EP_EMU_LOOKBACK 0.5
 
 /* Ceiling on the log-correction before it is exponentiated. The trained
@@ -208,11 +214,14 @@ static double interp_desc(
 }
 
 /*
- * The eight inputs, on the n - 1 bin centres, row-major.
+ * The nine inputs, on the n - 1 bin centres, row-major.
  *
  * Every one of these is a property of the walk rather than of the grid, which
- * is what lets the result be read on any radius sampling: the emulated answer
- * moves by under 0.25% between 64 and 256 radii.
+ * is what lets the result be read on any radius sampling. Two first versions
+ * were not -- cum_lam stopped at the bin's upper edge and nu_origin was read at
+ * the outermost bin centre -- and the answer moved by 0.5% between 65 and 513
+ * radii. Taken at the bin centre and at the largest radius, it moves by under
+ * 0.05% once the spacing is d ln S <~ 0.02.
  */
 static int features(
   const sif_ep_features_t* f, uint32_t n, const double* lam, double* X) {
@@ -225,37 +234,44 @@ static int features(
   double* ln_nu = malloc((size_t)n_bins * sizeof(double));
   double* ln_S = malloc((size_t)n_bins * sizeof(double));
   double* cum_lam = malloc((size_t)n_bins * sizeof(double));
+  double* g2_mid = malloc((size_t)n_bins * sizeof(double));
 
-  if (!S_mid || !nu_mid || !ln_nu || !ln_S || !cum_lam) {
+  if (!S_mid || !nu_mid || !ln_nu || !ln_S || !cum_lam || !g2_mid) {
     SIF_LOG_ERROR(TAG, "failed to allocate the feature workspace");
     free(S_mid);
     free(nu_mid);
     free(ln_nu);
     free(ln_S);
     free(cum_lam);
+    free(g2_mid);
     return SIF_ERR_ALLOC;
   }
 
   for (uint32_t i = 0; i < n_bins; i++) {
     S_mid[i] = 0.5 * (f->S[i] + f->S[i + 1]);
     nu_mid[i] = 0.5 * (f->nu[i] + f->nu[i + 1]);
+    g2_mid[i] = 0.5 * (f->gamma2[i] + f->gamma2[i + 1]);
     ln_nu[i] = log(nu_mid[i]);
     ln_S[i] = log(S_mid[i]);
   }
 
-  /* Hazard accumulated BEFORE entering each bin: the walk enters at the
-   * largest radius (highest index) and works down, so this is the reverse
-   * cumulative sum, excluding the bin itself. It is the one number that
-   * summarises the whole prior history, and it is what the surviving
-   * population is conditioned on. */
+  /* Hazard accumulated up to each bin's CENTRE: everything above the bin plus
+   * half the bin. The walk enters at the largest radius (highest index) and
+   * works down, so this is a reverse cumulative sum. Measured at the centre,
+   * where the other features are; stopping at the bin's upper edge made it,
+   * and through it the answer, depend on the bin width. */
   double cum = 0.0;
   for (int32_t i = (int32_t)n_bins - 1; i >= 0; i--) {
-    cum_lam[i] = cum;
+    cum_lam[i] = cum + 0.5 * lam[i];
     cum += lam[i];
   }
 
+  /* The lookback is clamped at the walk's origin, the largest radius. */
   const double S_origin = f->S[n - 1];
-  const double nu_origin = nu_mid[n_bins - 1];
+
+  /* nu at the largest RADIUS, where the walk starts. The outermost bin
+   * centre sits half a grid step inside it and so moved with the sampling. */
+  const double nu_origin = f->nu[n - 1];
 
   for (uint32_t i = 0; i < n_bins; i++) {
     double* row = X + (size_t)i * F_COUNT;
@@ -265,15 +281,20 @@ static int features(
       target = S_origin;
 
     row[F_NU] = nu_mid[i];
-    row[F_GAMMA2] = 0.5 * (f->gamma2[i] + f->gamma2[i + 1]);
+    row[F_GAMMA2] = g2_mid[i];
     row[F_Y] = 0.5 * (f->y[i] + f->y[i + 1]);
     row[F_DLNNU_DLNS] = grad(ln_nu, ln_S, n_bins, i);
     row[F_NU_BACK] = interp_desc(S_mid, nu_mid, n_bins, target);
     row[F_LAG] = log(S_mid[i] / target);
     row[F_CUM_LAM] = cum_lam[i];
     row[F_NU_ORIGIN] = nu_origin;
+    /* gamma^2 peaks near R ~ 10 Mpc/h, so its local value is reached from two
+     * sides; where it was half a variance ago says which side the walk came
+     * from. */
+    row[F_GAMMA2_BACK] = interp_desc(S_mid, g2_mid, n_bins, target);
   }
 
+  free(g2_mid);
   free(cum_lam);
   free(S_mid);
   free(nu_mid);
@@ -285,56 +306,78 @@ static int features(
 
 /* --- The domain report --- */
 
-static void report_domain(
-  const double* X, uint32_t n_bins, double nu_large, sif_emu_domain_t* domain) {
+static void report_domain(const double* X, const sif_real* radii,
+  uint32_t n_bins, double nu_large, sif_emu_domain_t* domain) {
 
   const double* lo = SIF_EP_EMU_BOX_LO;
   const double* hi = SIF_EP_EMU_BOX_HI;
   static const char* const names[F_COUNT] = {"nu", "gamma2", "y", "dlnnu_dlnS",
-    "nu_back", "lag", "cum_lam", "nu_origin"};
+    "nu_back", "lag", "cum_lam", "nu_origin", "gamma2_back"};
 
   const double first_step = sif__ep_upper_tail(nu_large);
 
   uint32_t n_outside = 0;
   uint32_t worst = 0;
   double worst_excess = 0.0;
+  double worst_value = 0.0;
+  uint32_t first_out = 0, last_out = 0;
 
   for (uint32_t i = 0; i < n_bins; i++) {
     const double* row = X + (size_t)i * F_COUNT;
+    /* Above the trained nu nothing crosses (less than 1e-8 of the walks), so
+     * whatever the correction does there cannot reach the answer: the network
+     * was measured to stay within a few per cent of one out to nu = 50. Such
+     * bins are where a grid started further out than training walks; they are
+     * not a gap in what the model knows. */
+    if (row[F_NU] > hi[F_NU])
+      continue;
     int out = 0;
     for (uint32_t j = 0; j < F_COUNT; j++) {
+      /* The upper edges of nu_back and nu_origin are where training walks
+       * started, not a limit of the physics: nu_origin is held at it before
+       * the network (see the caller), and nu_back passes it only in bins at
+       * nu > 4, where under 3e-5 of the walks cross. The low end of
+       * nu_origin is the origin check below, reported once, there. */
+      if (j == F_NU_ORIGIN)
+        continue; /* its own check below; held at the maximum above */
+      const int no_upper = (j == F_NU_BACK);
       const double span = (hi[j] - lo[j]) > 0.0 ? (hi[j] - lo[j]) : 1.0;
-      const double excess =
-        (row[j] < lo[j]) ? (lo[j] - row[j]) / span
-                         : ((row[j] > hi[j]) ? (row[j] - hi[j]) / span : 0.0);
+      const double excess = (row[j] < lo[j])
+        ? (lo[j] - row[j]) / span
+        : ((row[j] > hi[j] && !no_upper) ? (row[j] - hi[j]) / span : 0.0);
       if (excess > 0.0)
         out = 1;
       if (excess > worst_excess) {
         worst_excess = excess;
         worst = j;
+        worst_value = row[j];
       }
     }
-    n_outside += (uint32_t)out;
+    if (out) {
+      if (n_outside == 0)
+        first_out = i;
+      last_out = i;
+      n_outside++;
+    }
   }
 
   const int origin_low = nu_large < SIF_EP_EMU_NU_ORIGIN_MIN;
 
   if (origin_low) {
     SIF_LOG_WARNING(TAG,
-      "nu at the largest radius is %.3f, below the %.3f the correction was "
-      "trained over: %.2f%% of walks start above the barrier and never enter "
-      "any bin. Extend the radius grid outward; no amount of training would "
-      "fix this one",
-      nu_large, (double)SIF_EP_EMU_NU_ORIGIN_MIN, 100.0 * first_step);
+      "walk origin too low: nu at R = %g is %.3f, %.2f%% of walks start above "
+      "the barrier (expected nu >= %.3f; extend the radii outward)",
+      (double)radii[n_bins], nu_large, 100.0 * first_step,
+      (double)SIF_EP_EMU_NU_ORIGIN_MIN);
   }
 
   if (n_outside > 0) {
     SIF_LOG_WARNING(TAG,
-      "%u of %u bins fall outside the region the correction was fitted over; "
-      "%s is the furthest out, by %.1f%% of its trained span. The baseline is "
-      "still corrected, but the accuracy below is the measured out-of-domain "
-      "figure rather than the in-domain one",
-      n_outside, n_bins, names[worst], 100.0 * worst_excess);
+      "%u of %u bins outside the trained range, R = %g to %g: %s = %.4g "
+      "(trained %.4g to %.4g)",
+      n_outside, n_bins, (double)radii[first_out],
+      (double)radii[last_out + 1], names[worst], worst_value, lo[worst],
+      hi[worst]);
   }
 
   if (domain) {
@@ -348,13 +391,95 @@ static void report_domain(
   }
 }
 
+/* --- The density at the radii --- */
+
+/*
+ * The first-crossing density per unit R AT each radius, n values:
+ *
+ *     f(R_i) = r(S_i) * alive(S_i) * |dS/dR|_i
+ *
+ * with r = f_up * exp(correction) the corrected rate per unit S, alive the
+ * fraction of walks not yet crossed -- exact at a grid point, from the same
+ * recursion as the bins -- and dS/dR second order in ln S over ln R. The
+ * correction is fitted per bin; it is smooth and O(1), so it is carried from
+ * the bin centres to the radii linearly in ln S, extrapolated over the half
+ * bin at either end. tools/ep_model.py (multiplicity_at_radii) is the
+ * reference.
+ *
+ * `lam` holds the CORRECTED per-bin hazards, `corr` the raw network output.
+ */
+static int density_at_radii(const sif_ep_features_t* f, const sif_real* radii,
+  uint32_t n, const double* corr, const double* lam, double alive_origin,
+  sif_real* out) {
+
+  const uint32_t n_bins = n - 1;
+  double* ln_mid = malloc((size_t)n_bins * sizeof(double));
+  double* ln_R = malloc((size_t)n * sizeof(double));
+  double* ln_S = malloc((size_t)n * sizeof(double));
+
+  if (!ln_mid || !ln_R || !ln_S) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the density workspace");
+    free(ln_mid);
+    free(ln_R);
+    free(ln_S);
+    return SIF_ERR_ALLOC;
+  }
+
+  for (uint32_t i = 0; i < n_bins; i++)
+    ln_mid[i] = log(0.5 * (f->S[i] + f->S[i + 1]));
+  for (uint32_t i = 0; i < n; i++) {
+    ln_R[i] = log((double)radii[i]);
+    ln_S[i] = log(f->S[i]);
+  }
+
+  double alive = alive_origin;
+
+  for (int32_t i = (int32_t)n - 1; i >= 0; i--) {
+    const uint32_t k = (uint32_t)i;
+    const double ln_s = ln_S[k];
+
+    /* Radius k sits between bin centres k (smaller S) and k - 1 (larger S);
+     * the first and last radii extrapolate from the two nearest centres. */
+    uint32_t a, b;
+    if (k == 0) {
+      a = 1;
+      b = 0;
+    } else if (k == n - 1) {
+      a = n_bins - 1;
+      b = n_bins - 2;
+    } else {
+      a = k;
+      b = k - 1;
+    }
+    const double c_raw =
+      corr[a] + (corr[b] - corr[a]) / (ln_mid[b] - ln_mid[a]) * (ln_s - ln_mid[a]);
+    const double c = c_raw < EP_EMU_CORR_MAX ? c_raw : EP_EMU_CORR_MAX;
+
+    if (k < n - 1)
+      alive *= exp(-lam[k]);
+
+    /* dS/dR through the logarithms: S is close to a power law in R, and
+     * differenced directly it was 0.5% off at 48 radii; this way, 0.007%. */
+    const double dS_dR =
+      f->S[k] / (double)radii[k] * fabs(grad(ln_S, ln_R, n, k));
+    const double v = f->f_up[k] * exp(c) * alive * dS_dR;
+    out[k] = (sif_real)(v > 0.0 ? v : 0.0);
+  }
+
+  free(ln_mid);
+  free(ln_R);
+  free(ln_S);
+  return SIF_OK;
+}
+
 /* --- The entry point --- */
 
 sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
   const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt) {
 
-  (void)opt; /* reserved */
+  const int binned =
+    (opt & SIF__EP_EMU_OUTPUT_MASK) == SIF_EP_EMU_BIN_CENTRES;
 
   if (domain) {
     domain->in_domain = 0;
@@ -380,7 +505,8 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   double* lam = malloc((size_t)n_bins * sizeof(double));
   double* X = malloc((size_t)n_bins * F_COUNT * sizeof(double));
   double* corr = malloc((size_t)n_bins * sizeof(double));
-  sif_real* out = sif_calloc_aligned((size_t)n_bins, sizeof(sif_real));
+  sif_real* out =
+    sif_calloc_aligned((size_t)(binned ? n_bins : n), sizeof(sif_real));
 
   if (!S || !lam || !X || !corr || !out) {
     SIF_LOG_ERROR(TAG, "failed to allocate the emulator workspace");
@@ -399,11 +525,23 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   if (features(&f, n, lam, X) != SIF_OK)
     goto fail;
 
+  const double nu_large = f.nu[n - 1];
+  report_domain(X, radii, n_bins, nu_large, domain);
+
+  /* A walk starting further out than any training walk is the same walk: above
+   * nu ~ 3.5 nothing has crossed, so the Monte Carlo does not depend on where
+   * the grid starts. The network was only shown origins up to the trained
+   * maximum, and extrapolated past it moves the answer by up to 0.4% at
+   * nu_origin = 8; held at the maximum, by under 0.1%. */
+  const double nu_origin_max = SIF_EP_EMU_BOX_HI[F_NU_ORIGIN];
+  for (uint32_t i = 0; i < n_bins; i++) {
+    double* row = X + (size_t)i * F_COUNT;
+    if (row[F_NU_ORIGIN] > nu_origin_max)
+      row[F_NU_ORIGIN] = nu_origin_max;
+  }
+
   if (sif__nn_eval(&SIF_EP_EMU_NN, X, n_bins, corr) != SIF_OK)
     goto fail;
-
-  const double nu_large = f.nu[n - 1];
-  report_domain(X, n_bins, nu_large, domain);
 
   /* The correction multiplies the HAZARD. Everything downstream of this line
    * is bounded by construction: 1 - exp(-Lambda) stays in [0, 1] however
@@ -423,7 +561,13 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
     lam[i] = scaled > 0.0 ? scaled : 0.0;
   }
 
-  sif__ep_survival(lam, radii, n_bins, 1.0 - sif__ep_upper_tail(nu_large), out);
+  const double alive_origin = 1.0 - sif__ep_upper_tail(nu_large);
+
+  if (binned)
+    sif__ep_survival(lam, radii, n_bins, alive_origin, out);
+  else if (density_at_radii(&f, radii, n, corr, lam, alive_origin, out) !=
+           SIF_OK)
+    goto fail;
 
   free(S);
   free(lam);

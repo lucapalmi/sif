@@ -16,7 +16,7 @@ Every cosmology is evaluated on the SAME wavenumber grid -- same minkh, maxkh
 and npoints -- so k is stored once and P(k) is a single 2D array, and no
 interpolation ever touches the spectrum.
 
-Usage:  python tools/ep_make_spectra.py [output.npz]
+Usage:  python tools/ep_make_spectra.py [ep_spectra_v2.npz]
 """
 
 import sys
@@ -26,7 +26,12 @@ import camb
 
 from ep_trainset_design import COSMO_BOX, build_cosmologies
 
-K_MIN, K_MAX, N_K = 1e-4, 500.0, 2400
+# Campaign 2 (walks out to 700 Mpc/h). <(d delta/dS)^2> needs
+# k dlnk R < pi/4 over the k that carry it, and at R = 600 the campaign-1 grid
+# (N_K = 2400, dlnk = 0.0064, kept in ep_spectra.npz for runs/) was 0.43% off
+# against a dlnk = 0.0005 reference. 10000 points bring that to 1.5e-4 out to
+# R = 800 and leave sigma untouched.
+K_MIN, K_MAX, N_K = 1e-4, 500.0, 10000
 K_PAD_LO, K_PAD_HI, N_PAD = 1e-6, 1e4, 500
 
 
@@ -61,7 +66,7 @@ def pad_pk(kh, pk, k_full, n_lo, n_hi):
 
 
 def main():
-    out = sys.argv[1] if len(sys.argv) > 1 else "ep_spectra.npz"
+    out = sys.argv[1] if len(sys.argv) > 1 else "ep_spectra_v2.npz"
     cosmologies = build_cosmologies()
 
     k_full = None

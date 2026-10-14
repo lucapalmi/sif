@@ -13,7 +13,7 @@ through ep_model, which is also what the deployed emulator calls, so the
 training features and the inference features cannot drift apart. A change to a
 feature definition means re-running this, not re-running the cluster.
 
-Usage:  python tools/ep_trainset_load.py runs/
+Usage:  python tools/ep_trainset_load.py runs/ [runs_v2/ ...]
 """
 
 import glob
@@ -34,12 +34,12 @@ MAX_REL_ERR = 0.05
 MAX_FIRST_STEP = 0.01
 
 
-def load_runs(run_dir, max_rel_err=MAX_REL_ERR, max_first_step=MAX_FIRST_STEP,
-              keep_truncated=False):
+def load_runs(run_dirs, max_rel_err=MAX_REL_ERR, max_first_step=MAX_FIRST_STEP,
+              keep_truncated=False, max_origin=None):
     """Every curve in every task file, with canonical features and targets.
 
     Each curve carries:
-      X          (n-1, 8) canonical feature matrix, columns FEATURE_NAMES
+      X          (n-1, 9) canonical feature matrix, columns FEATURE_NAMES
       lam_up     baseline hazard per bin
       lam_mc     Monte Carlo hazard per bin (the target's numerator)
       ratio      lam_mc / lam_up, the quantity the network learns the log of
@@ -47,11 +47,19 @@ def load_runs(run_dir, max_rel_err=MAX_REL_ERR, max_first_step=MAX_FIRST_STEP,
       mask       bins usable for fitting and scoring
       plus the raw inputs, the barrier parameters and the cosmology.
     """
+    if isinstance(run_dirs, str):
+        run_dirs = [run_dirs]
+    paths = [p for run_dir in run_dirs
+             for p in sorted(glob.glob(os.path.join(run_dir, "trainset_*.npz")))]
+
     curves = []
 
-    for path in sorted(glob.glob(os.path.join(run_dir, "trainset_*.npz"))):
+    for path in paths:
         d = np.load(path)
         n_paths = int(d["n_paths"])
+        # Both campaigns share cosmologies by task id, so `task` groups a
+        # cosmology across them for cross-validation.
+        campaign = int(d["campaign"]) if "campaign" in d.files else 1
         task = int(os.path.basename(path).split("_")[1].split(".")[0])
         cosmo = {k.split("__", 1)[1]: float(d[k]) for k in d.files
                  if k.startswith("cosmo__")}
@@ -74,6 +82,8 @@ def load_runs(run_dir, max_rel_err=MAX_REL_ERR, max_first_step=MAX_FIRST_STEP,
             first_step = float(upper_tail(nu_large))
             if first_step > max_first_step and not keep_truncated:
                 continue
+            if max_origin is not None and radii[-1] > max_origin:
+                continue
 
             with np.errstate(divide="ignore", invalid="ignore"):
                 ratio = np.where(lam_up > 0.0, lam_mc / lam_up, np.nan)
@@ -83,6 +93,7 @@ def load_runs(run_dir, max_rel_err=MAX_REL_ERR, max_first_step=MAX_FIRST_STEP,
                     & np.all(np.isfinite(X), axis=1))
 
             c = dict(task=task, barrier_tag=tag, cosmo=task, family="cdm",
+                     campaign=campaign, r_origin=float(radii[-1]),
                      radii=radii, S_full=S, barrier=barrier,
                      deriv_variance=dvar, counts=counts, n_paths=n_paths,
                      X=X, lam_up=lam_up, lam_mc=lam_mc, ratio=ratio,
@@ -103,10 +114,10 @@ def load_runs(run_dir, max_rel_err=MAX_REL_ERR, max_first_step=MAX_FIRST_STEP,
 
 
 def main():
-    run_dir = sys.argv[1] if len(sys.argv) > 1 else "runs"
-    curves = load_runs(run_dir)
+    run_dirs = sys.argv[1:] or ["runs"]
+    curves = load_runs(run_dirs)
     if not curves:
-        sys.exit(f"no trainset_*.npz under {run_dir}")
+        sys.exit(f"no trainset_*.npz under {' '.join(run_dirs)}")
 
     n_bins = sum(int(c["mask"].sum()) for c in curves)
     pool = lambda k: np.concatenate([c[k][c["mask"]] for c in curves])

@@ -159,7 +159,7 @@ def main():
  * cosmologies: the median relative error on the multiplicity in domain, and
  * the measured figure just outside it. */
 #define {PREFIX}_ERROR_IN_DOMAIN {c_double(emu.accuracy.get('median', 0.0013))}
-#define {PREFIX}_ERROR_OUT_DOMAIN {c_double(0.0077)}
+#define {PREFIX}_ERROR_OUT_DOMAIN {c_double(emu.accuracy.get('median_outside', 0.0077))}
 
 #endif /* {GUARD} */
 """)

@@ -153,15 +153,17 @@ SIF_NODISCARD sif_real* sif_ep_multiplicity_function(const sif_real* radii,
  * the answer is all that is wanted.
  *
  * Leaving the trained region is not an error and does not fail the call. It
- * costs accuracy -- around 0.33% against the usual 0.13% at the edge that was
- * measured -- and a sampler should be able to notice that without parsing the
- * log or aborting a chain over one proposal.
+ * costs accuracy -- `expected_error` carries the measured figure either way --
+ * and a sampler should be able to notice that without parsing the log or
+ * aborting a chain over one proposal.
  */
 typedef struct {
   /* Zero if either check below fired. */
   int in_domain;
 
-  /* Bins with at least one input outside the range the fit covered. */
+  /* Bins with at least one input outside the range the fit covered. Bins
+   * above the trained nu are not counted: nothing crosses there, so a grid
+   * started further out than the training walks is not out of domain. */
   uint32_t n_bins_outside;
 
   /* B / sigma at the LARGEST radius, and the fraction of walks that therefore
@@ -195,28 +197,35 @@ typedef struct {
  * in the radius count.
  *
  * @note Returns the answer the Monte Carlo CONVERGES to, not the answer it
- * gives on the caller's grid. Those differ: a first-crossing walk sampled at 50
- * radii sits about 1% from its own continuum limit. Comparing the two on a
- * coarse grid shows a disagreement larger than either method's error, and the
- * emulator is the one to trust. The emulated result moves by under 0.25%
- * between 64 and 256 radii.
+ * gives on the caller's grid. Those differ: a first-crossing walk sampled at 65
+ * radii sits about 0.1% below its converged value, at 129 within 0.05%. The
+ * emulated result hardly depends on the sampling: the same problem on 65, 129
+ * and 257 radii agrees to 0.02%.
  *
- * @note Trained over CDM-like spectra and Sheth-Mo-Tormen barriers. Other
- * spectral families are outside the contract, and the `domain` report does not
- * reliably catch them: a per-feature range check passes power-law spectra that
- * are several per cent wrong, because what distinguishes them is the shape of
- * the whole trajectory rather than any pointwise value.
+ * @note No cosmological parameter enters: the cosmology is seen only through
+ * sigma and deriv_variance, i.e. through nu = B / sigma along the walk and the
+ * shape of P(k). Trained over CDM-like spectra and Sheth-Mo-Tormen barriers
+ * (constant barriers included), for walks starting anywhere from ~2 to
+ * 250 Mpc/h -- the largest radius of the grid, placed as described under
+ * `radii`. Other spectral families and barrier shapes are outside the
+ * contract. The `domain` report catches the ones far off (a strong
+ * warm-dark-matter cutoff, a barrier rising with sigma) but not every mild
+ * one: a power-law spectrum or a weak cutoff can pass 0.25-0.3% wrong, since
+ * what sets them apart is the shape of the whole trajectory rather than any
+ * pointwise value.
  *
  * @param radii Smoothing radii, strictly positive and strictly increasing, at
- * least 3. Extend the grid outward far enough that few walks start above the
- * barrier; `domain` reports whether that was achieved.
+ * least 4. Place the largest where nu = B / sigma is ~3.5 or more: few walks
+ * then start above the barrier, and the answer does not depend on exactly
+ * where the grid starts (further out costs nothing). Keep nu above ~0.21 at
+ * the smallest. `domain` reports a start too low and an end too deep.
  * @param n_radii Number of radii
  * @param sigma R.m.s. density contrast per radius, strictly positive. Take it
  * from sif_delta_covariance_pk so the barrier and the walk share one variance.
  * @param barrier n_radii barrier heights, in the ascending order of radii,
  * **strictly positive** -- stricter than the Monte Carlo, which takes any
  * finite value. The features here are built from log(B / sigma), and the
- * correction was trained over nu from 0.23 upward, so the convention is a
+ * correction was trained over nu from 0.21 upward, so the convention is a
  * positive barrier crossed from below. That is what sif_ep_barrier_smt()
  * produces; a void threshold enters through its magnitude, as it does in the
  * BBKS routines.
@@ -226,12 +235,17 @@ typedef struct {
  * which would make the answer depend on how finely `radii` was sampled -- the
  * one property this entry point exists to avoid.
  * @param domain Optional report; pass NULL to skip
- * @param opt Reserved; pass SIF_DEFAULT
+ * @param opt SIF_EP_EMU_AT_RADII (default): the first-crossing density per
+ * unit R at each of the n_radii radii. SIF_EP_EMU_BIN_CENTRES: its average
+ * over each bin, n_radii - 1 values on the bin centres -- the form a Monte
+ * Carlo histogram measures, and so what sif_ep_multiplicity_function returns;
+ * use it to compare the two. The forms agree to second order in the spacing
+ * (0.01-0.06% at 129 radii).
  *
- * @return Newly allocated array of n_radii - 1 values on the same bin centres
- * as sif_ep_multiplicity_function, released with sif_free_aligned, or NULL on
- * invalid input. An input outside the trained region is NOT invalid: the answer
- * is returned, `domain` records it, and the log names the quantity responsible.
+ * @return Newly allocated array of n_radii values (or n_radii - 1 under
+ * SIF_EP_EMU_BIN_CENTRES), released with sif_free_aligned, or NULL on invalid
+ * input. An input outside the trained region is NOT invalid: the answer is
+ * returned, `domain` records it, and the log names the quantity responsible.
  */
 SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,

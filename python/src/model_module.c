@@ -189,7 +189,7 @@ static PyMethodDef model_methods[] = {
     (PyCFunction)py_sif_ep_multiplicity_function_emu,
     METH_VARARGS | METH_KEYWORDS,
     "ep_multiplicity_function_emu(radii, sigma, barrier, deriv_variance, "
-    "return_domain=False)"
+    "return_domain=False, binned=False)"
     "\n"
     "--\n\n"
     "Emulated void multiplicity function: the same quantity as "
@@ -197,16 +197,22 @@ static PyMethodDef model_methods[] = {
     "The up-crossing rate of Verza et al. (2024) eq. (3.15) -- Musso-Sheth "
     "with the exact scale-dependent <(d delta / dS)^2> -- corrected by a "
     "small trained network. "
-    "About 0.13% of the Monte Carlo it was fitted against, and roughly a "
-    "million times faster.\n"
+    "About 0.08% of the Monte Carlo it was fitted against (median, "
+    "radii below 80 Mpc/h), for walks starting anywhere from ~2 to 250 "
+    "Mpc/h, and a few million times faster.\n"
     "Takes sigma, NOT the packed covariance the Monte Carlo needs: the "
     "emulator reads only the diagonal, so it wants n values rather than "
     "n(n+1)/2. deriv_variance is required, from delta_covariance_pk.\n"
     "Returns the answer the Monte Carlo CONVERGES to, not the answer it gives "
-    "on a coarse grid; the emulated result moves by under 0.25% between 64 and "
-    "256 radii, where the walk itself moves by about a per cent.\n"
-    "Extend the radius grid outward far enough that few walks start above the "
-    "barrier; return_domain=True returns (mult, domain) with in_domain, "
+    "on a coarse grid; the emulated result agrees to 0.02% on 65, 129 and "
+    "257 radii.\n"
+    "Returns the first-crossing density per unit R at each radius (n "
+    "values); binned=True returns its average over each bin instead, n - 1 "
+    "values on the bin centres, which is what the Monte Carlo "
+    "ep_multiplicity_function measures.\n"
+    "Place the largest radius where nu = barrier / sigma is ~3.5 or more "
+    "(further out costs nothing) and keep nu above ~0.21 at the smallest; "
+    "return_domain=True returns (mult, domain) with in_domain, "
     "n_bins_outside, nu_origin, first_step_mass and expected_error."},
 
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,

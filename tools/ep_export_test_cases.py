@@ -11,7 +11,8 @@ The C emulator has to reproduce ep_model.py, not merely resemble it: the
 network was fitted against those exact feature expressions, so a stencil or a
 lookback that differs in the last term is a different model, and no physical
 invariant would catch it. These cases pin the whole chain -- baseline rate,
-hazard integration, all eight features, the network, the survival recursion --
+hazard integration, all nine features, the network, the survival recursion and
+the density at the radii --
 against values the Python produced.
 
 The inputs are stored at the precision the C entry point actually receives
@@ -68,7 +69,10 @@ def main():
             radii.astype(np.float64), S, barrier.astype(np.float64), dvar)
         f, info = emu.multiplicity(
             radii.astype(np.float64), S, barrier.astype(np.float64), dvar)
-        cases.append((radii, sigma, barrier, dvar, f, nu_large, info))
+        fb, _ = emu.multiplicity(
+            radii.astype(np.float64), S, barrier.astype(np.float64), dvar,
+            check=False, binned=True)
+        cases.append((radii, sigma, barrier, dvar, f, fb, nu_large, info))
 
     n = len(cases[0][0])
 
@@ -91,26 +95,29 @@ def main():
  * Reference values from the Python model the network was fitted with. The C
  * emulator must reproduce the multiplicity to the precision sif_real can hold;
  * anything worse means a feature is being computed differently, which no
- * physical invariant would detect.
+ * physical invariant would detect. EXPECT is the density at the radii (the
+ * default output), EXPECT_BINNED the bin averages (SIF_EP_EMU_BIN_CENTRES).
  */
 
 #define EP_EMU_N_CASES {len(cases)}
 #define EP_EMU_CASE_N {n}
 
 """)
-        for i, (radii, sigma, barrier, dvar, f, nu_large, info) in \
+        for i, (radii, sigma, barrier, dvar, f, fb, nu_large, info) in \
                 enumerate(cases):
             emit(f"EP_EMU_RADII_{i}", radii, fh)
             emit(f"EP_EMU_SIGMA_{i}", sigma, fh)
             emit(f"EP_EMU_BARRIER_{i}", barrier, fh)
             emit(f"EP_EMU_DVAR_{i}", dvar, fh)
             emit(f"EP_EMU_EXPECT_{i}", f, fh)
+            emit(f"EP_EMU_EXPECT_BINNED_{i}", fb, fh)
             fh.write(f"static const double EP_EMU_NU_ORIGIN_{i} = "
                      f"{nu_large:.17g};\n")
             fh.write(f"static const int EP_EMU_IN_DOMAIN_{i} = "
                      f"{1 if info['ok'] else 0};\n\n")
 
-        for nm in ("RADII", "SIGMA", "BARRIER", "DVAR", "EXPECT"):
+        for nm in ("RADII", "SIGMA", "BARRIER", "DVAR", "EXPECT",
+                   "EXPECT_BINNED"):
             arrs = ", ".join(f"EP_EMU_{nm}_{i}" for i in range(len(cases)))
             fh.write(f"static const double* const EP_EMU_{nm}[] = "
                      f"{{{arrs}}};\n")
@@ -124,7 +131,7 @@ def main():
 
     print(f"{len(cases)} cases of {n} radii -> {args.out}")
     print(f"  weights sha256 {wh}")
-    print(f"  in-domain: {[bool(c[6]['ok']) for c in cases]}")
+    print(f"  in-domain: {[bool(c[7]['ok']) for c in cases]}")
 
 
 if __name__ == "__main__":

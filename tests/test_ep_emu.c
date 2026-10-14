@@ -74,16 +74,22 @@ static void test_against_reference(void) {
     sif_emu_domain_t dom;
     sif_real* f = sif_ep_multiplicity_function_emu(
       radii, n, sigma, barrier, EP_EMU_DVAR[c], &dom, SIF_DEFAULT);
+    sif_real* fb = sif_ep_multiplicity_function_emu(
+      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_EP_EMU_BIN_CENTRES);
 
-    CHECK(f != NULL, "case %d returned NULL on a valid input", c);
+    CHECK(f != NULL && fb != NULL, "case %d returned NULL on a valid input", c);
 
-    if (f) {
+    if (f && fb) {
+      /* Both forms: n values at the radii, n - 1 bin averages. */
       double worst = 0.0;
       uint32_t at = 0;
-      for (uint32_t i = 0; i < n_bins; i++) {
-        const double want = EP_EMU_EXPECT[c][i];
+      for (uint32_t i = 0; i < n + n_bins; i++) {
+        const int at_radii = i < n;
+        const double want = at_radii ? EP_EMU_EXPECT[c][i]
+                                     : EP_EMU_EXPECT_BINNED[c][i - n];
+        const double got = at_radii ? (double)f[i] : (double)fb[i - n];
         const double scale = fabs(want) > 1e-300 ? fabs(want) : 1.0;
-        const double rel = fabs((double)f[i] - want) / scale;
+        const double rel = fabs(got - want) / scale;
         if (rel > worst) {
           worst = rel;
           at = i;
@@ -91,9 +97,9 @@ static void test_against_reference(void) {
       }
 
       CHECK(worst < REF_TOL,
-        "case %d departs from the Python model by a relative %.3e at bin %u; "
+        "case %d departs from the Python model by a relative %.3e at %s %u; "
         "at this size the cause is an implementation difference, not rounding",
-        c, worst, at);
+        c, worst, at < n ? "radius" : "bin", at < n ? at : at - n);
 
       CHECK(dom.in_domain == EP_EMU_IN_DOMAIN[c],
         "case %d reports in_domain=%d, the reference says %d", c, dom.in_domain,
@@ -104,11 +110,12 @@ static void test_against_reference(void) {
       CHECK(nu_rel < 1e-6, "case %d reports nu_origin %.6f, expected %.6f", c,
         (double)dom.nu_origin, EP_EMU_NU_ORIGIN[c]);
 
-      printf("  case %d: worst relative departure %.2e at bin %u, "
+      printf("  case %d: worst relative departure %.2e (radii and bins), "
              "in_domain %d\n",
-        c, worst, at, dom.in_domain);
-      sif_free_aligned(f);
+        c, worst, dom.in_domain);
     }
+    sif_free_aligned(f);
+    sif_free_aligned(fb);
 
     free(radii);
     free(sigma);
@@ -128,18 +135,28 @@ static void test_invariants(void) {
     sif_real* sigma = as_real(EP_EMU_SIGMA[c], n);
     sif_real* barrier = as_real(EP_EMU_BARRIER[c], n);
 
+    /* The bound is structural in the binned form: each bin holds a
+     * probability, alive * (1 - exp(-Lambda)), so they cannot sum past one.
+     * The density at the radii is the same function sampled at points; it
+     * must be non-negative and finite, and integrate to the same total. */
+    sif_real* fb = sif_ep_multiplicity_function_emu(
+      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_EP_EMU_BIN_CENTRES);
     sif_real* f = sif_ep_multiplicity_function_emu(
       radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_DEFAULT);
 
-    if (f) {
+    if (f && fb) {
       int negative = 0, nonfinite = 0;
-      double integral = 0.0;
-      for (uint32_t i = 0; i + 1 < n; i++) {
-        if (f[i] < 0.0f)
+      double integral = 0.0, trapezoid = 0.0;
+      for (uint32_t i = 0; i < n; i++) {
+        if (f[i] < 0.0f || (i + 1 < n && fb[i] < 0.0f))
           negative = 1;
-        if (!isfinite((double)f[i]))
+        if (!isfinite((double)f[i]) || (i + 1 < n && !isfinite((double)fb[i])))
           nonfinite = 1;
-        integral += (double)f[i] * ((double)radii[i + 1] - (double)radii[i]);
+        if (i + 1 < n) {
+          const double dr = (double)radii[i + 1] - (double)radii[i];
+          integral += (double)fb[i] * dr;
+          trapezoid += 0.5 * ((double)f[i] + (double)f[i + 1]) * dr;
+        }
       }
       CHECK(!negative, "case %d went negative", c);
       CHECK(!nonfinite, "case %d produced a non-finite value", c);
@@ -147,9 +164,15 @@ static void test_invariants(void) {
         "case %d integrates to %.6f, above the one path per path it can "
         "represent",
         c, integral);
-      printf("  case %d: crossing fraction %.4f\n", c, integral);
-      sif_free_aligned(f);
+      CHECK(fabs(trapezoid / integral - 1.0) < 1e-3,
+        "case %d: the density at the radii integrates to %.6f, the bins to "
+        "%.6f",
+        c, trapezoid, integral);
+      printf("  case %d: crossing fraction %.4f (at the radii: %.4f)\n", c,
+        integral, trapezoid);
     }
+    sif_free_aligned(f);
+    sif_free_aligned(fb);
 
     free(radii);
     free(sigma);
@@ -224,10 +247,10 @@ static void test_grid_independence(void) {
       CHECK(f != NULL, "the emulator returned NULL at %u radii", n);
 
       if (f) {
-        /* Linear interpolation onto the probe radius, on bin centres. */
-        for (uint32_t i = 0; i + 2 < n; i++) {
-          const double a = 0.5 * ((double)radii[i] + (double)radii[i + 1]);
-          const double b = 0.5 * ((double)radii[i + 1] + (double)radii[i + 2]);
+        /* Linear interpolation onto the probe radius, between radii. */
+        for (uint32_t i = 0; i + 1 < n; i++) {
+          const double a = (double)radii[i];
+          const double b = (double)radii[i + 1];
           if (a <= r_probe && r_probe <= b) {
             const double w = (r_probe - a) / (b - a);
             value[g] = (1.0 - w) * (double)f[i] + w * (double)f[i + 1];
@@ -317,7 +340,12 @@ static void test_domain(void) {
     sif_free_aligned(f2);
   }
 
-  /* A barrier far above anything trained: extrapolation, reported per bin. */
+  /*
+   * A barrier four times higher: the walk starts at nu ~ 18, far beyond any
+   * training walk. Above nu ~ 3.5 nothing has crossed, so that is the same
+   * walk started further out, and the bins where nothing crosses are not a gap
+   * in what the model knows. Not flagged.
+   */
   {
     sif_real* tall = malloc((size_t)n * sizeof(sif_real));
     for (uint32_t i = 0; i < n; i++)
@@ -325,14 +353,35 @@ static void test_domain(void) {
 
     sif_real* f3 = sif_ep_multiplicity_function_emu(
       radii, n, sigma, tall, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
-    CHECK(f3 != NULL, "an out-of-domain barrier was rejected rather than "
-                      "reported");
-    CHECK(dom.in_domain == 0 && dom.n_bins_outside > 0,
-      "a barrier four times the trained scale was reported as in domain");
-    printf("  barrier x4: %u of %u bins outside, expected error %.3f%%\n",
-      dom.n_bins_outside, n - 1, 100.0 * (double)dom.expected_error);
+    CHECK(f3 && dom.in_domain == 1,
+      "a walk started beyond the trained origins was flagged (%u bins)",
+      dom.n_bins_outside);
+    printf("  barrier x4 (origin nu %.1f): in_domain %d\n",
+      (double)dom.nu_origin, dom.in_domain);
     sif_free_aligned(f3);
     free(tall);
+  }
+
+  /*
+   * Half the derivative variance doubles gamma^2, past anything a CDM-like
+   * spectrum produces: a spectral shape the network never saw. Extrapolation,
+   * reported per bin, and the answer still returned.
+   */
+  {
+    double* dvar = malloc((size_t)n * sizeof(double));
+    for (uint32_t i = 0; i < n; i++)
+      dvar[i] = 0.5 * EP_EMU_DVAR[0][i];
+
+    sif_real* f4 = sif_ep_multiplicity_function_emu(
+      radii, n, sigma, barrier, dvar, &dom, SIF_DEFAULT);
+    CHECK(f4 != NULL, "an out-of-domain spectrum was rejected rather than "
+                      "reported");
+    CHECK(dom.in_domain == 0 && dom.n_bins_outside > 0,
+      "gamma^2 twice the trained range was reported as in domain");
+    printf("  gamma^2 x2: %u of %u bins outside, expected error %.3f%%\n",
+      dom.n_bins_outside, n - 1, 100.0 * (double)dom.expected_error);
+    sif_free_aligned(f4);
+    free(dvar);
   }
 
   free(radii);

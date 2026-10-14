@@ -24,8 +24,20 @@ multiplicity, so the survival recursion keeps the result in [0, 1] whatever the
 network does.
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 from scipy.optimize import minimize
+
+# Rows per block in the loss. The cost is the elementwise tanh and its
+# derivative over n_rows x width arrays, which numpy runs on one thread and
+# from main memory; in blocks of this size they stay in cache and run on every
+# core at once (numpy releases the GIL in ufuncs and matmul). Blocks are summed
+# in a fixed order, so the result does not depend on the thread count. Run it
+# with the BLAS single-threaded (ep_train_final.py does): a threaded BLAS under
+# these threads oversubscribes the cores and was measured to stall.
+BLOCK_ROWS = 8192
 
 
 class EmulatorMLP:
@@ -74,16 +86,15 @@ class EmulatorMLP:
             acts.append(h)
         return h.ravel(), acts
 
-    def _loss_grad(self, theta, X, y, w):
-        layers = self._unpack(theta)
+    def _block_loss_grad(self, layers, X, y, w, w_total):
+        """Unregularised loss and flat gradient over one block of rows."""
         pred, acts = self._forward(layers, X)
 
         resid = pred - y
-        loss = 0.5 * np.sum(w * resid ** 2) / np.sum(w)
-        loss += 0.5 * self.l2 * np.dot(theta, theta)
+        loss = 0.5 * np.sum(w * resid ** 2) / w_total
 
         # dL/dpred
-        g = (w * resid / np.sum(w))[:, None]
+        g = (w * resid / w_total)[:, None]
 
         grads = [None] * len(layers)
         for i in range(len(layers) - 1, -1, -1):
@@ -93,8 +104,21 @@ class EmulatorMLP:
             if i > 0:
                 g = (g @ W.T) * (1.0 - acts[i] ** 2)
 
-        flat = np.concatenate([np.concatenate([gw.ravel(), gb.ravel()])
-                               for (gw, gb) in grads])
+        return loss, np.concatenate([np.concatenate([gw.ravel(), gb.ravel()])
+                                     for (gw, gb) in grads])
+
+    def _loss_grad(self, theta, X, y, w):
+        layers = self._unpack(theta)
+        w_total = np.sum(w)
+        blocks = [slice(i, i + BLOCK_ROWS)
+                  for i in range(0, len(y), BLOCK_ROWS)]
+        parts = list(self._pool.map(
+            lambda sl: self._block_loss_grad(layers, X[sl], y[sl], w[sl],
+                                             w_total), blocks))
+
+        loss = sum(p[0] for p in parts)
+        flat = np.sum([p[1] for p in parts], axis=0)
+        loss += 0.5 * self.l2 * np.dot(theta, theta)
         flat += self.l2 * theta
         return loss, flat
 
@@ -114,15 +138,26 @@ class EmulatorMLP:
         n = self._n_params()
 
         best = None
+        self._pool = ThreadPoolExecutor(
+            int(os.environ.get("EP_FIT_THREADS", os.cpu_count() or 1)))
         for r in range(restarts):
             rng = np.random.default_rng(self.seed + r)
             # Modest init: tanh saturates and the gradient dies otherwise.
             theta0 = rng.normal(0.0, 0.5, n) / np.sqrt(max(X.shape[1], 1))
+            # ftol = gtol = 0: stop on maxiter alone. SciPy's default relative
+            # tolerance (~2e-9) ends the fit after a few hundred iterations
+            # here, because the loss is ~1e-5 and each step's gain looks
+            # negligible relative to it -- measured: every network stopped
+            # near iteration 660 whatever maxiter said, at twice the training
+            # loss a full run reaches.
             res = minimize(self._loss_grad, theta0, args=(Xs, y, w),
                            jac=True, method="L-BFGS-B",
-                           options=dict(maxiter=maxiter, maxfun=maxiter * 2))
+                           options=dict(maxiter=maxiter, maxfun=maxiter * 2,
+                                        ftol=0.0, gtol=0.0))
             if best is None or res.fun < best.fun:
                 best = res
+        self._pool.shutdown()
+        del self._pool
 
         self.theta_ = best.x
         self.loss_ = best.fun

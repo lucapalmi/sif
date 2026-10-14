@@ -236,6 +236,18 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 /** @} */
 
 /**
+ * @defgroup opt_ep_emu_output Emulated multiplicity: where it is evaluated
+ * @brief The density at the radii themselves (default), or its average over
+ * each bin on the n - 1 centres -- what a Monte Carlo histogram measures, and
+ * so what sif_ep_multiplicity_function returns.
+ * @{
+ */
+#define SIF_EP_EMU_AT_RADII     (0u << 8)
+#define SIF_EP_EMU_BIN_CENTRES  (1u << 8)
+#define SIF__EP_EMU_OUTPUT_MASK (1u << 8)
+/** @} */
+
+/**
  * @defgroup opt_vsf_bin Void size function binning
  * @brief Spacing of the radius bins.
  * @{

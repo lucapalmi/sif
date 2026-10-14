@@ -115,7 +115,7 @@ def stage_mc(out_path):
             barrier = barrier_values(sigma.astype(float), bp).astype(np.float32)
 
             t = time.perf_counter()
-            counts = model.first_crossing_counts_ep(
+            counts = model.ep_first_crossing_counts(
                 radii, cov, barrier, n_paths=N_PATHS,
                 seed=VALID_SEED + 1000 * i + j)
             dt = time.perf_counter() - t

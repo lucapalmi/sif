@@ -380,12 +380,13 @@ PyObject* py_sif_ep_multiplicity_function_emu(
 
   PyObject *radii_obj, *sigma_obj, *barrier_obj, *dvar_obj;
   int return_domain = 0;
+  int binned = 0;
 
-  static char* kwlist[] = {
-    "radii", "sigma", "barrier", "deriv_variance", "return_domain", NULL};
+  static char* kwlist[] = {"radii", "sigma", "barrier", "deriv_variance",
+    "return_domain", "binned", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOO|p", kwlist, &radii_obj,
-        &sigma_obj, &barrier_obj, &dvar_obj, &return_domain)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOO|pp", kwlist, &radii_obj,
+        &sigma_obj, &barrier_obj, &dvar_obj, &return_domain, &binned)) {
     return NULL;
   }
 
@@ -428,7 +429,8 @@ PyObject* py_sif_ep_multiplicity_function_emu(
     sif_ep_multiplicity_function_emu((const sif_real*)PyArray_DATA(radii_arr),
       (uint32_t)n, (const sif_real*)PyArray_DATA(sigma_arr),
       (const sif_real*)PyArray_DATA(barrier_arr),
-      (const double*)PyArray_DATA(dvar_arr), &domain, SIF_DEFAULT);
+      (const double*)PyArray_DATA(dvar_arr), &domain,
+      binned ? SIF_EP_EMU_BIN_CENTRES : SIF_EP_EMU_AT_RADII);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -442,7 +444,7 @@ PyObject* py_sif_ep_multiplicity_function_emu(
     return NULL;
   }
 
-  PyObject* mult_arr = py_sif_owned_array(values, n - 1);
+  PyObject* mult_arr = py_sif_owned_array(values, binned ? n - 1 : n);
   if (!mult_arr)
     return NULL;
 

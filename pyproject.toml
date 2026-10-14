@@ -34,9 +34,11 @@ classifiers = [
 
 # The command-line programs. Each is a native executable inside the package
 # (pysif/bin/, see bin/CMakeLists.txt); these are the commands pip puts on
-# PATH to run them.
+# PATH to run them. The launchers are in _pysif_cli, not in pysif: importing
+# pysif loads OpenMP, which can pin the launcher to one core and, through
+# execv, the program with it (see python/_pysif_cli/__init__.py).
 [project.scripts]
-sif-exodus = "pysif._cli:exodus"
+sif-exodus = "_pysif_cli:exodus"
 
 [project.urls]
 Homepage = "https://github.com/lucapalmi/sif"
@@ -50,9 +52,10 @@ ninja.version = ">=1.5"
 build-dir = "build/{wheel_tag}"
 cmake.build-type = "Release"
 
-# The Python half of the package; CMake installs the compiled half,
-# pysif/_pysif.*.so, next to it (see python/CMakeLists.txt).
-wheel.packages = ["python/pysif"]
+# The Python half of the package, and the launchers of the programs; CMake
+# installs the compiled half, pysif/_pysif.*.so, next to it (see
+# python/CMakeLists.txt).
+wheel.packages = ["python/pysif", "python/_pysif_cli"]
 
 # What the source distribution leaves out: none of it is needed to build.
 sdist.exclude = [

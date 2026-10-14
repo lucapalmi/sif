@@ -8,8 +8,14 @@ data/
 !tests/data/
 __pycache__/
 runs/
+runs_v2/
+runs_v3/
+runs_v4/
+val_v2/
 tools/plots/
 tools/ep_spectra.npz
+tools/ep_spectra_v2.npz
+tools/ep_validation_spectra.npz
 tools/ep_validation_mc.npz
 public/
 docs/_build/

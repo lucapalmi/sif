@@ -15,11 +15,11 @@
 #               the wheel repair (auditwheel, delocate) finds it and points
 #               it at the libraries the wheel bundles. It is not on PATH
 #               there: pip installs a launcher that is, one per program --
-#               python/pysif/_cli.py and [project.scripts] in pyproject.toml.
+#               python/_pysif_cli/ and [project.scripts] in pyproject.toml.
 #
 # Adding a program: a directory with its sources and a CMakeLists.txt calling
 # sif_add_program(), an add_subdirectory() below, and on the pip side a
-# launcher in _cli.py and its line in [project.scripts].
+# launcher in python/_pysif_cli/ and its line in [project.scripts].
 
 # Lua, which the programs read their configuration files with (vendor/lua,
 # see README.sif there). The core and the libraries a configuration may use,

@@ -14,7 +14,8 @@
 # cosmologies that is four waves.
 #
 # Submit:
-#   sbatch tools/ep_trainset.slurm
+#   sbatch tools/ep_trainset.slurm                                 # campaign 1
+#   sbatch --export=ALL,CAMPAIGN=2 tools/ep_trainset.slurm         # campaign 2
 # Check the projected cost on one node first (STRONGLY recommended, see below):
 #   sbatch --array=0 --export=ALL,BENCHMARK=1 tools/ep_trainset.slurm
 #
@@ -23,12 +24,13 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=72
-#SBATCH --time=02:00:00
+#SBATCH --time=01:30:00
 #SBATCH --output=logs/ep_trainset_%A_%a.out
 #SBATCH --error=logs/ep_trainset_%A_%a.err
 #
-# Uncomment and set for your site:
-##SBATCH --partition=CHANGEME
+# raven: whole nodes come from `general`; `small` shares nodes and was found
+# queued behind a CPU-group limit for hours while `general` started at once.
+#SBATCH --partition=general
 ##SBATCH --account=CHANGEME
 
 set -euo pipefail
@@ -47,8 +49,14 @@ export OMP_NUM_THREADS
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 
-SPECTRA="${SPECTRA:-ep_spectra.npz}"
-OUTDIR="${OUTDIR:-runs}"
+CAMPAIGN="${CAMPAIGN:-1}"
+if [[ "$CAMPAIGN" == "2" ]]; then
+    SPECTRA="${SPECTRA:-tools/ep_spectra_v2.npz}"
+    OUTDIR="${OUTDIR:-runs_v2}"
+else
+    SPECTRA="${SPECTRA:-tools/ep_spectra.npz}"
+    OUTDIR="${OUTDIR:-runs}"
+fi
 NPATHS="${NPATHS:-1000000000}"
 
 # --- environment -------------------------------------------------------------
@@ -64,6 +72,7 @@ mkdir -p "$OUTDIR" logs
 echo "host        $(hostname)"
 echo "task        ${SLURM_ARRAY_TASK_ID:-0} of ${SLURM_ARRAY_TASK_COUNT:-?}"
 echo "threads     $OMP_NUM_THREADS"
+echo "campaign    $CAMPAIGN"
 echo "paths/curve $NPATHS"
 echo "started     $(date -Is)"
 
@@ -75,6 +84,7 @@ if [[ "${BENCHMARK:-0}" == "1" ]]; then
     # thing that cannot be known off-cluster.
     python tools/ep_trainset_worker.py \
         --task-id "${SLURM_ARRAY_TASK_ID:-0}" \
+        --campaign "$CAMPAIGN" \
         --spectra "$SPECTRA" \
         --n-paths "$NPATHS" \
         --benchmark
@@ -83,6 +93,7 @@ fi
 
 python tools/ep_trainset_worker.py \
     --task-id "${SLURM_ARRAY_TASK_ID:-0}" \
+    --campaign "$CAMPAIGN" \
     --spectra "$SPECTRA" \
     --out "$OUTDIR" \
     --n-paths "$NPATHS"

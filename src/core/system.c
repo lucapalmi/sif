@@ -127,6 +127,23 @@ int sif_system_init(sif_config_t* config) {
    * the batch scheduler may cap us below it, and every work-splitting decision
    * in the library sizes its buffers from this number. */
   system_state->max_threads = (uint32_t)omp_get_max_threads();
+
+  /* omp_get_num_procs() counts the processors this process may run on -- the
+   * affinity mask it started with, not the machine. Fewer of them than
+   * threads means the threads share cores, and nothing else would say so:
+   * the log shows the full thread count while the run crawls. The usual cause
+   * is a parent that was pinned before it exec'd us -- a launcher that loaded
+   * an OpenMP runtime with OMP_PROC_BIND set binds itself to one core, and
+   * the mask is inherited -- or a cpu-bind or cgroup narrower than intended.
+   * Running this way is not an error, so it is a warning. */
+  const int n_procs = omp_get_num_procs();
+  if (n_procs > 0 && system_state->max_threads > (uint32_t)n_procs) {
+    SIF_LOG_WARNING("system",
+      "%u threads but %d processor%s available to this process: the threads "
+      "will share them. Check the CPU affinity this process inherited "
+      "(taskset -p, or Cpus_allowed_list in /proc/self/status)",
+      system_state->max_threads, n_procs, n_procs == 1 ? "" : "s");
+  }
 #else
   system_state->max_threads = 1;
   if (req_threads > 1) {

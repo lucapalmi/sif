@@ -221,12 +221,34 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
    * would carry the float's rounding into the derivative rather than the
    * value. */
   double* Bd = malloc((size_t)n * sizeof(double));
-  if (!Bd) {
+  double* lnB = malloc((size_t)n * sizeof(double));
+  double* lnS = malloc((size_t)n * sizeof(double));
+  if (!Bd || !lnB || !lnS) {
     SIF_LOG_ERROR(TAG, "failed to allocate the promoted barrier");
+    free(Bd);
+    free(lnB);
+    free(lnS);
     return SIF_ERR_ALLOC;
   }
-  for (uint32_t i = 0; i < n; i++)
+
+  /* dB/dS is taken through the logarithms, (B/S) d ln B / d ln S, whenever
+   * the barrier is positive throughout -- always, on the emulator's path. A
+   * barrier is close to a power law in sigma, so ln B against ln S is nearly
+   * straight and the three-point stencil nearly exact for it; on B against S
+   * it carried an error of second order in the spacing, which made f_up and
+   * the answer depend on the caller's radius sampling. */
+  int log_slope = 1;
+  for (uint32_t i = 0; i < n; i++) {
     Bd[i] = (double)barrier[i];
+    if (!(Bd[i] > 0.0))
+      log_slope = 0;
+  }
+  if (log_slope) {
+    for (uint32_t i = 0; i < n; i++) {
+      lnB[i] = log(Bd[i]);
+      lnS[i] = log(f->S[i]);
+    }
+  }
 
   int bad = 0;
   uint32_t first_bad = 0;
@@ -255,7 +277,9 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
     const double mu = Bd[i] / (2.0 * S);
     const double sigma_slope = sqrt(V[i] - 1.0 / (4.0 * S));
 
-    const double dB = deriv_nonuniform(Bd, f->S, n, i);
+    const double dB = log_slope
+                        ? Bd[i] / S * deriv_nonuniform(lnB, lnS, n, i)
+                        : deriv_nonuniform(Bd, f->S, n, i);
 
     f->y[i] = (dB - mu) / sigma_slope;
 
@@ -278,6 +302,8 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
   }
 
   free(Bd);
+  free(lnB);
+  free(lnS);
 
   if (bad > 0) {
     SIF_LOG_ERROR(TAG,
@@ -360,29 +386,83 @@ int sif__ep_features_fill(sif_ep_features_t* f, const sif_real* radii,
 
 void sif__ep_hazard_bins(const sif_ep_features_t* f, uint32_t n, double* lam) {
 
+  /* 4-point Gauss-Legendre on [-1, 1]. */
+  static const double gl_x[4] = {-0.8611363115940526, -0.3399810435848563,
+    0.3399810435848563, 0.8611363115940526};
+  static const double gl_w[4] = {0.3478548451374538, 0.6521451548625461,
+    0.6521451548625461, 0.3478548451374538};
+
   for (uint32_t i = 0; i + 1 < n; i++) {
 
     const double dS = f->S[i] - f->S[i + 1]; /* positive: S descends */
-    const double f0 = f->f_up[i + 1];        /* entered first */
-    const double f1 = f->f_up[i];
 
     /*
-     * Integrating the log-linear interpolant is exact for a pure exponential
-     * and costs one logarithm:
+     * The rate carries exp(-nu^2/2), so ln f_up is smooth where f_up itself
+     * is steep. Over the bin it is replaced by the cubic through the four
+     * radii nearest it -- the bin's ends and a neighbour either side, or the
+     * four at the end of the grid for the outermost bins -- and the
+     * exponential of that cubic is integrated at four Gauss-Legendre nodes.
      *
-     *     int f dS  =  (f1 - f0) dS / ln(f1 / f0)
-     *
-     * the logarithmic mean of the endpoints. It degenerates when the endpoints
-     * are close, where the trapezoid is both accurate and stable, so that is
-     * the branch taken there.
+     * The logarithmic mean of the endpoints used before is exact only for a
+     * pure exponential, and its error depended on the bin width: 0.1-0.5% at
+     * nu > 3 on 129 radii, 2% on 65. The trained correction absorbed it, so
+     * the emulated answer moved with the caller's radius sampling. This rule
+     * leaves 0.01-0.05% at 129 radii. tools/ep_model.py is the reference.
      */
+    if (n < 4) {
+      /* Too few radii for the cubic (the up-crossing multiplicity accepts
+       * two): the logarithmic mean of the endpoints, exact for a pure
+       * exponential, or the trapezoid where they are too close for it. */
+      const double f0 = f->f_up[i + 1];
+      const double f1 = f->f_up[i];
+      double v = 0.5 * (f0 + f1) * dS;
+      if (f0 > 0.0 && f1 > 0.0) {
+        const double lr = log(f1 / f0);
+        if (fabs(lr) > 1e-6)
+          v = (f1 - f0) * dS / lr;
+      }
+      lam[i] = (v > 0.0) ? v : 0.0;
+      continue;
+    }
+
+    uint32_t j0 = (i > 0) ? i - 1 : 0;
+    if (j0 + 4 > n)
+      j0 = n - 4;
+
+    int usable = 1;
+    double xs[4], ys[4];
+    for (uint32_t a = 0; a < 4; a++) {
+      const double fa = f->f_up[j0 + a];
+      if (!(fa > 0.0)) {
+        usable = 0;
+        break;
+      }
+      xs[a] = f->S[j0 + a];
+      ys[a] = log(fa);
+    }
+
     double v;
 
-    if (f0 > 0.0 && f1 > 0.0) {
-      const double lr = log(f1 / f0);
-      v = (fabs(lr) > 1e-6) ? (f1 - f0) * dS / lr : 0.5 * (f0 + f1) * dS;
+    if (usable) {
+      const double mid = 0.5 * (f->S[i] + f->S[i + 1]);
+      v = 0.0;
+      for (uint32_t k = 0; k < 4; k++) {
+        const double x = mid + 0.5 * dS * gl_x[k];
+        double g = 0.0;
+        for (uint32_t a = 0; a < 4; a++) {
+          double basis = 1.0;
+          for (uint32_t b = 0; b < 4; b++)
+            if (b != a)
+              basis *= (x - xs[b]) / (xs[a] - xs[b]);
+          g += ys[a] * basis;
+        }
+        v += gl_w[k] * exp(g);
+      }
+      v *= 0.5 * dS;
     } else {
-      v = 0.5 * (f0 + f1) * dS;
+      /* A rate that is exactly zero somewhere on the stencil gets the
+       * trapezoid, which is what a vanishing rate deserves. */
+      v = 0.5 * (f->f_up[i] + f->f_up[i + 1]) * dS;
     }
 
     lam[i] = (v > 0.0) ? v : 0.0;

@@ -110,12 +110,12 @@ def radii_for_sigma_range(k, pk, n_radii=N_RADII):
 
 def run_case(radii, cov, sigma, dvar, bpars, n_paths=N_PATHS, seed=98765):
     n = len(radii)
-    barrier = model.barrier_smt(sigma, **bpars)
+    barrier = model.ep_barrier_smt(sigma, **bpars)
     S = cov_diag(cov, n).astype(float)
     nu, gamma2, y, f_up = baseline_features(S, barrier.astype(float), dvar)
     lam_up = baseline_hazard(S, f_up)
 
-    counts = model.first_crossing_counts_ep(
+    counts = model.ep_first_crossing_counts(
         radii, cov, barrier, n_paths=n_paths, seed=seed)
     lam_mc, rel_err, alive = mc_hazard(counts.astype(float), n_paths)
 

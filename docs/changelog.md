@@ -3,6 +3,35 @@
 Current version: v0.3 release 0
 
 
+## Unreleased
+
+### Added
+
+- `sif_system_init()` warns when there are more threads than processors the
+  process may run on (an inherited CPU affinity, a cpu-bind or a cgroup
+  narrower than the thread count): the threads would share them, and until
+  now the log showed the full thread count while the run crawled
+
+### Changed
+
+- `sif_ep_multiplicity_function_emu()`: retrained for walks starting out to
+  250 Mpc/h (shallow void thresholds); about 0.08% below 80 Mpc/h, and
+  no longer dependent on the radius sampling
+- `sif_ep_multiplicity_function_emu()` returns the density at the n radii;
+  `SIF_EP_EMU_BIN_CENTRES` (`binned=True`) gives the old n - 1 bin averages
+- `sif_ep_multiplicity_function_emu()`: a grid started further out than
+  the training walks is no longer reported out of domain, nor extrapolated
+  (up to 0.4% off before); barriers rising with sigma are. Warnings give the
+  radii affected and the value against its trained range
+
+### Fixed
+
+- `sif-exodus` installed by pip ran every thread on one core when
+  `OMP_PROC_BIND` was set: its launcher imported pysif, whose OpenMP runtime
+  pinned the launcher to the first core, and the program inherited the mask.
+  The launchers are now in their own package, `_pysif_cli`, which never
+  imports pysif. Reinstall the wheel to get the new `sif-exodus` command
+
 ## v0.3.0 -- 13/10/2026
 
 ### Added
