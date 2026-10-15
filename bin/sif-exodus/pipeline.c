@@ -277,6 +277,9 @@ typedef struct {
   double footprint_volume;
   /* The inputs were on the sky, and converted with the cosmology. */
   bool sky_input;
+
+  /* Voids that came from the prior catalogue. */
+  uint64_t n_prior;
 } run_facts_t;
 
 /* Record what made the catalogue in its metadata, which every format then
@@ -326,9 +329,89 @@ static void describe_catalogue(
       s |= sif_catalogue_meta_real_set(cat, "wa", c->wa);
     }
   }
+  if (p->prior.path) {
+    s |= sif_catalogue_meta_string_set(cat, "prior", p->prior.path);
+    s |= sif_catalogue_meta_int_set(cat, "n_prior", (int64_t)r->n_prior);
+  }
   if (s != SIF_OK)
     SIF_LOG_WARNING(
       TAG, "some of the run's settings could not be recorded in the catalogue");
+}
+
+/* The finder leaves its checkpoint for this, the catalogue now being on
+ * disk; while it was not, a failure to write it could have lost the run. */
+static void remove_checkpoint(const exodus_params_t* p) {
+  if (p->checkpoint && unlink(p->checkpoint) != 0 && errno != ENOENT)
+    SIF_LOG_WARNING(
+      TAG, "checkpoint: %s: cannot remove: %s", p->checkpoint, strerror(errno));
+}
+
+/* After a catalogue that could not be written: the finder's work is in the
+ * checkpoint, and the same command picks it up. */
+static void keep_checkpoint(const exodus_params_t* p) {
+  if (p->checkpoint && access(p->checkpoint, F_OK) == 0)
+    SIF_LOG_WARNING(TAG,
+      "checkpoint: %s: kept, with every rung done; run again to write the "
+      "catalogue from it",
+      p->checkpoint);
+}
+
+/*
+ * The prior catalogue, Cartesian, in the frame the inputs are in -- which is
+ * the frame the voids of an earlier run came out in. One written on the sky
+ * is taken off it with the run's cosmology; *as_given then keeps it as it was
+ * read, for the voids to go back out exactly as they came in. NULL for both
+ * when there is no prior.
+ */
+static int read_prior(const exodus_params_t* p, sif_catalogue_t** prior,
+  sif_catalogue_t** as_given) {
+
+  *prior = *as_given = NULL;
+  if (!p->prior.path)
+    return SIF_OK;
+
+  sif_catalogue_t* cat;
+  if (p->prior.kind == EXODUS_OUTPUT_HDF5)
+    cat = sif_catalogue_read_hdf5(p->prior.path);
+  else if (p->prior.kind == EXODUS_OUTPUT_FITS)
+    cat = sif_catalogue_read_fits(p->prior.path);
+  else
+    cat = sif_catalogue_read_ascii(p->prior.path, p->prior.columns);
+  if (!cat) {
+    const int status = sif_error_status();
+    return status != SIF_OK ? status : SIF_ERR_IO;
+  }
+
+  if (cat->units == SIF_COORDINATES_SKY) {
+    if (p->mode != EXODUS_MODE_SURVEY || !p->survey.has_cosmology) {
+      SIF_LOG_ERROR(TAG,
+        "%s: voids on the sky, and this run has no cosmology to place them "
+        "with (only a survey whose inputs are on the sky does)",
+        p->prior.path);
+      sif_catalogue_free(cat);
+      return SIF_ERR_INVALID;
+    }
+
+    sif_catalogue_t* copy = sif_catalogue_alloc(cat->n_voids);
+    int status = copy ? SIF_OK : SIF_ERR_ALLOC;
+    for (uint64_t i = 0; status == SIF_OK && i < cat->n_voids; i++)
+      status = sif_catalogue_append(
+        copy, cat->cx[i], cat->cy[i], cat->cz[i], cat->radii[i]);
+    if (status == SIF_OK)
+      status = sif_catalogue_to_cartesian(cat, &p->survey.cosmology);
+    if (status != SIF_OK) {
+      sif_catalogue_free(copy);
+      sif_catalogue_free(cat);
+      return status;
+    }
+    copy->units = SIF_COORDINATES_SKY;
+    *as_given = copy;
+  }
+
+  SIF_LOG_INFO(TAG, "prior: %" PRIu64 " voids from %s%s", cat->n_voids,
+    p->prior.path, *as_given ? ", taken off the sky" : "");
+  *prior = cat;
+  return SIF_OK;
 }
 
 /* Write the catalogue beside the output, then move it into place. An output
@@ -389,6 +472,8 @@ int pipeline_box(const exodus_params_t* p) {
   sif_grid_t* grid = NULL;
   sif_chain_mesh_t* mesh = NULL;
   sif_catalogue_t* cat = NULL;
+  sif_catalogue_t* prior = NULL;
+  sif_catalogue_t* prior_given = NULL;
   sif_real* radii = NULL;
   run_facts_t r = {0};
   sif_timer_t t_total, t;
@@ -415,6 +500,13 @@ int pipeline_box(const exodus_params_t* p) {
   }
 
   sif_timer_start(&t_total);
+
+  /* 0. The prior catalogue, first: a mistake there is cheaper to hear about
+   * before the tracers are read. */
+  status = read_prior(p, &prior, &prior_given);
+  if (status != SIF_OK)
+    goto done;
+  r.n_prior = prior ? prior->n_voids : 0;
 
   /* 1. Field. */
   sif_timer_start(&t);
@@ -500,9 +592,13 @@ int pipeline_box(const exodus_params_t* p) {
 
   /* 4. Finder. The grid is not needed afterwards, so it is not restored. */
   sif_timer_start(&t);
-  cat = sif_finder_exodus(grid, mesh, radii, p->finder.n_radii,
+  const sif_finder_exodus_extras_t extras = {
+    .checkpoint = p->checkpoint, .prior = prior, .keep_checkpoint = 1};
+  cat = sif_finder_exodus_ex(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
-    SIF_FINDER_CONSUME_GRID | search);
+    SIF_FINDER_CONSUME_GRID | search |
+      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+    &extras);
   sif_chain_mesh_free(mesh);
   mesh = NULL;
   sif_grid_free(grid);
@@ -517,8 +613,11 @@ int pipeline_box(const exodus_params_t* p) {
   /* 5. Catalogue. */
   sif_timer_start(&t);
   status = write_output(p, &r, cat);
-  if (status != SIF_OK)
+  if (status != SIF_OK) {
+    keep_checkpoint(p);
     goto done;
+  }
+  remove_checkpoint(p);
   SIF_LOG_INFO(
     TAG, "catalogue: written to %s (%.2f s)", p->output.path, seconds_since(&t));
 
@@ -527,6 +626,8 @@ int pipeline_box(const exodus_params_t* p) {
 done:
   free(radii);
   sif_catalogue_free(cat);
+  sif_catalogue_free(prior);
+  sif_catalogue_free(prior_given);
   sif_chain_mesh_free(mesh);
   sif_grid_free(grid);
   sif_field_free(field);
@@ -818,6 +919,8 @@ int pipeline_survey(const exodus_params_t* p) {
   sif_chain_mesh_t* data_mesh = NULL;
   sif_chain_mesh_t* random_mesh = NULL;
   sif_catalogue_t* cat = NULL;
+  sif_catalogue_t* prior = NULL;
+  sif_catalogue_t* prior_given = NULL;
   sif_real* radii = NULL;
   run_facts_t r = {0};
   sif_timer_t t_total, t;
@@ -838,6 +941,12 @@ int pipeline_survey(const exodus_params_t* p) {
     return status;
 
   sif_timer_start(&t_total);
+
+  /* 0. The prior catalogue, before the expensive part. */
+  status = read_prior(p, &prior, &prior_given);
+  if (status != SIF_OK)
+    goto done;
+  r.n_prior = prior ? prior->n_voids : 0;
 
   /* 1-2. Fields, footprint, box. */
   sif_real offset[3], box;
@@ -922,9 +1031,14 @@ int pipeline_survey(const exodus_params_t* p) {
 
   /* 5. Finder. */
   sif_timer_start(&t);
-  cat = sif_finder_exodus_survey(data_grid, random_grid, data_mesh, random_mesh,
-    offset, radii, p->finder.n_radii, (sif_real)p->finder.threshold,
-    (sif_real)p->finder.overlap_fraction, SIF_FINDER_CONSUME_GRID | search);
+  const sif_finder_exodus_extras_t extras = {
+    .checkpoint = p->checkpoint, .prior = prior, .keep_checkpoint = 1};
+  cat = sif_finder_exodus_survey_ex(data_grid, random_grid, data_mesh,
+    random_mesh, offset, radii, p->finder.n_radii,
+    (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
+    SIF_FINDER_CONSUME_GRID | search |
+      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+    &extras);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);
   random_mesh = data_mesh = NULL;
@@ -945,10 +1059,22 @@ int pipeline_survey(const exodus_params_t* p) {
     status = sif_catalogue_to_sky(cat, &p->survey.cosmology);
     if (status != SIF_OK)
       goto done;
+
+    /* A prior read on the sky went off it and back on, and in single
+     * precision that need not land where it started: it goes out as read. */
+    if (prior_given && prior_given->n_voids > 0) {
+      const size_t bytes = (size_t)prior_given->n_voids * sizeof(sif_real);
+      memcpy(cat->cx, prior_given->cx, bytes);
+      memcpy(cat->cy, prior_given->cy, bytes);
+      memcpy(cat->cz, prior_given->cz, bytes);
+    }
   }
   status = write_output(p, &r, cat);
-  if (status != SIF_OK)
+  if (status != SIF_OK) {
+    keep_checkpoint(p);
     goto done;
+  }
+  remove_checkpoint(p);
   SIF_LOG_INFO(TAG, "catalogue: written to %s%s (%.2f s)", p->output.path,
     p->survey.sky ? ", on the sky" : "", seconds_since(&t));
 
@@ -957,6 +1083,8 @@ int pipeline_survey(const exodus_params_t* p) {
 done:
   free(radii);
   sif_catalogue_free(cat);
+  sif_catalogue_free(prior);
+  sif_catalogue_free(prior_given);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);
   sif_grid_free(random_grid);

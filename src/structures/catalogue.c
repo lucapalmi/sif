@@ -402,6 +402,80 @@ int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosm
   return SIF_OK;
 }
 
+int sif_catalogue_to_cartesian(
+  sif_catalogue_t* catalogue, const sif_cosmology_t* cosmo) {
+  if (!catalogue || !cosmo) {
+    SIF_LOG_ERROR(
+      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "cosmology");
+    return SIF_ERR_INVALID;
+  }
+  if (catalogue->units != SIF_COORDINATES_SKY) {
+    SIF_LOG_ERROR("void_catalogue", "catalogue: already Cartesian");
+    return SIF_ERR_INVALID;
+  }
+
+  /* Everything checked, and the table built, before anything is changed --
+   * with the tests sif_field_convert_sky_coordinates() applies. */
+  const uint64_t n = catalogue->n_voids;
+  const sif_real* ra = catalogue->cx;
+  const sif_real* dec = catalogue->cy;
+  const sif_real* red = catalogue->cz;
+  uint64_t bad_ra = 0, bad_dec = 0, bad_z = 0, bad = 0;
+  uint64_t first = UINT64_MAX;
+  double z_max = 0.0;
+  for (uint64_t i = 0; i < n; i++) {
+    const int r = !isfinite(ra[i]);
+    const int d = !(dec[i] >= -90.0f && dec[i] <= 90.0f);
+    const int z = !(red[i] >= 0.0f) || !isfinite(red[i]);
+    bad_ra += r;
+    bad_dec += d;
+    bad_z += z;
+    if (r || d || z) {
+      if (!bad)
+        first = i;
+      bad++;
+    } else if ((double)red[i] > z_max) {
+      z_max = (double)red[i];
+    }
+  }
+  if (bad) {
+    SIF_LOG_ERROR("void_catalogue",
+      "catalogue: %" PRIu64 " of %" PRIu64 " sky centres unusable: %" PRIu64
+      " ra not finite, %" PRIu64 " dec outside [-90, 90], %" PRIu64
+      " z negative or not finite (first: void %" PRIu64
+      ", ra %g, dec %g, z %g); nothing converted",
+      bad, n, bad_ra, bad_dec, bad_z, first, (double)ra[first],
+      (double)dec[first], (double)red[first]);
+    return SIF_ERR_INVALID;
+  }
+
+  sif__distance_table_t table;
+  const int status = sif__distance_table_build(cosmo, z_max, &table);
+  if (status != SIF_OK)
+    return status;
+
+  const double deg = 3.14159265358979323846 / 180.0;
+
+#pragma omp parallel for schedule(static)
+  for (uint64_t i = 0; i < n; i++) {
+    const double d = sif__distance_table_eval(&table, (double)red[i]);
+    const double a = (double)ra[i] * deg, b = (double)dec[i] * deg;
+    const double cos_b = cos(b);
+    catalogue->cx[i] = (sif_real)(d * cos_b * cos(a));
+    catalogue->cy[i] = (sif_real)(d * cos_b * sin(a));
+    catalogue->cz[i] = (sif_real)(d * sin(b));
+  }
+
+  SIF_LOG_INFO("void_catalogue",
+    "catalogue: %" PRIu64 " void centres converted from the sky, out to z = "
+    "%g (D_C = %g Mpc/h)",
+    n, z_max, sif__distance_table_eval(&table, z_max));
+
+  sif__distance_table_free(&table);
+  catalogue->units = SIF_COORDINATES_CARTESIAN;
+  return SIF_OK;
+}
+
 /* ------------------------------------------------------------------------ */
 /* metadata                                                                  */
 /* ------------------------------------------------------------------------ */

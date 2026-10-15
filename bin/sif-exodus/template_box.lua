@@ -79,6 +79,12 @@ finder = {
   search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2
 }
 
+-- Voids to start from: the run adds its own and writes both, these first.
+-- To extend a catalogue to smaller radii, run the rungs below the ones it
+-- was found with. Read like output, by its name; an ASCII catalogue from
+-- another finder names its columns: "* x y z * r".
+-- prior = { path = "large_voids.h5", format = "hdf5" }
+
 -- .h5 or .hdf5: HDF5; .fits: FITS; anything else: ASCII. Each records
 -- the run's settings alongside the voids.
 output = "voids.h5"
@@ -88,4 +94,8 @@ run = {
   threads = "auto",
   log_level = "info",  -- trace | debug | info | warning | error | none
   tune_fft = true,     -- false: estimated FFT plans, quicker to set up
+  -- Progress, saved after every rung; a run that finds it resumes from it,
+  -- so a job resubmitted as it was picks up where it stopped. Removed when
+  -- the run completes. Default: the output's path + ".ckpt". false: none.
+  -- checkpoint = "voids.h5.ckpt",
 }

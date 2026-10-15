@@ -13,6 +13,13 @@ Current version: v0.3 release 0
 - `sif_finder_exodus_ex()` / `sif_finder_exodus_survey_ex()` also take a prior
   catalogue to extend, e.g. down to smaller radii;
   `sif_finder_exodus_checkpoint_read()` reads a checkpoint
+- `sif-exodus`: `run.checkpoint` (default: the output + `.ckpt`, so a
+  resubmitted job resumes), `--checkpoint` / `--no-checkpoint`, a `prior`
+  section, and `--check` on checkpoints
+- Python: `checkpoint=` and `prior=` on `finders.exodus()` and
+  `exodus_survey()`, and `finders.read_checkpoint()`
+- `sif_catalogue_to_cartesian()` (`Catalogue.to_cartesian()`), the inverse of
+  `sif_catalogue_to_sky()`
 - `sif_system_init()` warns when there are more threads than processors the
   process may run on (an inherited CPU affinity, a cpu-bind or a cgroup
   narrower than the thread count): the threads would share them, and until

@@ -31,6 +31,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "test_util.h"
+
 static int failures = 0;
 
 #define CHECK(cond, msg, ...)                                                  \
@@ -258,8 +260,15 @@ static void test_catalogue_to_sky(void) {
   sif_catalogue_t* cat = sif_catalogue_alloc(n);
   CHECK(cat && cat->units == SIF_COORDINATES_CARTESIAN,
     "a new catalogue is not Cartesian");
-  for (uint64_t i = 0; i < n; i++)
+  sif_real* x0 = malloc(n * sizeof(sif_real));
+  sif_real* y0 = malloc(n * sizeof(sif_real));
+  sif_real* z0 = malloc(n * sizeof(sif_real));
+  for (uint64_t i = 0; i < n; i++) {
     (void)sif_catalogue_append(cat, f->x[i], f->y[i], f->z[i], 10.0f);
+    x0[i] = f->x[i];
+    y0[i] = f->y[i];
+    z0[i] = f->z[i];
+  }
   sif_field_free(f);
 
   CHECK(sif_catalogue_to_sky(cat, &cosmo) == SIF_OK &&
@@ -307,6 +316,38 @@ static void test_catalogue_to_sky(void) {
     "the sky catalogue did not read back on the sky");
   sif_catalogue_free(back);
   remove("test_cosmology_sky.txt");
+
+  /* And back to positions: to_cartesian is to_sky's inverse, within single
+   * precision some 1e3 Mpc/h out. */
+  CHECK(sif_catalogue_to_cartesian(cat, &cosmo) == SIF_OK &&
+          cat->units == SIF_COORDINATES_CARTESIAN,
+    "the conversion back from the sky failed");
+  double worst_pos = 0.0;
+  for (uint64_t i = 0; i < n; i++) {
+    const double dx = cat->cx[i] - x0[i], dy = cat->cy[i] - y0[i],
+                 dz = cat->cz[i] - z0[i];
+    const double d0 = sqrt(
+      (double)x0[i] * x0[i] + (double)y0[i] * y0[i] + (double)z0[i] * z0[i]);
+    worst_pos = fmax(worst_pos, sqrt(dx * dx + dy * dy + dz * dz) / d0);
+  }
+  CHECK(worst_pos < 1e-5, "a centre came back off by %.2e of its distance",
+    worst_pos);
+  CHECK(cat->radii[0] == 10.0f, "the radii were changed on the way back");
+  CHECK(sif_catalogue_to_cartesian(cat, &cosmo) == SIF_ERR_INVALID,
+    "converted a catalogue already Cartesian");
+  sif_catalogue_free(cat);
+
+  /* What it refuses, before anything changes. */
+  cat = sif_catalogue_alloc(2);
+  (void)sif_catalogue_append(cat, 10.0f, 20.0f, 0.5f, 1.0f);
+  (void)sif_catalogue_append(cat, 10.0f, 95.0f, 0.5f, 1.0f);
+  cat->units = SIF_COORDINATES_SKY;
+  sif_error_clear();
+  CHECK(sif_catalogue_to_cartesian(cat, &cosmo) == SIF_ERR_INVALID &&
+          cat->units == SIF_COORDINATES_SKY && cat->cx[0] == 10.0f &&
+          error_has("dec outside"),
+    "a declination of 95 was not refused, or the refusal changed the "
+    "catalogue");
   sif_catalogue_free(cat);
 
   /* The observer's own position, and refusals before anything changes. */
@@ -328,6 +369,9 @@ static void test_catalogue_to_sky(void) {
   free(a);
   free(b);
   free(z);
+  free(x0);
+  free(y0);
+  free(z0);
 }
 
 /* --- refusals ----------------------------------------------------------- */

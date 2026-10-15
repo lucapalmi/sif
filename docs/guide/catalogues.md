@@ -333,6 +333,8 @@ back by the opposite offset, and `to_sky` converts them to right ascension,
 declination and redshift, the inverse of the conversion applied to the fields.
 `to_sky` requires the observer at the origin, so it is applied after
 `translate`, with the same cosmology used for the fields. Radii stay in Mpc/h.
+`to_cartesian` undoes `to_sky`, for a catalogue written on the sky that is
+to be measured against tracers or extended by the finder.
 
 :::::{tab-set}
 

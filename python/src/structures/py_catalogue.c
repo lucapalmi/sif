@@ -392,6 +392,32 @@ static PyObject* sifCatalogue_to_sky(
   }
 }
 
+static PyObject* sifCatalogue_to_cartesian(
+  PyObject* self_obj, PyObject* args, PyObject* kwds) {
+  double omega_m;
+  PyObject* omega_de = Py_None;
+  double omega_r = 0.0, w0 = -1.0, wa = 0.0;
+  static char* kwlist[] = {"omega_m", "omega_de", "omega_r", "w0", "wa", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "d|Oddd", kwlist, &omega_m, &omega_de, &omega_r, &w0, &wa))
+    return NULL;
+
+  sif_cosmology_t cosmo;
+  if (py_sif_cosmology_from(omega_m, omega_de, omega_r, w0, wa, &cosmo) < 0)
+    return NULL;
+
+  sif_catalogue_t* cat = ((sifCatalogueObject*)self_obj)->catalogue;
+
+  int status;
+  sif_error_clear();
+  Py_BEGIN_ALLOW_THREADS status = sif_catalogue_to_cartesian(cat, &cosmo);
+  Py_END_ALLOW_THREADS
+
+    if (status != SIF_OK) return py_sif_raise(status, "to_cartesian");
+  Py_RETURN_NONE;
+}
+
 static PyObject* sifCatalogue_set_metadata(
   PyObject* self_obj, PyObject* args, PyObject* kwds) {
   const char* key;
@@ -479,6 +505,25 @@ static PyMethodDef sifCatalogue_methods[] = {
     "Raises:\n"
     "    ValueError: For a catalogue already on the sky, a centre that is\n"
     "        not finite, or one past what the cosmology reaches."},
+  {"to_cartesian", (PyCFunction)sifCatalogue_to_cartesian,
+    METH_VARARGS | METH_KEYWORDS,
+    "to_cartesian(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, wa=0.0)\n"
+    "--\n\n"
+    "Turn void centres on the sky back into Cartesian ones, in place.\n\n"
+    "The inverse of to_sky(), and the conversion\n"
+    "Field.convert_sky_coordinates() applies to tracers: comoving\n"
+    "positions in Mpc/h with the observer at the origin. For voids written\n"
+    "on the sky that are to be measured against tracers, or passed to\n"
+    "finders.exodus_survey() as its prior. units is then 'cartesian'.\n"
+    "Radii and footprints are unchanged.\n\n"
+    "Args:\n"
+    "    omega_m, omega_de, omega_r, w0, wa: The cosmology, as for\n"
+    "        Field.convert_sky_coordinates() -- the one the voids were put\n"
+    "        on the sky with, for them to come back where they were.\n\n"
+    "Raises:\n"
+    "    ValueError: For a catalogue already Cartesian, a right ascension\n"
+    "        that is not finite, a declination outside [-90, 90] or a\n"
+    "        redshift that is negative or not finite."},
   {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */

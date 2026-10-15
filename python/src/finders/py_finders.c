@@ -219,6 +219,48 @@ static PyObject* wrap_catalogue(sif_catalogue_t* cat) {
   return (PyObject*)out;
 }
 
+/*
+ * What the exodus entry points take beyond the finder's own arguments:
+ * checkpoint= -- None for a name of the finder's own, False for none, or a
+ * path (str or os.PathLike) -- and prior=, None or a Catalogue. The path's
+ * bytes are held here, since the run reads them with the GIL released.
+ */
+typedef struct {
+  PyObject* path_bytes;
+  sif_finder_exodus_extras_t extras;
+  sif_option options;
+} exodus_extras_t;
+
+static int exodus_extras(
+  PyObject* checkpoint, PyObject* prior, exodus_extras_t* out) {
+
+  memset(out, 0, sizeof(*out));
+
+  if (checkpoint == Py_False) {
+    out->options = SIF_FINDER_NO_CHECKPOINT;
+  } else if (checkpoint == Py_True) {
+    PyErr_SetString(PyExc_ValueError,
+      "checkpoint: True (expected a path, None for a name of the run's own, "
+      "or False for none)");
+    return -1;
+  } else if (checkpoint != Py_None) {
+    if (!PyUnicode_FSConverter(checkpoint, &out->path_bytes))
+      return -1;
+    out->extras.checkpoint = PyBytes_AS_STRING(out->path_bytes);
+  }
+
+  if (prior != Py_None) {
+    if (!PyObject_TypeCheck(prior, &sifCatalogueType)) {
+      Py_CLEAR(out->path_bytes);
+      PyErr_Format(PyExc_TypeError,
+        "prior: expected a Catalogue or None, got %s", Py_TYPE(prior)->tp_name);
+      return -1;
+    }
+    out->extras.prior = ((sifCatalogueObject*)prior)->catalogue;
+  }
+  return 0;
+}
+
 /* --- Exodus Finder Wrapper --- */
 PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject *grid_obj = NULL, *mesh_obj = NULL, *radii_obj = NULL;
@@ -228,21 +270,31 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   /* Optional keyword arguments with safe defaults */
   int consume_grid = 0;
   double search_factor = 1.5;
+  PyObject* checkpoint = Py_None;
+  PyObject* prior = Py_None;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
-    "overlap_fraction", "consume_grid", "search_factor", NULL};
+    "overlap_fraction", "consume_grid", "search_factor", "checkpoint", "prior",
+    NULL};
 
   /* The '|' character denotes that everything after it is optional.
    * 'p' safely converts a Python boolean to a C int (1 or 0). */
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd$OO", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
-        &threshold, &overlap_frac, &consume_grid, &search_factor)) {
+        &threshold, &overlap_frac, &consume_grid, &search_factor, &checkpoint,
+        &prior)) {
     return NULL;
   }
 
-  PyArrayObject* radii_arr = radii_from_object(radii_obj);
-  if (!radii_arr)
+  exodus_extras_t x;
+  if (exodus_extras(checkpoint, prior, &x) < 0)
     return NULL;
+
+  PyArrayObject* radii_arr = radii_from_object(radii_obj);
+  if (!radii_arr) {
+    Py_XDECREF(x.path_bytes);
+    return NULL;
+  }
 
   npy_intp n_radii = PyArray_SHAPE(radii_arr)[0];
   sif_real* radii_data = (sif_real*)PyArray_DATA(radii_arr);
@@ -259,9 +311,10 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   sif_option reach;
   if (search_factor_option(search_factor, &reach) < 0) {
     Py_DECREF(radii_arr);
+    Py_XDECREF(x.path_bytes);
     return NULL;
   }
-  options |= reach;
+  options |= reach | x.options;
 
   /* Execute the algorithm. The GIL is released: this runs for minutes to
    * hours across every core, and holding it would freeze the interpreter and
@@ -272,11 +325,12 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   sif_catalogue_t* res_catalogue = NULL;
   sif_error_clear();
   Py_BEGIN_ALLOW_THREADS res_catalogue =
-    sif_finder_exodus(c_grid, c_mesh, radii_data, (uint32_t)n_radii,
-      (sif_real)threshold, (sif_real)overlap_frac, options);
+    sif_finder_exodus_ex(c_grid, c_mesh, radii_data, (uint32_t)n_radii,
+      (sif_real)threshold, (sif_real)overlap_frac, options, &x.extras);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
+  Py_XDECREF(x.path_bytes);
 
   if (!res_catalogue)
     return py_sif_raise(sif_error_status(), "exodus");
@@ -342,16 +396,18 @@ PyObject* py_sif_finder_exodus_survey(
   double overlap_frac = 0.0;
   int consume_grid = 0;
   double search_factor = 1.5;
+  PyObject* checkpoint = Py_None;
+  PyObject* prior = Py_None;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
     "random_mesh", "offset", "radii", "threshold", "overlap_fraction",
-    "consume_grid", "search_factor", NULL};
+    "consume_grid", "search_factor", "checkpoint", "prior", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd$OO", kwlist,
         &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
         &ox, &oy, &oz, &radii_obj, &threshold, &overlap_frac, &consume_grid,
-        &search_factor)) {
+        &search_factor, &checkpoint, &prior)) {
     return NULL;
   }
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
@@ -368,11 +424,17 @@ PyObject* py_sif_finder_exodus_survey(
   sif_option reach;
   if (search_factor_option(search_factor, &reach) < 0)
     return NULL;
-  options |= reach;
+
+  exodus_extras_t x;
+  if (exodus_extras(checkpoint, prior, &x) < 0)
+    return NULL;
+  options |= reach | x.options;
 
   PyArrayObject* radii_arr = radii_from_object(radii_obj);
-  if (!radii_arr)
+  if (!radii_arr) {
+    Py_XDECREF(x.path_bytes);
     return NULL;
+  }
 
   const npy_intp n_radii = PyArray_SHAPE(radii_arr)[0];
   const sif_real* radii_data = (const sif_real*)PyArray_DATA(radii_arr);
@@ -388,12 +450,13 @@ PyObject* py_sif_finder_exodus_survey(
    * the four borrowed objects are kept alive by the caller's references. */
   sif_catalogue_t* res = NULL;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS res = sif_finder_exodus_survey(data_grid, random_grid,
-    data_mesh, random_mesh, offset, radii_data, (uint32_t)n_radii,
-    (sif_real)threshold, (sif_real)overlap_frac, options);
+  Py_BEGIN_ALLOW_THREADS res = sif_finder_exodus_survey_ex(data_grid,
+    random_grid, data_mesh, random_mesh, offset, radii_data, (uint32_t)n_radii,
+    (sif_real)threshold, (sif_real)overlap_frac, options, &x.extras);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
+  Py_XDECREF(x.path_bytes);
 
   if (!res)
     return py_sif_raise(sif_error_status(), "exodus_survey");
@@ -452,4 +515,71 @@ PyObject* py_sif_finder_survey_box(
   o[2] = offset[2];
 
   return Py_BuildValue("(Nd)", offset_arr, (double)box_length);
+}
+
+/* --- Checkpoint Reader --- */
+PyObject* py_sif_finder_read_checkpoint(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+
+  PyObject* path_bytes = NULL;
+  static char* kwlist[] = {"path", NULL};
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, PyUnicode_FSConverter, &path_bytes))
+    return NULL;
+  const char* path = PyBytes_AS_STRING(path_bytes);
+
+  sif_finder_exodus_checkpoint_t h;
+  sif_error_clear();
+  sif_catalogue_t* cat = sif_finder_exodus_checkpoint_read(path, &h);
+  if (!cat) {
+    Py_DECREF(path_bytes);
+    return py_sif_raise(sif_error_status(), "read_checkpoint");
+  }
+
+  /* The ladder follows the header; the reader above has already checked the
+   * file whole, size and checksum, so it is there to be read. */
+  npy_intp dims[1] = {(npy_intp)h.n_radii};
+  PyObject* radii = PyArray_SimpleNew(1, dims, NPY_REAL_T);
+  FILE* f = radii ? fopen(path, "rb") : NULL;
+  const int ok = f && fseek(f, (long)sizeof(h), SEEK_SET) == 0 &&
+                 fread(PyArray_DATA((PyArrayObject*)radii), sizeof(sif_real),
+                   h.n_radii, f) == h.n_radii;
+  if (f)
+    fclose(f);
+  Py_DECREF(path_bytes);
+  if (!ok) {
+    Py_XDECREF(radii);
+    sif_catalogue_free(cat);
+    if (!PyErr_Occurred())
+      PyErr_SetFromErrno(PyExc_OSError);
+    return NULL;
+  }
+
+  PyObject* catalogue = wrap_catalogue(cat);
+  if (!catalogue) {
+    Py_DECREF(radii);
+    return NULL;
+  }
+
+  PyObject* info = Py_BuildValue(
+    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:d,s:O,s:I,s:d,s:K,s:d,s:K,s:d,"
+    "s:(ddd)}",
+    "mode", h.is_survey ? "survey" : "box", "weighted",
+    h.is_weighted ? Py_True : Py_False, "radii", radii, "rungs_done",
+    (unsigned)h.next_rung, "n_voids", (unsigned long long)h.n_voids, "n_prior",
+    (unsigned long long)h.n_prior, "threshold", h.threshold, "overlap_fraction",
+    h.overlap_fraction, "search_factor",
+    (double)sif__finder_search_factor(h.options), "keep_cic_window",
+    (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? Py_True : Py_False,
+    "grid_n_cells", (unsigned)h.grid_n_cells, "box_length", h.box_length,
+    "n_particles", (unsigned long long)h.n_particles, "total_weight",
+    h.total_weight, "n_randoms", (unsigned long long)h.random_n_particles,
+    "random_total_weight", h.random_total_weight, "offset", h.offset[0],
+    h.offset[1], h.offset[2]);
+  if (!info) {
+    Py_DECREF(catalogue);
+    return NULL;
+  }
+
+  return Py_BuildValue("(NN)", catalogue, info);
 }

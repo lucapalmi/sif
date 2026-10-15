@@ -21,5 +21,7 @@ PyObject* py_sif_finder_survey_box(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_grid_cells_from_size(
   PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* py_sif_finder_read_checkpoint(
+  PyObject* self, PyObject* args, PyObject* kwds);
 
 #endif /* SIF_PY_FINDERS_PY_FINDERS_H */

@@ -2890,6 +2890,7 @@ typedef struct {
   int active;   /* written after every rung */
   int on_disk;  /* this run wrote one, or resumed one */
   int progress; /* the one on disk holds a finished rung */
+  int keep;     /* left in place on success, for the caller */
   char path[SIF__CHECKPOINT_PATH_MAX];
   sif_finder_exodus_checkpoint_t header;
 } checkpoint_t;
@@ -2945,6 +2946,7 @@ static int run_start(checkpoint_t* ck, run_start_t* start,
 
   const sif_catalogue_t* prior = extras ? extras->prior : NULL;
   const char* named = extras ? extras->checkpoint : NULL;
+  ck->keep = extras && extras->keep_checkpoint;
 
   if (options & SIF_FINDER_NO_CHECKPOINT) {
     start->voids = prior_in_box(prior, offset);
@@ -3060,6 +3062,8 @@ static void checkpoint_finish(const checkpoint_t* ck, int status) {
     SIF_LOG_INFO(TAG, "checkpoint: %s: kept, resume the run from it", ck->path);
     return;
   }
+  if (status == SIF_OK && ck->keep)
+    return;
 
   if (unlink(ck->path) != 0)
     SIF_LOG_WARNING(

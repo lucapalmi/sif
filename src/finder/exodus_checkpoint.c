@@ -444,3 +444,68 @@ sif_catalogue_t* sif_finder_exodus_checkpoint_read(
     *header = h;
   return cat;
 }
+
+int sif_finder_exodus_checkpoint_check(const char* filepath, FILE* report) {
+  if (!filepath) {
+    SIF_LOG_ERROR(TAG, "filepath: NULL");
+    return SIF_ERR_INVALID;
+  }
+
+  sif_finder_exodus_checkpoint_t h;
+  sif_real* radii = NULL;
+  sif_catalogue_t* cat = NULL;
+  const int status = sif__exodus_checkpoint_load(filepath, &h, &radii, &cat);
+  if (status != SIF_OK)
+    return status;
+
+  if (report) {
+    const sif_real r_hi = radii[0], r_lo = radii[h.n_radii - 1];
+    sif_real v_lo = 0.0f, v_hi = 0.0f;
+    for (uint64_t i = 0; i < cat->n_voids; i++) {
+      v_lo = i ? SIF_REAL_MIN(v_lo, cat->radii[i]) : cat->radii[i];
+      v_hi = i ? SIF_REAL_MAX(v_hi, cat->radii[i]) : cat->radii[i];
+    }
+
+    fprintf(report, "%s\n", filepath);
+    fprintf(report,
+      "format        exodus checkpoint version %u, %s precision\n", h.version,
+      h.is_double ? "double" : "single");
+    fprintf(report, "run           %s, %s\n", h.is_survey ? "survey" : "box",
+      h.is_weighted ? "weighted" : "unweighted");
+    fprintf(report, "ladder        %u radii, %g down to %g\n", h.n_radii,
+      (double)r_hi, (double)r_lo);
+    if (h.next_rung < h.n_radii)
+      fprintf(report, "progress      %u of %u rungs done, next at %g\n",
+        h.next_rung, h.n_radii, (double)radii[h.next_rung]);
+    else
+      fprintf(report, "progress      all %u rungs done\n", h.n_radii);
+    fprintf(report, "voids         %" PRIu64, h.n_voids);
+    if (h.n_voids)
+      fprintf(report, ", radii %g to %g", (double)v_lo, (double)v_hi);
+    if (h.n_prior)
+      fprintf(report, " (%" PRIu64 " from a prior catalogue)", h.n_prior);
+    fputc('\n', report);
+    /* Stored widened from a float: printed at the float's precision, so a
+     * threshold of -0.7 does not read as -0.69999999. */
+    fprintf(report, "threshold     %.7g\n", h.threshold);
+    fprintf(report, "overlap       %.7g\n", h.overlap_fraction);
+    fprintf(report, "search factor %g\n",
+      (double)sif__finder_search_factor(h.options));
+    fprintf(report, "CIC window    %s\n",
+      (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved");
+    fprintf(report, "grid          %u^3 cells over %.8g\n", h.grid_n_cells,
+      h.box_length);
+    fprintf(report, "tracers       %" PRIu64 ", total weight %.10g\n",
+      h.n_particles, h.total_weight);
+    if (h.is_survey) {
+      fprintf(report, "randoms       %" PRIu64 ", total weight %.10g\n",
+        h.random_n_particles, h.random_total_weight);
+      fprintf(report, "offset        (%.8g, %.8g, %.8g)\n", h.offset[0],
+        h.offset[1], h.offset[2]);
+    }
+  }
+
+  sif_free_aligned(radii);
+  sif_catalogue_free(cat);
+  return SIF_OK;
+}

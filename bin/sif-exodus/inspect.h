@@ -21,6 +21,8 @@ typedef enum {
   FILE_KIND_HDF5,
   FILE_KIND_GADGET,
   FILE_KIND_XFIELD,
+  /* An exodus checkpoint. */
+  FILE_KIND_CHECKPOINT,
   /* Detection found nothing it knows. */
   FILE_KIND_UNKNOWN
 } file_kind_t;

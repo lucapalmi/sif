@@ -7,6 +7,7 @@
 #include "inspect.h"
 
 #include "sif/core/macros.h"
+#include "sif/finder/exodus_finder.h"
 #include "sif/io/field_io.h"
 #include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
@@ -16,8 +17,8 @@
 #include <string.h>
 #include <sys/stat.h>
 
-static const char* const KIND_NAMES[] = {
-  "auto", "lua", "ascii", "fits", "hdf5", "gadget", "xfield", "unknown"};
+static const char* const KIND_NAMES[] = {"auto", "lua", "ascii", "fits", "hdf5",
+  "gadget", "xfield", "checkpoint", "unknown"};
 
 int inspect_kind_parse(const char* name, file_kind_t* out) {
   for (int k = FILE_KIND_AUTO; k < FILE_KIND_UNKNOWN; k++) {
@@ -75,6 +76,8 @@ file_kind_t inspect_detect(const char* path) {
     return FILE_KIND_FITS;
   if (n >= 4 && memcmp(head, SIF_XFIELD_MAGIC, 4) == 0)
     return FILE_KIND_XFIELD;
+  if (n >= 4 && memcmp(head, SIF_FINDER_CHECKPOINT_MAGIC, 4) == 0)
+    return FILE_KIND_CHECKPOINT;
   if (sif_gadget_is_snapshot(path))
     return FILE_KIND_GADGET;
   if (n >= 8 && memcmp(head, h5sig, 8) == 0)
@@ -103,10 +106,13 @@ int inspect_file(const char* path, file_kind_t kind, const inspect_opts_t* o) {
   case FILE_KIND_XFIELD:
     status = sif_field_check_xfield(path, o->deep, stdout);
     break;
+  case FILE_KIND_CHECKPOINT:
+    status = sif_finder_exodus_checkpoint_check(path, stdout);
+    break;
   default:
     fprintf(stderr,
       "%s: not a kind of file --check recognises (FITS, HDF5, GADGET, "
-      ".xfield, ASCII); say which with --format\n",
+      ".xfield, ASCII, exodus checkpoint); say which with --format\n",
       path);
     return 2;
   }

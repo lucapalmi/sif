@@ -24,6 +24,7 @@
 
 #include <math.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include "sif/core/macros.h"
 #include "sif/structures/catalogue.h"
@@ -212,6 +213,14 @@ typedef struct {
    * ignored, and a survey recomputes them for all of its voids.
    */
   const sif_catalogue_t* prior;
+
+  /**
+   * Nonzero to leave the checkpoint in place when the run succeeds, for the
+   * caller to delete once the catalogue is safe -- written to disk, say.
+   * Otherwise it goes as the run returns, and a failure to save the
+   * catalogue after that would lose the whole run.
+   */
+  int keep_checkpoint;
 } sif_finder_exodus_extras_t;
 
 /**
@@ -224,7 +233,8 @@ typedef struct {
  * a temporary file and a rename so that a run killed while writing leaves
  * the previous checkpoint whole, and a run resumed from one returns the
  * catalogue it would have returned uninterrupted, bit for bit. A run that
- * succeeds deletes its checkpoint, and so does one that fails before
+ * succeeds deletes its checkpoint (unless asked to keep it), and so does one
+ * that fails before
  * finishing a rung, since there is nothing in it to resume; any other failure
  * keeps it and logs where.
  *
@@ -262,6 +272,12 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_ex(sif_grid_t* grid,
  * that puts them there, and sif_finder_exodus_checkpoint_read() takes them
  * back to the caller's frame. A prior catalogue is in the caller's frame,
  * as the voids the survey finder returns are.
+ *
+ * @note Extending to smaller radii matches one run over the whole ladder
+ * only if both runs are searched in the same box on the same grid.
+ * sif_finder_exodus_survey_box() sizes the box from the ladder's two ends,
+ * so a run over the larger radii alone gets a different one: size it from
+ * the whole ladder in both.
  */
 SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_ex(
   sif_grid_t* data_grid, sif_grid_t* random_grid,
@@ -361,6 +377,21 @@ typedef struct {
  */
 SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_checkpoint_read(
   const char* filepath, sif_finder_exodus_checkpoint_t* header);
+
+/**
+ * @brief Check an exodus checkpoint, and summarise the run it holds.
+ *
+ * Reads it whole, as a resume would -- header, size and checksum -- and
+ * writes what it says: the run's parameters, how many rungs are done and
+ * which comes next, and the voids so far.
+ *
+ * @param report Where the summary goes, or NULL for none.
+ * @return SIF_OK for a checkpoint that a run could resume from; otherwise
+ * the reason, logged as an ERROR, and SIF_ERR_IO, SIF_ERR_ALLOC, or
+ * SIF_ERR_INVALID for a NULL path.
+ */
+SIF_NODISCARD int sif_finder_exodus_checkpoint_check(
+  const char* filepath, FILE* report);
 
 /**
  * @brief The box a survey has to be searched in, and the offset that moves it

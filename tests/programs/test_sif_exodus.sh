@@ -675,6 +675,119 @@ expect_status 2 "a configuration with --deep"
 expect_error "bad.txt:3: 2 columns, format 'x y z' needs 3" "--deep, row 3"
 expect_error "bad.txt:4: column 3 (z): 'abc' is not a number" "--deep, row 4"
 
+# --- checkpoints and prior catalogues ----------------------------------------
+
+# A box with three spheres emptied out of it, so that there are voids at
+# several rungs: awk's generator again, rejecting what falls in a hole.
+awk 'BEGIN {
+  srand(7); n = 0
+  while (n < 30000) {
+    x = 100 * rand(); y = 100 * rand(); z = 100 * rand()
+    if ((x-25)^2 + (y-25)^2 + (z-25)^2 < 225 ||
+        (x-70)^2 + (y-40)^2 + (z-60)^2 < 144 ||
+        (x-40)^2 + (y-75)^2 + (z-80)^2 < 81) continue
+    printf "%.5f %.5f %.5f\n", x, y, z; n++
+  }
+}' >holes.txt
+cat >holes.lua <<'EOF'
+mode = "box"
+input = { path = "holes.txt", format = "ascii", box_length = 100 }
+grid = { n_cells = 32 }
+finder = {
+  radii = radii == "large" and { 15, 12 } or radii == "small" and { 10, 8 }
+    or { 15, 12, 10, 8 },
+  threshold = -0.7,
+}
+output = out or "holes_full.txt"
+prior = from
+run = { log_level = "warning" }
+EOF
+voids() { grep -v '^#' "$1"; }
+
+run holes.lua
+expect_status 0 "the reference run"
+[ ! -e holes_full.txt.ckpt ] || fail "a completed run left its checkpoint"
+[ "$(voids holes_full.txt | wc -l)" -ge 3 ] || fail "the reference run: too few voids"
+
+# The large radii, then the small ones from there: the single run's voids.
+run -D radii=large -D out=holes_large.txt holes.lua
+expect_status 0 "the large radii"
+run -D radii=small -D out=holes_ext.txt -D from=holes_large.txt holes.lua
+expect_status 0 "the small radii, from the large"
+voids holes_full.txt >a.txt
+voids holes_ext.txt >b.txt
+cmp -s a.txt b.txt || fail "large then small radii differ from one run"
+grep -q '^#prior="holes_large.txt"$' holes_ext.txt &&
+  grep -q '^#n_prior=' holes_ext.txt ||
+  fail "an extended catalogue does not record its prior"
+
+run -D from=missing.txt --check holes.lua
+expect_status 2 "a prior that is not there"
+expect_error "prior.path: cannot open missing.txt" "a prior that is not there"
+
+# A catalogue that cannot be written keeps the checkpoint, which --check
+# reads and the same command, given somewhere to write, finishes from.
+mkdir blocked.txt
+run -D out=blocked.txt holes.lua
+expect_status 1 "an output that cannot be written"
+expect_error "blocked.txt.ckpt: kept" "an output that cannot be written"
+[ -e blocked.txt.ckpt ] || fail "a run that could not write lost its checkpoint"
+
+run --check blocked.txt.ckpt
+expect_status 0 "--check on a checkpoint"
+grep -q '^progress      all 4 rungs done$' out.txt ||
+  fail "--check on a checkpoint: $(cat out.txt)"
+grep -q '^threshold     -0.7$' out.txt || fail "--check on a checkpoint: threshold"
+
+run -D out=blocked.txt --check holes.lua
+expect_status 0 "--check with a checkpoint to resume"
+expect_error "blocked.txt.ckpt exists: the run resumes from it, with 4 of 4" \
+  "--check with a checkpoint to resume"
+
+sed 's/threshold = -0.7/threshold = -0.6/' holes.lua >holes6.lua
+run -D out=blocked.txt holes6.lua
+expect_status 2 "another run's checkpoint"
+expect_error "is not this run's: threshold -0.7 (this run's: -0.6)" \
+  "another run's checkpoint"
+
+run -D out=holes_resumed.txt --checkpoint blocked.txt.ckpt holes.lua
+expect_status 0 "resumed from the checkpoint"
+voids holes_resumed.txt >b.txt
+cmp -s a.txt b.txt || fail "the resumed run differs from the reference"
+[ ! -e blocked.txt.ckpt ] || fail "a resumed run left its checkpoint"
+rmdir blocked.txt
+
+run -D out=nock.txt --no-checkpoint --check holes.lua
+expect_status 0 "--no-checkpoint"
+grep -q '^  checkpoint = false,$' out.txt || fail "--no-checkpoint: not resolved"
+run --checkpoint a.ckpt --no-checkpoint holes.lua
+expect_status 2 "--checkpoint with --no-checkpoint"
+run --checkpoint a.ckpt --check holes.txt
+expect_status 2 "--checkpoint with a data file"
+
+# On the sky: a prior written on the sky is taken off it with the run's
+# cosmology and goes back out as it came. Not compared with one run over the
+# whole ladder, as the box is: a survey's padded box and grid are sized from
+# the ladder's ends, so the two sessions are not searched on the same grid.
+for part in large small; do
+  case $part in
+    large) radii="35, 30"; extra="" ;;
+    small) radii="26"; extra='prior = "sky_large.txt"' ;;
+  esac
+  sed "s/radii = { 45, 35 }/radii = { $radii }/; s/survey_voids.txt/sky_$part.txt/" \
+    survey.lua >sky_$part.lua
+  echo "$extra" >>sky_$part.lua
+  run sky_$part.lua
+  expect_status 0 "a survey on the sky, $part radii"
+done
+n_large=$(voids sky_large.txt | wc -l)
+[ "$n_large" -gt 0 ] || fail "a survey on the sky: no voids at the large radii"
+voids sky_large.txt | cut -d' ' -f1-4 >a.txt
+voids sky_small.txt | head -n "$n_large" | cut -d' ' -f1-4 >b.txt
+cmp -s a.txt b.txt || fail "the prior's voids did not come back as they went in"
+[ "$(voids sky_small.txt | wc -l)" -gt "$n_large" ] ||
+  fail "a survey extended from the sky added no voids"
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
   exit 1

@@ -223,6 +223,26 @@ typedef struct {
     double search_factor;
   } finder;
 
+  /* --- prior catalogue ------------------------------------------------ */
+  /* Voids the run starts from and returns ahead of its own: the
+   * sif_finder_exodus_extras_t::prior of the finder, read from a file.
+   * path is NULL for none. */
+  struct {
+    const char* path;
+    /* Read with the reader of this output format. */
+    exodus_output_kind_t kind;
+    /* ASCII only: the sif_catalogue_read_ascii() column format, for a
+     * catalogue another finder wrote; NULL takes them from the file. */
+    const char* columns;
+  } prior;
+
+  /* --- checkpoint ----------------------------------------------------- */
+  /* Where the finder saves its progress after every rung, and resumes from
+   * when the file is already there; NULL for none. The configuration
+   * defaults it to the output path with ".ckpt" appended, so a job
+   * resubmitted as it was picks up where it stopped. */
+  const char* checkpoint;
+
   /* --- output --------------------------------------------------------- */
   /* Written beside the path and moved into place when complete, replacing
    * whatever was there. */

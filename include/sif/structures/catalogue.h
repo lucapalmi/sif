@@ -191,6 +191,31 @@ SIF_NODISCARD int sif_catalogue_to_sky(
   sif_catalogue_t* catalogue, const sif_cosmology_t* cosmo);
 
 /**
+ * @brief Turn void centres on the sky back into Cartesian ones, in place.
+ *
+ * The inverse of sif_catalogue_to_sky(), and the same conversion
+ * sif_field_convert_sky_coordinates() applies to tracers: right ascension and
+ * declination in degrees give the direction, the comoving distance to the
+ * redshift in @p cosmo the distance, and the observer is at the origin. For
+ * voids written on the sky that are to be measured against, or extended
+ * with, tracers in comoving coordinates. The catalogue is then
+ * #SIF_COORDINATES_CARTESIAN.
+ *
+ * Radii and footprints are left as they are.
+ *
+ * @param catalogue The catalogue, with sky centres; modified in place.
+ * @param cosmo The cosmology the redshifts are converted in -- the one they
+ * were written with, for the voids to come back where the finder put them.
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL argument, a catalogue already
+ * Cartesian, a right ascension that is not finite, a declination outside
+ * [-90, 90] or a redshift that is negative or not finite, or parameters the
+ * cosmology refuses; SIF_ERR_ALLOC. On failure the catalogue is left as it
+ * was.
+ */
+SIF_NODISCARD int sif_catalogue_to_cartesian(
+  sif_catalogue_t* catalogue, const sif_cosmology_t* cosmo);
+
+/**
  * @brief Give the catalogue its footprint columns, sif_catalogue_t::footprint
  * and sif_catalogue_t::footprint_shell.
  *

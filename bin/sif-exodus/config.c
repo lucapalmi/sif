@@ -34,7 +34,7 @@
 /* The top level: mode, which is a setting rather than a section, and the
  * sections. */
 static const char* const SECTIONS[] = {
-  "mode", "input", "grid", "mesh", "finder", "output", "run", NULL};
+  "mode", "input", "grid", "mesh", "finder", "prior", "output", "run", NULL};
 
 /* Some sections take other keys in a survey than in a box. */
 
@@ -83,8 +83,9 @@ static const char* const SURVEY_MESH_KEYS[] = {
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
   "overlap_fraction", "search_factor", NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
+static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
 static const char* const RUN_KEYS[] = {
-  "threads", "log_level", "tune_fft", NULL};
+  "threads", "log_level", "tune_fft", "checkpoint", NULL};
 
 /* Each section's keys, to tell a setting written at the top level where it
  * belongs. */
@@ -1427,6 +1428,82 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
   lua_settop(L, t - 1);
 }
 
+/* The catalogue format a file name implies: .h5, .hdf5 or .he5 HDF5, .fits
+ * or .fit FITS, anything else ASCII. */
+static int catalogue_format_of(const char* path) {
+  if (ends_with(path, ".h5") || ends_with(path, ".hdf5") ||
+      ends_with(path, ".he5"))
+    return EXODUS_OUTPUT_HDF5;
+  if (ends_with(path, ".fits") || ends_with(path, ".fit"))
+    return EXODUS_OUTPUT_FITS;
+  return EXODUS_OUTPUT_ASCII;
+}
+
+/* A catalogue format this build cannot handle, said at `where`. */
+static void check_catalogue_format(
+  reader_t* r, const char* where, int format, const char* what) {
+#if !defined(SIF_HAVE_HDF5)
+  if (format == EXODUS_OUTPUT_HDF5)
+    report(r, where,
+      "this sif-exodus was built without HDF5: %s an ASCII catalogue, or "
+      "rebuild with SIF_HDF5_SUPPORT=ON",
+      what);
+#endif
+#if !defined(SIF_HAVE_FITS)
+  if (format == EXODUS_OUTPUT_FITS)
+    report(r, where,
+      "this sif-exodus was built without FITS support: %s an HDF5 or an "
+      "ASCII catalogue, or rebuild with SIF_FITS_SUPPORT=ON",
+      what);
+#endif
+  (void)r, (void)where, (void)format, (void)what;
+}
+
+/* prior: a catalogue's file name, or { path, format, columns }. Optional. */
+static void read_prior(reader_t* r, int root, exodus_config_t* c) {
+  lua_State* L = r->L;
+  exodus_params_t* p = &c->params;
+  const char* path = NULL;
+  const char* columns = NULL;
+  int format = -1;
+
+  const int type = field(L, root, "prior");
+  const int t = lua_gettop(L);
+  if (type == LUA_TSTRING) {
+    path = lua_tostring(L, -1);
+  } else if (type == LUA_TTABLE) {
+    check_keys(r, t, "prior", PRIOR_KEYS);
+    if (!get_string(r, t, "prior", "path", &path) &&
+        field(L, t, "path") == LUA_TNIL)
+      report(r, "prior.path", "missing: the catalogue to start from");
+    lua_settop(L, t);
+    get_enum(r, t, "prior", "format", OUTPUT_FORMATS, &format);
+    get_string(r, t, "prior", "columns", &columns);
+  } else if (type != LUA_TNIL) {
+    report(r, "prior", "must be a file name or a table, got a %s",
+      lua_typename(L, type));
+  }
+
+  if (path) {
+    p->prior.path = keep(c, path);
+    if (format < 0)
+      format = catalogue_format_of(path);
+    p->prior.kind = (exodus_output_kind_t)format;
+    check_catalogue_format(
+      r, type == LUA_TSTRING ? "prior" : "prior.path", format, "start from");
+  }
+  if (columns && p->prior.path) {
+    if (p->prior.kind == EXODUS_OUTPUT_ASCII)
+      p->prior.columns = keep(c, columns);
+    else
+      report(r, "prior.columns",
+        "only for an ASCII catalogue; an %s one names its own columns",
+        OUTPUT_FORMATS[p->prior.kind]);
+  }
+
+  lua_settop(L, t - 1);
+}
+
 static void read_output(reader_t* r, int root, exodus_config_t* c) {
   lua_State* L = r->L;
   exodus_params_t* p = &c->params;
@@ -1454,14 +1531,8 @@ static void read_output(reader_t* r, int root, exodus_config_t* c) {
 
   if (path) {
     p->output.path = keep(c, path);
-    if (format < 0 && (ends_with(path, ".h5") || ends_with(path, ".hdf5") ||
-                        ends_with(path, ".he5")))
-      format = EXODUS_OUTPUT_HDF5;
-    else if (format < 0 &&
-             (ends_with(path, ".fits") || ends_with(path, ".fit")))
-      format = EXODUS_OUTPUT_FITS;
-    else if (format < 0)
-      format = EXODUS_OUTPUT_ASCII;
+    if (format < 0)
+      format = catalogue_format_of(path);
   }
   if (format >= 0)
     p->output.kind = (exodus_output_kind_t)format;
@@ -1484,10 +1555,14 @@ static void read_output(reader_t* r, int root, exodus_config_t* c) {
   lua_settop(L, t - 1);
 }
 
-static void read_run(reader_t* r, int root, exodus_config_t* c) {
+/* Read after the output, whose path the checkpoint's default comes from. */
+static void read_run(
+  reader_t* r, int root, exodus_config_t* c, const config_overrides_t* o) {
   lua_State* L = r->L;
   int i;
   bool b;
+  /* run.checkpoint: unset takes the default, false turns it off. */
+  bool checkpoint_set = false;
 
   const int type = field(L, root, "run");
   const int t = lua_gettop(L);
@@ -1498,10 +1573,40 @@ static void read_run(reader_t* r, int root, exodus_config_t* c) {
       c->run.log_level = (uint8_t)(SIF_LOG_LEVEL_TRACE + i);
     if (get_bool(r, t, "run", "tune_fft", &b))
       c->run.tune_fft = b;
+
+    const int ck = field(L, t, "checkpoint");
+    if (ck == LUA_TSTRING) {
+      c->params.checkpoint = keep(c, lua_tostring(L, -1));
+      checkpoint_set = true;
+    } else if (ck == LUA_TBOOLEAN && !lua_toboolean(L, -1)) {
+      checkpoint_set = true;
+    } else if (ck != LUA_TNIL) {
+      type_error(r, "run", "checkpoint", "a file name, or false for none", ck);
+    }
+    lua_pop(L, 1);
   } else if (type != LUA_TNIL) {
     report(r, "run", "must be a table, got a %s", lua_typename(L, type));
   }
   lua_settop(L, t - 1);
+
+  if (o && o->checkpoint) {
+    c->params.checkpoint = keep(c, o->checkpoint);
+    checkpoint_set = true;
+  } else if (o && o->no_checkpoint) {
+    c->params.checkpoint = NULL;
+    checkpoint_set = true;
+  }
+
+  /* Beside the output, so that the same command resumes the same run. */
+  if (!checkpoint_set && c->params.output.path) {
+    const size_t n = strlen(c->params.output.path) + sizeof(".ckpt");
+    char* path = malloc(n);
+    if (path) {
+      snprintf(path, n, "%s.ckpt", c->params.output.path);
+      c->params.checkpoint = keep(c, path);
+      free(path);
+    }
+  }
 }
 
 /* A name the script left at the top level that is not a section. Its own
@@ -1847,6 +1952,17 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
   format_double(num, sizeof num, p->finder.search_factor);
   fprintf(out, "  search_factor = %s,\n}\n\n", num);
 
+  if (p->prior.path) {
+    fputs("prior = { path = ", out);
+    write_lua_string(out, p->prior.path);
+    fprintf(out, ", format = \"%s\"", OUTPUT_FORMATS[p->prior.kind]);
+    if (p->prior.columns) {
+      fputs(", columns = ", out);
+      write_lua_string(out, p->prior.columns);
+    }
+    fputs(" }\n\n", out);
+  }
+
   fputs("output = { path = ", out);
   write_lua_string(out, p->output.path);
   fprintf(out, ", format = \"%s\" }\n\n", OUTPUT_FORMATS[p->output.kind]);
@@ -1856,15 +1972,21 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     fprintf(out, "%u", c->run.n_threads);
   else
     fputs("\"auto\"", out);
-  fprintf(out, ",\n  log_level = \"%s\",\n  tune_fft = %s,\n}\n",
+  fprintf(out, ",\n  log_level = \"%s\",\n  tune_fft = %s,\n",
     LOG_LEVELS[c->run.log_level - SIF_LOG_LEVEL_TRACE],
     c->run.tune_fft ? "true" : "false");
+  fputs("  checkpoint = ", out);
+  if (p->checkpoint)
+    write_lua_string(out, p->checkpoint);
+  else
+    fputs("false", out);
+  fputs(",\n}\n", out);
 }
 
 /* --- the entry points -------------------------------------------------- */
 
 int config_load(const char* path, const config_define_t* defines,
-  size_t n_defines, exodus_config_t* c) {
+  size_t n_defines, const config_overrides_t* overrides, exodus_config_t* c) {
 
   memset(c, 0, sizeof *c);
   set_defaults(c);
@@ -1951,8 +2073,9 @@ int config_load(const char* path, const config_define_t* defines,
   read_cells(&r, root, "grid", GRID_KEYS, 8, &c->params.grid.n_cells);
   read_mesh(&r, root, c);
   read_finder(&r, root, c);
+  read_prior(&r, root, c);
   read_output(&r, root, c);
-  read_run(&r, root, c);
+  read_run(&r, root, c, overrides);
 
   lua_close(L);
 
@@ -2257,6 +2380,7 @@ static uint64_t physical_memory(void) {
 }
 
 static void check_output(checker_t* ch, const exodus_params_t* p);
+static void check_resume(checker_t* ch, const exodus_params_t* p);
 
 /* An ASCII input, every row of it, against its column format: every problem
  * the reader would stop at the first of. Logged by the library, and counted
@@ -2433,6 +2557,7 @@ int config_check(
 
   if (p->mode == EXODUS_MODE_SURVEY) {
     check_survey(&ch, p, summary, deep);
+    check_resume(&ch, p);
     check_output(&ch, p);
     return ch.n_errors ? -1 : 0;
   }
@@ -2510,8 +2635,101 @@ int config_check(
         human_bytes(a, sizeof a, peak), human_bytes(b, sizeof b, ram));
   }
 
+  check_resume(&ch, p);
   check_output(&ch, p);
   return ch.n_errors ? -1 : 0;
+}
+
+/*
+ * What the run starts from: a prior catalogue that has to be there, and a
+ * checkpoint that may be. A checkpoint found is not an error -- it is how a
+ * resubmitted job resumes -- but it changes what the run does, so it is said,
+ * with how far it got. Its header is read here as the format lays it out,
+ * without the library; whether it describes this run is the finder's to
+ * check, against what only the run knows.
+ */
+static int descending(const void* a, const void* b) {
+  const sif_real x = *(const sif_real*)a, y = *(const sif_real*)b;
+  return (x < y) - (x > y);
+}
+
+static void check_resume(checker_t* ch, const exodus_params_t* p) {
+  if (p->prior.path && access(p->prior.path, R_OK) != 0)
+    check_say(ch, SIF_LOG_LEVEL_ERROR, "prior.path", "cannot open %s: %s",
+      p->prior.path, strerror(errno));
+
+  if (!p->checkpoint || access(p->checkpoint, F_OK) != 0)
+    return;
+
+  sif_finder_exodus_checkpoint_t h;
+  sif_real* saved = NULL;
+  FILE* f = fopen(p->checkpoint, "rb");
+  bool read = f && fread(&h, sizeof h, 1, f) == 1 &&
+              memcmp(h.magic, SIF_FINDER_CHECKPOINT_MAGIC, 4) == 0 &&
+              h.n_radii > 0 && h.n_radii <= MAX_RADII;
+  if (read) {
+    saved = malloc(h.n_radii * sizeof(sif_real));
+    read = saved && fread(saved, sizeof(sif_real), h.n_radii, f) == h.n_radii;
+  }
+  if (f)
+    fclose(f);
+
+  if (!read) {
+    check_say(ch, SIF_LOG_LEVEL_ERROR, "run.checkpoint",
+      "%s exists and is not an exodus checkpoint; move it, or name another "
+      "checkpoint",
+      p->checkpoint);
+    free(saved);
+    return;
+  }
+
+  /* What the configuration fixes on its own is compared now, so that a run
+   * that would be refused is refused before its inputs are read; the rest
+   * -- the grid, the tracers, a survey's box -- the finder compares once the
+   * run has them. */
+  char why[160] = "";
+  const uint32_t n = p->finder.n_radii;
+  sif_real* ladder = n ? malloc(n * sizeof(sif_real)) : NULL;
+  if (ladder) {
+    memcpy(ladder, p->finder.radii, n * sizeof(sif_real));
+    qsort(ladder, n, sizeof(sif_real), descending);
+  }
+  const double factor = (double)sif__finder_search_factor(h.options);
+
+  if ((h.is_survey != 0) != (p->mode == EXODUS_MODE_SURVEY))
+    snprintf(
+      why, sizeof why, "saved from a %s run", h.is_survey ? "survey" : "box");
+  else if (h.n_radii != n)
+    snprintf(
+      why, sizeof why, "a ladder of %u radii (this one has %u)", h.n_radii, n);
+  else if (h.threshold != (double)(sif_real)p->finder.threshold)
+    snprintf(why, sizeof why, "threshold %.7g (this run's: %.7g)", h.threshold,
+      p->finder.threshold);
+  else if (h.overlap_fraction != (double)(sif_real)p->finder.overlap_fraction)
+    snprintf(why, sizeof why, "overlap fraction %.7g (this run's: %.7g)",
+      h.overlap_fraction, p->finder.overlap_fraction);
+  else if (factor != p->finder.search_factor)
+    snprintf(why, sizeof why, "search factor %g (this run's: %g)", factor,
+      p->finder.search_factor);
+  for (uint32_t i = 0; !why[0] && ladder && i < n; i++) {
+    if (saved[i] != ladder[i])
+      snprintf(why, sizeof why,
+        "radius %u of the ladder, largest first: %g (this run's: %g)", i,
+        (double)saved[i], (double)ladder[i]);
+  }
+  free(ladder);
+  free(saved);
+
+  if (why[0])
+    check_say(ch, SIF_LOG_LEVEL_ERROR, "run.checkpoint",
+      "%s is not this run's: %s; delete it to start over, or name another "
+      "checkpoint",
+      p->checkpoint, why);
+  else
+    check_say(ch, SIF_LOG_LEVEL_WARNING, "run.checkpoint",
+      "%s exists: the run resumes from it, with %u of %u rungs done and %llu "
+      "voids; delete it to start over",
+      p->checkpoint, h.next_rung, h.n_radii, (unsigned long long)h.n_voids);
 }
 
 /* The output: a directory that takes files, and nothing lost silently when

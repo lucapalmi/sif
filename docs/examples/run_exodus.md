@@ -651,6 +651,73 @@ sif-exodus exodus.lua
 
 :::::
 
+## Long runs: checkpoints and extending a catalogue
+
+exodus saves its progress after every rung of the ladder: the voids found so
+far, and how many rungs they cover. A run that stops -- a job hitting its
+time limit, a node going down -- resumes from there, and returns exactly the
+catalogue it would have returned uninterrupted. The checkpoint is removed
+when the run completes.
+
+A run can also start from a catalogue of voids, and add to it. Running the
+large radii first and the small ones later from that catalogue gives the
+same voids as one run over the whole ladder, as long as consecutive radii
+are no further apart than the search factor. In a survey the search box
+depends on both ends of the ladder, so the two runs only match if both use
+the box sized for the whole ladder.
+
+:::::{tab-set}
+
+::::{tab-item} sif-exodus
+The checkpoint is the output's path plus `.ckpt`, so resubmitting the same
+job resumes it. `run.checkpoint` (or `--checkpoint PATH`) puts it elsewhere,
+and `false` (or `--no-checkpoint`) turns it off. A checkpoint from a
+different run is refused before anything is read.
+
+```lua
+-- the small radii, starting from the voids of a run over the large ones
+finder = { radii = ladder(10, 20, 0.05), threshold = -0.7 }
+prior = "voids_large.h5"
+output = "voids.h5"
+```
+
+```bash
+# how far a stopped run got
+sif-exodus --check voids.h5.ckpt
+```
+::::
+
+::::{tab-item} Python
+```python
+# progress goes to run.ckpt; if it already exists, the run resumes from it
+voids = pysif.finders.exodus(grid, mesh, radii, -0.7, checkpoint="run.ckpt")
+
+# how far a stopped run got
+done, info = pysif.finders.read_checkpoint("run.ckpt")
+print(info["rungs_done"], "of", len(info["radii"]), "rungs,", done.n_voids, "voids")
+
+# the small radii, starting from the voids of the large ones
+voids = pysif.finders.exodus(grid, mesh, small_radii, -0.7, prior=large_voids)
+```
+`checkpoint=None` (the default) writes to `exodus-<hex>.ckpt` in the working
+directory, and `checkpoint=False` writes nothing.
+::::
+
+::::{tab-item} C
+```c
+const sif_finder_exodus_extras_t extras = {
+  .checkpoint = "run.ckpt", /* NULL: exodus-<hex>.ckpt */
+  .prior = large_voids,     /* NULL: start from nothing */
+};
+sif_catalogue_t* voids = sif_finder_exodus_ex(grid, mesh, radii, n_radii,
+  -0.7f, 0.0f, SIF_DEFAULT, &extras);
+```
+`sif_finder_exodus()` checkpoints the same way, under a name of its own;
+`SIF_FINDER_NO_CHECKPOINT` turns it off.
+::::
+
+:::::
+
 ## Checking files before a run
 
 `sif-exodus --check` takes a data file as well as a configuration. It tells

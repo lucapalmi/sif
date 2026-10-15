@@ -5,7 +5,7 @@
  */
 
 /* The configuration file: a Lua script, run in a sandbox, whose sections --
- * mode, then input, grid, mesh, finder, output, run -- become an
+ * mode, then input, grid, mesh, finder, prior, output, run -- become an
  * exodus_params_t. mode, "box" or "survey", is required, and decides what
  * the sections may hold: a survey's input names randoms and a cosmology
  * where a box's names its box, and its mesh sizes two meshes.
@@ -66,12 +66,22 @@ typedef struct {
   const char** _paths[2];
 } exodus_config_t;
 
-/* Run the script at `path` and read it into `config`. Every problem found is
- * printed to stderr. Returns 0, or -1 if the script failed or the
- * configuration is invalid; `config` is then left empty, and safe to pass to
- * config_free(). */
+/* What the command line sets over the script, for settings that have an
+ * option of their own. Zeroed, it changes nothing. */
+typedef struct {
+  /* --checkpoint PATH: run.checkpoint = PATH. */
+  const char* checkpoint;
+  /* --no-checkpoint: run.checkpoint = false. */
+  bool no_checkpoint;
+} config_overrides_t;
+
+/* Run the script at `path` and read it into `config`, with `overrides`
+ * (NULL for none) applied on top. Every problem found is printed to stderr.
+ * Returns 0, or -1 if the script failed or the configuration is invalid;
+ * `config` is then left empty, and safe to pass to config_free(). */
 int config_load(const char* path, const config_define_t* defines,
-  size_t n_defines, exodus_config_t* config);
+  size_t n_defines, const config_overrides_t* overrides,
+  exodus_config_t* config);
 
 /* Check what a run would trip over, before it reads anything: that the
  * input is there and says what the configuration expects of it (for an

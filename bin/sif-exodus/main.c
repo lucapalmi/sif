@@ -9,7 +9,8 @@
  *
  *   sif-exodus [-D name=value ...] CONFIG     run
  *   sif-exodus --check [-D ...] CONFIG        resolve and check, do not run
- *   sif-exodus --check FILE                   check a data file
+ *   sif-exodus --check FILE                   check a data file or a
+ *                                             checkpoint
  *   sif-exodus --template box|survey          a configuration to start from
  *
  * Exit status: 0 on success, 1 when the run fails, 2 when the command line,
@@ -43,15 +44,21 @@ static void print_usage(FILE* out) {
     "\n"
     "options:\n"
     "  -D NAME=VALUE  set NAME to the string VALUE in CONFIG; repeatable\n"
+    "  --checkpoint PATH\n"
+    "                 save the run's progress to PATH after every rung,\n"
+    "                 and resume from it if it exists (default: the\n"
+    "                 output path + .ckpt; run.checkpoint in CONFIG)\n"
+    "  --no-checkpoint\n"
+    "                 save no progress\n"
     "  -c, --check    check FILE and stop: a configuration is resolved,\n"
     "                 checked and printed; a data file (ASCII, FITS,\n"
-    "                 HDF5, GADGET, .xfield) is checked for problems and\n"
-    "                 summarised\n"
+    "                 HDF5, GADGET, .xfield) or a checkpoint is checked\n"
+    "                 for problems and summarised\n"
     "  --deep         with --check, read every value: a data file's\n"
     "                 ranges, a configuration's inputs as the run would\n"
     "  --format KIND  with --check, the kind of FILE, instead of telling\n"
-    "                 it from its contents: lua, ascii, fits, hdf5, gadget\n"
-    "                 or xfield\n"
+    "                 it from its contents: lua, ascii, fits, hdf5, gadget,\n"
+    "                 xfield or checkpoint\n"
     "  --columns FMT  with --check on an ASCII file, the column format to\n"
     "                 check it against, as in a configuration: \"x y z w\"\n"
     "  --delimiter C  with --check on an ASCII file, the column delimiter\n"
@@ -81,6 +88,7 @@ int main(int argc, char** argv) {
   bool check_only = false;
   inspect_opts_t io = {FILE_KIND_AUTO, NULL, '\0', 0, false};
   bool ascii_options = false;
+  config_overrides_t overrides = {NULL, false};
 
   for (int i = 1; i < argc; i++) {
     const char* arg = argv[i];
@@ -120,6 +128,11 @@ int main(int argc, char** argv) {
       return 0;
     } else if (strcmp(arg, "-c") == 0 || strcmp(arg, "--check") == 0) {
       check_only = true;
+    } else if (strcmp(arg, "--checkpoint") == 0) {
+      if (!(overrides.checkpoint = option_value(argc, argv, &i)))
+        return 2;
+    } else if (strcmp(arg, "--no-checkpoint") == 0) {
+      overrides.no_checkpoint = true;
     } else if (strcmp(arg, "--deep") == 0) {
       io.deep = true;
     } else if (strcmp(arg, "--format") == 0) {
@@ -128,8 +141,8 @@ int main(int argc, char** argv) {
         return 2;
       if (inspect_kind_parse(v, &io.format) != 0) {
         fprintf(stderr,
-          "sif-exodus: --format %s: expected lua, ascii, fits, hdf5, gadget "
-          "or xfield\n",
+          "sif-exodus: --format %s: expected lua, ascii, fits, hdf5, gadget, "
+          "xfield or checkpoint\n",
           v);
         return 2;
       }
@@ -206,6 +219,12 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  if (overrides.checkpoint && overrides.no_checkpoint) {
+    fprintf(stderr,
+      "sif-exodus: --checkpoint and --no-checkpoint: one or the other\n");
+    return 2;
+  }
+
   if (!check_only &&
       (io.deep || io.format != FILE_KIND_AUTO || ascii_options)) {
     fprintf(stderr, "sif-exodus: --deep, --format, --columns, --delimiter and "
@@ -217,6 +236,14 @@ int main(int argc, char** argv) {
                            : io.format != FILE_KIND_AUTO
                              ? io.format
                              : inspect_detect(config_path);
+  if (kind != FILE_KIND_LUA &&
+      (overrides.checkpoint || overrides.no_checkpoint)) {
+    fprintf(stderr,
+      "sif-exodus: --checkpoint and --no-checkpoint go with a "
+      "configuration, and %s is %s\n",
+      config_path, inspect_kind_name(kind));
+    return 2;
+  }
   if (kind != FILE_KIND_LUA && n_defines > 0) {
     fprintf(stderr, "sif-exodus: -D goes with a configuration, and %s is %s\n",
       config_path, inspect_kind_name(kind));
@@ -244,7 +271,7 @@ int main(int argc, char** argv) {
   }
 
   exodus_config_t config;
-  if (config_load(config_path, defines, n_defines, &config) != 0)
+  if (config_load(config_path, defines, n_defines, &overrides, &config) != 0)
     return 2;
 
   if (check_only) {
