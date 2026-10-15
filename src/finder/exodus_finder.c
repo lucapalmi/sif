@@ -89,10 +89,12 @@
 
 #include "sif/finder/exodus_finder.h"
 
+#include <errno.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "sif/core/macros.h"
 #include "sif/structures/bitmask.h"
@@ -108,6 +110,7 @@
 #include "sif/utils/sort.h"
 #include "sif/utils/timer.h"
 
+#include "exodus_checkpoint.h"
 #include "utils.h"
 
 /* A distance collected by the refinement on a weighted mesh, with the weight
@@ -2349,14 +2352,86 @@ static int check_weights(const sif_chain_mesh_t* mesh) {
 
 /* --- Driver --- */
 
-static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
-  const sif_real* radii, uint32_t n_radii, sif_real threshold,
-  sif_real overlap_fraction, sif_option options, sif_grid_t* random_grid,
-  const sif_chain_mesh_t* random_mesh);
+static sif_catalogue_t* exodus_run(sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option options,
+  sif_grid_t* random_grid, const sif_chain_mesh_t* random_mesh,
+  const sif_real offset[3], const sif_finder_exodus_extras_t* extras);
+
+/*
+ * The checks the extras need that the rest of the arguments do not: a prior
+ * catalogue the finder can place, and no checkpoint path asked for alongside
+ * the option that turns checkpoints off.
+ */
+static int check_extras(const sif_finder_exodus_extras_t* extras,
+  sif_option options, const sif_real offset[3], sif_real box_length) {
+
+  if (!extras)
+    return SIF_OK;
+
+  if (extras->checkpoint && (options & SIF_FINDER_NO_CHECKPOINT)) {
+    SIF_LOG_ERROR(TAG, "checkpoint: %s, with SIF_FINDER_NO_CHECKPOINT set",
+      extras->checkpoint);
+    return SIF_ERR_INVALID;
+  }
+  if (extras->checkpoint &&
+      strlen(extras->checkpoint) + 32 >= SIF__CHECKPOINT_PATH_MAX) {
+    SIF_LOG_ERROR(TAG, "checkpoint: path of %zu characters (expected under %d)",
+      strlen(extras->checkpoint), SIF__CHECKPOINT_PATH_MAX - 32);
+    return SIF_ERR_INVALID;
+  }
+
+  const sif_catalogue_t* prior = extras->prior;
+  if (!prior)
+    return SIF_OK;
+
+  if (prior->units != SIF_COORDINATES_CARTESIAN) {
+    SIF_LOG_ERROR(
+      TAG, "prior: centres on the sky (expected Cartesian coordinates)");
+    return SIF_ERR_INVALID;
+  }
+
+  for (uint64_t i = 0; i < prior->n_voids; i++) {
+    const sif_real r = prior->radii[i];
+    if (!(r > 0.0f) || !isfinite(r)) {
+      SIF_LOG_ERROR(TAG,
+        "prior: void %" PRIu64 ": radius %g (expected "
+        "positive and finite)",
+        i, (double)r);
+      return SIF_ERR_INVALID;
+    }
+
+    /* Where the finder will put it, which is where it has to fit. */
+    const sif_real c[3] = {prior->cx[i] + (offset ? offset[0] : 0.0f),
+      prior->cy[i] + (offset ? offset[1] : 0.0f),
+      prior->cz[i] + (offset ? offset[2] : 0.0f)};
+    for (int k = 0; k < 3; k++) {
+      if (!(c[k] >= 0.0f && c[k] < box_length)) {
+        SIF_LOG_ERROR(TAG,
+          "prior: void %" PRIu64 ": centre (%g, %g, %g)%s outside the box "
+          "[0, %g)",
+          i, (double)prior->cx[i], (double)prior->cy[i], (double)prior->cz[i],
+          offset ? ", moved by the offset," : "", (double)box_length);
+        return SIF_ERR_INVALID;
+      }
+    }
+  }
+
+  return SIF_OK;
+}
 
 sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options) {
+
+  return sif_finder_exodus_ex(
+    grid, mesh, radii, n_radii, threshold, overlap_fraction, options, NULL);
+}
+
+sif_catalogue_t* sif_finder_exodus_ex(sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option options,
+  const sif_finder_exodus_extras_t* extras) {
 
   if (!grid || !grid->values || !mesh) {
     SIF_LOG_ERROR(TAG, "%s",
@@ -2402,8 +2477,13 @@ sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid, const sif_chain_mesh_t* mes
     return NULL;
   }
 
+  if (check_extras(extras, options, NULL, grid->box_length) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+
   return exodus_run(grid, mesh, radii, n_radii, threshold, overlap_fraction,
-    options, NULL, NULL);
+    options, NULL, NULL, NULL, extras);
 }
 
 /*
@@ -2494,6 +2574,18 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   const sif_chain_mesh_t* random_mesh, const sif_real offset[3],
   const sif_real* radii, uint32_t n_radii, sif_real threshold,
   sif_real overlap_fraction, sif_option options) {
+
+  return sif_finder_exodus_survey_ex(data_grid, random_grid, data_mesh,
+    random_mesh, offset, radii, n_radii, threshold, overlap_fraction, options,
+    NULL);
+}
+
+sif_catalogue_t* sif_finder_exodus_survey_ex(sif_grid_t* data_grid,
+  sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
+  const sif_chain_mesh_t* random_mesh, const sif_real offset[3],
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_real overlap_fraction, sif_option options,
+  const sif_finder_exodus_extras_t* extras) {
 
   const char* missing = !data_grid             ? "data grid: NULL"
                         : !data_grid->values   ? "data grid: no values"
@@ -2596,8 +2688,14 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
     return NULL;
   }
 
-  sif_catalogue_t* cat = exodus_run(data_grid, data_mesh, radii, n_radii,
-    threshold, overlap_fraction, options, random_grid, random_mesh);
+  if (check_extras(extras, options, offset, data_grid->box_length) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+
+  sif_catalogue_t* cat =
+    exodus_run(data_grid, data_mesh, radii, n_radii, threshold,
+      overlap_fraction, options, random_grid, random_mesh, offset, extras);
 
   /* Back to the caller's frame, so that a forgotten step cannot leave the
    * voids where the box put them. */
@@ -2608,6 +2706,17 @@ sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
       sif_catalogue_free(cat);
       sif__error_status_set(status);
       return NULL;
+    }
+
+    /* The prior voids went into the box and back out, and in floating point
+     * x + o - o need not be x. They are the caller's own, so they come back
+     * as given. */
+    const sif_catalogue_t* prior = extras ? extras->prior : NULL;
+    if (prior && prior->n_voids > 0) {
+      const size_t bytes = (size_t)prior->n_voids * sizeof(sif_real);
+      memcpy(cat->cx, prior->cx, bytes);
+      memcpy(cat->cy, prior->cy, bytes);
+      memcpy(cat->cz, prior->cz, bytes);
     }
   }
   return cat;
@@ -2768,6 +2877,195 @@ int sif_finder_exodus_survey_box(const sif_field_t* data,
   return SIF_OK;
 }
 
+/* --- checkpoints --- */
+
+/* See sif__exodus_halt_after_set(). */
+static uint32_t halt_after = 0;
+
+void sif__exodus_halt_after_set(uint32_t n_rungs) { halt_after = n_rungs; }
+
+/* A run's checkpoint, and where it stands. See exodus_checkpoint.c for why
+ * the catalogue is all it needs to hold. */
+typedef struct {
+  int active;   /* written after every rung */
+  int on_disk;  /* this run wrote one, or resumed one */
+  int progress; /* the one on disk holds a finished rung */
+  char path[SIF__CHECKPOINT_PATH_MAX];
+  sif_finder_exodus_checkpoint_t header;
+} checkpoint_t;
+
+/* Where a run starts: the voids its catalogue holds before the first rung it
+ * runs, which rung that is, and the mismatch count carried over. */
+typedef struct {
+  sif_catalogue_t* voids;
+  uint32_t first_rung;
+  uint64_t n_mismatched;
+} run_start_t;
+
+/* The prior voids, moved to where the finder works. */
+static sif_catalogue_t* prior_in_box(
+  const sif_catalogue_t* prior, const sif_real offset[3]) {
+
+  const uint64_t n = prior ? prior->n_voids : 0;
+  sif_catalogue_t* voids = sif_catalogue_alloc(n);
+  if (!voids)
+    return NULL;
+
+  for (uint64_t i = 0; i < n; i++) {
+    const int status =
+      sif_catalogue_append(voids, prior->cx[i] + (offset ? offset[0] : 0.0f),
+        prior->cy[i] + (offset ? offset[1] : 0.0f),
+        prior->cz[i] + (offset ? offset[2] : 0.0f), prior->radii[i]);
+    if (status != SIF_OK) {
+      sif_catalogue_free(voids);
+      return NULL;
+    }
+  }
+  return voids;
+}
+
+/*
+ * Decides where the run starts, before any of the expensive setup: a
+ * checkpoint that does not describe this run, or cannot be written, should
+ * fail the call in milliseconds, not after the grid's transform.
+ *
+ * A checkpoint the caller named and that exists is resumed. Anything else
+ * starts from the prior voids, if any, and writes the first checkpoint now --
+ * which is also what proves the path writable while the caller is still
+ * watching.
+ */
+static int run_start(checkpoint_t* ck, run_start_t* start,
+  const sif_grid_t* grid, const sif_chain_mesh_t* mesh,
+  const sif_chain_mesh_t* random_mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option options,
+  const sif_real offset[3], const sif_finder_exodus_extras_t* extras) {
+
+  memset(ck, 0, sizeof(*ck));
+  memset(start, 0, sizeof(*start));
+
+  const sif_catalogue_t* prior = extras ? extras->prior : NULL;
+  const char* named = extras ? extras->checkpoint : NULL;
+
+  if (options & SIF_FINDER_NO_CHECKPOINT) {
+    start->voids = prior_in_box(prior, offset);
+    return start->voids ? SIF_OK : SIF_ERR_ALLOC;
+  }
+
+  sif_real* sorted = sif_malloc_aligned(n_radii * sizeof(sif_real));
+  if (!sorted) {
+    SIF_LOG_ERROR(TAG, "out of memory: %u radii", n_radii);
+    return SIF_ERR_ALLOC;
+  }
+  memcpy(sorted, radii, n_radii * sizeof(sif_real));
+  sort_radii_desc(sorted, n_radii);
+
+  sif_finder_exodus_checkpoint_t* h = &ck->header;
+  h->is_survey = random_mesh != NULL;
+  h->is_weighted = mesh->weights != NULL;
+  h->options = options & (SIF__FINDER_SEARCH_MASK | SIF_FINDER_KEEP_CIC_WINDOW);
+  h->n_radii = n_radii;
+  h->grid_n_cells = grid->n_cells;
+  h->box_length = (double)grid->box_length;
+  h->threshold = (double)threshold;
+  h->overlap_fraction = (double)overlap_fraction;
+  h->n_particles = mesh->n_particles;
+  h->total_weight = mesh->total_weight;
+  if (random_mesh) {
+    h->random_n_particles = random_mesh->n_particles;
+    h->random_total_weight = random_mesh->total_weight;
+  }
+  for (int k = 0; random_mesh && offset && k < 3; k++)
+    h->offset[k] = (double)offset[k];
+  if (prior && prior->n_voids > 0) {
+    h->n_prior = prior->n_voids;
+    h->prior_crc32 = sif__exodus_checkpoint_crc(prior);
+  }
+
+  if (named)
+    snprintf(ck->path, sizeof(ck->path), "%s", named);
+  else
+    sif__exodus_checkpoint_name(ck->path, sizeof(ck->path));
+
+  int status = SIF_OK;
+
+  if (named && access(named, F_OK) == 0) {
+    sif_finder_exodus_checkpoint_t got;
+    sif_real* got_radii = NULL;
+
+    status =
+      sif__exodus_checkpoint_load(named, &got, &got_radii, &start->voids);
+    if (status == SIF_OK)
+      status = sif__exodus_checkpoint_match(named, h, sorted, &got, got_radii);
+    sif_free_aligned(got_radii);
+
+    if (status == SIF_OK) {
+      start->first_rung = got.next_rung;
+      start->n_mismatched = got.n_mismatched;
+      ck->active = 1;
+      ck->on_disk = 1;
+      ck->progress = 1;
+      SIF_LOG_INFO(TAG,
+        "checkpoint: %s: resuming with %u of %u rungs done, %" PRIu64 " voids",
+        named, got.next_rung, n_radii, got.n_voids);
+    }
+    sif_free_aligned(sorted);
+    return status;
+  }
+
+  start->voids = prior_in_box(prior, offset);
+  if (!start->voids) {
+    sif_free_aligned(sorted);
+    return SIF_ERR_ALLOC;
+  }
+
+  status = sif__exodus_checkpoint_write(ck->path, h, sorted, start->voids,
+    named ? NULL : "running without a checkpoint");
+  sif_free_aligned(sorted);
+
+  if (status == SIF_OK) {
+    ck->active = 1;
+    ck->on_disk = 1;
+    SIF_LOG_INFO(TAG, "checkpoint: %s", ck->path);
+  }
+
+  /* Only a checkpoint the caller asked for by name is worth failing over. */
+  return named ? status : SIF_OK;
+}
+
+/* After rung i: the catalogue so far, and the rungs it covers. */
+static void checkpoint_rung(checkpoint_t* ck, const exodus_ctx_t* ctx,
+  uint32_t rungs_done, uint64_t n_mismatched) {
+
+  if (!ck->active)
+    return;
+
+  ck->header.next_rung = rungs_done;
+  ck->header.n_mismatched = n_mismatched;
+
+  /* A failure is logged as a warning and leaves the previous checkpoint in
+   * place; the next rung tries again. */
+  if (sif__exodus_checkpoint_write(ck->path, &ck->header, ctx->sorted_radii,
+        ctx->cat, "checkpoint not updated, the previous one stands") == SIF_OK)
+    ck->progress = 1;
+}
+
+/* A run that completed has no use for its checkpoint, and neither has one
+ * that failed before finishing a rung: resuming it would start over. Any other
+ * keeps it, and says where. */
+static void checkpoint_finish(const checkpoint_t* ck, int status) {
+  if (!ck->on_disk)
+    return;
+
+  if (status != SIF_OK && ck->progress) {
+    SIF_LOG_INFO(TAG, "checkpoint: %s: kept, resume the run from it", ck->path);
+    return;
+  }
+
+  if (unlink(ck->path) != 0)
+    SIF_LOG_WARNING(
+      TAG, "checkpoint: %s: cannot remove: %s", ck->path, strerror(errno));
+}
+
 /*
  * The run both finders share. Everything that decides which candidates become
  * voids -- the rung ladder, the speculative batches, the overlap re-checks --
@@ -2777,22 +3075,44 @@ int sif_finder_exodus_survey_box(const sif_field_t* data,
  * random_grid and random_mesh are NULL for a box run, and the box run then
  * takes exactly the path it always has.
  */
-static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
-  const sif_real* radii, uint32_t n_radii, sif_real threshold,
-  sif_real overlap_fraction, sif_option options, sif_grid_t* random_grid,
-  const sif_chain_mesh_t* random_mesh) {
+static sif_catalogue_t* exodus_run(sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option options,
+  sif_grid_t* random_grid, const sif_chain_mesh_t* random_mesh,
+  const sif_real offset[3], const sif_finder_exodus_extras_t* extras) {
 
   const int weighted = (mesh->weights != NULL);
   const int survey = (random_mesh != NULL);
+
+  checkpoint_t ck;
+  run_start_t start;
+  int status = run_start(&ck, &start, grid, mesh, random_mesh, radii, n_radii,
+    threshold, overlap_fraction, options, offset, extras);
+  if (status != SIF_OK) {
+    sif_catalogue_free(start.voids);
+    sif__error_status_set(status);
+    return NULL;
+  }
 
   exodus_ctx_t ctx;
   const int init = ctx_init(
     &ctx, grid, mesh, radii, n_radii, options, random_grid, random_mesh);
   if (init != SIF_OK) {
+    sif_catalogue_free(start.voids);
+    checkpoint_finish(&ck, init);
     sif__error_status_set(init);
     ctx_release(&ctx, grid);
     return NULL;
   }
+
+  /* The voids already found, put back exactly as the rungs that found them
+   * left them: the overlap mask, the void index and the largest radius are
+   * all accept_void()'s doing, and none depends on the order. */
+  for (uint64_t v = 0; v < start.voids->n_voids && status == SIF_OK; v++)
+    status = accept_void(&ctx, grid, start.voids->cx[v], start.voids->cy[v],
+      start.voids->cz[v], start.voids->radii[v]);
+  sif_catalogue_free(start.voids);
+  start.voids = NULL;
 
   /* Loop invariants: the mean tracer density never changes between radii. */
   const sif_real box_volume =
@@ -2829,10 +3149,9 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
       sif_bitmask_count_set(ctx.occupied), grid->total_cells);
 
   sif_timer_t timer;
-  int status = SIF_OK;
-  uint64_t total_mismatched = 0;
+  uint64_t total_mismatched = start.n_mismatched;
 
-  for (uint32_t i = 0; i < n_radii && status == SIF_OK; i++) {
+  for (uint32_t i = start.first_rung; i < n_radii && status == SIF_OK; i++) {
     sif_timer_start(&timer);
 
     const sif_real radius = ctx.sorted_radii[i];
@@ -3167,6 +3486,15 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
 
     sif__finder_log_radius(TAG, radius, &stats, ctx.cat->n_voids,
       sif_timer_elapsed_ms(&timer) / 1000.0);
+
+    if (status == SIF_OK)
+      checkpoint_rung(&ck, &ctx, i + 1, total_mismatched);
+
+    if (status == SIF_OK && halt_after == i + 1) {
+      SIF_LOG_ERROR(
+        TAG, "halted after rung %u of %u (test hook)", i + 1, n_radii);
+      status = SIF_ERR_INVALID;
+    }
   }
 
   /* Restored after a failure too: the caller gets back the grid they gave,
@@ -3186,6 +3514,7 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
   /* A partial catalogue is not handed back: it would look like a run that
    * found fewer voids. */
   if (status != SIF_OK) {
+    checkpoint_finish(&ck, status);
     sif__error_status_set(status);
     ctx_release(&ctx, grid);
     return NULL;
@@ -3205,10 +3534,13 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mes
   sif_catalogue_trim(ctx.cat);
 
   if (survey && survey_footprint(ctx.cat, ctx.occupied, grid) != SIF_OK) {
+    checkpoint_finish(&ck, SIF_ERR_ALLOC);
     sif__error_status_set(SIF_ERR_ALLOC);
     ctx_release(&ctx, grid);
     return NULL;
   }
+
+  checkpoint_finish(&ck, SIF_OK);
 
   sif_catalogue_t* result = ctx.cat;
   ctx.cat = NULL; /* ownership passes to the caller */

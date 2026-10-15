@@ -172,6 +172,197 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
   sif_real overlap_fraction, sif_option opt);
 
 /**
+ * @brief What sif_finder_exodus_ex() and sif_finder_exodus_survey_ex() take
+ * beyond the plain finders' arguments. Zero it and set what is wanted: an
+ * all-zero struct, or a NULL pointer to one, is the plain run.
+ */
+typedef struct {
+  /**
+   * Where the run saves its progress, or NULL for a name of its own.
+   *
+   * A file that does not exist is created, and rewritten after every rung.
+   * One that exists is resumed: its header has to describe this run -- the
+   * same ladder, threshold, overlap fraction, search factor, CIC window
+   * option, grid geometry, tracer counts and total weights, and for a survey
+   * the same offset -- or the call fails saying which differs. The grid and
+   * the mesh themselves are not compared, so resuming against different
+   * tracers that happen to agree on all of that is the caller's mistake to
+   * avoid.
+   *
+   * Left NULL, the run writes to `exodus-<16 hex digits>.ckpt` in the
+   * working directory, a name no earlier run has used, and logs it before the
+   * first rung.
+   */
+  const char* checkpoint;
+
+  /**
+   * Voids to start from, or NULL. Read only; the caller keeps it.
+   *
+   * They go into the catalogue before the first rung, as though an earlier
+   * rung had found them: what the finder adds has to respect the overlap
+   * fraction against them, and they are returned, first and unchanged, ahead
+   * of what it adds. Nothing ties them to this run. They can come from a run
+   * over the larger radii of the same field, from another finder, or from
+   * anywhere else, and whether they are consistent with this run is the
+   * caller's call. For a run over the next radii down, see the note below.
+   *
+   * Centres in the caller's frame -- for a survey, the frame the offset is
+   * taken back out of -- and inside the box once there; Cartesian
+   * coordinates; radii positive and finite. Any footprint columns are
+   * ignored, and a survey recomputes them for all of its voids.
+   */
+  const sif_catalogue_t* prior;
+} sif_finder_exodus_extras_t;
+
+/**
+ * @brief sif_finder_exodus(), with a checkpoint and, optionally, voids to
+ * start from.
+ *
+ * **Checkpoints.** The catalogue after each rung is all a run carries to the
+ * next one, so it is all a run needs to be picked up again: the voids so far
+ * and how many rungs they cover. They are written after every rung, through
+ * a temporary file and a rename so that a run killed while writing leaves
+ * the previous checkpoint whole, and a run resumed from one returns the
+ * catalogue it would have returned uninterrupted, bit for bit. A run that
+ * succeeds deletes its checkpoint, and so does one that fails before
+ * finishing a rung, since there is nothing in it to resume; any other failure
+ * keeps it and logs where.
+ *
+ * Every run checkpoints unless SIF_FINDER_NO_CHECKPOINT is set, including
+ * through sif_finder_exodus(), which writes to a name of its own. A
+ * checkpoint the caller named that cannot be written at the start fails the
+ * run; one it did not name is a warning, and the run goes on without. Any
+ * failure to write one later is a warning too, leaving the last good
+ * checkpoint in place: losing the backup is no reason to lose the run.
+ *
+ * **Starting from a catalogue.** See sif_finder_exodus_extras_t::prior.
+ *
+ * @param extras What the plain finder lacks, or NULL for none.
+ *
+ * Every other parameter, and the return value, as for sif_finder_exodus().
+ * The returned catalogue holds the prior voids first.
+ *
+ * @note To extend a catalogue to smaller radii, run the rungs below the last
+ * one it was found with. The result matches a single run over the whole
+ * ladder as long as consecutive rungs are no further apart than the search
+ * factor, which the default 1.5 is for any ordinary ladder: the first rung
+ * here does not know the one above it, and a gap wider than that would
+ * otherwise be closed by reaching up to it.
+ */
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_ex(sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option opt,
+  const sif_finder_exodus_extras_t* extras);
+
+/**
+ * @brief sif_finder_exodus_survey(), with a checkpoint and, optionally, voids
+ * to start from; see sif_finder_exodus_ex().
+ *
+ * The checkpoint holds the voids in the survey box, along with the offset
+ * that puts them there, and sif_finder_exodus_checkpoint_read() takes them
+ * back to the caller's frame. A prior catalogue is in the caller's frame,
+ * as the voids the survey finder returns are.
+ */
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_ex(
+  sif_grid_t* data_grid, sif_grid_t* random_grid,
+  const sif_chain_mesh_t* data_mesh, const sif_chain_mesh_t* random_mesh,
+  const sif_real offset[3], const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_real overlap_fraction, sif_option opt,
+  const sif_finder_exodus_extras_t* extras);
+
+/** @brief Magic number at the start of every exodus checkpoint. */
+#define SIF_FINDER_CHECKPOINT_MAGIC "XCKP"
+/** @brief Version of the checkpoint layout this build reads and writes. */
+#define SIF_FINDER_CHECKPOINT_VERSION 1
+
+/**
+ * @brief The fixed 192-byte header of an exodus checkpoint.
+ *
+ * The file is this header and then, in host byte order and at the precision
+ * sif was built with: the ladder, sorted largest first (`n_radii`
+ * sif_real), and the voids as four columns of `n_voids` sif_real each --
+ * every x, then every y, every z and every radius. The voids are where the
+ * finder works, which for a survey is the survey box: subtract `offset` for
+ * the caller's frame.
+ *
+ * Floating-point run parameters are stored widened to double, so they
+ * compare exactly against the sif_real they came from.
+ */
+typedef struct {
+  /** #SIF_FINDER_CHECKPOINT_MAGIC. */
+  char magic[4];
+  /** #SIF_FINDER_CHECKPOINT_VERSION. */
+  uint32_t version;
+  /** 0x01020304 as the writer stored it; reads otherwise on a machine of the
+   * other byte order. */
+  uint32_t byte_order;
+  /** 1 if written with a 64-bit sif_real. */
+  uint32_t is_double;
+  /** 1 for sif_finder_exodus_survey_ex(), 0 for a periodic box. */
+  uint32_t is_survey;
+  /** 1 if the (data) mesh carries weights. */
+  uint32_t is_weighted;
+  /** The options that change the catalogue: the SIF_FINDER_SEARCH_* factor
+   * and SIF_FINDER_KEEP_CIC_WINDOW. */
+  uint32_t options;
+  /** Rungs on the ladder. */
+  uint32_t n_radii;
+  /** Rungs done, and so the index of the next one; n_radii when all are. */
+  uint32_t next_rung;
+  /** Grid cells per side. */
+  uint32_t grid_n_cells;
+  /** Side of the box the grid and meshes span. */
+  double box_length;
+  double threshold;
+  double overlap_fraction;
+  /** Tracers in the (data) mesh. */
+  uint64_t n_particles;
+  /** The (data) mesh's total weight; n_particles on an unweighted one. */
+  double total_weight;
+  /** Tracers in the random mesh; 0 for a box. */
+  uint64_t random_n_particles;
+  /** The random mesh's total weight; 0 for a box. */
+  double random_total_weight;
+  /** What the survey was moved into the box by; zero for a box, or for a
+   * survey that was not moved. */
+  double offset[3];
+  /** How many of the voids came from sif_finder_exodus_extras_t::prior,
+   * which are the first ones. */
+  uint64_t n_prior;
+  /** CRC32 of the prior catalogue's four columns as the caller gave them, so
+   * that a resumed run can tell it was given the same one. 0 when there were
+   * none. */
+  uint32_t prior_crc32;
+  /** CRC32 of this header, with this field zero, followed by everything after
+   * it. */
+  uint32_t crc32;
+  /** Voids saved. */
+  uint64_t n_voids;
+  /** Of those the finder added, how many are more than twice the rung that
+   * found them, carried for the warning the finished run gives. */
+  uint64_t n_mismatched;
+  /** Reserved, zero, to hold the header at 192 bytes. */
+  char reserved[40];
+} sif_finder_exodus_checkpoint_t;
+
+/**
+ * @brief Read an exodus checkpoint: what it says about its run, and the
+ * voids found so far.
+ *
+ * For a look at a run in progress, or one that stopped -- not needed to
+ * resume one, which is sif_finder_exodus_ex() given the same path.
+ *
+ * @param filepath The checkpoint.
+ * @param[out] header Its header, or NULL if only the voids are wanted.
+ * @return The voids, in the caller's frame, as a catalogue the caller owns
+ * and releases with sif_catalogue_free(); NULL if the file cannot be read,
+ * is not a checkpoint, is of another byte order or precision, or fails its
+ * checksum, with sif_error_message() saying which.
+ */
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_checkpoint_read(
+  const char* filepath, sif_finder_exodus_checkpoint_t* header);
+
+/**
  * @brief The box a survey has to be searched in, and the offset that moves it
  * there.
  *

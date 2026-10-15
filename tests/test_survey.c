@@ -24,10 +24,13 @@
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
 
+#include "finder/exodus_checkpoint.h"
+
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "test_util.h"
 
@@ -389,6 +392,33 @@ static void run_weights(void) {
  * sif_catalogue_translate(). They have to come out where the holes are in the
  * caller's frame.
  */
+/* Bit for bit, footprints included where both carry them. */
+static void same_voids(
+  const char* label, const sif_catalogue_t* got, const sif_catalogue_t* ref) {
+
+  CHECK(got && ref, "%s: a run returned NULL", label);
+  if (!got || !ref)
+    return;
+  CHECK(got->n_voids == ref->n_voids, "%s: %llu voids, reference has %llu",
+    label, (unsigned long long)got->n_voids, (unsigned long long)ref->n_voids);
+  if (got->n_voids != ref->n_voids)
+    return;
+
+  const int footprints = got->footprint && ref->footprint;
+  for (uint64_t i = 0; i < got->n_voids; i++) {
+    CHECK(
+      got->cx[i] == ref->cx[i] && got->cy[i] == ref->cy[i] &&
+        got->cz[i] == ref->cz[i] && got->radii[i] == ref->radii[i] &&
+        (!footprints || (got->footprint[i] == ref->footprint[i] &&
+                          got->footprint_shell[i] == ref->footprint_shell[i])),
+      "%s: void %llu is (%g, %g, %g; r=%.6f), reference (%g, %g, %g; "
+      "r=%.6f)",
+      label, (unsigned long long)i, (double)got->cx[i], (double)got->cy[i],
+      (double)got->cz[i], (double)got->radii[i], (double)ref->cx[i],
+      (double)ref->cy[i], (double)ref->cz[i], (double)ref->radii[i]);
+  }
+}
+
 static void run_workflow(void) {
   printf("box helper and translation\n");
 
@@ -507,6 +537,46 @@ static void run_workflow(void) {
           (double)cat->footprint[i]);
     }
   }
+
+  /* A checkpoint keeps the voids in the box, with the offset, and the reader
+   * takes them back out; a resumed run, and one extended from the larger
+   * rungs' voids, give the uninterrupted catalogue in the caller's frame. */
+  const char* path = "test_survey.ckpt";
+  unlink(path);
+  const sif_option none = SIF_FINDER_NO_CHECKPOINT;
+  const uint32_t split = 2;
+  sif_catalogue_t* head = sif_finder_exodus_survey_ex(
+    gd, gr, md, mr, offset, radii, split, -0.7f, 0.0f, none, NULL);
+
+  sif__exodus_halt_after_set(split);
+  const sif_finder_exodus_extras_t named = {.checkpoint = path};
+  sif_catalogue_t* halted = sif_finder_exodus_survey_ex(
+    gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, &named);
+  sif__exodus_halt_after_set(0);
+  CHECK(!halted, "the halted survey run returned a catalogue");
+  sif_catalogue_free(halted);
+
+  sif_finder_exodus_checkpoint_t h;
+  sif_catalogue_t* saved = sif_finder_exodus_checkpoint_read(path, &h);
+  CHECK(saved && head && h.is_survey == 1 && h.next_rung == split &&
+          (sif_real)h.offset[0] == offset[0],
+    "survey checkpoint header: survey %u, %u rungs, offset %g", h.is_survey,
+    h.next_rung, h.offset[0]);
+  same_voids("survey checkpoint, read back", saved, head);
+  sif_catalogue_free(saved);
+
+  sif_catalogue_t* resumed = sif_finder_exodus_survey_ex(
+    gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, &named);
+  same_voids("survey, resumed", resumed, cat);
+  sif_catalogue_free(resumed);
+  CHECK(access(path, F_OK) != 0, "survey run left its checkpoint");
+
+  const sif_finder_exodus_extras_t extend = {.prior = head};
+  sif_catalogue_t* extended = sif_finder_exodus_survey_ex(gd, gr, md, mr,
+    offset, radii + split, n_radii - split, -0.7f, 0.0f, none, &extend);
+  same_voids("survey, extended", extended, cat);
+  sif_catalogue_free(extended);
+  sif_catalogue_free(head);
 
   sif_catalogue_free(cat);
   sif_chain_mesh_free(md);

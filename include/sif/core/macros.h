@@ -56,7 +56,7 @@ typedef uint32_t sif_option;
 
 /**
  * @defgroup opt_finder Finder options
- * @brief Bits 12-15. Bits 8-11 are free.
+ * @brief Bits 11-15. Bits 8-10 are free.
  * @{
  */
 /**
@@ -131,6 +131,15 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * smallest radius against the cell size and warn when it does not.
  */
 #define SIF_FINDER_KEEP_CIC_WINDOW (1u << 14)
+
+/**
+ * Write no checkpoint.
+ *
+ * The exodus finder saves its progress after every rung, so that a run cut
+ * short can be resumed (see sif_finder_exodus_ex()). This turns that off,
+ * for a caller that runs many small searches and has no use for it.
+ */
+#define SIF_FINDER_NO_CHECKPOINT (1u << 11)
 /** @} */
 
 /**

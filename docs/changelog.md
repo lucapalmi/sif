@@ -7,6 +7,12 @@ Current version: v0.3 release 0
 
 ### Added
 
+- Exodus checkpoints: every run saves its voids after each rung (to
+  `exodus-<hex>.ckpt` unless named) and a run cut short resumes from it with
+  `sif_finder_exodus_ex()`, bit for bit; `SIF_FINDER_NO_CHECKPOINT` turns it off
+- `sif_finder_exodus_ex()` / `sif_finder_exodus_survey_ex()` also take a prior
+  catalogue to extend, e.g. down to smaller radii;
+  `sif_finder_exodus_checkpoint_read()` reads a checkpoint
 - `sif_system_init()` warns when there are more threads than processors the
   process may run on (an inherited CPU affinity, a cpu-bind or a cgroup
   narrower than the thread count): the threads would share them, and until

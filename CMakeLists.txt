@@ -277,6 +277,7 @@ set(SOURCES
   # finder
     src/finder/spherical_finder.c
     src/finder/exodus_finder.c
+    src/finder/exodus_checkpoint.c
     src/finder/utils.c
 
   # measure

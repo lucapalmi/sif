@@ -20,10 +20,14 @@
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
 
+#include "finder/exodus_checkpoint.h"
+
+#include <dirent.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "test_util.h"
 
@@ -590,6 +594,250 @@ static void run_invariance(sif_config_t* cfg) {
   printf("  ok\n");
 }
 
+/* --- checkpoints and prior catalogues --- */
+
+/* The test's own grid and mesh, built once: a run hands the grid back as it
+ * came, so every run below can share them. */
+typedef struct {
+  sif_grid_t* grid;
+  sif_chain_mesh_t* mesh;
+} setup_t;
+
+static sif_catalogue_t* exodus_x(const setup_t* s, const sif_real* r,
+  uint32_t n, sif_real threshold, sif_option opt, const char* checkpoint,
+  const sif_catalogue_t* prior) {
+
+  const sif_finder_exodus_extras_t extras = {
+    .checkpoint = checkpoint, .prior = prior};
+  return sif_finder_exodus_ex(
+    s->grid, s->mesh, r, n, threshold, 0.0f, opt, &extras);
+}
+
+static int file_exists(const char* path) { return access(path, F_OK) == 0; }
+
+/* Checkpoints a run named for itself, in the working directory. */
+static int auto_checkpoints(char* first, size_t size) {
+  int n = 0;
+  DIR* dir = opendir(".");
+  if (!dir)
+    return -1;
+  struct dirent* e;
+  while ((e = readdir(dir)) != NULL) {
+    const size_t len = strlen(e->d_name);
+    if (strncmp(e->d_name, "exodus-", 7) == 0 && len > 5 &&
+        strcmp(e->d_name + len - 5, ".ckpt") == 0) {
+      if (n++ == 0 && first)
+        snprintf(first, size, "%s", e->d_name);
+    }
+  }
+  closedir(dir);
+  return n;
+}
+
+/*
+ * A run stopped after any rung and resumed from its checkpoint returns the
+ * uninterrupted catalogue, bit for bit; a checkpoint of another run is
+ * refused and left alone; a run handed the voids of the larger rungs and
+ * the ladder below them returns the single run's catalogue too.
+ */
+static void run_checkpoints(void) {
+  printf("checkpoints and prior catalogues\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  make_field(x, y, z);
+
+  sif_field_t* f = sif_field_alloc(N_P);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  setup_t s = {sif_grid_alloc(N_GRID, BOX), NULL};
+  CHECK(sif_grid_assign_cic(s.grid, f) == SIF_OK, "CIC assignment failed");
+  CHECK(
+    sif_grid_to_density_contrast(s.grid) == SIF_OK, "density contrast failed");
+  s.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+  sif_field_free(f);
+  free(x);
+  free(y);
+  free(z);
+
+  const sif_option none = SIF_FINDER_NO_CHECKPOINT;
+  const char* path = "test_finders.ckpt";
+  unlink(path);
+
+  sif_catalogue_t* ref = exodus_x(&s, radii, n_radii, -0.7f, none, NULL, NULL);
+  CHECK(ref && ref->n_voids > 0, "reference run found nothing");
+
+  const int auto_before = auto_checkpoints(NULL, 0);
+
+  /* A plain run checkpoints under a name of its own, and clears it up. */
+  sif_catalogue_t* cat =
+    sif_finder_exodus(s.grid, s.mesh, radii, n_radii, -0.7f, 0.0f, 0);
+  check_same_catalogue("plain run", cat, ref);
+  sif_catalogue_free(cat);
+  CHECK(auto_checkpoints(NULL, 0) == auto_before,
+    "a run that finished left its checkpoint behind");
+
+  /* Stopped after the first rung, part-way, and after the last. */
+  const uint32_t cuts[] = {1, 3, n_radii};
+  for (size_t c = 0; c < sizeof(cuts) / sizeof(cuts[0]); c++) {
+    const uint32_t k = cuts[c];
+    char label[48];
+    snprintf(label, sizeof(label), "resumed after rung %u", k);
+
+    sif__exodus_halt_after_set(k);
+    sif_error_clear();
+    cat = exodus_x(&s, radii, n_radii, -0.7f, 0, path, NULL);
+    sif__exodus_halt_after_set(0);
+    CHECK(!cat, "%s: the halted run returned a catalogue", label);
+    sif_catalogue_free(cat);
+    CHECK(file_exists(path), "%s: no checkpoint kept", label);
+
+    /* What it holds is what the first k rungs find on their own. */
+    sif_finder_exodus_checkpoint_t h;
+    sif_catalogue_t* saved = sif_finder_exodus_checkpoint_read(path, &h);
+    sif_catalogue_t* head = exodus_x(&s, radii, k, -0.7f, none, NULL, NULL);
+    CHECK(saved && h.next_rung == k && h.n_radii == n_radii,
+      "%s: header says %u of %u rungs", label, h.next_rung, h.n_radii);
+    check_same_catalogue(label, saved, head);
+    sif_catalogue_free(saved);
+    sif_catalogue_free(head);
+
+    cat = exodus_x(&s, radii, n_radii, -0.7f, 0, path, NULL);
+    check_same_catalogue(label, cat, ref);
+    sif_catalogue_free(cat);
+    CHECK(!file_exists(path), "%s: checkpoint left after finishing", label);
+  }
+
+  /* Another run's checkpoint: refused, named, and not touched. */
+  sif__exodus_halt_after_set(2);
+  cat = exodus_x(&s, radii, n_radii, -0.7f, 0, path, NULL);
+  sif__exodus_halt_after_set(0);
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii, -0.6f, 0, path, NULL);
+  CHECK(!cat && error_has("not this run: threshold"),
+    "another threshold was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii - 1, -0.7f, 0, path, NULL);
+  CHECK(!cat && error_has("not this run: ladder"),
+    "another ladder was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_SEARCH_2_00, path, NULL);
+  CHECK(!cat && error_has("not this run: search factor"),
+    "another search factor was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+  CHECK(file_exists(path), "a refused resume removed the checkpoint");
+
+  /* One byte changed anywhere fails the checksum. */
+  FILE* fp = fopen(path, "r+b");
+  CHECK(fp != NULL, "cannot reopen the checkpoint");
+  if (fp) {
+    fseek(fp, -3, SEEK_END);
+    const int byte = fgetc(fp);
+    fseek(fp, -3, SEEK_END);
+    fputc(byte ^ 0x10, fp);
+    fclose(fp);
+  }
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii, -0.7f, 0, path, NULL);
+  CHECK(!cat && error_has("corrupt"), "a damaged checkpoint was resumed (%s)",
+    sif_error_message());
+  sif_catalogue_free(cat);
+  unlink(path);
+
+  /* A run stopped without a name for its checkpoint keeps the one it made. */
+  sif__exodus_halt_after_set(2);
+  cat = exodus_x(&s, radii, n_radii, -0.7f, 0, NULL, NULL);
+  sif__exodus_halt_after_set(0);
+  sif_catalogue_free(cat);
+  char kept[256] = "";
+  CHECK(auto_checkpoints(kept, sizeof(kept)) == auto_before + 1,
+    "a halted run kept no checkpoint of its own");
+  if (kept[0]) {
+    cat = exodus_x(&s, radii, n_radii, -0.7f, 0, kept, NULL);
+    check_same_catalogue("resumed from its own name", cat, ref);
+    sif_catalogue_free(cat);
+    unlink(kept);
+  }
+
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii, -0.7f, none, path, NULL);
+  CHECK(!cat && error_has("SIF_FINDER_NO_CHECKPOINT"),
+    "a checkpoint path with checkpoints off was not refused");
+  sif_catalogue_free(cat);
+
+  /* The larger rungs' voids, extended with the rest of the ladder. The test
+   * ladder steps by at most 1.3, under the default search factor. */
+  const uint32_t split = 3;
+  sif_catalogue_t* prior = exodus_x(&s, radii, split, -0.7f, none, NULL, NULL);
+  cat = exodus_x(&s, radii + split, n_radii - split, -0.7f, none, NULL, prior);
+  check_same_catalogue("extended", cat, ref);
+  sif_catalogue_free(cat);
+
+  /* Extended, stopped, and resumed: the prior has to be the same one. */
+  sif__exodus_halt_after_set(1);
+  cat = exodus_x(&s, radii + split, n_radii - split, -0.7f, 0, path, prior);
+  sif__exodus_halt_after_set(0);
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat = exodus_x(&s, radii + split, n_radii - split, -0.7f, 0, path, NULL);
+  CHECK(!cat && error_has("prior voids"),
+    "a resume without its prior was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  cat = exodus_x(&s, radii + split, n_radii - split, -0.7f, 0, path, prior);
+  check_same_catalogue("extended and resumed", cat, ref);
+  sif_catalogue_free(cat);
+  CHECK(!file_exists(path), "extended run left its checkpoint");
+  sif_catalogue_free(prior);
+
+  /* Any catalogue will do as a prior; it comes back first and as given, and
+   * nothing found overlaps it. */
+  prior = sif_catalogue_alloc(1);
+  CHECK(sif_catalogue_append(prior, 100.0f, 100.0f, 100.0f, 35.0f) == SIF_OK,
+    "append failed");
+  cat = exodus_x(&s, radii, n_radii, -0.7f, none, NULL, prior);
+  CHECK(
+    cat && cat->n_voids >= 1 && cat->cx[0] == 100.0f && cat->radii[0] == 35.0f,
+    "prior void not returned first");
+  for (uint64_t i = 1; cat && i < cat->n_voids; i++) {
+    const double dx = cat->cx[i] - 100.0, dy = cat->cy[i] - 100.0,
+                 dz = cat->cz[i] - 100.0;
+    CHECK(sqrt(dx * dx + dy * dy + dz * dz) >= 35.0 + cat->radii[i] - 1e-3,
+      "void %llu overlaps the prior one", (unsigned long long)i);
+  }
+  sif_catalogue_free(cat);
+
+  /* Priors the finder cannot place. */
+  prior->radii[0] = 0.0f;
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii, -0.7f, none, NULL, prior);
+  CHECK(!cat && error_has("prior: void 0: radius"),
+    "a zero prior radius was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  prior->radii[0] = 10.0f;
+  prior->cx[0] = BOX + 1.0f;
+  sif_error_clear();
+  cat = exodus_x(&s, radii, n_radii, -0.7f, none, NULL, prior);
+  CHECK(!cat && error_has("outside the box"),
+    "a prior outside the box was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+  sif_catalogue_free(prior);
+
+  sif_catalogue_free(ref);
+  sif_chain_mesh_free(s.mesh);
+  sif_grid_free(s.grid);
+  printf("  ok\n");
+}
+
 /* --- refusals --- */
 
 /*
@@ -762,6 +1010,7 @@ int main(void) {
 #if !SIF_TEST_INSTRUMENTED
   run_invariance(&cfg);
 #endif
+  run_checkpoints();
   run_refusals();
   run_grid_cells();
 
