@@ -55,6 +55,10 @@
  */
 #define EP_Y_ASYMPTOTIC 5.0
 
+/* SIF_PI is a sif_real, single precision in the default build; the baseline
+ * is computed in double, as the Python it was fitted against is. */
+#define EP_PI 3.14159265358979323846
+
 /* 1 - Phi(x), the upper tail of the standard normal. Shared with the emulator,
  * which needs it for the walk's first step. */
 double sif__ep_upper_tail(double x) { return 0.5 * erfc(x / sqrt(2.0)); }
@@ -66,18 +70,18 @@ double sif__ep_upper_tail(double x) { return 0.5 * erfc(x / sqrt(2.0)); }
  * barrier runs away from the walk in units of the walk's own slope scatter, so
  * a large positive y is a barrier fleeing upward and almost never crossed.
  */
-static double mean_excess(double y) {
+double sif__ep_mean_excess(double y) {
 
   if (y > EP_Y_ASYMPTOTIC) {
     /* phi(y) (1/y^2 - 3/y^4 + 15/y^6 - 105/y^8), from the tail expansion of
      * 1 - Phi. Positive and monotonically decreasing, as the exact form is. */
-    const double phi = exp(-0.5 * y * y) / sqrt(2.0 * SIF_PI);
+    const double phi = exp(-0.5 * y * y) / sqrt(2.0 * EP_PI);
     const double y2 = y * y;
     const double y4 = y2 * y2;
     return phi * (1.0 / y2) * (1.0 - 3.0 / y2 + 15.0 / y4 - 105.0 / (y4 * y2));
   }
 
-  const double phi = exp(-0.5 * y * y) / sqrt(2.0 * SIF_PI);
+  const double phi = exp(-0.5 * y * y) / sqrt(2.0 * EP_PI);
   return phi - y * sif__ep_upper_tail(y);
 }
 
@@ -294,8 +298,8 @@ static int fill_core(sif_ep_features_t* f, const sif_real* radii, uint32_t n,
      * excess above. Same expression, one transcendental instead of two.
      */
     const double nu = f->nu[i];
-    f->f_up[i] = exp(-0.5 * nu * nu) / sqrt(2.0 * SIF_PI * S) * sigma_slope *
-                 mean_excess(f->y[i]);
+    f->f_up[i] = exp(-0.5 * nu * nu) / sqrt(2.0 * EP_PI * S) * sigma_slope *
+                 sif__ep_mean_excess(f->y[i]);
 
     if (!(f->f_up[i] >= 0.0))
       f->f_up[i] = 0.0;

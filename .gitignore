@@ -12,6 +12,8 @@ runs_v2/
 runs_v3/
 runs_v4/
 val_v2/
+runs_vic/
+val_vic/
 tools/plots/
 tools/ep_spectra.npz
 tools/ep_spectra_v2.npz

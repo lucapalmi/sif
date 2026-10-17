@@ -40,12 +40,27 @@ from scipy.optimize import minimize
 BLOCK_ROWS = 8192
 
 
+# The negexp link's output is capped before the exponential: K = e^-e^10 is
+# already zero to any precision, and the cap keeps a wild early step finite.
+LINK_Z_MAX = 10.0
+
+
 class EmulatorMLP:
 
-    def __init__(self, hidden=(16, 16), seed=0, l2=1e-6):
+    def __init__(self, hidden=(16, 16), seed=0, l2=1e-6, link="identity"):
         self.hidden = tuple(hidden)
         self.seed = seed
         self.l2 = l2
+        # "identity": the output is the target. "negexp": the target is
+        # -scale exp(output), for a quantity that is never positive and
+        # reaches zero -- ln K of void-in-cloud, where K <= 1 and is 1
+        # wherever nothing collapses -- with `scale` a per-row baseline that
+        # the network corrects multiplicatively (1 without one). The loss
+        # stays on the target either way.
+        if link not in ("identity", "negexp"):
+            raise ValueError(f"link: {link!r} (expected 'identity' or "
+                             f"'negexp')")
+        self.link = link
         self.mu_ = None
         self.sd_ = None
         self.shapes_ = None
@@ -76,7 +91,7 @@ class EmulatorMLP:
 
     # --- forward and gradient ------------------------------------------------
 
-    def _forward(self, layers, X):
+    def _forward(self, layers, X, scale=None):
         """Returns the output and the per-layer activations for the backward."""
         acts = [X]
         h = X
@@ -84,17 +99,28 @@ class EmulatorMLP:
             z = h @ W + b
             h = np.tanh(z) if i < len(layers) - 1 else z
             acts.append(h)
-        return h.ravel(), acts
+        out = h.ravel()
+        if self.link == "negexp":
+            out = -np.exp(np.minimum(out, LINK_Z_MAX))
+            if scale is not None:
+                out = out * scale
+        return out, acts
 
-    def _block_loss_grad(self, layers, X, y, w, w_total):
+    def _block_loss_grad(self, layers, X, y, w, w_total, scale=None):
         """Unregularised loss and flat gradient over one block of rows."""
-        pred, acts = self._forward(layers, X)
+        pred, acts = self._forward(layers, X, scale)
 
         resid = pred - y
         loss = 0.5 * np.sum(w * resid ** 2) / w_total
 
-        # dL/dpred
-        g = (w * resid / w_total)[:, None]
+        # dL/dpred, then through the link: d(-e^z)/dz = -e^z = pred
+        g = w * resid / w_total
+        if self.link == "negexp":
+            # zero past the cap, where the output no longer moves with z: a
+            # gradient that ignored it disagreed with the loss and stopped the
+            # line search within ~100 iterations
+            g = np.where(acts[-1].ravel() < LINK_Z_MAX, g * pred, 0.0)
+        g = g[:, None]
 
         grads = [None] * len(layers)
         for i in range(len(layers) - 1, -1, -1):
@@ -107,14 +133,15 @@ class EmulatorMLP:
         return loss, np.concatenate([np.concatenate([gw.ravel(), gb.ravel()])
                                      for (gw, gb) in grads])
 
-    def _loss_grad(self, theta, X, y, w):
+    def _loss_grad(self, theta, X, y, w, scale=None):
         layers = self._unpack(theta)
         w_total = np.sum(w)
         blocks = [slice(i, i + BLOCK_ROWS)
                   for i in range(0, len(y), BLOCK_ROWS)]
         parts = list(self._pool.map(
-            lambda sl: self._block_loss_grad(layers, X[sl], y[sl], w[sl],
-                                             w_total), blocks))
+            lambda sl: self._block_loss_grad(
+                layers, X[sl], y[sl], w[sl], w_total,
+                None if scale is None else scale[sl]), blocks))
 
         loss = sum(p[0] for p in parts)
         flat = np.sum([p[1] for p in parts], axis=0)
@@ -124,10 +151,12 @@ class EmulatorMLP:
 
     # --- fitting -------------------------------------------------------------
 
-    def fit(self, X, y, w=None, maxiter=600, restarts=1):
+    def fit(self, X, y, w=None, maxiter=600, restarts=1, scale=None):
         X = np.asarray(X, dtype=float)
         y = np.asarray(y, dtype=float)
         w = np.ones_like(y) if w is None else np.asarray(w, dtype=float)
+        if scale is not None:
+            scale = np.asarray(scale, dtype=float)
 
         self.mu_ = X.mean(axis=0)
         self.sd_ = X.std(axis=0)
@@ -150,7 +179,7 @@ class EmulatorMLP:
             # negligible relative to it -- measured: every network stopped
             # near iteration 660 whatever maxiter said, at twice the training
             # loss a full run reaches.
-            res = minimize(self._loss_grad, theta0, args=(Xs, y, w),
+            res = minimize(self._loss_grad, theta0, args=(Xs, y, w, scale),
                            jac=True, method="L-BFGS-B",
                            options=dict(maxiter=maxiter, maxfun=maxiter * 2,
                                         ftol=0.0, gtol=0.0))
@@ -161,11 +190,15 @@ class EmulatorMLP:
 
         self.theta_ = best.x
         self.loss_ = best.fun
+        # Kept so a fit that stopped early says so: a line search that fails
+        # ends L-BFGS long before maxiter, and the scores look merely worse.
+        self.nit_ = int(best.nit)
+        self.message_ = str(best.message)
         return self
 
-    def predict(self, X):
+    def predict(self, X, scale=None):
         Xs = (np.asarray(X, dtype=float) - self.mu_) / self.sd_
-        pred, _ = self._forward(self._unpack(self.theta_), Xs)
+        pred, _ = self._forward(self._unpack(self.theta_), Xs, scale)
         return pred
 
     # --- export --------------------------------------------------------------

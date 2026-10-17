@@ -73,9 +73,9 @@ static void test_against_reference(void) {
 
     sif_emu_domain_t dom;
     sif_real* f = sif_ep_multiplicity_function_emu(
-      radii, n, sigma, barrier, EP_EMU_DVAR[c], &dom, SIF_DEFAULT);
-    sif_real* fb = sif_ep_multiplicity_function_emu(
-      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_EP_EMU_BIN_CENTRES);
+      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, NULL, &dom, SIF_DEFAULT);
+    sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
+      EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
 
     CHECK(f != NULL && fb != NULL, "case %d returned NULL on a valid input", c);
 
@@ -85,8 +85,8 @@ static void test_against_reference(void) {
       uint32_t at = 0;
       for (uint32_t i = 0; i < n + n_bins; i++) {
         const int at_radii = i < n;
-        const double want = at_radii ? EP_EMU_EXPECT[c][i]
-                                     : EP_EMU_EXPECT_BINNED[c][i - n];
+        const double want =
+          at_radii ? EP_EMU_EXPECT[c][i] : EP_EMU_EXPECT_BINNED[c][i - n];
         const double got = at_radii ? (double)f[i] : (double)fb[i - n];
         const double scale = fabs(want) > 1e-300 ? fabs(want) : 1.0;
         const double rel = fabs(got - want) / scale;
@@ -123,6 +123,69 @@ static void test_against_reference(void) {
   }
 }
 
+/* --- 1b. void-in-cloud, against the Python reference --- */
+
+static void test_vic_reference(void) {
+  printf("void-in-cloud against the Python model\n");
+
+  for (int c = 0; c < EP_VIC_N_CASES; c++) {
+    const uint32_t n = EP_VIC_CASE_N;
+    const uint32_t n_bins = n - 1;
+
+    sif_real* radii = as_real(EP_VIC_RADII[c], n);
+    sif_real* sigma = as_real(EP_VIC_SIGMA[c], n);
+    sif_real* barrier = as_real(EP_VIC_BARRIER[c], n);
+    sif_real* collapse = as_real(EP_VIC_COLLAPSE[c], n);
+
+    sif_real* f = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
+      EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], NULL, SIF_DEFAULT);
+    sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
+      EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], NULL, SIF_EP_EMU_BIN_CENTRES);
+    sif_real* f1 = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
+      EP_VIC_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
+
+    CHECK(f && fb && f1, "void-in-cloud case %d returned NULL", c);
+
+    if (f && fb && f1) {
+      double worst = 0.0, k_min = 1.0, k_max = 0.0;
+      for (uint32_t i = 0; i < n + n_bins; i++) {
+        const int at_radii = i < n;
+        const double want =
+          at_radii ? EP_VIC_EXPECT[c][i] : EP_VIC_EXPECT_BINNED[c][i - n];
+        const double got = at_radii ? (double)f[i] : (double)fb[i - n];
+        /* Below 1e-30 a sif_real is subnormal or nearly so, and its few
+         * remaining bits say nothing about the model. */
+        if (fabs(want) < 1e-30)
+          continue;
+        const double rel = fabs(got - want) / fabs(want);
+        if (rel > worst)
+          worst = rel;
+      }
+      /* K = f with collapse / f without: never above one. */
+      for (uint32_t i = 0; i < n_bins; i++) {
+        if (!(f1[i] > 0.0f))
+          continue;
+        const double k = (double)fb[i] / (double)f1[i];
+        k_min = k < k_min ? k : k_min;
+        k_max = k > k_max ? k : k_max;
+      }
+      CHECK(worst < REF_TOL,
+        "void-in-cloud case %d departs from the Python model by %.3e", c,
+        worst);
+      CHECK(k_max <= 1.0 + 1e-6, "void-in-cloud raised f: K = %.8f", k_max);
+      printf("  case %d: worst relative departure %.2e, K %.4f to %.4f\n", c,
+        worst, k_min, k_max);
+    }
+    sif_free_aligned(f);
+    sif_free_aligned(fb);
+    sif_free_aligned(f1);
+    free(radii);
+    free(sigma);
+    free(barrier);
+    free(collapse);
+  }
+}
+
 /* --- 2. what must hold whatever the network says --- */
 
 static void test_invariants(void) {
@@ -139,10 +202,10 @@ static void test_invariants(void) {
      * probability, alive * (1 - exp(-Lambda)), so they cannot sum past one.
      * The density at the radii is the same function sampled at points; it
      * must be non-negative and finite, and integrate to the same total. */
-    sif_real* fb = sif_ep_multiplicity_function_emu(
-      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_EP_EMU_BIN_CENTRES);
+    sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
+      EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
     sif_real* f = sif_ep_multiplicity_function_emu(
-      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, SIF_DEFAULT);
+      radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_DEFAULT);
 
     if (f && fb) {
       int negative = 0, nonfinite = 0;
@@ -242,7 +305,7 @@ static void test_grid_independence(void) {
     if (cov) {
       sif_real* barrier = sif_ep_barrier_smt(sigma, n, 0.5f, 0.3f, 0.8f);
       sif_real* f = barrier ? sif_ep_multiplicity_function_emu(radii, n, sigma,
-                                barrier, dvar, NULL, SIF_DEFAULT)
+                                barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT)
                             : NULL;
       CHECK(f != NULL, "the emulator returned NULL at %u radii", n);
 
@@ -309,7 +372,7 @@ static void test_domain(void) {
 
   sif_emu_domain_t dom;
   sif_real* f = sif_ep_multiplicity_function_emu(
-    radii, n, sigma, barrier, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
+    radii, n, sigma, barrier, EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
   CHECK(f && dom.in_domain == 1, "a training-like input was not in domain");
   CHECK(dom.first_step_mass < 0.01f,
     "the walk origin of a training-like input reports %.3f of its paths "
@@ -327,8 +390,8 @@ static void test_domain(void) {
    */
   {
     const uint32_t cut = n / 2;
-    sif_real* f2 = sif_ep_multiplicity_function_emu(
-      radii, cut, sigma, barrier, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
+    sif_real* f2 = sif_ep_multiplicity_function_emu(radii, cut, sigma, barrier,
+      EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
     CHECK(f2 != NULL, "a truncated grid was rejected rather than reported");
     CHECK(dom.in_domain == 0,
       "a grid cut to %u radii was reported as in domain, with %.2f%% of walks "
@@ -352,7 +415,7 @@ static void test_domain(void) {
       tall[i] = barrier[i] * 4.0f;
 
     sif_real* f3 = sif_ep_multiplicity_function_emu(
-      radii, n, sigma, tall, EP_EMU_DVAR[0], &dom, SIF_DEFAULT);
+      radii, n, sigma, tall, EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
     CHECK(f3 && dom.in_domain == 1,
       "a walk started beyond the trained origins was flagged (%u bins)",
       dom.n_bins_outside);
@@ -373,7 +436,7 @@ static void test_domain(void) {
       dvar[i] = 0.5 * EP_EMU_DVAR[0][i];
 
     sif_real* f4 = sif_ep_multiplicity_function_emu(
-      radii, n, sigma, barrier, dvar, &dom, SIF_DEFAULT);
+      radii, n, sigma, barrier, dvar, NULL, NULL, &dom, SIF_DEFAULT);
     CHECK(f4 != NULL, "an out-of-domain spectrum was rejected rather than "
                       "reported");
     CHECK(dom.in_domain == 0 && dom.n_bins_outside > 0,
@@ -402,23 +465,46 @@ static void test_guards(void) {
   sif_real* r;
 
   r = sif_ep_multiplicity_function_emu(
-    NULL, n, sigma, barrier, dvar, NULL, SIF_DEFAULT);
+    NULL, n, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
 
+  /* Void-in-cloud: the collapse barrier needs the covariance, and is a
+   * positive magnitude. */
+  {
+    const uint32_t m = EP_VIC_CASE_N;
+    sif_real* vr = as_real(EP_VIC_RADII[0], m);
+    sif_real* vs = as_real(EP_VIC_SIGMA[0], m);
+    sif_real* vb = as_real(EP_VIC_BARRIER[0], m);
+    sif_real* vc = as_real(EP_VIC_COLLAPSE[0], m);
+    r = sif_ep_multiplicity_function_emu(
+      vr, m, vs, vb, EP_VIC_DVAR[0], vc, NULL, NULL, SIF_DEFAULT);
+    CHECK(r == NULL, "a collapse barrier without cov was accepted");
+    sif_free_aligned(r);
+    vc[m / 2] = 0.0f;
+    r = sif_ep_multiplicity_function_emu(
+      vr, m, vs, vb, EP_VIC_DVAR[0], vc, EP_VIC_COV[0], NULL, SIF_DEFAULT);
+    CHECK(r == NULL, "a zero collapse barrier was accepted");
+    sif_free_aligned(r);
+    free(vr);
+    free(vs);
+    free(vb);
+    free(vc);
+  }
+
   r = sif_ep_multiplicity_function_emu(
-    radii, n, NULL, barrier, dvar, NULL, SIF_DEFAULT);
+    radii, n, NULL, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL sigma was accepted");
   sif_free_aligned(r);
 
   r = sif_ep_multiplicity_function_emu(
-    radii, n, sigma, barrier, NULL, NULL, SIF_DEFAULT);
+    radii, n, sigma, barrier, NULL, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL,
     "a NULL derivative variance was accepted; it has no fallback here");
   sif_free_aligned(r);
 
   r = sif_ep_multiplicity_function_emu(
-    radii, 2, sigma, barrier, dvar, NULL, SIF_DEFAULT);
+    radii, 2, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "two radii were accepted by a three-point stencil");
   sif_free_aligned(r);
 
@@ -429,7 +515,7 @@ static void test_guards(void) {
    * than left to the reference cases (all of which are 128 radii).
    */
   r = sif_ep_multiplicity_function_emu(
-    radii, 3, sigma, barrier, dvar, NULL, SIF_DEFAULT);
+    radii, 3, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL,
     "three radii were accepted, leaving the three-point stencil two bin "
     "centres to work with");
@@ -437,7 +523,7 @@ static void test_guards(void) {
 
   /* Four is the smallest grid the model is defined on, and must work. */
   r = sif_ep_multiplicity_function_emu(
-    radii, 4, sigma, barrier, dvar, NULL, SIF_DEFAULT);
+    radii, 4, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r != NULL, "four radii were rejected; that is the documented minimum");
   if (r) {
     int ok = 1;
@@ -453,7 +539,7 @@ static void test_guards(void) {
     for (uint32_t i = 0; i < n; i++)
       descending[i] = radii[n - 1 - i];
     r = sif_ep_multiplicity_function_emu(
-      descending, n, sigma, barrier, dvar, NULL, SIF_DEFAULT);
+      descending, n, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "descending radii were accepted");
     sif_free_aligned(r);
     free(descending);
@@ -464,7 +550,7 @@ static void test_guards(void) {
     memcpy(bad, sigma, (size_t)n * sizeof(sif_real));
     bad[3] = 0.0f;
     r = sif_ep_multiplicity_function_emu(
-      radii, n, bad, barrier, dvar, NULL, SIF_DEFAULT);
+      radii, n, bad, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero sigma was accepted");
     sif_free_aligned(r);
     free(bad);
@@ -486,6 +572,7 @@ int main(void) {
   }
 
   test_against_reference();
+  test_vic_reference();
   test_invariants();
   test_grid_independence();
   test_domain();

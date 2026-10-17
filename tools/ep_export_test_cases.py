@@ -30,7 +30,7 @@ import os
 
 import numpy as np
 
-from ep_model import EPEmulator, compute_features
+from ep_model import EPEmulator, VICEmulator, compute_features
 
 N_CASES = 3
 
@@ -42,11 +42,64 @@ def emit(name, values, fh):
     fh.write(f"static const double {name}[{len(v)}] = {{\n  {body}\n}};\n")
 
 
+# Void-in-cloud: a constant delta_c and an ellipsoidal one, over a grid where
+# K falls well below one, on a fixed training spectrum so the covariance can be
+# rebuilt with the case. Barrier, collapse and cov are stored at the precision
+# the C takes them.
+VIC_CASES = (dict(cosmo=5, alpha=0.5, beta=0.3, gamma=0.9, beta_e=0.0),
+             dict(cosmo=11, alpha=0.4, beta=0.2, gamma=1.3, beta_e=0.47))
+VIC_N = 96
+
+
+def write_vic_cases(fh, emu, args):
+    import pysif.model as model
+    vic = VICEmulator.load(args.vic)
+    sp = np.load(args.spectra)
+    k = np.ascontiguousarray(sp["k"])
+    fh.write(f"/* Void-in-cloud: f with a collapse barrier, from "
+             f"{os.path.basename(args.vic)}. */\n"
+             f"#define EP_VIC_N_CASES {len(VIC_CASES)}\n"
+             f"#define EP_VIC_CASE_N {VIC_N}\n\n")
+    names = []
+    for i, c in enumerate(VIC_CASES):
+        radii = np.geomspace(0.6, 40.0, VIC_N).astype(np.float32)
+        cov, sig, _, dv = model.delta_covariance_pk(
+            k, np.ascontiguousarray(sp["pk"][c["cosmo"]]), radii)
+        sigma = np.asarray(sig, np.float32)
+        S = sigma.astype(np.float64) ** 2
+        barrier = model.ep_barrier_smt(sigma, alpha=c["alpha"],
+                                       beta=c["beta"], gamma=c["gamma"])
+        sd = sigma.astype(np.float64)
+        collapse = (1.686 * (1.0 + c["beta_e"] * (sd / 1.686) ** 1.23)
+                    ).astype(np.float32)
+        dvar = np.asarray(dv, np.float64)
+        args_ = (radii.astype(np.float64), S, barrier.astype(np.float64),
+                 dvar)
+        kw = dict(collapse=collapse.astype(np.float64),
+                  cov=np.asarray(cov, np.float64), vic=vic, check=False)
+        f, _ = emu.multiplicity(*args_, **kw)
+        fb, _ = emu.multiplicity(*args_, binned=True, **kw)
+        for nm, v in (("RADII", radii), ("SIGMA", sigma), ("BARRIER", barrier),
+                      ("COLLAPSE", collapse), ("DVAR", dvar),
+                      ("COV", np.asarray(cov, np.float64)), ("EXPECT", f),
+                      ("EXPECT_BINNED", fb)):
+            emit(f"EP_VIC_{nm}_{i}", v, fh)
+        fh.write("\n")
+    for nm in ("RADII", "SIGMA", "BARRIER", "COLLAPSE", "DVAR", "COV",
+               "EXPECT", "EXPECT_BINNED"):
+        arrs = ", ".join(f"EP_VIC_{nm}_{i}" for i in range(len(VIC_CASES)))
+        fh.write(f"static const double* const EP_VIC_{nm}[] = {{{arrs}}};\n")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--weights", default="ep_emulator.npz")
     ap.add_argument("--mc", default="ep_validation_mc.npz")
     ap.add_argument("-o", "--out", default="../tests/ep_emu_cases.h")
+    ap.add_argument("--vic", default="ep_emulator_vic.npz",
+                    help="the void-in-cloud network the C header was "
+                         "exported from")
+    ap.add_argument("--spectra", default="ep_spectra_v2.npz")
     args = ap.parse_args()
 
     emu = EPEmulator.load(args.weights)
@@ -127,6 +180,7 @@ def main():
         fh.write("static const int EP_EMU_IN_DOMAIN[] = {"
                  + ", ".join(f"EP_EMU_IN_DOMAIN_{i}"
                              for i in range(len(cases))) + "};\n")
+        write_vic_cases(fh, emu, args)
         fh.write("\n#endif /* SIF_TESTS_EP_EMU_CASES_H */\n")
 
     print(f"{len(cases)} cases of {n} radii -> {args.out}")

@@ -353,7 +353,7 @@ static void test_two_step_exact(void) {
   const sif_real barrier[2] = {0.0f, 0.0f};
 
   uint64_t* c = sif_ep_first_crossing_counts(
-    radii, 2, cov, barrier, n_paths, 12345u, SIF_DEFAULT);
+    radii, 2, cov, barrier, NULL, n_paths, 12345u, NULL, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on a valid two-step problem");
   if (!c)
     return;
@@ -409,7 +409,7 @@ static void test_geometric(void) {
   }
 
   uint64_t* c = sif_ep_first_crossing_counts(
-    radii, n, cov, barrier, n_paths, 777u, SIF_DEFAULT);
+    radii, n, cov, barrier, NULL, n_paths, 777u, NULL, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on an identity covariance");
 
   if (c) {
@@ -458,7 +458,7 @@ static void test_degenerate(void) {
     cov[i] = 1.0;
 
   uint64_t* c = sif_ep_first_crossing_counts(
-    radii, n, cov, barrier, n_paths, 99u, SIF_DEFAULT);
+    radii, n, cov, barrier, NULL, n_paths, 99u, NULL, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on a rank-one covariance");
 
   if (c) {
@@ -526,7 +526,7 @@ static void test_thread_independence(void) {
   for (int t = 0; t < 3; t++) {
     omp_set_num_threads(threads[t]);
     uint64_t* c = sif_ep_first_crossing_counts(
-      radii, n, cov, barrier, n_paths, 2024u, SIF_DEFAULT);
+      radii, n, cov, barrier, NULL, n_paths, 2024u, NULL, SIF_DEFAULT);
     CHECK(c != NULL, "the walk returned NULL at %d threads", threads[t]);
     if (!c)
       continue;
@@ -579,10 +579,10 @@ static void test_convergence(void) {
   double* cov = model_covariance(radii, n, -0.5, 1.5);
   sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
-  uint64_t* a =
-    sif_ep_first_crossing_counts(radii, n, cov, barrier, n1, 5u, SIF_DEFAULT);
-  uint64_t* b =
-    sif_ep_first_crossing_counts(radii, n, cov, barrier, n2, 5u, SIF_DEFAULT);
+  uint64_t* a = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, NULL, n1, 5u, NULL, SIF_DEFAULT);
+  uint64_t* b = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, NULL, n2, 5u, NULL, SIF_DEFAULT);
 
   CHECK(a && b, "the walk returned NULL during the convergence check");
 
@@ -628,7 +628,7 @@ static void test_marginal_bound(void) {
   sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
   uint64_t* c = sif_ep_first_crossing_counts(
-    radii, n, cov, barrier, n_paths, 31337u, SIF_DEFAULT);
+    radii, n, cov, barrier, NULL, n_paths, 31337u, NULL, SIF_DEFAULT);
   CHECK(c != NULL, "the walk returned NULL on the realistic setup");
 
   if (c) {
@@ -685,11 +685,11 @@ static void test_binning(void) {
   sif_real* barrier = model_barrier(cov, n, 0.2, 0.1, 0.87);
 
   uint64_t* c = sif_ep_first_crossing_counts(
-    radii, n, cov, barrier, n_paths, 4242u, SIF_DEFAULT);
+    radii, n, cov, barrier, NULL, n_paths, 4242u, NULL, SIF_DEFAULT);
 
   uint64_t* c_out = calloc(n, sizeof(uint64_t));
   sif_real* f = sif_ep_multiplicity_function(
-    radii, n, cov, barrier, n_paths, 4242u, c_out, SIF_DEFAULT);
+    radii, n, cov, barrier, NULL, n_paths, 4242u, c_out, SIF_DEFAULT);
 
   CHECK(c && c_out && f, "the counts or the multiplicity returned NULL");
 
@@ -763,25 +763,28 @@ static void test_guards(void) {
 
   uint64_t* r;
 
-  r = sif_ep_first_crossing_counts(NULL, n, cov, barrier, 100, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(
+    NULL, n, cov, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
 
-  r =
-    sif_ep_first_crossing_counts(radii, n, NULL, barrier, 100, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(
+    radii, n, NULL, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL covariance was accepted");
   sif_free_aligned(r);
 
-  r = sif_ep_first_crossing_counts(radii, n, cov, NULL, 100, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(
+    radii, n, cov, NULL, NULL, 100, 1u, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL barrier was accepted");
   sif_free_aligned(r);
 
-  r =
-    sif_ep_first_crossing_counts(radii, 1, cov, barrier, 100, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(
+    radii, 1, cov, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a single radius was accepted");
   sif_free_aligned(r);
 
-  r = sif_ep_first_crossing_counts(radii, n, cov, barrier, 0, 1u, SIF_DEFAULT);
+  r = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, NULL, 0, 1u, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "zero paths were accepted");
   sif_free_aligned(r);
 
@@ -790,7 +793,7 @@ static void test_guards(void) {
     for (uint32_t i = 0; i < n; i++)
       descending[i] = radii[n - 1 - i];
     r = sif_ep_first_crossing_counts(
-      descending, n, cov, barrier, 100, 1u, SIF_DEFAULT);
+      descending, n, cov, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(r == NULL,
       "descending radii were accepted; the reference silently produced a "
       "negative multiplicity in exactly this case");
@@ -804,7 +807,7 @@ static void test_guards(void) {
       zeroed[i] = radii[i];
     zeroed[0] = 0.0f;
     r = sif_ep_first_crossing_counts(
-      zeroed, n, cov, barrier, 100, 1u, SIF_DEFAULT);
+      zeroed, n, cov, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero radius was accepted");
     sif_free_aligned(r);
     free(zeroed);
@@ -814,7 +817,7 @@ static void test_guards(void) {
     double* flat = model_covariance(radii, n, -0.5, 1.5);
     flat[SIF_COV_INDEX(0, 0)] = 0.0;
     r = sif_ep_first_crossing_counts(
-      radii, n, flat, barrier, 100, 1u, SIF_DEFAULT);
+      radii, n, flat, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero covariance diagonal was accepted");
     sif_free_aligned(r);
     sif_free_aligned(flat);
@@ -826,7 +829,7 @@ static void test_guards(void) {
     double* bad = model_covariance(radii, n, -0.5, 1.5);
     bad[SIF_COV_INDEX(1, 0)] *= 50.0;
     r = sif_ep_first_crossing_counts(
-      radii, n, bad, barrier, 100, 1u, SIF_DEFAULT);
+      radii, n, bad, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "an indefinite covariance was accepted");
     sif_free_aligned(r);
     sif_free_aligned(bad);
@@ -834,7 +837,7 @@ static void test_guards(void) {
 
   {
     sif_real* f = sif_ep_multiplicity_function(
-      radii, 1, cov, barrier, 100, 1u, NULL, SIF_DEFAULT);
+      radii, 1, cov, barrier, NULL, 100, 1u, NULL, SIF_DEFAULT);
     CHECK(f == NULL, "the multiplicity accepted a single radius");
     sif_free_aligned(f);
   }
@@ -847,6 +850,222 @@ static void test_guards(void) {
 }
 
 /* --- The covariance --- */
+
+/* --- Void-in-cloud: the collapse barrier --- */
+
+/*
+ * Independent unit-variance steps against two barriers: each step reaches the
+ * void barrier with probability p_v, the collapse level with p_c, and goes on
+ * with q = 1 - p_v - p_c, so both histograms are exactly geometric.
+ */
+static void test_collapse_geometric(void) {
+  printf("void-in-cloud: independent steps, two geometric histograms\n");
+
+  const uint32_t n = 20;
+  const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(2000000);
+  const double b = 0.8, c = 1.2;
+  const double pv = tail(b), pc = tail(c), q = 1.0 - pv - pc;
+
+  sif_real* radii = log_radii(n, 1.0, 40.0);
+  sif_real* barrier = malloc(n * sizeof(sif_real));
+  sif_real* collapse = malloc(n * sizeof(sif_real));
+  uint64_t* cc = calloc(n, sizeof(uint64_t));
+  double* cov = sif_calloc_aligned(SIF_COV_SIZE(n), sizeof(double));
+
+  for (uint32_t i = 0; i < n; i++) {
+    barrier[i] = (sif_real)b;
+    collapse[i] = (sif_real)c;
+    cov[SIF_COV_INDEX(i, i)] = 1.0;
+  }
+
+  uint64_t* cv = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, collapse, n_paths, 4711u, cc, SIF_DEFAULT);
+  CHECK(cv != NULL, "the walk returned NULL with a collapse barrier");
+
+  if (cv) {
+    double worst = 0.0;
+    for (uint32_t j = 0; j < n; j++) {
+      const double reach = (double)n_paths * pow(q, (double)j);
+      const double ev = reach * pv, ec = reach * pc;
+      const double dv = fabs((double)cv[n - 1 - j] - ev) / sqrt(ev);
+      const double dc = fabs((double)cc[n - 1 - j] - ec) / sqrt(ec);
+      worst = fmax(worst, fmax(dv, dc));
+    }
+    CHECK(worst < 4.5,
+      "the void or collapse histogram departs from geometric by %.2f sigma",
+      worst);
+    printf(
+      "  p_v = %.4f, p_c = %.4f, worst departure %.2f sigma\n", pv, pc, worst);
+    sif_free_aligned(cv);
+  }
+
+  sif_free_aligned(cov);
+  free(cc);
+  free(collapse);
+  free(barrier);
+  free(radii);
+}
+
+/*
+ * Same seed, same walks: with a collapse barrier the void counts can only
+ * fall, by exactly the walks a cloud took first, and a barrier no walk reaches
+ * changes nothing at all.
+ */
+static void test_collapse_pairing(void) {
+  printf("void-in-cloud: paired against the single barrier\n");
+
+  const uint32_t n = 48;
+  const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(400000);
+  sif_real* radii = log_radii(n, 1.0, 60.0);
+  double* cov = model_covariance(radii, n, -0.6, 0.5);
+  sif_real* barrier = model_barrier(cov, n, 0.3, 0.2, 0.8);
+  sif_real* collapse = malloc(n * sizeof(sif_real));
+  sif_real* never = malloc(n * sizeof(sif_real));
+  uint64_t* cc = calloc(n, sizeof(uint64_t));
+  uint64_t* cc_never = calloc(n, sizeof(uint64_t));
+
+  for (uint32_t i = 0; i < n; i++) {
+    collapse[i] = 0.6f;
+    never[i] = 1e30f;
+  }
+
+  uint64_t* one = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, NULL, n_paths, 99u, NULL, SIF_DEFAULT);
+  uint64_t* far = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, never, n_paths, 99u, cc_never, SIF_DEFAULT);
+  uint64_t* two = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, collapse, n_paths, 99u, cc, SIF_DEFAULT);
+  CHECK(one && far && two, "the paired walks returned NULL");
+
+  if (one && far && two) {
+    int same = 1, never_crushed = 1, fewer = 1;
+    uint64_t lost = 0, crushed = 0, voids = 0;
+    for (uint32_t i = 0; i < n; i++) {
+      same &= one[i] == far[i];
+      never_crushed &= cc_never[i] == 0;
+      fewer &= two[i] <= one[i];
+      lost += one[i] - (two[i] <= one[i] ? two[i] : one[i]);
+      crushed += cc[i];
+      voids += two[i];
+    }
+    CHECK(same && never_crushed,
+      "a collapse barrier no walk reaches changed the counts");
+    CHECK(fewer, "void-in-cloud raised the void count at some radius");
+    CHECK(lost > 0 && lost <= crushed,
+      "%llu voids lost against %llu walks crushed (expected 0 < lost <= "
+      "crushed)",
+      (unsigned long long)lost, (unsigned long long)crushed);
+    CHECK(voids + crushed <= n_paths,
+      "%llu voids and %llu crushed walks exceed the %llu paths",
+      (unsigned long long)voids, (unsigned long long)crushed,
+      (unsigned long long)n_paths);
+    printf("  voids kept %.4f, walks crushed %.4f\n",
+      (double)voids / (double)(voids + lost),
+      (double)crushed / (double)n_paths);
+  }
+
+  sif_free_aligned(one);
+  sif_free_aligned(far);
+  sif_free_aligned(two);
+
+  /* A magnitude, like delta_c: zero or below is refused. */
+  collapse[n / 2] = 0.0f;
+  uint64_t* r = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, collapse, 100, 1u, NULL, SIF_DEFAULT);
+  CHECK(r == NULL, "a zero collapse barrier was accepted");
+  sif_free_aligned(r);
+
+  free(cc_never);
+  free(cc);
+  free(never);
+  free(collapse);
+  free(barrier);
+  sif_free_aligned(cov);
+  free(radii);
+}
+
+/* Probability that a Brownian walk from 0 leaves the strip (-c, b) through b
+ * by time S: the image series, Sheth & van de Weygaert (2004). */
+static double strip_exit_upper(double S, double b, double c) {
+  const double pi = 3.14159265358979323846; /* SIF_PI is a sif_real */
+  const double w = b + c;
+  double sum = 0.0;
+  for (int j = 1; j <= 20000; j++) {
+    const double kj = j * pi / w;
+    const double lam = 0.5 * kj * kj;
+    const double term =
+      sin(kj * c) * kj * ((j % 2) ? 1.0 : -1.0) * (1.0 - exp(-lam * S)) / lam;
+    sum += term;
+    if (j > 50 && fabs(term) < 1e-14)
+      break;
+  }
+  return sum / w;
+}
+
+/*
+ * The exact two-barrier answer. With cov(i, j) = S at the larger radius the
+ * walk is Brownian in S, and for constant barriers the first exit through the
+ * void side is the series above. A walk sampled every dS misses crossings
+ * between samples, which moves both barriers out by 0.5826 sqrt(dS)
+ * (Siegmund); with that shift the two agree to 1e-3 at 300 steps.
+ */
+static void test_collapse_brownian(void) {
+  printf("void-in-cloud: Brownian walk against the exact two-barrier series\n");
+
+  const uint32_t n = 300;
+  const uint64_t n_paths = (uint64_t)SIF_TEST_SCALE(1000000);
+  const double s_max = 9.0, dv = 2.0, dc = 1.686;
+  const double ds = s_max / n;
+
+  sif_real* radii = log_radii(n, 1.0, 100.0);
+  sif_real* barrier = malloc(n * sizeof(sif_real));
+  sif_real* collapse = malloc(n * sizeof(sif_real));
+  double* cov = sif_malloc_aligned(SIF_COV_SIZE(n) * sizeof(double));
+
+  /* Ascending radii, so S falls with the index: S_i = s_max - i dS. */
+  for (uint32_t i = 0; i < n; i++) {
+    barrier[i] = (sif_real)dv;
+    collapse[i] = (sif_real)dc;
+    for (uint32_t j = 0; j <= i; j++)
+      cov[SIF_COV_INDEX(i, j)] = s_max - (double)i * ds;
+  }
+
+  uint64_t* one = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, NULL, n_paths, 5150u, NULL, SIF_DEFAULT);
+  uint64_t* two = sif_ep_first_crossing_counts(
+    radii, n, cov, barrier, collapse, n_paths, 5150u, NULL, SIF_DEFAULT);
+  CHECK(one && two, "the Brownian walk returned NULL");
+
+  if (one && two) {
+    double n1 = 0.0, n2 = 0.0;
+    for (uint32_t i = 0; i < n; i++) {
+      n1 += (double)one[i];
+      n2 += (double)two[i];
+    }
+    const double shift = 0.5826 * sqrt(ds);
+    const double p1 = erfc((dv + shift) / sqrt(2.0 * s_max));
+    const double p2 = strip_exit_upper(s_max, dv + shift, dc + shift);
+    const double kept = n2 / n1, kept_exact = p2 / p1;
+    /* The same walks in both runs: kept is binomial over the n1 voids. */
+    const double sd = sqrt(kept * (1.0 - kept) / n1);
+    const double sd1 = sqrt(p1 * (1.0 - p1) / (double)n_paths);
+    CHECK(fabs(kept - kept_exact) < 4.0 * sd + 1e-3,
+      "voids kept by void-in-cloud %.4f (expected %.4f +- %.4f)", kept,
+      kept_exact, sd);
+    CHECK(fabs(n1 / (double)n_paths - p1) < 4.0 * sd1 + 1e-3,
+      "single-barrier void fraction %.4f (expected %.4f +- %.4f)",
+      n1 / (double)n_paths, p1, sd1);
+    printf(
+      "  voids kept %.4f against %.4f exact (+- %.4f)\n", kept, kept_exact, sd);
+  }
+
+  sif_free_aligned(one);
+  sif_free_aligned(two);
+  sif_free_aligned(cov);
+  free(collapse);
+  free(barrier);
+  free(radii);
+}
 
 #define N_K 4000
 
@@ -1470,7 +1689,7 @@ static void test_pipeline(void) {
     CHECK(falling, "sigma does not decrease with radius");
 
     sif_real* f = sif_ep_multiplicity_function(
-      radii, n, cov, barrier, n_paths, 1234u, NULL, SIF_DEFAULT);
+      radii, n, cov, barrier, NULL, n_paths, 1234u, NULL, SIF_DEFAULT);
     CHECK(f != NULL, "the multiplicity returned NULL on the real pipeline");
 
     if (f) {
@@ -1582,7 +1801,7 @@ static void test_upcrossing_baseline(void) {
     CHECK(base != NULL, "the baseline multiplicity returned NULL");
 
     sif_real* mc = sif_ep_multiplicity_function(
-      radii, n, cov, barrier, n_paths, 4321u, NULL, SIF_DEFAULT);
+      radii, n, cov, barrier, NULL, n_paths, 4321u, NULL, SIF_DEFAULT);
     CHECK(mc != NULL, "the Monte Carlo returned NULL");
 
     if (base && mc) {
@@ -1753,6 +1972,9 @@ int main(void) {
   test_marginal_bound();
   test_binning();
   test_guards();
+  test_collapse_geometric();
+  test_collapse_pairing();
+  test_collapse_brownian();
   test_pipeline();
   test_upcrossing_baseline();
 

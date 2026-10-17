@@ -9,7 +9,9 @@
 #include "py_delta_common.h"
 #include "sif/model/delta_moments.h"
 #include "sif/model/excursion_set.h"
+#include <math.h>
 #include <numpy/arrayobject.h>
+#include <stdio.h>
 #include <string.h>
 
 /* The covariance and the walk run in double whatever sif_real is, so these
@@ -203,133 +205,216 @@ PyObject* py_sif_ep_barrier_smt(
   return py_sif_owned_array(values, n);
 }
 
-/* Shared argument handling for the two first-crossing entry points.
- * `return_counts` is accepted by both and ignored by the counts entry point,
- * which returns them either way. */
-static int parse_walk_args(PyObject* args, PyObject* kwds,
-  PyArrayObject** radii_arr, PyArrayObject** cov_arr,
-  PyArrayObject** barrier_arr, unsigned long long* n_paths,
-  unsigned long long* seed, int* return_counts) {
+/* The collapse barrier: None for none, a number for a constant delta_c, or
+ * one entry per radius for a moving one. Sets *out to NULL for None. */
+static int as_collapse(PyObject* obj, npy_intp n, PyArrayObject** out) {
+  *out = NULL;
+  if (obj == NULL || obj == Py_None)
+    return 0;
+
+  if (PyFloat_Check(obj) || PyLong_Check(obj)) {
+    const double v = PyFloat_AsDouble(obj);
+    if (v == -1.0 && PyErr_Occurred())
+      return -1;
+    *out = (PyArrayObject*)PyArray_SimpleNew(1, &n, NPY_REAL_T);
+    if (!*out)
+      return -1;
+    sif_real* d = (sif_real*)PyArray_DATA(*out);
+    for (npy_intp i = 0; i < n; i++)
+      d[i] = (sif_real)v;
+    return 0;
+  }
+
+  *out = py_sif_as_real_array(obj, "collapse");
+  if (!*out)
+    return -1;
+  if (PyArray_SIZE(*out) != n) {
+    PyErr_Format(PyExc_ValueError,
+      "collapse: %zd entries (expected a number or one per radius, %zd)",
+      PyArray_SIZE(*out), n);
+    Py_CLEAR(*out);
+    return -1;
+  }
+  return 0;
+}
+
+/* delta_c is a magnitude; said here with the index rather than left to the C
+ * log behind a RuntimeError. */
+static int collapse_positive(PyArrayObject* c) {
+  const sif_real* d = (const sif_real*)PyArray_DATA(c);
+  for (npy_intp i = 0; i < PyArray_SIZE(c); i++) {
+    if (!(d[i] > 0.0f && isfinite((double)d[i]))) {
+      char msg[160];
+      snprintf(msg, sizeof msg,
+        "collapse[%zd]: %g (expected positive and finite: delta_c is a "
+        "magnitude, like the void barrier)",
+        (Py_ssize_t)i, (double)d[i]);
+      PyErr_SetString(PyExc_ValueError, msg);
+      return -1;
+    }
+  }
+  return 0;
+}
+
+/* Shared argument handling for the two first-crossing entry points. Each has
+ * its own keywords: the counts entry point returns the counts either way and
+ * can add the collapse counts; the multiplicity can add the counts. */
+typedef struct {
+  PyArrayObject* radii;
+  PyArrayObject* cov;
+  PyArrayObject* barrier;
+  PyArrayObject* collapse; /* NULL for the single void barrier */
+  unsigned long long n_paths;
+  unsigned long long seed;
+  int return_extra;
+} walk_args_t;
+
+static void walk_args_release(walk_args_t* w) {
+  Py_XDECREF(w->radii);
+  Py_XDECREF(w->cov);
+  Py_XDECREF(w->barrier);
+  Py_XDECREF(w->collapse);
+}
+
+static int parse_walk_args(
+  PyObject* args, PyObject* kwds, int counts_entry, walk_args_t* w) {
 
   PyObject* radii_obj;
   PyObject* cov_obj;
   PyObject* barrier_obj;
-  *n_paths = 1000000;
-  *seed = 0;
-  *return_counts = 0;
+  PyObject* collapse_obj = Py_None;
+  w->radii = w->cov = w->barrier = w->collapse = NULL;
+  w->n_paths = 1000000;
+  w->seed = 0;
+  w->return_extra = 0;
 
-  static char* kwlist[] = {
-    "radii", "cov", "barrier", "n_paths", "seed", "return_counts", NULL};
+  static char* kw_counts[] = {"radii", "cov", "barrier", "n_paths", "seed",
+    "collapse", "return_collapse_counts", NULL};
+  static char* kw_mult[] = {"radii", "cov", "barrier", "n_paths", "seed",
+    "return_counts", "collapse", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|KKp", kwlist, &radii_obj,
-        &cov_obj, &barrier_obj, n_paths, seed, return_counts)) {
+  int ok = counts_entry
+             ? PyArg_ParseTupleAndKeywords(args, kwds, "OOO|KKOp", kw_counts,
+                 &radii_obj, &cov_obj, &barrier_obj, &w->n_paths, &w->seed,
+                 &collapse_obj, &w->return_extra)
+             : PyArg_ParseTupleAndKeywords(args, kwds, "OOO|KKpO", kw_mult,
+                 &radii_obj, &cov_obj, &barrier_obj, &w->n_paths, &w->seed,
+                 &w->return_extra, &collapse_obj);
+  if (!ok)
     return -1;
-  }
 
-  if (*n_paths == 0) {
+  if (w->n_paths == 0) {
     PyErr_SetString(PyExc_ValueError, "n_paths must be strictly positive");
     return -1;
   }
 
-  *radii_arr = py_sif_as_real_array(radii_obj, "radii");
-  if (!*radii_arr)
-    return -1;
+  w->radii = py_sif_as_real_array(radii_obj, "radii");
+  if (!w->radii)
+    goto fail;
+  w->cov = py_sif_as_double_array(cov_obj, "cov");
+  if (!w->cov)
+    goto fail;
+  w->barrier = py_sif_as_real_array(barrier_obj, "barrier");
+  if (!w->barrier)
+    goto fail;
 
-  *cov_arr = py_sif_as_double_array(cov_obj, "cov");
-  if (!*cov_arr) {
-    Py_DECREF(*radii_arr);
-    return -1;
-  }
+  const npy_intp n = PyArray_SIZE(w->radii);
 
-  *barrier_arr = py_sif_as_real_array(barrier_obj, "barrier");
-  if (!*barrier_arr) {
-    Py_DECREF(*radii_arr);
-    Py_DECREF(*cov_arr);
-    return -1;
-  }
-
-  const npy_intp n = PyArray_SIZE(*radii_arr);
-
-  if (PyArray_SIZE(*barrier_arr) != n) {
+  if (PyArray_SIZE(w->barrier) != n) {
     PyErr_SetString(PyExc_ValueError, "barrier must have one entry per radius");
     goto fail;
   }
 
-  if (PyArray_SIZE(*cov_arr) != (npy_intp)SIF_COV_SIZE((uint32_t)n)) {
+  if (PyArray_SIZE(w->cov) != (npy_intp)SIF_COV_SIZE((uint32_t)n)) {
     PyErr_Format(PyExc_ValueError,
       "cov must be the packed lower triangle of %zd radii, i.e. %zd entries, "
       "not %zd",
-      n, (npy_intp)SIF_COV_SIZE((uint32_t)n), PyArray_SIZE(*cov_arr));
+      n, (npy_intp)SIF_COV_SIZE((uint32_t)n), PyArray_SIZE(w->cov));
     goto fail;
   }
+
+  if (as_collapse(collapse_obj, n, &w->collapse) < 0)
+    goto fail;
+  if (w->collapse && collapse_positive(w->collapse) < 0)
+    goto fail;
 
   return 0;
 
 fail:
-  Py_DECREF(*radii_arr);
-  Py_DECREF(*cov_arr);
-  Py_DECREF(*barrier_arr);
+  walk_args_release(w);
   return -1;
+}
+
+static const sif_real* collapse_data(const walk_args_t* w) {
+  return w->collapse ? (const sif_real*)PyArray_DATA(w->collapse) : NULL;
 }
 
 PyObject* py_sif_ep_first_crossing_counts(
   PyObject* self, PyObject* args, PyObject* kwds) {
-  PyArrayObject *radii_arr, *cov_arr, *barrier_arr;
-  unsigned long long n_paths, seed;
-  int return_counts;
-
-  if (parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr, &n_paths,
-        &seed, &return_counts) < 0) {
+  walk_args_t w;
+  if (parse_walk_args(args, kwds, 1, &w) < 0)
     return NULL;
+
+  npy_intp n = PyArray_SIZE(w.radii);
+
+  PyObject* collapse_arr = NULL;
+  uint64_t* collapse_counts = NULL;
+  if (w.return_extra) {
+    collapse_arr = PyArray_ZEROS(1, &n, NPY_UINT64, 0);
+    if (!collapse_arr) {
+      walk_args_release(&w);
+      return NULL;
+    }
+    collapse_counts = (uint64_t*)PyArray_DATA((PyArrayObject*)collapse_arr);
   }
 
-  const npy_intp n = PyArray_SIZE(radii_arr);
   uint64_t* counts = NULL;
 
   Py_BEGIN_ALLOW_THREADS counts =
-    sif_ep_first_crossing_counts((const sif_real*)PyArray_DATA(radii_arr),
-      (uint32_t)n, (const double*)PyArray_DATA(cov_arr),
-      (const sif_real*)PyArray_DATA(barrier_arr), (uint64_t)n_paths,
-      (uint64_t)seed, SIF_DEFAULT);
+    sif_ep_first_crossing_counts((const sif_real*)PyArray_DATA(w.radii),
+      (uint32_t)n, (const double*)PyArray_DATA(w.cov),
+      (const sif_real*)PyArray_DATA(w.barrier), collapse_data(&w),
+      (uint64_t)w.n_paths, (uint64_t)w.seed, collapse_counts, SIF_DEFAULT);
   Py_END_ALLOW_THREADS
 
-    Py_DECREF(radii_arr);
-  Py_DECREF(cov_arr);
-  Py_DECREF(barrier_arr);
+    walk_args_release(&w);
 
   if (!counts) {
+    Py_XDECREF(collapse_arr);
     PyErr_SetString(PyExc_RuntimeError,
       "failed to evaluate the first-crossing counts; see the sif log");
     return NULL;
   }
 
-  return py_sif_owned_u64_array(counts, n);
+  PyObject* counts_arr = py_sif_owned_u64_array(counts, n);
+  if (!counts_arr) {
+    Py_XDECREF(collapse_arr);
+    return NULL;
+  }
+
+  if (!w.return_extra)
+    return counts_arr;
+
+  return Py_BuildValue("(NN)", counts_arr, collapse_arr);
 }
 
 PyObject* py_sif_ep_multiplicity_function(
   PyObject* self, PyObject* args, PyObject* kwds) {
-  PyArrayObject *radii_arr, *cov_arr, *barrier_arr;
-  unsigned long long n_paths, seed;
-  int return_counts;
-
-  if (parse_walk_args(args, kwds, &radii_arr, &cov_arr, &barrier_arr, &n_paths,
-        &seed, &return_counts) < 0) {
+  walk_args_t w;
+  if (parse_walk_args(args, kwds, 0, &w) < 0)
     return NULL;
-  }
 
-  const npy_intp n = PyArray_SIZE(radii_arr);
+  npy_intp n = PyArray_SIZE(w.radii);
 
   /* Allocated up front so the walk can write straight into it: the whole
    * point of the out-parameter is that the counts cost nothing extra. */
   PyObject* counts_arr = NULL;
   uint64_t* counts_data = NULL;
 
-  if (return_counts) {
-    counts_arr = PyArray_SimpleNew(1, (npy_intp*)&n, NPY_UINT64);
+  if (w.return_extra) {
+    counts_arr = PyArray_SimpleNew(1, &n, NPY_UINT64);
     if (!counts_arr) {
-      Py_DECREF(radii_arr);
-      Py_DECREF(cov_arr);
-      Py_DECREF(barrier_arr);
+      walk_args_release(&w);
       return NULL;
     }
     counts_data = (uint64_t*)PyArray_DATA((PyArrayObject*)counts_arr);
@@ -338,15 +423,13 @@ PyObject* py_sif_ep_multiplicity_function(
   sif_real* values = NULL;
 
   Py_BEGIN_ALLOW_THREADS values =
-    sif_ep_multiplicity_function((const sif_real*)PyArray_DATA(radii_arr),
-      (uint32_t)n, (const double*)PyArray_DATA(cov_arr),
-      (const sif_real*)PyArray_DATA(barrier_arr), (uint64_t)n_paths,
-      (uint64_t)seed, counts_data, SIF_DEFAULT);
+    sif_ep_multiplicity_function((const sif_real*)PyArray_DATA(w.radii),
+      (uint32_t)n, (const double*)PyArray_DATA(w.cov),
+      (const sif_real*)PyArray_DATA(w.barrier), collapse_data(&w),
+      (uint64_t)w.n_paths, (uint64_t)w.seed, counts_data, SIF_DEFAULT);
   Py_END_ALLOW_THREADS
 
-    Py_DECREF(radii_arr);
-  Py_DECREF(cov_arr);
-  Py_DECREF(barrier_arr);
+    walk_args_release(&w);
 
   if (!values) {
     Py_XDECREF(counts_arr);
@@ -361,7 +444,7 @@ PyObject* py_sif_ep_multiplicity_function(
     return NULL;
   }
 
-  if (!return_counts)
+  if (!w.return_extra)
     return mult_arr;
 
   return Py_BuildValue("(NN)", mult_arr, counts_arr);
@@ -379,14 +462,17 @@ PyObject* py_sif_ep_multiplicity_function_emu(
   (void)self;
 
   PyObject *radii_obj, *sigma_obj, *barrier_obj, *dvar_obj;
+  PyObject* collapse_obj = Py_None;
+  PyObject* cov_obj = Py_None;
   int return_domain = 0;
   int binned = 0;
 
   static char* kwlist[] = {"radii", "sigma", "barrier", "deriv_variance",
-    "return_domain", "binned", NULL};
+    "return_domain", "binned", "collapse", "cov", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOO|pp", kwlist, &radii_obj,
-        &sigma_obj, &barrier_obj, &dvar_obj, &return_domain, &binned)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOO|ppOO", kwlist, &radii_obj,
+        &sigma_obj, &barrier_obj, &dvar_obj, &return_domain, &binned,
+        &collapse_obj, &cov_obj)) {
     return NULL;
   }
 
@@ -400,6 +486,8 @@ PyObject* py_sif_ep_multiplicity_function_emu(
   PyArrayObject* sigma_arr = NULL;
   PyArrayObject* barrier_arr = NULL;
   PyArrayObject* dvar_arr = NULL;
+  PyArrayObject* collapse_arr = NULL;
+  PyArrayObject* cov_arr = NULL;
 
   sigma_arr = py_sif_as_real_array(sigma_obj, "sigma");
   if (!sigma_arr)
@@ -422,6 +510,28 @@ PyObject* py_sif_ep_multiplicity_function_emu(
     goto fail;
   }
 
+  if (as_collapse(collapse_obj, n, &collapse_arr) < 0)
+    goto fail;
+  if (collapse_arr) {
+    if (collapse_positive(collapse_arr) < 0)
+      goto fail;
+    if (cov_obj == Py_None) {
+      PyErr_SetString(PyExc_ValueError,
+        "collapse needs cov: the packed covariance from delta_covariance_pk, "
+        "which void-in-cloud conditions on");
+      goto fail;
+    }
+    cov_arr = py_sif_as_double_array(cov_obj, "cov");
+    if (!cov_arr)
+      goto fail;
+    if (PyArray_SIZE(cov_arr) != (npy_intp)SIF_COV_SIZE((uint32_t)n)) {
+      PyErr_Format(PyExc_ValueError,
+        "cov: %zd entries (expected the packed triangle of %zd radii, %zd)",
+        PyArray_SIZE(cov_arr), n, (npy_intp)SIF_COV_SIZE((uint32_t)n));
+      goto fail;
+    }
+  }
+
   sif_emu_domain_t domain;
   sif_real* values = NULL;
 
@@ -429,7 +539,9 @@ PyObject* py_sif_ep_multiplicity_function_emu(
     sif_ep_multiplicity_function_emu((const sif_real*)PyArray_DATA(radii_arr),
       (uint32_t)n, (const sif_real*)PyArray_DATA(sigma_arr),
       (const sif_real*)PyArray_DATA(barrier_arr),
-      (const double*)PyArray_DATA(dvar_arr), &domain,
+      (const double*)PyArray_DATA(dvar_arr),
+      collapse_arr ? (const sif_real*)PyArray_DATA(collapse_arr) : NULL,
+      cov_arr ? (const double*)PyArray_DATA(cov_arr) : NULL, &domain,
       binned ? SIF_EP_EMU_BIN_CENTRES : SIF_EP_EMU_AT_RADII);
   Py_END_ALLOW_THREADS
 
@@ -437,6 +549,8 @@ PyObject* py_sif_ep_multiplicity_function_emu(
   Py_DECREF(sigma_arr);
   Py_DECREF(barrier_arr);
   Py_DECREF(dvar_arr);
+  Py_XDECREF(collapse_arr);
+  Py_XDECREF(cov_arr);
 
   if (!values) {
     PyErr_SetString(PyExc_RuntimeError,
@@ -471,5 +585,7 @@ fail:
   Py_XDECREF(sigma_arr);
   Py_XDECREF(barrier_arr);
   Py_XDECREF(dvar_arr);
+  Py_XDECREF(collapse_arr);
+  Py_XDECREF(cov_arr);
   return NULL;
 }

@@ -23,6 +23,7 @@
 #include "sif/model/excursion_set.h"
 
 #include "math/nn.h"
+#include "model/ep_emu_vic_weights.h"
 #include "model/ep_emu_weights.h"
 #include "model/ep_internal.h"
 #include "sif/utils/align.h"
@@ -51,6 +52,29 @@ enum {
 _Static_assert(F_COUNT == SIF_EP_EMU_N_IN,
   "ep_emu.c computes a different number of features than the generated "
   "weights expect; regenerate ep_emu_weights.h with tools/ep_export_c.py");
+
+/* The void-in-cloud candidates: the nine above, then the collapse side, in the
+ * order of VIC_CANDIDATES in tools/ep_model.py. The trained network takes the
+ * ones SIF_EP_VIC_INPUTS lists. */
+enum {
+  V_NU_C = F_COUNT,
+  V_NU_C_BACK,
+  V_DLNNUC_DLNS,
+  V_Y_C,
+  V_LOG_CUM_LAM_C,
+  V_LOG_LAM_VALUE,
+  V_LOG_LAM_COND,
+  V_COUNT
+};
+
+_Static_assert(V_COUNT == SIF_EP_VIC_N_CAND,
+  "ep_emu.c computes a different list of void-in-cloud candidates than the "
+  "generated weights index; regenerate ep_emu_vic_weights.h");
+
+/* As in ep_model.py: logs of hazards are floored, and the network output is
+ * capped before the exponential, as it was in the fit. */
+#define VIC_LOG_FLOOR 1e-30
+#define VIC_Z_MAX     10.0
 
 /* The lookback: nu and gamma^2 where the variance was half its current
  * value. */
@@ -151,6 +175,36 @@ static int validate(const sif_real* radii, uint32_t n_radii,
     }
   }
 
+  return SIF_OK;
+}
+
+/* The collapse barrier, positive like the void barrier, and the covariance
+ * its baseline needs. */
+static int validate_collapse(const sif_real* radii, uint32_t n,
+  const sif_real* collapse, const double* cov) {
+
+  if (!cov) {
+    SIF_LOG_ERROR(TAG,
+      "collapse given without cov: the void-in-cloud baseline conditions on "
+      "the covariance between scales (pass the packed cov from "
+      "sif_delta_covariance_pk)");
+    return SIF_ERR_INVALID;
+  }
+  for (uint32_t i = 0; i < n; i++) {
+    if (!(collapse[i] > 0.0f && isfinite((double)collapse[i]))) {
+      SIF_LOG_ERROR(TAG,
+        "collapse barrier at radius %u (%g): %g (expected positive and "
+        "finite)",
+        i, (double)radii[i], (double)collapse[i]);
+      return SIF_ERR_INVALID;
+    }
+    if (!(cov[SIF_COV_INDEX(i, i)] > 0.0)) {
+      SIF_LOG_ERROR(TAG,
+        "cov diagonal at radius %u (%g): %g (expected positive)", i,
+        (double)radii[i], cov[SIF_COV_INDEX(i, i)]);
+      return SIF_ERR_INVALID;
+    }
+  }
   return SIF_OK;
 }
 
@@ -342,9 +396,10 @@ static void report_domain(const double* X, const sif_real* radii,
         continue; /* its own check below; held at the maximum above */
       const int no_upper = (j == F_NU_BACK);
       const double span = (hi[j] - lo[j]) > 0.0 ? (hi[j] - lo[j]) : 1.0;
-      const double excess = (row[j] < lo[j])
-        ? (lo[j] - row[j]) / span
-        : ((row[j] > hi[j] && !no_upper) ? (row[j] - hi[j]) / span : 0.0);
+      const double excess =
+        (row[j] < lo[j])
+          ? (lo[j] - row[j]) / span
+          : ((row[j] > hi[j] && !no_upper) ? (row[j] - hi[j]) / span : 0.0);
       if (excess > 0.0)
         out = 1;
       if (excess > worst_excess) {
@@ -375,9 +430,8 @@ static void report_domain(const double* X, const sif_real* radii,
     SIF_LOG_WARNING(TAG,
       "%u of %u bins outside the trained range, R = %g to %g: %s = %.4g "
       "(trained %.4g to %.4g)",
-      n_outside, n_bins, (double)radii[first_out],
-      (double)radii[last_out + 1], names[worst], worst_value, lo[worst],
-      hi[worst]);
+      n_outside, n_bins, (double)radii[first_out], (double)radii[last_out + 1],
+      names[worst], worst_value, lo[worst], hi[worst]);
   }
 
   if (domain) {
@@ -409,8 +463,8 @@ static void report_domain(const double* X, const sif_real* radii,
  * `lam` holds the CORRECTED per-bin hazards, `corr` the raw network output.
  */
 static int density_at_radii(const sif_ep_features_t* f, const sif_real* radii,
-  uint32_t n, const double* corr, const double* lam, double alive_origin,
-  sif_real* out) {
+  uint32_t n, const double* corr, const double* lam, const double* ln_k,
+  double alive_origin, sif_real* out) {
 
   const uint32_t n_bins = n - 1;
   double* ln_mid = malloc((size_t)n_bins * sizeof(double));
@@ -451,8 +505,9 @@ static int density_at_radii(const sif_ep_features_t* f, const sif_real* radii,
       a = k;
       b = k - 1;
     }
-    const double c_raw =
-      corr[a] + (corr[b] - corr[a]) / (ln_mid[b] - ln_mid[a]) * (ln_s - ln_mid[a]);
+    const double c_raw = corr[a] + (corr[b] - corr[a]) /
+                                     (ln_mid[b] - ln_mid[a]) *
+                                     (ln_s - ln_mid[a]);
     const double c = c_raw < EP_EMU_CORR_MAX ? c_raw : EP_EMU_CORR_MAX;
 
     if (k < n - 1)
@@ -462,7 +517,15 @@ static int density_at_radii(const sif_ep_features_t* f, const sif_real* radii,
      * differenced directly it was 0.5% off at 48 radii; this way, 0.007%. */
     const double dS_dR =
       f->S[k] / (double)radii[k] * fabs(grad(ln_S, ln_R, n, k));
-    const double v = f->f_up[k] * exp(c) * alive * dS_dR;
+    double v = f->f_up[k] * exp(c) * alive * dS_dR;
+    if (ln_k) {
+      /* Void-in-cloud, carried to the radius as the correction is, and held
+       * at or below zero: an extrapolated end must not make K exceed one. */
+      const double lk = ln_k[a] + (ln_k[b] - ln_k[a]) /
+                                    (ln_mid[b] - ln_mid[a]) *
+                                    (ln_s - ln_mid[a]);
+      v *= exp(lk < 0.0 ? lk : 0.0);
+    }
     out[k] = (sif_real)(v > 0.0 ? v : 0.0);
   }
 
@@ -472,14 +535,180 @@ static int density_at_radii(const sif_ep_features_t* f, const sif_real* radii,
   return SIF_OK;
 }
 
+/* --- Void-in-cloud --- */
+
+/*
+ * ln K per bin: the fraction of voids whose walk was not inside a cloud at a
+ * larger radius, emulated as -Lambda_cond exp(z), with Lambda_cond the
+ * slope-conditioned collapse hazard (ep_vic.c) and z the network's output.
+ * X holds the nine single-barrier features, as computed -- before the
+ * nu_origin hold, as the trainer saw them. Counts the bins whose inputs fall
+ * outside the trained region into *n_outside and names the furthest.
+ */
+static int vic_ln_k(const sif_real* radii, uint32_t n, const double* S,
+  const sif_real* barrier, const sif_real* collapse,
+  const double* deriv_variance, const double* cov, const double* X,
+  double* ln_k, uint32_t* n_outside) {
+
+  const uint32_t n_bins = n - 1;
+  int status = SIF_ERR_ALLOC;
+
+  sif_ep_features_t fc;
+  if (sif__ep_features_init(&fc, n) != SIF_OK) {
+    sif__ep_features_free(&fc);
+    return SIF_ERR_ALLOC;
+  }
+
+  double* Bd = malloc((size_t)n * sizeof(double));
+  double* Cd = malloc((size_t)n * sizeof(double));
+  double* hz = malloc((size_t)n * sizeof(double));
+  double* hv = malloc((size_t)n * sizeof(double));
+  double* lam_c = malloc((size_t)n_bins * sizeof(double));
+  double* S_mid = malloc((size_t)n_bins * sizeof(double));
+  double* ln_S = malloc((size_t)n_bins * sizeof(double));
+  double* nuc = malloc((size_t)n_bins * sizeof(double));
+  double* ln_nuc = malloc((size_t)n_bins * sizeof(double));
+  double* cand = malloc((size_t)n_bins * V_COUNT * sizeof(double));
+  double* Xv = malloc((size_t)n_bins * SIF_EP_VIC_N_IN * sizeof(double));
+  double* z = malloc((size_t)n_bins * sizeof(double));
+
+  if (!Bd || !Cd || !hz || !hv || !lam_c || !S_mid || !ln_S || !nuc ||
+      !ln_nuc || !cand || !Xv || !z) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the void-in-cloud workspace");
+    goto done;
+  }
+
+  for (uint32_t i = 0; i < n; i++) {
+    Bd[i] = (double)barrier[i];
+    Cd[i] = (double)collapse[i];
+  }
+
+  status =
+    sif__ep_features_fill_diag(&fc, radii, n, S, collapse, deriv_variance);
+  if (status != SIF_OK)
+    goto done;
+  sif__ep_hazard_bins(&fc, n, lam_c);
+
+  status = sif__ep_vic_hazard(cov, S, Bd, Cd, deriv_variance, n, hz);
+  if (status != SIF_OK)
+    goto done;
+
+  /* The value-only baseline is a second O(n^2) pass; only if the network
+   * takes it. */
+  int want_value = 0;
+  for (uint32_t k = 0; k < SIF_EP_VIC_N_IN; k++)
+    want_value |= SIF_EP_VIC_INPUTS[k] == V_LOG_LAM_VALUE;
+  if (want_value) {
+    status = sif__ep_vic_hazard_value(cov, S, Bd, Cd, deriv_variance, n, hv);
+    if (status != SIF_OK)
+      goto done;
+  } else {
+    for (uint32_t i = 0; i < n; i++)
+      hv[i] = 0.0;
+  }
+
+  for (uint32_t i = 0; i < n_bins; i++) {
+    S_mid[i] = 0.5 * (S[i] + S[i + 1]);
+    ln_S[i] = log(S_mid[i]);
+    nuc[i] = 0.5 * (fc.nu[i] + fc.nu[i + 1]);
+    ln_nuc[i] = log(nuc[i]);
+  }
+
+  /* Collapse hazard accumulated to each bin's centre, as cum_lam is. */
+  double cum = 0.0;
+  for (int32_t i = (int32_t)n_bins - 1; i >= 0; i--) {
+    double* row = cand + (size_t)i * V_COUNT;
+    const double c = cum + 0.5 * lam_c[i];
+    cum += lam_c[i];
+    row[V_LOG_CUM_LAM_C] = log(c > VIC_LOG_FLOOR ? c : VIC_LOG_FLOOR);
+  }
+
+  for (uint32_t i = 0; i < n_bins; i++) {
+    double* row = cand + (size_t)i * V_COUNT;
+    for (uint32_t j = 0; j < F_COUNT; j++)
+      row[j] = X[(size_t)i * F_COUNT + j];
+    double target = EP_EMU_LOOKBACK * S_mid[i];
+    if (target < S[n - 1])
+      target = S[n - 1];
+    row[V_NU_C] = nuc[i];
+    row[V_NU_C_BACK] = interp_desc(S_mid, nuc, n_bins, target);
+    row[V_DLNNUC_DLNS] = grad(ln_nuc, ln_S, n_bins, i);
+    row[V_Y_C] = 0.5 * (fc.y[i] + fc.y[i + 1]);
+    const double lv = 0.5 * (hv[i] + hv[i + 1]);
+    const double lc = 0.5 * (hz[i] + hz[i + 1]);
+    row[V_LOG_LAM_VALUE] = log(lv > VIC_LOG_FLOOR ? lv : VIC_LOG_FLOOR);
+    row[V_LOG_LAM_COND] = log(lc > VIC_LOG_FLOOR ? lc : VIC_LOG_FLOOR);
+    for (uint32_t k = 0; k < SIF_EP_VIC_N_IN; k++)
+      Xv[(size_t)i * SIF_EP_VIC_N_IN + k] = row[SIF_EP_VIC_INPUTS[k]];
+  }
+
+  status = sif__nn_eval(&SIF_EP_VIC_NN, Xv, n_bins, z);
+  if (status != SIF_OK)
+    goto done;
+
+  /* Bins where the baseline sees no cloud have K = 1 exactly, whatever the
+   * inputs, and bins above the trained nu nothing crosses: neither is a gap
+   * in what the network knows. */
+  uint32_t outside = 0, worst = 0;
+  double worst_excess = 0.0, worst_value = 0.0;
+  for (uint32_t i = 0; i < n_bins; i++) {
+    const double lc = 0.5 * (hz[i] + hz[i + 1]);
+    const double zz = z[i] < VIC_Z_MAX ? z[i] : VIC_Z_MAX;
+    ln_k[i] = -lc * exp(zz);
+    if (!(lc > 0.0) || X[(size_t)i * F_COUNT + F_NU] > SIF_EP_EMU_BOX_HI[F_NU])
+      continue;
+    int out = 0;
+    for (uint32_t k = 0; k < SIF_EP_VIC_N_IN; k++) {
+      const double v = Xv[(size_t)i * SIF_EP_VIC_N_IN + k];
+      const double lo = SIF_EP_VIC_BOX_LO[k], hi = SIF_EP_VIC_BOX_HI[k];
+      const double span = hi - lo > 0.0 ? hi - lo : 1.0;
+      const double ex =
+        v < lo ? (lo - v) / span : (v > hi ? (v - hi) / span : 0.0);
+      if (ex > 0.0)
+        out = 1;
+      if (ex > worst_excess) {
+        worst_excess = ex;
+        worst = k;
+        worst_value = v;
+      }
+    }
+    outside += (uint32_t)out;
+  }
+  if (outside > 0) {
+    SIF_LOG_WARNING(TAG,
+      "%u of %u bins outside the void-in-cloud training range: input %u = "
+      "%.4g (trained %.4g to %.4g)",
+      outside, n_bins, worst, worst_value, SIF_EP_VIC_BOX_LO[worst],
+      SIF_EP_VIC_BOX_HI[worst]);
+  }
+  *n_outside = outside;
+  status = SIF_OK;
+
+done:
+  free(Bd);
+  free(Cd);
+  free(hz);
+  free(hv);
+  free(lam_c);
+  free(S_mid);
+  free(ln_S);
+  free(nuc);
+  free(ln_nuc);
+  free(cand);
+  free(Xv);
+  free(z);
+  sif__ep_features_free(&fc);
+  return status;
+}
+
 /* --- The entry point --- */
 
 sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
-  const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt) {
+  const double* deriv_variance, const sif_real* collapse, const double* cov,
+  sif_emu_domain_t* domain, sif_option opt) {
 
-  const int binned =
-    (opt & SIF__EP_EMU_OUTPUT_MASK) == SIF_EP_EMU_BIN_CENTRES;
+  const int binned = (opt & SIF__EP_EMU_OUTPUT_MASK) == SIF_EP_EMU_BIN_CENTRES;
 
   if (domain) {
     domain->in_domain = 0;
@@ -490,6 +719,8 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   }
 
   if (validate(radii, n_radii, sigma, barrier, deriv_variance) != SIF_OK)
+    return NULL;
+  if (collapse && validate_collapse(radii, n_radii, collapse, cov) != SIF_OK)
     return NULL;
 
   const uint32_t n = n_radii;
@@ -505,10 +736,11 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   double* lam = malloc((size_t)n_bins * sizeof(double));
   double* X = malloc((size_t)n_bins * F_COUNT * sizeof(double));
   double* corr = malloc((size_t)n_bins * sizeof(double));
+  double* ln_k = collapse ? malloc((size_t)n_bins * sizeof(double)) : NULL;
   sif_real* out =
     sif_calloc_aligned((size_t)(binned ? n_bins : n), sizeof(sif_real));
 
-  if (!S || !lam || !X || !corr || !out) {
+  if (!S || !lam || !X || !corr || !out || (collapse && !ln_k)) {
     SIF_LOG_ERROR(TAG, "failed to allocate the emulator workspace");
     goto fail;
   }
@@ -527,6 +759,16 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
 
   const double nu_large = f.nu[n - 1];
   report_domain(X, radii, n_bins, nu_large, domain);
+
+  uint32_t vic_outside = 0;
+  if (collapse && vic_ln_k(radii, n, S, barrier, collapse, deriv_variance, cov,
+                    X, ln_k, &vic_outside) != SIF_OK)
+    goto fail;
+  if (domain && vic_outside > 0) {
+    domain->in_domain = 0;
+    domain->n_bins_outside += vic_outside;
+    domain->expected_error = (sif_real)SIF_EP_EMU_ERROR_OUT_DOMAIN;
+  }
 
   /* A walk starting further out than any training walk is the same walk: above
    * nu ~ 3.5 nothing has crossed, so the Monte Carlo does not depend on where
@@ -563,16 +805,20 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
 
   const double alive_origin = 1.0 - sif__ep_upper_tail(nu_large);
 
-  if (binned)
+  if (binned) {
     sif__ep_survival(lam, radii, n_bins, alive_origin, out);
-  else if (density_at_radii(&f, radii, n, corr, lam, alive_origin, out) !=
-           SIF_OK)
+    if (ln_k)
+      for (uint32_t i = 0; i < n_bins; i++)
+        out[i] = (sif_real)((double)out[i] * exp(ln_k[i]));
+  } else if (density_at_radii(
+               &f, radii, n, corr, lam, ln_k, alive_origin, out) != SIF_OK)
     goto fail;
 
   free(S);
   free(lam);
   free(X);
   free(corr);
+  free(ln_k);
   sif__ep_features_free(&f);
   return out;
 
@@ -581,6 +827,7 @@ fail:
   free(lam);
   free(X);
   free(corr);
+  free(ln_k);
   sif_free_aligned(out);
   sif__ep_features_free(&f);
   return NULL;

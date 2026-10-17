@@ -24,12 +24,24 @@ Current version: v0.3 release 0
   process may run on (an inherited CPU affinity, a cpu-bind or a cgroup
   narrower than the thread count): the threads would share them, and until
   now the log showed the full thread count while the run crawled
+- Void-in-cloud in the excursion-set Monte Carlo: a collapse barrier
+  (`collapse=` in Python, delta_c or one value per radius) discards walks
+  that reach it before the void barrier
+- `sif_ep_multiplicity_function_emu()`: void-in-cloud too, given the
+  collapse barrier and the covariance (`collapse=`, `cov=`); about 0.09% where
+  it matters, against 0.8% if it is ignored
 
 ### Changed
 
+- `sif_ep_first_crossing_counts()` and `sif_ep_multiplicity_function()` take
+  the collapse barrier after the void barrier (NULL for none), and the counts
+  function a `collapse_counts` output before `opt`
+
 - `sif_ep_multiplicity_function_emu()`: retrained for walks starting out to
-  250 Mpc/h (shallow void thresholds); about 0.08% below 80 Mpc/h, and
+  250 Mpc/h (shallow void thresholds); about 0.06% below 80 Mpc/h, and
   no longer dependent on the radius sampling
+- `sif_ep_multiplicity_function_emu()` takes `collapse` and `cov` after
+  `deriv_variance` (NULL for the single barrier)
 - `sif_ep_multiplicity_function_emu()` returns the density at the n radii;
   `SIF_EP_EMU_BIN_CENTRES` (`binned=True`) gives the old n - 1 bin averages
 - `sif_ep_multiplicity_function_emu()`: a grid started further out than

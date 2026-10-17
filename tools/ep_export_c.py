@@ -27,7 +27,7 @@ import os
 
 import numpy as np
 
-from ep_model import FEATURE_NAMES, EPEmulator
+from ep_model import FEATURE_NAMES, VIC_CANDIDATES, EPEmulator, VICEmulator
 
 GUARD = "SIF__MODEL_EP_EMU_WEIGHTS_H"
 PREFIX = "SIF_EP_EMU"
@@ -68,12 +68,99 @@ def verify_roundtrip(text, arrays):
             raise SystemExit(f"{name} does not survive the round trip")
 
 
+def export_vic(path, out_path):
+    """The void-in-cloud network: ln K = -Lambda_cond exp(output)."""
+    emu = VICEmulator.load(path)
+    P = "SIF_EP_VIC"
+    guard = "SIF__MODEL_EP_EMU_VIC_WEIGHTS_H"
+    ids = [VIC_CANDIDATES.index(f) for f in emu.features]
+    n_in, n_layers = len(emu.mu), len(emu.layers)
+    n_par = sum(W.size + b.size for (W, b) in emu.layers)
+    src_hash = hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
+    arrays = {f"{P}_MU": emu.mu, f"{P}_SD": emu.sd}
+    for i, (W, b) in enumerate(emu.layers):
+        arrays[f"{P}_W{i}"] = W
+        arrays[f"{P}_B{i}"] = b
+    arrays[f"{P}_BOX_LO"] = emu.box[0]
+    arrays[f"{P}_BOX_HI"] = emu.box[1]
+
+    out = [f"""/* Copyright (C) 2026 Luca Palmieri
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * This file is part of sif. See COPYING for the full license text.
+ */
+
+#ifndef {guard}
+#define {guard}
+
+/*
+ * GENERATED FILE -- do not edit.
+ *
+ * Emitted by tools/ep_export_c.py --vic from {os.path.basename(path)}
+ * (sha256 {src_hash}) on {datetime.date.today().isoformat()}.
+ *
+ * The void-in-cloud factor: a {n_in}-input, {n_layers}-layer network of
+ * {n_par} parameters whose output z gives ln K = -Lambda_cond exp(z) per bin.
+ * Its inputs are picked by index from the candidates ep_emu.c computes, in
+ * the order of VIC_CANDIDATES in tools/ep_model.py.
+ */
+
+#include <stdint.h>
+
+#include "math/nn.h"
+
+#define {P}_N_CAND {len(VIC_CANDIDATES)}u
+#define {P}_N_IN {n_in}u
+
+"""]
+    for j, name in enumerate(emu.features):
+        out.append(f"/*   {j}  {name} (candidate {ids[j]}) */\n")
+    out.append(f"static const uint32_t {P}_INPUTS[{n_in}] = {{"
+               + ", ".join(f"{i}u" for i in ids) + "};\n\n")
+    for name, values in arrays.items():
+        out.append(emit_array(name, values))
+        out.append("\n")
+    layer_lines = []
+    for i, (W, b) in enumerate(emu.layers):
+        act = "SIF__NN_LINEAR" if i == n_layers - 1 else "SIF__NN_TANH"
+        layer_lines.append(f"    {{{W.shape[0]}u, {W.shape[1]}u, {P}_W{i}, "
+                           f"{P}_B{i}, {act}}}")
+    layers = ",\n".join(layer_lines)
+    out.append(f"""static const sif_nn_t {P}_NN = {{
+  .n_layers = {n_layers}u,
+  .n_in = {n_in}u,
+  .n_out = 1u,
+  .mu = {P}_MU,
+  .sd = {P}_SD,
+  .layers = {{
+{layers}
+  }}
+}};
+
+/* Held-out median error of f x K below 80 Mpc/h, where K < 0.999. */
+#define {P}_ERROR_IN_DOMAIN {c_double(emu.accuracy.get('median', 0.0))}
+
+#endif /* {guard} */
+""")
+    text = "".join(out)
+    verify_roundtrip(text, arrays)
+    with open(out_path, "w") as fh:
+        fh.write(text)
+    print(f"void-in-cloud: {n_par} parameters, {n_in} inputs "
+          f"({', '.join(emu.features)}) -> {out_path}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("weights", nargs="?", default="ep_emulator.npz")
     ap.add_argument("-o", "--out",
                     default="../src/model/ep_emu_weights.h")
+    ap.add_argument("--vic", metavar="VIC_NPZ",
+                    help="also emit the void-in-cloud network")
+    ap.add_argument("--vic-out", default="../src/model/ep_emu_vic_weights.h")
     args = ap.parse_args()
+    if args.vic:
+        export_vic(args.vic, args.vic_out)
 
     emu = EPEmulator.load(args.weights)
     n_in = len(emu.mu)

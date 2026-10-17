@@ -65,6 +65,10 @@ MAX_ORIGIN = 300.0
 # (0.16%) and wrong at -0.375 (0.35%) and -0.25 (0.83%), with the box passing
 # them all.
 DLNNU_DLNS_MAX = -0.40
+# Fit y / rms(y) and divide the output layer back. Off, the data term near the
+# optimum (~1e-6) sat below the L2 term (~1e-3), which then set the weights:
+# measured, CV below 80 Mpc/h 0.081% unscaled against 0.061% scaled.
+SCALE_TARGET = os.environ.get("EP_SCALE_TARGET", "1") == "1"
 N_TRAIN = 0           # bins drawn for the fit; 0 = every usable bin
 MAXITER = 6000
 N_FOLDS = 4
@@ -88,8 +92,25 @@ def fit(curves, hidden=HIDDEN, maxiter=MAXITER, n_train=N_TRAIN, seed=SEED):
                                                  replace=False)
         X, y = X[idx], y[idx]
 
-    return EmulatorMLP(hidden=hidden, seed=seed).fit(
-        X, y, np.ones(len(y)), maxiter=maxiter)
+    if not SCALE_TARGET:
+        return EmulatorMLP(hidden=hidden, seed=seed).fit(
+            X, y, np.ones(len(y)), maxiter=maxiter)
+
+    # Fitted on y / rms(y), then the output layer divided back: the same
+    # network, but with the data term O(1) rather than ~1e-6 near the optimum,
+    # where the L2 term (~1e-3) would otherwise set the weights.
+    c = 1.0 / np.sqrt(np.mean(y * y))
+    m = EmulatorMLP(hidden=hidden, seed=seed).fit(
+        X, c * y, np.ones(len(y)), maxiter=maxiter)
+    layers = m._unpack(m.theta_)
+    W, b = layers[-1]
+    W /= c
+    b /= c
+    m.theta_ = np.concatenate([np.concatenate([Wl.ravel(), bl.ravel()])
+                               for (Wl, bl) in layers])
+    print(f"fit: {m.nit_} iterations, loss {m.loss_:.4e} ({m.message_})",
+          flush=True)
+    return m
 
 
 def as_emulator(mlp, curves):

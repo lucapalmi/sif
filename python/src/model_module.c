@@ -161,48 +161,56 @@ static PyMethodDef model_methods[] = {
 
   {"ep_first_crossing_counts", (PyCFunction)py_sif_ep_first_crossing_counts,
     METH_VARARGS | METH_KEYWORDS,
-    "ep_first_crossing_counts(radii, cov, barrier, n_paths, seed=0)"
+    "ep_first_crossing_counts(radii, cov, barrier, n_paths, seed=0, collapse="
+    "None, return_collapse_counts=False)"
     "\n"
     "--\n\n"
     "Raw first-crossing counts of a correlated random walk against a moving "
     "barrier, one per radius.\n"
     "radii ascending, cov the packed triangle from delta_covariance_pk, "
     "barrier one entry per radius. The result is a deterministic function of "
-    "(seed, n_paths), independent of the thread count."},
+    "(seed, n_paths), independent of the thread count.\n"
+    "collapse adds void-in-cloud: delta_c, positive, as a number or one entry "
+    "per radius. A walk that reaches it before the void barrier is inside a "
+    "collapsing region and is not counted as a void at any radius. The same "
+    "seed gives the same walks with or without it. "
+    "return_collapse_counts=True returns (counts, collapse_counts), the "
+    "latter the walks discarded at each radius."},
 
   {"ep_multiplicity_function", (PyCFunction)py_sif_ep_multiplicity_function,
     METH_VARARGS | METH_KEYWORDS,
     "ep_multiplicity_function(radii, cov, barrier, n_paths, seed=0, retur"
-    "n_counts=False)"
+    "n_counts=False, collapse=None)"
     "\n"
     "--\n\n"
     "Void multiplicity function from the first crossing of a moving barrier "
     "by a correlated random walk.\n"
     "Returns len(radii) - 1 bin-centred values: a Monte Carlo can only place "
     "a crossing between two consecutive smoothing scales. Same arguments as "
-    "first_crossing_counts_ep.\n"
+    "ep_first_crossing_counts; collapse adds void-in-cloud.\n"
     "return_counts=True returns (mult, counts) instead, with the raw "
     "len(radii) counts the multiplicity was built from. Prefer it to a second "
-    "call to first_crossing_counts_ep, which would run the whole walk again."},
+    "call to ep_first_crossing_counts, which would run the whole walk again."},
 
   {"ep_multiplicity_function_emu",
     (PyCFunction)py_sif_ep_multiplicity_function_emu,
     METH_VARARGS | METH_KEYWORDS,
     "ep_multiplicity_function_emu(radii, sigma, barrier, deriv_variance, "
-    "return_domain=False, binned=False)"
+    "return_domain=False, binned=False, collapse=None, cov=None)"
     "\n"
     "--\n\n"
     "Emulated void multiplicity function: the same quantity as "
-    "multiplicity_function_ep, without the random walks.\n"
+    "ep_multiplicity_function, without the random walks.\n"
     "The up-crossing rate of Verza et al. (2024) eq. (3.15) -- Musso-Sheth "
     "with the exact scale-dependent <(d delta / dS)^2> -- corrected by a "
     "small trained network. "
-    "About 0.08% of the Monte Carlo it was fitted against (median, "
+    "About 0.06% of the Monte Carlo it was fitted against (median, "
     "radii below 80 Mpc/h), for walks starting anywhere from ~2 to 250 "
     "Mpc/h, and a few million times faster.\n"
     "Takes sigma, NOT the packed covariance the Monte Carlo needs: the "
-    "emulator reads only the diagonal, so it wants n values rather than "
-    "n(n+1)/2. deriv_variance is required, from delta_covariance_pk.\n"
+    "single-barrier emulator reads only the diagonal, so it wants n values "
+    "rather than n(n+1)/2 (void-in-cloud is the exception, below). "
+    "deriv_variance is required, from delta_covariance_pk.\n"
     "Returns the answer the Monte Carlo CONVERGES to, not the answer it gives "
     "on a coarse grid; the emulated result agrees to 0.02% on 65, 129 and "
     "257 radii.\n"
@@ -212,6 +220,10 @@ static PyMethodDef model_methods[] = {
     "ep_multiplicity_function measures.\n"
     "Place the largest radius where nu = barrier / sigma is ~3.5 or more "
     "(further out costs nothing) and keep nu above ~0.21 at the smallest; "
+    "collapse (delta_c, a number or one per radius) adds void-in-cloud, as "
+    "a factor K <= 1 on the single-barrier answer (about 0.09% where it "
+    "matters), and needs cov, the packed covariance from "
+    "delta_covariance_pk. "
     "return_domain=True returns (mult, domain) with in_domain, "
     "n_bins_outside, nu_origin, first_step_mass and expected_error."},
 

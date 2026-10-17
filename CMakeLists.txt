@@ -296,6 +296,7 @@ set(SOURCES
     src/model/excursion_set.c
     src/model/ep_upcrossing.c
     src/model/ep_emu.c
+    src/model/ep_vic.c
 
   # io -- the HDF5 half is added below, one file or the other
     src/io/core_io.c

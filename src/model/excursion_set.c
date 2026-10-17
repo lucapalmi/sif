@@ -17,6 +17,7 @@
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 
+#include <float.h>
 #include <math.h>
 #include <stdlib.h>
 
@@ -161,7 +162,7 @@ int sif__ep_cholesky(
 /* --- Validation --- */
 
 static int validate(const sif_real* radii, uint32_t n_radii, const double* cov,
-  const sif_real* barrier, uint64_t n_paths) {
+  const sif_real* barrier, const sif_real* collapse, uint64_t n_paths) {
 
   if (!radii || !cov || !barrier) {
     SIF_LOG_ERROR(TAG, "radii, cov and barrier are all required");
@@ -211,6 +212,16 @@ static int validate(const sif_real* radii, uint32_t n_radii, const double* cov,
     if (!isfinite((double)barrier[i])) {
       SIF_LOG_ERROR(TAG, "the barrier at radius %u (%g) is not finite", i,
         (double)radii[i]);
+      return SIF_ERR_INVALID;
+    }
+    /* A magnitude, like delta_c itself: the walk is -delta, so collapse is
+     * -delta <= -collapse. Zero or below would put half the walks in a cloud
+     * on their first step. */
+    if (collapse && !(collapse[i] > 0.0f && isfinite((double)collapse[i]))) {
+      SIF_LOG_ERROR(TAG,
+        "collapse barrier at radius %u (%g): %g (expected positive and "
+        "finite)",
+        i, (double)radii[i], (double)collapse[i]);
       return SIF_ERR_INVALID;
     }
   }
@@ -386,12 +397,12 @@ static inline void ep_seed_path(
 }
 
 uint64_t* sif_ep_first_crossing_counts(const sif_real* radii, uint32_t n_radii,
-  const double* cov, const sif_real* barrier, uint64_t n_paths, uint64_t seed,
-  sif_option opt) {
+  const double* cov, const sif_real* barrier, const sif_real* collapse,
+  uint64_t n_paths, uint64_t seed, uint64_t* collapse_counts, sif_option opt) {
 
   (void)opt; /* reserved */
 
-  if (validate(radii, n_radii, cov, barrier, n_paths) != SIF_OK)
+  if (validate(radii, n_radii, cov, barrier, collapse, n_paths) != SIF_OK)
     return NULL;
 
   const uint32_t n = n_radii;
@@ -406,21 +417,31 @@ uint64_t* sif_ep_first_crossing_counts(const sif_real* radii, uint32_t n_radii,
     return NULL;
   }
 
-  /* Reversed into walk order once, and promoted: it is compared against a
-   * double accumulator. */
+  /* Reversed into walk order once, and promoted: they are compared against a
+   * double accumulator. Collapse is stored as the level -delta_c the walk of
+   * -delta falls to. */
   double* barrier_walk = sif_malloc_aligned((size_t)n * sizeof(double));
+  double* collapse_walk = sif_malloc_aligned((size_t)n * sizeof(double));
   uint64_t* total = sif_calloc_aligned((size_t)n, sizeof(uint64_t));
+  uint64_t* total_c = sif_calloc_aligned((size_t)n, sizeof(uint64_t));
 
-  if (!barrier_walk || !total) {
+  if (!barrier_walk || !collapse_walk || !total || !total_c) {
     SIF_LOG_ERROR(TAG, "failed to allocate the walk buffers");
     sif_free_aligned(barrier_walk);
+    sif_free_aligned(collapse_walk);
     sif_free_aligned(total);
+    sif_free_aligned(total_c);
     sif__ep_factor_free(&f);
     return NULL;
   }
 
-  for (uint32_t j = 0; j < n; j++)
+  /* Without a collapse barrier the level is -DBL_MAX, which no walk reaches,
+   * so one loop serves both. Not -INFINITY: the release build carries
+   * -ffast-math, under which the compiler may assume no infinity appears. */
+  for (uint32_t j = 0; j < n; j++) {
     barrier_walk[j] = (double)barrier[n - 1 - j];
+    collapse_walk[j] = collapse ? -(double)collapse[n - 1 - j] : -DBL_MAX;
+  }
 
   /* The last row is the longest, and the dot product runs to its padded end. */
   const uint64_t xi_len = roundup((uint64_t)n, SIF__EP_ROW_PAD);
@@ -432,9 +453,10 @@ uint64_t* sif_ep_first_crossing_counts(const sif_real* radii, uint32_t n_radii,
     /* Per-thread histogram. The critical section below runs once per thread,
      * not once per path -- do not "fix" it into an atomic in the inner loop. */
     uint64_t* local = calloc((size_t)n, sizeof(uint64_t));
+    uint64_t* local_c = calloc((size_t)n, sizeof(uint64_t));
     double* xi = sif_calloc_aligned((size_t)xi_len, sizeof(double));
 
-    if (!local || !xi) {
+    if (!local || !local_c || !xi) {
 #pragma omp atomic write
       alloc_failed = 1;
     }
@@ -450,7 +472,7 @@ uint64_t* sif_ep_first_crossing_counts(const sif_real* radii, uint32_t n_radii,
 
       /* A thread that failed to allocate still has to reach the worksharing
        * construct, so it enters the loop and declines the body. */
-      if (!local || !xi)
+      if (!local || !local_c || !xi)
         continue;
 
       sif_prng_state_t prng;
@@ -489,48 +511,65 @@ uint64_t* sif_ep_first_crossing_counts(const sif_real* radii, uint32_t n_radii,
           local[j]++;
           break;
         }
+        /* Void-in-cloud: a walk inside a collapsing region at a larger scale
+         * is not a void at any smaller one, whatever it does later. The two
+         * tests cannot both hold, so their order is immaterial. */
+        if (d <= collapse_walk[j]) {
+          local_c[j]++;
+          break;
+        }
       }
     }
 
-    if (local) {
+    if (local && local_c) {
 #pragma omp critical
       {
-        for (uint32_t j = 0; j < n; j++)
+        for (uint32_t j = 0; j < n; j++) {
           total[j] += local[j];
+          total_c[j] += local_c[j];
+        }
       }
     }
 
     free(local);
+    free(local_c);
     sif_free_aligned(xi);
   }
 
   sif_free_aligned(barrier_walk);
+  sif_free_aligned(collapse_walk);
   sif__ep_factor_free(&f);
 
   if (alloc_failed) {
     SIF_LOG_ERROR(TAG, "a worker failed to allocate its walk buffers");
     sif_free_aligned(total);
+    sif_free_aligned(total_c);
     return NULL;
   }
 
   /* Back to the caller's ascending order. */
+  for (uint32_t j = 0; j < n; j++) {
+    if (collapse_counts)
+      collapse_counts[j] = total_c[n - 1 - j];
+  }
   for (uint32_t j = 0; j < n / 2; j++) {
     const uint64_t t = total[j];
     total[j] = total[n - 1 - j];
     total[n - 1 - j] = t;
   }
 
+  sif_free_aligned(total_c);
   return total;
 }
 
 /* --- The multiplicity function --- */
 
 sif_real* sif_ep_multiplicity_function(const sif_real* radii, uint32_t n_radii,
-  const double* cov, const sif_real* barrier, uint64_t n_paths, uint64_t seed,
-  uint64_t* counts_out, sif_option opt) {
+  const double* cov, const sif_real* barrier, const sif_real* collapse,
+  uint64_t n_paths, uint64_t seed, uint64_t* counts_out, sif_option opt) {
 
   uint64_t* counts = sif_ep_first_crossing_counts(
-    radii, n_radii, cov, barrier, n_paths, seed, opt);
+    radii, n_radii, cov, barrier, collapse, n_paths, seed, NULL, opt);
   if (!counts)
     return NULL;
 

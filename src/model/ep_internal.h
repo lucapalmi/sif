@@ -168,6 +168,30 @@ void sif__ep_survival(const double* lam, const sif_real* radii, uint32_t n_bins,
 /* 1 - Phi(x), the upper tail of the standard normal. */
 double sif__ep_upper_tail(double x);
 
+/* E[(z - y)^+] for a standard normal z, phi(y) - y (1 - Phi(y)), with the
+ * tail expansion past the point where that difference cancels. */
+double sif__ep_mean_excess(double y);
+
+/**
+ * @brief The void-in-cloud baseline per radius: -ln of the probability that a
+ * walk making its void at S_i was not inside a cloud at a larger radius, with
+ * the expected number of collapse crossings conditional on the void
+ * crossing's value and slope, averaged over the up-crossing slopes.
+ *
+ * Mirrors slope_collapse_hazard in tools/ep_model.py. cov is the packed lower
+ * triangle in ascending radii; S, B (void barrier), C (collapse barrier) and
+ * dvar are per radius in the same order, B and C positive. O(n^2) in time and
+ * memory. Returns SIF_OK or SIF_ERR_ALLOC.
+ */
+int sif__ep_vic_hazard(const double* cov, const double* S, const double* B,
+  const double* C, const double* dvar, uint32_t n, double* out);
+
+/* The same conditional only on the void crossing's value, not its slope:
+ * conditional_collapse_hazard in tools/ep_model.py. */
+int sif__ep_vic_hazard_value(const double* cov, const double* S,
+  const double* B, const double* C, const double* dvar, uint32_t n,
+  double* out);
+
 /**
  * @brief First-crossing multiplicity from the up-crossing rate alone.
  *

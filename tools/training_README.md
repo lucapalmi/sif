@@ -1,10 +1,11 @@
 # The excursion-set multiplicity emulator
 
 A trained replacement for the Monte Carlo first-crossing calculation
-(`sif_ep_multiplicity_function`), accurate to **0.08%** (median, held-out
+(`sif_ep_multiplicity_function`), accurate to **0.06%** (median, held-out
 cosmologies, radii below 80 Mpc/h) for walks starting anywhere from ~2 to
-250 Mpc/h, and about **3×10⁶ times faster**. Intended for MCMC use where the
-Monte Carlo is unaffordable.
+250 Mpc/h, and about **2×10⁶ times faster**. With a collapse barrier it adds
+void-in-cloud (§11), at 0.09% where that matters. Intended for MCMC use where
+the Monte Carlo is unaffordable.
 
 This document covers what the emulator emulates and why, the physical meaning
 of every quantity it consumes, the training pipeline, and the measured results.
@@ -256,16 +257,17 @@ On campaign 1 (433-parameter network):
 | systematic misspecification | mean vs RMS residual per ν band | bias/RMS = 0.01–0.06. Unbiased; pure scatter. |
 | training-data noise | model residual vs MC noise per band | ratio 1.00–1.07 at ν>3. Data-limited there; the model error is unmeasurably small. |
 
-**Those comparisons were run with an optimiser that stopped early** (§4): every
-network ended near iteration 660 whatever `maxiter` said. Rerun to completion
-on the final training set the conclusions still hold, for a sharper reason.
-Every architecture from 32×32 to 64×64 lands within the validation noise of the
-others (§4), and **averaging the three gains nothing**: the residual left at
-ν < 1.5 is a per-curve offset of ~2×10⁻³ in log-hazard, coherent along each
-curve and shared by networks of every size. It is not fit noise; most likely it is
-what the nine features cannot tell apart — walks they describe alike whose
-Monte Carlo differs by that much. Only a new feature, not capacity or
-averaging, moves it.
+**Those comparisons were run with an optimiser that stopped early, and then
+with one the L2 term held back** (§4). The early stop ended every network near
+iteration 660 whatever `maxiter` said. Once that was fixed, every architecture
+from 32×32 to 64×64 still landed within the validation noise of the others and
+averaging three gained nothing, which read as a feature-information floor: a
+per-curve offset of ~2×10⁻³ in log-hazard at ν < 1.5, shared by networks of
+every size. It was in good part the regulariser. Near the optimum the data term
+was ~10⁻⁶ against an L2 term of ~10⁻³, so every network was pulled to the same
+small-weight compromise; with the target normalised (§4) the CV error fell
+from 0.081% to 0.061% and the shallow void thresholds that carried the offset
+from 0.16–0.21% to 0.09–0.15% (§6.2), with nothing else changed.
 
 ---
 
@@ -287,16 +289,29 @@ averaging, moves it.
   a question nobody asked; the large-radius end carries the cosmological
   information and gets equal say.
 - **Optimiser**: L-BFGS-B with analytic gradients, **6000 iterations with
-  `ftol = gtol = 0`**, L2 = 10⁻⁶, over all 517,984 usable bins.
+  `ftol = gtol = 0`**, L2 = 10⁻⁶, over all 517,984 usable bins, **on the target
+  divided by its rms**, the output layer divided back afterwards (the same
+  network).
 - **Parallelism**: the loss is evaluated in blocks of 8192 rows on a thread
   pool, BLAS single-threaded underneath (a threaded BLAS under the pool
   oversubscribes and was measured to stall). 13× faster than one big array.
 
-**The stopping rule is the largest single improvement in this version.**
-SciPy's default relative tolerance (~2×10⁻⁹) ends the fit after a few hundred
-iterations here, because the loss is ~10⁻⁵ and each step's gain looks
-negligible relative to it. Every network stopped near iteration 660 at twice
-the training loss a full run reaches.
+**Two fitting details made the largest improvements of all.** SciPy's default
+relative tolerance (~2×10⁻⁹) ended the fit after a few hundred iterations,
+because the loss is ~10⁻⁵ and each step's gain looks negligible relative to it:
+every network stopped near iteration 660 at twice the training loss a full run
+reaches. And with the stopping fixed, the fit of the raw target still settled
+where the L2 term wanted: the residual near the optimum is ~10⁻³, so the data
+term is ~10⁻⁶ against an L2 term of ~10⁻³ for 2881 weights of order one.
+Normalising the target makes the data term O(1) at the start and keeps it in
+charge to the end:
+
+| target | CV, R < 80 | model error | V | T | W |
+|---|---|---|---|---|---|
+| raw | 0.081% | 1.34×10⁻³ | 0.080% | 0.096% | 0.112% |
+| **divided by its rms** | **0.061%** | **1.01×10⁻³** | **0.061%** | **0.093%** | **0.083%** |
+
+The width comparisons below were made before that, with the raw target.
 
 Widths, scored on data no fit saw (median relative error, bins below
 80 Mpc/h). On campaigns 1–2, against the validation sets of §6.2 and the 16
@@ -321,9 +336,10 @@ set W:
 | **48×48** | **2881** | **0.080%** | **0.096%** | **0.112%** |
 | 64×64 | 4865 | 0.080% | 0.103% | 0.106% |
 
-All fully trained networks sit within the validation noise of each other (the
+All fully trained networks sat within the validation noise of each other (the
 generic set's Monte Carlo noise alone is 0.057%). 48×48 is kept: the best on
-the thesis barrier, never the worst, and free in C; three layers buy nothing.
+the thesis barrier, never the worst, and free in C; three layers bought
+nothing.
 
 ---
 
@@ -477,18 +493,18 @@ log-hazard residual with the Monte Carlo's own noise removed in quadrature.
 
 | evaluated on | bins | median | 95th | model error | ν<1 | 1–2 | 2–3 | >3 |
 |---|---|---|---|---|---|---|---|---|
-| all bins | 517,984 | 0.085% | 0.49% | 1.4×10⁻³ | 0.08% | 0.07% | 0.08% | 0.30% |
-| campaign 1 | 190,989 | 0.078% | 0.49% | 9.1×10⁻⁴ | 0.08% | 0.06% | 0.08% | 0.32% |
-| campaigns 2–4 | 326,995 | 0.090% | 0.48% | 1.6×10⁻³ | 0.09% | 0.08% | 0.08% | 0.29% |
-| **R < 80 Mpc/h** | 445,225 | **0.081%** | **0.44%** | 1.3×10⁻³ | 0.08% | 0.06% | 0.08% | 0.31% |
-| R < 80, origin < 30 | 273,066 | 0.079% | 0.48% | 1.0×10⁻³ | 0.08% | 0.06% | 0.08% | 0.32% |
-| R < 80, origin 30–120 | 112,404 | 0.074% | 0.30% | 1.1×10⁻³ | 0.07% | 0.07% | 0.07% | 0.27% |
-| R < 80, origin 120–300 | 59,755 | 0.110% | 0.49% | 2.5×10⁻³ | 0.11% | 0.10% | 0.06% | 0.07% |
-| R ≥ 80 | 72,759 | 0.120% | 0.74% | 1.7×10⁻³ | 0.12% | 0.10% | 0.09% | 0.30% |
+| all bins | 517,984 | 0.063% | 0.44% | 1.0×10⁻³ | 0.06% | 0.05% | 0.07% | 0.30% |
+| campaign 1 | 190,989 | 0.062% | 0.46% | 4.2×10⁻⁴ | 0.06% | 0.05% | 0.07% | 0.32% |
+| campaigns 2–4 | 326,995 | 0.065% | 0.43% | 1.3×10⁻³ | 0.06% | 0.05% | 0.07% | 0.29% |
+| **R < 80 Mpc/h** | 445,225 | **0.061%** | **0.40%** | 1.0×10⁻³ | 0.06% | 0.05% | 0.07% | 0.30% |
+| R < 80, origin < 30 | 273,066 | 0.061% | 0.45% | 6.0×10⁻⁴ | 0.05% | 0.05% | 0.07% | 0.32% |
+| R < 80, origin 30–120 | 112,404 | 0.051% | 0.26% | 7.1×10⁻⁴ | 0.05% | 0.04% | 0.06% | 0.27% |
+| R < 80, origin 120–300 | 59,755 | 0.094% | 0.43% | 2.3×10⁻³ | 0.10% | 0.09% | 0.05% | 0.09% |
+| R ≥ 80 | 72,759 | 0.080% | 0.70% | 1.1×10⁻³ | 0.09% | 0.05% | 0.07% | 0.29% |
 
 The far-origin corner went from 0.45% (1,361 bins, campaigns 1–2) to 0.110%
-(59,755 bins) with campaign 3, and nothing else moved by more than the fold
-noise. The ν>3 column is *not* model error — there the residual equals the
+(59,755 bins) with campaign 3, and to 0.094% with the normalised target (§4).
+The ν>3 column is *not* model error — there the residual equals the
 reference's noise, so the emulator is more accurate than this training set can
 demonstrate.
 
@@ -501,13 +517,14 @@ None of these touched training or model selection. All at 10⁹ paths.
 
 | bins | median | 95th | MC noise | model error |
 |---|---|---|---|---|
-| all | 0.084% | 0.37% | 0.057% | 2.0×10⁻³ |
-| R < 80 | **0.080%** | 0.34% | 0.057% | 1.9×10⁻³ |
-| R < 80, origin 2–30 | 0.080% | 0.38% | 0.062% | |
-| R < 80, origin 30–150 | 0.081% | 0.30% | 0.049% | |
+| all | 0.061% | 0.34% | 0.057% | 1.8×10⁻³ |
+| R < 80 | **0.061%** | 0.30% | 0.057% | 1.7×10⁻³ |
+| R < 80, origin 2–30 | 0.066% | 0.33% | 0.062% | |
+| R < 80, origin 30–150 | 0.053% | 0.27% | 0.049% | |
 
-Per cosmology, the median below 80 Mpc/h runs 0.062–0.102%, with no trend in
-Ω_c h², H₀, n_s, Σm_ν or z. No curve is flagged by the guard.
+At the Monte Carlo noise. Per cosmology, the median below 80 Mpc/h runs
+0.051–0.079%, with no trend in Ω_c h², H₀, n_s, Σm_ν or z. No curve is flagged
+by the guard.
 
 **A calibrated void barrier at analysis thresholds** (set T): the barrier of a
 real void-size-function analysis (B = α[1 + (β/σ)^γ], γ = 0.53, fitted α(δ) and
@@ -517,18 +534,17 @@ real void-size-function analysis (B = α[1 + (β/σ)^γ], γ = 0.53, fitted α(�
 | δ_NL | −0.15 | −0.20 | −0.25 | −0.30 | −0.40 | −0.50 | −0.60 | −0.70 |
 |---|---|---|---|---|---|---|---|---|
 | walk origin (Mpc/h) | 185 | 146 | 119 | 100 | 71 | 51 | 37 | 25 |
-| median error | 0.16% | 0.21% | 0.18% | 0.11% | 0.09% | 0.09% | 0.08% | 0.07% |
+| median error | 0.09% | 0.15% | 0.14% | 0.10% | 0.11% | 0.10% | 0.09% | 0.08% |
 | MC noise | 0.08% | 0.08% | 0.09% | 0.09% | 0.09% | 0.09% | 0.09% | 0.09% |
 
-Pooled below 80 Mpc/h: **0.096%** against 0.078% Monte Carlo noise. The
-shallow thresholds sit at 0.16–0.21%, about twice their noise: these curves
-share one barrier family and one cosmology, so the per-curve offset of §3 lands
-on all of them with the same sign rather than averaging away. Every width
-tried, and their average, gives the same values there.
+Pooled below 80 Mpc/h: **0.093%** against 0.078% Monte Carlo noise. The
+shallow thresholds were the ones a regularised fit left high (0.16–0.21%,
+§3); δ_NL = −0.20 and −0.25 are still about 1.7 times their noise, the rest at
+it.
 
 **The far-origin corner** (set W): 8 new cosmologies × 4 barriers with walks
 starting at 150–200 Mpc/h — three SMT draws and one near-constant (β = 10⁻³).
-Below 80 Mpc/h: **0.112%** (SMT 0.126%, near-constant 0.082%) against 0.043%
+Below 80 Mpc/h: **0.083%** (SMT 0.094%, near-constant 0.064%) against 0.043%
 noise; no curve flagged.
 
 ### 6.3 The Monte Carlo is converged
@@ -579,6 +595,7 @@ refinement.
 |---|---|
 | C emulator through pysif, 128 radii | 122 µs |
 | C emulator through pysif, 200 radii | 189 µs |
+| with void-in-cloud (§11), 128 / 200 radii | ~1 / ~3 ms, six times the above |
 | Monte Carlo, 10⁹ paths, 128 radii | ~400 s (workstation), ~60 s (72 cores) |
 | speed-up | ~3×10⁶ |
 
@@ -593,22 +610,22 @@ definitions), scored on the same fresh Monte Carlo as §6.2, bins below
 
 | set | previous median | this median | previous 95th | this 95th | MC noise |
 |---|---|---|---|---|---|
-| V generic, all | 0.24% | **0.080%** | 1.59% | 0.34% | 0.057% |
-| V origin 2–30 | 0.21% | 0.080% | 0.89% | 0.38% | 0.062% |
-| V origin 30–120 | 0.32% | 0.078% | 2.44% | 0.29% | 0.050% |
-| V origin 120–250 | 0.62% | 0.14% | 2.60% | 0.31% | 0.046% |
-| V, per cosmology | 0.20 – 0.35% | 0.06 – 0.10% | | | |
-| T thesis barrier, pooled | 0.20% | **0.096%** | 1.13% | 0.85% | 0.078% |
-| T δ_NL −0.20 | 0.55% | 0.23% | 0.66% | 0.35% | 0.061% |
+| V generic, all | 0.24% | **0.061%** | 1.59% | 0.30% | 0.057% |
+| V origin 2–30 | 0.21% | 0.066% | 0.89% | 0.33% | 0.062% |
+| V origin 30–120 | 0.32% | 0.051% | 2.44% | 0.26% | 0.050% |
+| V origin 120–250 | 0.62% | 0.091% | 2.60% | 0.31% | 0.046% |
+| V, per cosmology | 0.20 – 0.35% | 0.05 – 0.08% | | | |
+| T thesis barrier, pooled | 0.20% | **0.093%** | 1.13% | 0.86% | 0.078% |
+| T δ_NL −0.20 | 0.55% | 0.16% | 0.66% | 0.33% | 0.061% |
 | T δ_NL −0.30 | 0.16% | 0.08% | 0.38% | 0.22% | 0.073% |
-| W far origin, all | 0.66% | **0.112%** | 1.72% | 0.45% | 0.043% |
-| pilot, 16 cosmologies, origin 30–120 | 0.35% | 0.14% | 1.81% | 0.52% | 0.155% |
-| pilot, origin 120–250 | 0.73% | 0.19% | 1.48% | 0.51% | 0.152% |
+| W far origin, all | 0.66% | **0.083%** | 1.72% | 0.41% | 0.043% |
+| pilot, 16 cosmologies, origin 30–120 | 0.35% | 0.12% | 1.81% | 0.49% | 0.155% |
+| pilot, origin 120–250 | 0.73% | 0.16% | 1.48% | 0.46% | 0.152% |
 
-Three to six times better wherever the old one was in its domain, and the
-95th percentile, which the old features' grid dependence dominated, by 3–8×.
+Four to eight times better wherever the old one was in its domain, and the
+95th percentile, which the old features' grid dependence dominated, by 3–9×.
 On its own campaign-1 domain the old emulator cross-validated at 0.128% (model
-error 2.1×10⁻³); the same bins are now at 0.078% (9.1×10⁻⁴).
+error 2.1×10⁻³); the same bins are now at 0.062% (4.2×10⁻⁴).
 
 ### 6.7 A note on the asymptote
 
@@ -758,14 +775,30 @@ python tools/ep_train_final.py --merge f0.npz f1.npz f2.npz f3.npz -o tools/ep_e
 On a cluster that caps running jobs per user (raven: 16, whatever their size),
 `ep_packed.slurm` runs several single-node tasks inside one multi-node job.
 
+Void-in-cloud (§11), after the single-barrier training set exists: replay it
+with collapse barriers (one task per stored file, ~1 node-hour per campaign),
+build the cache, then fold, merge and fit as above:
+
+```bash
+python tools/ep_vic_worker.py --runs runs_v2 --task-id $TASK \
+    --spectra tools/ep_spectra_v2.npz --out runs_vic/c2 --verify   # per campaign
+python tools/ep_train_vic.py features --root . --cache vic_cache.npz
+python tools/ep_train_vic.py fold 0 --cache vic_cache.npz -o v0.npz   # ... 3
+python tools/ep_train_vic.py fit --cache vic_cache.npz -o tools/ep_emulator_vic.npz
+python tools/ep_train_vic.py merge v0.npz v1.npz v2.npz v3.npz -o tools/ep_emulator_vic.npz
+python tools/ep_validate_vic.py mc --task $TASK --out val_vic    # 17 tasks
+python tools/ep_validate_vic.py analyse --out val_vic
+python tools/ep_export_c.py --vic tools/ep_emulator_vic.npz
+```
+
 ### Files
 
 **Core (the specification):**
 
 | file | role |
 |---|---|
-| `ep_model.py` | **The canonical definition.** Baseline rate, hazard integration, the nine features, survival recursion, the density at the radii, `EPEmulator` (inference + guard + persistence). The C implementation must reproduce this exactly. |
-| `ep_emulator.py` | The MLP fitter: forward pass, analytic gradients, block-parallel loss, L-BFGS. Training only. |
+| `ep_model.py` | **The canonical definition.** Baseline rate, hazard integration, the nine features, survival recursion, the density at the radii, `EPEmulator` (inference + guard + persistence); the void-in-cloud baseline, candidates and `VICEmulator`. The C implementation must reproduce this exactly. |
+| `ep_emulator.py` | The MLP fitter: forward pass, analytic gradients, block-parallel loss, L-BFGS; the negexp link for ln K. Training only. |
 
 **Pipeline:**
 
@@ -781,7 +814,10 @@ On a cluster that caps running jobs per user (raven: 16, whatever their size),
 | `ep_train_final.py` | Cross-validation (whole or per fold), final fit, accuracy record. |
 | `ep_validate_v2.py`, `ep_validate_v2.slurm` | Fresh Monte Carlo (sets V, T, C, W), its analysis, grid and origin invariance. |
 | `ep_validate.py` | Campaign 1's validation (fresh ensemble at 10⁸ paths, guard, speed). |
-| `ep_export_c.py`, `ep_export_test_cases.py` | The C header and the stored test cases (both output forms). |
+| `ep_export_c.py`, `ep_export_test_cases.py` | The C headers (`--vic` for the void-in-cloud one) and the stored test cases (both output forms, with and without void-in-cloud). |
+| `ep_vic_worker.py` | Void-in-cloud replay of one stored training file, with a pairing check (`--verify`). |
+| `ep_train_vic.py` | Void-in-cloud cache, cross-validation by fold, merge, final fit. |
+| `ep_validate_vic.py` | The fresh sets replayed with collapse barriers, and their analysis. |
 
 **Studies (evidence, not needed to train):**
 
@@ -792,10 +828,11 @@ On a cluster that caps running jobs per user (raven: 16, whatever their size),
 
 **Data:** `ep_spectra.npz` (campaign 1, N_K = 2400), `ep_spectra_v2.npz`
 (campaigns 2–4, N_K = 10000), `ep_validation_spectra.npz`, `ep_emulator.npz`
-(trained weights + domain box + accuracy), `ep_validation_mc.npz` (campaign 1's
-validation ensemble, also the source of the C test cases). The Monte Carlo
-outputs live in `runs/`, `runs_v2/`, `runs_v3/`, `runs_v4/` and `val_v2/` at
-the repository root.
+(trained weights + domain box + accuracy), `ep_emulator_vic.npz` (the same for
+void-in-cloud), `ep_validation_mc.npz` (campaign 1's validation ensemble, also
+the source of the C test cases). The Monte Carlo outputs live in `runs/`,
+`runs_v2/`, `runs_v3/`, `runs_v4/`, `runs_vic/`, `val_v2/` and `val_vic/` at the
+repository root.
 
 ### Reproducibility
 
@@ -815,17 +852,25 @@ The emulator is one public function, declared in `include/sif/model/excursion_se
 ```c
 SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
-  const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt);
+  const double* deriv_variance, const sif_real* collapse, const double* cov,
+  sif_emu_domain_t* domain, sif_option opt);
 ```
+
+`collapse` and `cov` are for void-in-cloud (§11): NULL for the single barrier,
+bit for bit as before. With a collapse barrier the result is f × K, and `cov`
+— the packed covariance `sif_delta_covariance_pk` returns with sigma — is
+required.
 
 It returns **n values, the density at the radii**. With
 `SIF_EP_EMU_BIN_CENTRES` in `opt` it returns n − 1 bin averages instead, on the
 bin centres, as the Monte Carlo does.
 
 It takes **`sigma`, not the packed covariance** that `sif_ep_multiplicity_function`
-needs. That is deliberate: the emulator reads only the diagonal, so it wants
-`n` numbers where the Monte Carlo wants `n(n+1)/2`, and its cost is linear
-rather than quadratic in the radius count. `deriv_variance` is **required**
+needs. That is deliberate: the single-barrier emulator reads only the diagonal,
+so it wants `n` numbers where the Monte Carlo wants `n(n+1)/2`, and its cost is
+linear rather than quadratic in the radius count. Void-in-cloud is the
+exception: it conditions on how a walk ending on the void barrier was
+correlated with its larger scales, which the diagonal cannot say. `deriv_variance` is **required**
 here, unlike the Monte Carlo path — differencing it off a covariance converges
 only at first order, which would reintroduce exactly the grid dependence the
 emulator exists to avoid. Both come from `sif_delta_covariance_pk`.
@@ -833,8 +878,8 @@ emulator exists to avoid. Both come from `sif_delta_covariance_pk`.
 **Place the grid by ν, not by R.** The outermost radius should sit where
 ν = B/σ ≳ 3.5 — the emulator then starts the walk where nothing has crossed
 yet, and the answer does not depend on exactly where (§6.4); further out costs
-nothing (§7). The innermost should keep ν ≳ 0.21, the trained floor. The spacing is free: 65 radii over ν 0.5–4.5 already agree with 257
-to 0.02%.
+nothing (§7). The innermost should keep ν ≳ 0.21, the trained floor. The
+spacing is free: 65 radii over ν 0.5–4.5 already agree with 257 to 0.02%.
 
 `domain` is optional (pass NULL to skip) and reports where the call sat
 relative to the training:
@@ -845,7 +890,7 @@ typedef struct {
   uint32_t n_bins_outside;   /* bins with a feature outside the trained box */
   sif_real   nu_origin;        /* B/sigma at the largest radius */
   sif_real   first_step_mass;  /* walks starting above the barrier */
-  sif_real   expected_error;   /* 0.00081 in domain, 0.017 outside */
+  sif_real   expected_error;   /* 0.00061 in domain, 0.016 outside */
 } sif_emu_domain_t;
 ```
 
@@ -870,7 +915,11 @@ f_bins = model.ep_multiplicity_function_emu(radii, sigma, barrier, dvar,
 f, dom = model.ep_multiplicity_function_emu(radii, sigma, barrier, dvar,
                                             return_domain=True)
 # dom -> {'in_domain': True, 'n_bins_outside': 0, 'nu_origin': 4.7997,
-#         'first_step_mass': 7.9e-07, 'expected_error': 0.00081}
+#         'first_step_mass': 7.9e-07, 'expected_error': 0.00061}
+
+# void-in-cloud: delta_c as a number (or one per radius), and the covariance
+f_vic = model.ep_multiplicity_function_emu(radii, sigma, barrier, dvar,
+                                           collapse=1.686, cov=cov)
 ```
 
 Code written against the previous version, which read the result on the bin
@@ -882,7 +931,9 @@ centres, needs `binned=True` (or to use the radii themselves).
 |---|---|
 | `src/math/nn.c`, `nn.h` | Internal dense-network evaluation. Not public: there is no training in C, and the weights only ever come from this library's own models. Batched, no allocation, `const` throughout, so it is safe to call from several threads. |
 | `src/model/ep_emu_weights.h` | Generated by `ep_export_c.py`. `static const` tables in `.rodata`; every literal verified to round-trip bit-exactly before the header is written. `ep_emu.c` refuses to compile against a header with a different number of inputs. |
-| `src/model/ep_emu.c` | The entry point: features, network, survival recursion, the density at the radii, domain report. |
+| `src/model/ep_emu.c` | The entry point: features, network, survival recursion, the density at the radii, domain report; the void-in-cloud candidates, network and factor. |
+| `src/model/ep_vic.c` | The void-in-cloud baselines: the collapse hazard conditional on the void crossing's value and slope (O(n²), threaded). |
+| `src/model/ep_emu_vic_weights.h` | Generated by `ep_export_c.py --vic`: the void-in-cloud network, and which candidates it takes. |
 | `src/model/ep_upcrossing.c` | The baseline, shared with the semi-analytic up-crossing path rather than duplicated — `sif__ep_features_fill_diag`, `sif__ep_hazard_bins`, `sif__ep_survival`. |
 | `tests/test_ep_emu.c` | Pins the C against stored values from the Python reference. |
 
@@ -918,10 +969,10 @@ fires on both conditions it exists for.
 2. **Walks crossing at 2–250 Mpc/h.** Where the grid starts is free (§7);
    where the walk can cross is what training covers, to 300 Mpc/h, and the
    guard flags crossings only past the γ² floor (~450–600 Mpc/h).
-3. **A per-curve floor of ~2×10⁻³ at ν < 1.5** (§3). It averages away over
-   varied curves but not over many thresholds of one barrier: the shallow void
-   thresholds of §6.2 sit at 0.16–0.21%, twice their noise. Neither capacity
-   nor ensembles move it.
+3. **What remains is correlated within a curve.** It averages away over
+   varied curves but less over many thresholds of one barrier: the shallow
+   void thresholds of §6.2 sit at 0.09–0.15%, the two worst about 1.7 times
+   their noise.
 4. **The radius grid must start where ν ≳ 2.5**, better 3.5, and end at
    ν ≳ 0.21; the guard reports both. Starting further out costs nothing.
 5. **Accuracy degrades at the edges of feature coverage** — the outer 5% of
@@ -931,3 +982,147 @@ fires on both conditions it exists for.
 6. **The emulator reproduces the converged Monte Carlo**, which a coarse
    Monte Carlo grid misses by ~0.1% at 65 radii (§6.3). Comparing the two on a
    coarse grid shows that, and the emulator is the one to trust.
+
+---
+
+## 11. Void-in-cloud
+
+A void inside a region that is collapsing on a larger scale is crushed: Sheth
+& van de Weygaert (2004)'s void-in-cloud. In the walk, a second barrier, the
+collapse threshold δ_c(σ) (constant, or moving like ellipsoidal collapse), and
+a void counted at R only if the walk did not reach δ_c at any larger radius
+first. The Monte Carlo takes it as `collapse`; the emulator as `collapse` plus
+the packed covariance.
+
+### 11.1 The Monte Carlo
+
+The walk stops at whichever barrier it reaches first and counts only a void
+crossing; walks that reach δ_c first are reported separately
+(`collapse_counts`). Checked three ways (`tests/test_ep.c`):
+
+- **independent unit steps**: both histograms exactly geometric;
+- **an independent numpy walker** on a correlated top-hat walk: the fraction of
+  voids kept agrees per radius band to 0.001, within noise;
+- **the exact two-barrier series** for uncorrelated steps (the image series of
+  Sheth & van de Weygaert): the raw Monte Carlo keeps 87.4% of voids against
+  85.8% exact, the known discreteness of a walk sampled every ΔS, which moves
+  both barriers out by 0.5826 √ΔS (Siegmund). With that shift the two agree to
+  the fourth decimal at 300, 600 and 1200 steps.
+
+The same seed gives the same walks with or without the collapse barrier, so
+the void counts with it are a subset of those without, walk for walk.
+
+### 11.2 What is emulated
+
+**K = f_vic / f, per bin**: the fraction of the voids at a radius whose walk
+was not in a cloud at a larger one. The single-barrier emulator is kept as it
+is, and multiplied by an emulated K. Two things make that the right split:
+
+- **K is measured almost free of noise.** Every training curve was replayed
+  with its own seed and a collapse barrier (`ep_vic_worker.py`), so K is a
+  binomial fraction of paired walks, not a ratio of two Poisson counts. The
+  replay was checked against the stored counts first: 0 of the crossings moved
+  for campaigns 2–4, 3×10⁻⁷ for campaign 1, whose covariance an older build
+  rounded differently.
+- **Where nothing collapses, the answer is the single-barrier one, exactly**,
+  through the form below.
+
+Collapse barriers: half constant, δ_c uniform in 1.2–2.2; half the ellipsoidal
+δ_c [1 + β_e (σ/δ_c)^{2γ_e}], β_e in 0–0.7, γ_e in 0.4–0.8 (Sheth, Mo & Tormen
+2001 have 0.47, 0.615). The network sees only δ_c/σ and its shape; what the
+ranges buy is coverage of the ratio of the two barriers.
+
+### 11.3 The baseline: a collapse hazard conditioned on the void crossing
+
+The network learns ln K = −Λ_cond e^z, so K ≤ 1 by construction and K = 1
+exactly wherever Λ_cond = 0. Λ_cond sets the scale, and the candidates were
+judged by how tightly −ln K / Λ clusters where void-in-cloud matters:
+
+| baseline | −ln K / Λ, median | 16–84% |
+|---|---|---|
+| Markov (sharp-k) two-barrier answer at the local ν, ν_c | 0.04 | 0.026–0.056 (25–75%) |
+| unconditional expected collapse up-crossings | 0.04 | 0.013–0.22 |
+| collapse up-crossings conditional on δ = −B at R | 3.5 | 2.7–6.8 |
+| **… and on the slope of the void crossing** | **1.3** | **1.13–2.5** (1.17–1.54 at ν < 0.7) |
+
+Correlated walks are smooth, so the Markov answer overstates void-in-cloud
+10–70 times; the unconditional count ignores that a walk ending low was low
+before. Conditioning on the value is most of it, and the **slope** the rest: a
+walk crossing steeply came from higher up and is likelier to have been in a
+cloud. That last form, `slope_collapse_hazard`, averages the conditional
+expected crossings over the up-crossing slope distribution (8 Gauss-Legendre
+nodes, within 0.2% of 64), −ln E_u[e^{−Λ(u)}]. It needs C(s, S) and its
+derivatives in both arguments: the **covariance between scales**, which the
+single-barrier emulator never needed and `delta_covariance_pk` returns anyway.
+What is left at ν > 1, where the ratio climbs, is the condition that the walk
+had not crossed the void barrier at a larger radius either — smooth in ν, and
+left to the network. Grid-converged: 129 and 257 radii agree to 0.03–0.15%.
+
+### 11.4 The network
+
+```
+15 inputs → standardise → 48 (tanh) → 48 (tanh) → 1 linear,  ln K = −Λ_cond e^min(z, 10)
+```
+
+The nine single-barrier features, and the collapse side: ν_c = δ_c/σ, ν_c half
+a variance back, d ln ν_c / d ln S, the collapse barrier's y, the
+unconditional collapse hazard accumulated to the bin (log), and ln Λ_cond.
+Cross-validated by cosmology, against the paired Monte Carlo, f = f_emu × K
+(single-barrier emulator included), bins below 80 Mpc/h:
+
+| inputs | all bins | K < 0.999 | K < 0.99 | model error in ln K |
+|---|---|---|---|---|
+| ν, ν_c, γ², ln Λ_cond | 0.065% | 0.134% | 0.268% | 5.3×10⁻³ |
+| **the 15 above** | **0.063%** | **0.089%** | **0.120%** | **1.5×10⁻³** |
+| … and the value-only baseline | 0.063% | 0.087% | 0.116% | 1.9×10⁻³ |
+| … at 64×64 | 0.063% | 0.086% | 0.114% | 1.85×10⁻³ |
+| with K exact | 0.061% | 0.064% | 0.067% | |
+| ignoring void-in-cloud | 0.070% | 0.79% | 3.1% | |
+
+The history is what matters; the value-only baseline and width buy nothing
+the smallest model error justifies, so the 15 are kept.
+
+**Two traps on the way, both worth knowing.** The loss: ln K is ~10⁻³ in a
+typical bin and zero in most, so the plain mean square was ~10⁻⁶ against an
+L2 term of ~10⁻³ and L-BFGS stopped within ~140 iterations; target and
+baseline are scaled together so the data term is O(1) (the same fix, applied to
+the single-barrier fit, took it from 0.081% to 0.061%, §4). And the cache: a
+target column once named `y` overwrote the barrier's `y`, the network was
+fitted with the answer among its inputs, cross-validated beautifully and failed
+on fresh curves; the trainer now refuses any name shared by an input and the
+bookkeeping.
+
+### 11.5 Validation
+
+On fresh Monte Carlo (`ep_validate_vic.py`): the curves of §6.2 replayed with
+their own seeds and a collapse barrier — sets V and W with a drawn one, the
+thesis barrier with δ_c = 1.686 and with the ellipsoidal one. Pairing checked:
+0 crossings moved on every task. Bins below 80 Mpc/h:
+
+| set | bins | emulated K | K exact | ignoring void-in-cloud | MC noise |
+|---|---|---|---|---|---|
+| V, all | 4764 | **0.062%** | 0.061% | 0.068% | 0.057% |
+| V, K < 0.999 | 377 | **0.091%** | 0.068% | 0.46% | 0.061% |
+| V, K < 0.99 | 116 | **0.079%** | 0.064% | 2.3% | 0.062% |
+| V, K < 0.95 | 32 | **0.067%** | 0.065% | 16.4% | 0.054% |
+| W, all | 2565 | 0.083% | 0.083% | 0.083% | 0.043% |
+| T, δ_c = 1.686 / ellipsoidal | 931 | 0.093% | 0.093% | 0.093% | 0.078% |
+
+**For the calibrated void barrier at z = 0, void-in-cloud is negligible over
+the analysis range**: K = 1.0000 at every threshold, with either collapse
+barrier, and the emulator returns that (ln K within 4×10⁻⁶). It matters at
+small radii, where σ approaches δ_c. No validation curve is flagged by the
+guard.
+
+### 11.6 Cost and limits
+
+Void-in-cloud is O(n²) where the single barrier is O(n): about 1 ms at 128
+radii (1.4 ms measured on a loaded machine), about six times the
+single-barrier call, threaded over radii (bit-identical at any thread count). Without `collapse` nothing of it runs.
+
+- The collapse barrier is constant or ellipsoidal-like, rising with σ; other
+  shapes are untested.
+- The guard checks the void-in-cloud inputs only where Λ_cond > 0 and ν is
+  inside the trained range: elsewhere K = 1 exactly, whatever the inputs.
+- Where void-in-cloud is strong (K < 0.99) the emulated K adds ~0.03–0.05% to
+  the single-barrier error.

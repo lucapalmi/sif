@@ -230,6 +230,228 @@ def compute_features(radii, S, barrier, dvar):
     return X, lam_up, nu_r[-1]
 
 
+# --- Void-in-cloud ------------------------------------------------------------
+#
+# With a collapse barrier delta_c the void counts per bin are those of the
+# single barrier times K, the fraction of voids at that radius whose walk was
+# not inside a cloud at any larger radius -- exactly, when the two runs share
+# their walks. The emulator keeps the single-barrier network and multiplies by
+# an emulated K.
+#
+# K's baseline is the conditional collapse hazard: the expected number of
+# up-crossings of delta_c at larger radii by a walk that sits on the void
+# barrier at this one. It needs the covariance between scales -- the diagonal
+# alone cannot say how strongly a walk that ends low was low before, which is
+# the whole effect -- and it sets the scale: on the pilot -ln K / Lambda_cond
+# sat at ~3 with a 0.4 dex spread, where the unconditional collapse hazard
+# spread over 1.25 dex and the Markov (sharp-k) answer was 10-70 times too
+# large. The network corrects it multiplicatively: ln K = -Lambda_cond e^z.
+
+VIC_RATE_FLOOR = 1e-300
+VIC_PINNED = 1e-12
+VIC_EXCESS_LIMIT = 40.0
+
+
+def unpack_cov(cov, n):
+    """Packed lower triangle (ascending radii) to the full symmetric matrix."""
+    cov = np.asarray(cov, dtype=float)
+    M = np.zeros((n, n))
+    rows, cols = np.tril_indices(n)
+    M[rows, cols] = cov[rows * (rows + 1) // 2 + cols]
+    return M + np.tril(M, -1).T
+
+
+def conditional_collapse_hazard(cov, S, barrier, collapse, dvar):
+    """Per radius i: the integral over s < S_i (the larger radii) of the
+    up-crossing rate of the collapse barrier by delta, conditional on
+    delta(S_i) = -B_i. Radii ascending, so S descends with the index.
+
+    Conditional on delta(S_i), the pair (delta_s, delta'_s) is Gaussian with
+    the moments below, from C(s, S_i) and its derivative along s; the rate is
+    the density at the barrier times the mean excess of the slope over the
+    barrier's own.
+    """
+    S = np.asarray(S, dtype=float)
+    B = np.asarray(barrier, dtype=float)
+    Cb = np.asarray(collapse, dtype=float)
+    V = np.asarray(dvar, dtype=float)
+    n = len(S)
+    M = unpack_cov(cov, n)
+    dCb = Cb / S * np.gradient(np.log(Cb), np.log(S), edge_order=2)
+
+    # The last two radii have fewer than three larger ones to difference the
+    # covariance over; next to the walk's origin nothing has collapsed anyway.
+    lam = np.zeros(n)
+    for i in range(n - 3):
+        j = np.arange(i + 1, n)
+        s = S[j]
+        c = M[j, i]
+        dc = np.gradient(c, s, edge_order=2)
+        Si = S[i]
+        m = -B[i] * c / Si
+        v = np.maximum(s - c * c / Si, VIC_RATE_FLOOR)
+        mp = -B[i] * dc / Si
+        vp = np.maximum(V[j] - dc * dc / Si, VIC_RATE_FLOOR)
+        cv = 0.5 - c * dc / Si
+        mu = mp + cv / v * (Cb[j] - m) - dCb[j]
+        sd = np.sqrt(np.maximum(vp - cv * cv / v, VIC_RATE_FLOOR))
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            dens = (np.exp(-0.5 * (Cb[j] - m) ** 2 / v)
+                    / np.sqrt(2.0 * np.pi * v))
+            # max(mu, 0) past |mu / sd| = 40, as in slope_collapse_hazard
+            y = -mu / sd
+            near = np.abs(y) <= VIC_EXCESS_LIMIT
+            rate = dens * np.where(near, sd * mean_excess(np.where(near, y,
+                                                                   0.0)),
+                                   np.maximum(mu, 0.0))
+        # Where the conditional variance has collapsed, delta_s is pinned to
+        # its mean -- far below delta_c -- and nothing crosses. Set to zero
+        # rather than computed: the arithmetic there runs through 1e300, which
+        # the C build under -ffast-math may not carry through.
+        rate = np.where(np.isfinite(rate) & (v > VIC_PINNED * s), rate, 0.0)
+        # s runs from S_{n-1} (the origin) up to S_{i+1}: trapezoid in s.
+        lam[i] = np.sum(0.5 * (rate[1:] + rate[:-1]) * (s[:-1] - s[1:]))
+    return lam
+
+
+# Nodes over the void crossing's slope. Gauss-Legendre on [B', mu + 8 sd]:
+# the weight (u - B')^+ phi(u) has a kink at B' that Gauss-Hermite converges
+# through slowly (4% off at 4 nodes); this rule is within 0.2% of 64 nodes at
+# 8.
+VIC_SLOPE_NODES = 8
+VIC_SLOPE_SPAN = 8.0
+
+
+def _log_slope(v, S):
+    """dv/dS through the logarithms, as baseline_rate takes dB/dS."""
+    return v / S * np.gradient(np.log(v), np.log(S), edge_order=2)
+
+
+def slope_collapse_hazard(cov, S, barrier, collapse, dvar):
+    """Per radius i: -ln of the probability that a walk making a void at S_i
+    was not in a cloud at any larger radius, with the expected number of
+    cloud crossings taken conditional on BOTH the void crossing's value and
+    its slope, and averaged over the up-crossing slope distribution.
+
+    Work in x = -delta: the void is x crossing B upward at S_i with slope
+    u >= B'; a cloud is x reaching -C at an earlier s, i.e. crossing -C
+    downward as s increases. Conditional on (x_S, x'_S) = (B, u), the pair
+    (x_s, x'_s) is Gaussian with moments from C(s, S) and its derivatives in
+    either argument; the rate at s is the density at -C times the mean excess
+    of the downward slope. Lambda(u) integrates it over s; the result is
+    -ln E_u[exp(-Lambda(u))], weighting u by (u - B') phi(u | x_S = B).
+
+    On the pilot, -ln K over this sat at 1.3 (16-84%: 1.17-1.54 at nu < 0.7)
+    where conditioning on the value alone left 3.5 (2.8-4.5): a walk crossing
+    steeply came from higher up, and is the likelier to have been in a cloud.
+    """
+    S = np.asarray(S, dtype=float)
+    B = np.asarray(barrier, dtype=float)
+    Cb = np.asarray(collapse, dtype=float)
+    V = np.asarray(dvar, dtype=float)
+    n = len(S)
+    M = unpack_cov(cov, n)
+    A = np.gradient(M, S, axis=1, edge_order=2)    # <x_s x'_S> = dC(s, S)/dS
+    Dm = np.gradient(M, S, axis=0, edge_order=2)   # <x'_s x_S> = dC(s, S)/ds
+    E = np.gradient(A, S, axis=0, edge_order=2)    # <x'_s x'_S>
+    dB, dC = _log_slope(B, S), _log_slope(Cb, S)
+    gx, gw = np.polynomial.legendre.leggauss(VIC_SLOPE_NODES)
+
+    out = np.zeros(n)
+    for i in range(n - 3):
+        j = np.arange(i + 1, n)
+        s, Si = S[j], S[i]
+        det = Si * V[i] - 0.25
+        if not det > 0.0:
+            continue
+        zi = np.array([[V[i], -0.5], [-0.5, Si]]) / det        # Sigma_Z^-1
+        # rows of Sigma_YZ for Y = (x_s, x'_s), Z = (x_S, x'_S)
+        a0, a1 = M[j, i], A[j, i]
+        b0, b1 = Dm[j, i], E[j, i]
+        g00 = a0 * zi[0, 0] + a1 * zi[1, 0]
+        g01 = a0 * zi[0, 1] + a1 * zi[1, 1]
+        g10 = b0 * zi[0, 0] + b1 * zi[1, 0]
+        g11 = b0 * zi[0, 1] + b1 * zi[1, 1]
+        c11 = s - (g00 * a0 + g01 * a1)
+        c12 = 0.5 - (g00 * b0 + g01 * b1)
+        c22 = V[j] - (g10 * b0 + g11 * b1)
+        pinned = c11 <= VIC_PINNED * s
+        c11 = np.maximum(c11, VIC_RATE_FLOOR)
+        sd2 = np.sqrt(np.maximum(c22 - c12 * c12 / c11, VIC_RATE_FLOOR))
+
+        mu_u = B[i] * 0.5 / Si
+        sg_u = np.sqrt(max(V[i] - 0.25 / Si, VIC_RATE_FLOOR))
+        lo = dB[i]
+        hi = max(mu_u, lo) + VIC_SLOPE_SPAN * sg_u
+        u = 0.5 * (lo + hi) + 0.5 * (hi - lo) * gx
+        w = gw * (u - lo) * np.exp(-0.5 * ((u - mu_u) / sg_u) ** 2)
+        if not w.sum() > 0.0:
+            continue
+        w = w / w.sum()
+
+        lev = -Cb[j][:, None]
+        m1 = g00[:, None] * B[i] + g01[:, None] * u[None, :]
+        m2 = g10[:, None] * B[i] + g11[:, None] * u[None, :]
+        with np.errstate(over="ignore", under="ignore", invalid="ignore"):
+            dens = (np.exp(-0.5 * (lev - m1) ** 2 / c11[:, None])
+                    / np.sqrt(2.0 * np.pi * c11[:, None]))
+            mprime = m2 + (c12 / c11)[:, None] * (lev - m1)
+            g = -dC[j][:, None] - mprime
+            # Past |g / sd| = 40 the mean excess is max(g, 0) to double
+            # precision; said directly, so neither side squares a huge ratio.
+            y = -g / sd2[:, None]
+            near = np.abs(y) <= VIC_EXCESS_LIMIT
+            excess = np.where(near, sd2[:, None]
+                              * mean_excess(np.where(near, y, 0.0)),
+                              np.maximum(g, 0.0))
+            rate = dens * excess
+        rate = np.where(np.isfinite(rate) & ~pinned[:, None], rate, 0.0)
+        lam_u = np.sum(0.5 * (rate[1:] + rate[:-1])
+                       * (s[:-1] - s[1:])[:, None], axis=0)
+        # -ln E_u[exp(-Lambda(u))], shifted so a large Lambda cannot underflow
+        # and through expm1/log1p so a tiny one is not lost to rounding.
+        lo_lam = lam_u.min()
+        out[i] = lo_lam - np.log1p(np.sum(w * np.expm1(-(lam_u - lo_lam))))
+    return out
+
+
+# Every input the void-in-cloud network may take, in a fixed order the C
+# mirrors (ep_emu.c): the nine single-barrier features, then the collapse
+# side. A trained network records which of these it uses, by name; the
+# exporter turns the names into indices here.
+VIC_CANDIDATES = FEATURE_NAMES + ["nu_c", "nu_c_back", "dlnnuc_dlnS", "y_c",
+                                  "log_cum_lam_c", "log_lam_value",
+                                  "log_lam_cond"]
+
+
+def vic_candidates(radii, S, barrier, collapse, dvar, cov):
+    """Every void-in-cloud input considered, per bin, plus the baseline.
+
+    Returns (dict name -> (n-1,) array, Lambda_cond per bin).
+    """
+    S = np.asarray(S, dtype=float)
+    X, lam_up, _ = compute_features(radii, S, barrier, dvar)
+    out = {name: X[:, j] for j, name in enumerate(FEATURE_NAMES)}
+    nuc_r, _, yc_r, fc = baseline_rate(S, collapse, dvar)
+    lam_c = baseline_hazard(S, fc)
+    nuc, S_mid = _mid(nuc_r), _mid(S)
+    target = np.maximum(LOOKBACK_FRACTION * S_mid, S[-1])
+    out["nu_c"] = nuc
+    out["nu_c_back"] = np.interp(target, S_mid[::-1], nuc[::-1])
+    out["dlnnuc_dlnS"] = np.gradient(np.log(nuc), np.log(S_mid),
+                                     edge_order=2)
+    out["y_c"] = _mid(yc_r)
+    cum_c = (np.concatenate([np.cumsum(lam_c[::-1])[::-1][1:], [0.0]])
+             + 0.5 * lam_c)
+    out["log_cum_lam_c"] = np.log(np.maximum(cum_c, 1e-30))
+    lam_v = _mid(conditional_collapse_hazard(cov, S, barrier, collapse,
+                                             dvar))
+    out["log_lam_value"] = np.log(np.maximum(lam_v, 1e-30))
+    lam_cond = _mid(slope_collapse_hazard(cov, S, barrier, collapse, dvar))
+    out["log_lam_cond"] = np.log(np.maximum(lam_cond, 1e-30))
+    return out, lam_cond
+
+
 def mc_hazard(counts, n_paths):
     """Per-bin hazard from raw first-crossing counts: the training target.
 
@@ -291,7 +513,8 @@ def _grad2(f, x):
                        edge_order=2)
 
 
-def multiplicity_at_radii(radii, S, f_up, corr, lam, nu_at_largest):
+def multiplicity_at_radii(radii, S, f_up, corr, lam, nu_at_largest,
+                          ln_k=None):
     """The first-crossing density per unit R AT the radii, n values.
 
     multiplicity_from_hazard gives the probability of first crossing inside
@@ -311,17 +534,7 @@ def multiplicity_at_radii(radii, S, f_up, corr, lam, nu_at_largest):
     """
     radii = np.asarray(radii, dtype=float)
     S = np.asarray(S, dtype=float)
-    lnS_mid = np.log(0.5 * (S[1:] + S[:-1]))
-    lnS = np.log(S)
-    corr = np.asarray(corr, dtype=float)
-
-    # S descends with the index, so ln S_mid does too; interpolate on the
-    # reversed (ascending) arrays and extrapolate linearly at both ends.
-    xs, ys = lnS_mid[::-1], corr[::-1]
-    c = np.interp(lnS, xs, ys)
-    lo, hi = lnS < xs[0], lnS > xs[-1]
-    c[lo] = ys[0] + (ys[1] - ys[0]) / (xs[1] - xs[0]) * (lnS[lo] - xs[0])
-    c[hi] = ys[-1] + (ys[-1] - ys[-2]) / (xs[-1] - xs[-2]) * (lnS[hi] - xs[-1])
+    c = _mid_to_radii(corr, S)
 
     n = len(radii)
     alive = np.empty(n)
@@ -333,7 +546,29 @@ def multiplicity_at_radii(radii, S, f_up, corr, lam, nu_at_largest):
     # power law in R. Differenced directly, dS/dR was 0.5% off at 48 radii;
     # this way, 0.007%.
     dS_dR = S / radii * np.abs(_grad2(np.log(S), np.log(radii)))
-    return np.asarray(f_up, dtype=float) * np.exp(c) * alive * dS_dR
+    f = np.asarray(f_up, dtype=float) * np.exp(c) * alive * dS_dR
+    if ln_k is not None:
+        # Void-in-cloud, carried to the radii as the correction is, and held
+        # at or below zero: an extrapolated end must not make K exceed one.
+        f = f * np.exp(np.minimum(_mid_to_radii(ln_k, S), 0.0))
+    return f
+
+
+def _mid_to_radii(v, S):
+    """A per-bin quantity at the radii: linear in ln S between the bin
+    centres, extrapolated from the two nearest over the half bin at each end.
+    """
+    lnS_mid = np.log(0.5 * (S[1:] + S[:-1]))
+    lnS = np.log(S)
+    v = np.asarray(v, dtype=float)
+    # S descends with the index, so ln S_mid does too; interpolate on the
+    # reversed (ascending) arrays and extrapolate linearly at both ends.
+    xs, ys = lnS_mid[::-1], v[::-1]
+    c = np.interp(lnS, xs, ys)
+    lo, hi = lnS < xs[0], lnS > xs[-1]
+    c[lo] = ys[0] + (ys[1] - ys[0]) / (xs[1] - xs[0]) * (lnS[lo] - xs[0])
+    c[hi] = ys[-1] + (ys[-1] - ys[-2]) / (xs[-1] - xs[-2]) * (lnS[hi] - xs[-1])
+    return c
 
 
 class EPEmulator:
@@ -373,23 +608,36 @@ class EPEmulator:
 
     # --- the whole thing ----------------------------------------------------
 
-    def multiplicity(self, radii, S, barrier, dvar, check=True, binned=False):
+    def multiplicity(self, radii, S, barrier, dvar, check=True, binned=False,
+                     collapse=None, cov=None, vic=None):
         """The emulated multiplicity function.
 
         At the n radii by default; with binned=True, the bin averages on the
         n-1 centres that a Monte Carlo histogram measures. Returns (f, info)
         where info carries the domain report.
+
+        With a collapse barrier (and the packed covariance, and the trained
+        VICEmulator `vic`), f is multiplied by the void-in-cloud factor K.
         """
         X, lam_up, nu_large = compute_features(radii, S, barrier, dvar)
         info = self.check_domain(X, nu_large) if check else {}
 
+        ln_k = None
+        if collapse is not None:
+            if cov is None or vic is None:
+                raise ValueError("collapse needs cov and a VICEmulator")
+            cand, lam_cond = vic_candidates(radii, S, barrier, collapse,
+                                            dvar, cov)
+            ln_k = vic.ln_k(vic.inputs(cand), lam_cond)
+
         corr = self.correction(X)
         lam = lam_up * np.exp(corr)
         if binned:
-            return multiplicity_from_hazard(lam, radii, nu_large), info
+            f = multiplicity_from_hazard(lam, radii, nu_large)
+            return (f if ln_k is None else f * np.exp(ln_k)), info
         f_up = baseline_rate(S, barrier, dvar)[3]
-        return multiplicity_at_radii(radii, S, f_up, corr, lam,
-                                     nu_large), info
+        return multiplicity_at_radii(radii, S, f_up, corr, lam, nu_large,
+                                     ln_k), info
 
     # --- domain -------------------------------------------------------------
 
@@ -477,3 +725,49 @@ class EPEmulator:
 
     def n_parameters(self):
         return sum(W.size + b.size for (W, b) in self.layers)
+
+
+class VICEmulator:
+    """The void-in-cloud factor: ln K = -Lambda_cond exp(network)."""
+
+    def __init__(self, features, mu, sd, layers, box=None, accuracy=None):
+        self.features = list(features)
+        self.mu = np.asarray(mu, dtype=float)
+        self.sd = np.asarray(sd, dtype=float)
+        self.layers = [(np.asarray(W, dtype=float), np.asarray(b, dtype=float))
+                       for (W, b) in layers]
+        self.box = box
+        self.accuracy = accuracy or {}
+
+    def inputs(self, cand):
+        return np.column_stack([cand[name] for name in self.features])
+
+    def ln_k(self, X, lam_cond):
+        h = (np.asarray(X, dtype=float) - self.mu) / self.sd
+        for i, (W, b) in enumerate(self.layers):
+            h = h @ W + b
+            if i < len(self.layers) - 1:
+                h = np.tanh(h)
+        z = np.minimum(h.ravel(), 10.0)
+        return -np.asarray(lam_cond, dtype=float) * np.exp(z)
+
+    def save(self, path):
+        store = dict(mu=self.mu, sd=self.sd, n_layers=len(self.layers),
+                     features=np.array(self.features))
+        for i, (W, b) in enumerate(self.layers):
+            store[f"W{i}"] = W
+            store[f"b{i}"] = b
+        if self.box is not None:
+            store["box_lo"], store["box_hi"] = self.box
+        for k, v in self.accuracy.items():
+            store[f"acc__{k}"] = v
+        np.savez(path, **store)
+
+    @staticmethod
+    def load(path):
+        d = np.load(path, allow_pickle=False)
+        layers = [(d[f"W{i}"], d[f"b{i}"]) for i in range(int(d["n_layers"]))]
+        box = ((d["box_lo"], d["box_hi"]) if "box_lo" in d else None)
+        acc = {k[5:]: float(d[k]) for k in d.files if k.startswith("acc__")}
+        return VICEmulator([str(f) for f in d["features"]], d["mu"], d["sd"],
+                           layers, box, acc)

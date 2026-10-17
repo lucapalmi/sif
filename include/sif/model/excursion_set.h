@@ -85,6 +85,13 @@ SIF_NODISCARD sif_real* sif_ep_barrier_smt(const sif_real* sigma, uint32_t n,
  * the barrier. Paths that never reach it are not recorded, so the counts sum
  * to at most n_paths.
  *
+ * With a `collapse` barrier the walk is stopped at whichever it reaches first,
+ * and only a void crossing is counted: a walk that first reaches collapse at
+ * some radius sits inside a collapsing region there, and is not a void at that
+ * radius or any smaller one -- the void-in-cloud of Sheth & van de Weygaert
+ * (2004). The same seed gives the same walks with or without it, so the two
+ * runs differ by exactly the walks a cloud crushed.
+ *
  * @note The barrier is an upcrossing condition, delta >= B, which makes the
  * sign convention of the barrier the caller's responsibility. Reversing it
  * produces a plausible-looking curve rather than an obvious failure.
@@ -102,17 +109,26 @@ SIF_NODISCARD sif_real* sif_ep_barrier_smt(const sif_real* sigma, uint32_t n,
  * single-precision factorisation of a realistic radius grid reaches a
  * non-positive pivot and fails.
  * @param barrier n_radii barrier heights, in the ascending order of radii
+ * @param collapse Optional, n_radii collapse thresholds in the ascending order
+ * of radii, strictly positive: delta_c (constant, or moving), the magnitude of
+ * the overdensity at which a region collapses, in the same linear units as
+ * the void barrier. Reached when -delta_walk <= -collapse, i.e. delta >=
+ * delta_c. NULL for the single void barrier.
  * @param n_paths Number of walks, strictly positive
  * @param seed Seed for the walk ensemble
+ * @param collapse_counts Optional output, n_radii entries in the ascending
+ * order of radii: the walks that reached `collapse` first, at each radius, and
+ * were discarded there. All zero without a collapse barrier. Pass NULL to skip.
  * @param opt Reserved; pass SIF_DEFAULT
  *
- * @return Newly allocated array of n_radii counts in the ascending order of
- * radii, released with sif_free_aligned, or NULL on invalid input or a failed
- * factorisation.
+ * @return Newly allocated array of n_radii void counts in the ascending order
+ * of radii, released with sif_free_aligned, or NULL on invalid input or a
+ * failed factorisation.
  */
 SIF_NODISCARD uint64_t* sif_ep_first_crossing_counts(const sif_real* radii,
   uint32_t n_radii, const double* cov, const sif_real* barrier,
-  uint64_t n_paths, uint64_t seed, sif_option opt);
+  const sif_real* collapse, uint64_t n_paths, uint64_t seed,
+  uint64_t* collapse_counts, sif_option opt);
 
 /**
  * @brief Lagrangian void multiplicity function from the first crossing of a
@@ -133,19 +149,24 @@ SIF_NODISCARD uint64_t* sif_ep_first_crossing_counts(const sif_real* radii,
  * through sif_ep_first_crossing_counts to get the same numbers doubles the
  * cost of the most expensive call in the library.
  *
+ * @note With a `collapse` barrier, f is the multiplicity of voids that are
+ * not inside a cloud; the walks a cloud crushed are in neither the numerator
+ * nor anywhere else, so f integrates to less than without it.
+ *
  * @param counts Optional output, n_radii entries: the raw first-crossing
  * counts this multiplicity was built from, exactly as
  * sif_ep_first_crossing_counts would have returned them. Pass NULL to skip.
  *
- * Remaining parameters, and the barrier and reproducibility conventions, are as
- * sif_ep_first_crossing_counts.
+ * Remaining parameters (`collapse` included), and the barrier and
+ * reproducibility conventions, are as sif_ep_first_crossing_counts.
  *
  * @return Newly allocated array of n_radii - 1 values, released with
  * sif_free_aligned, or NULL on invalid input or a failed factorisation.
  */
 SIF_NODISCARD sif_real* sif_ep_multiplicity_function(const sif_real* radii,
   uint32_t n_radii, const double* cov, const sif_real* barrier,
-  uint64_t n_paths, uint64_t seed, uint64_t* counts, sif_option opt);
+  const sif_real* collapse, uint64_t n_paths, uint64_t seed, uint64_t* counts,
+  sif_option opt);
 
 /**
  * @brief Report on where an emulated call sat relative to what the emulator
@@ -202,6 +223,10 @@ typedef struct {
  * emulated result hardly depends on the sampling: the same problem on 65, 129
  * and 257 radii agrees to 0.02%.
  *
+ * @note Void-in-cloud is a factor on top: without `collapse` the result is
+ * the single-barrier one, bit for bit, and compares with the Monte Carlo run
+ * without one.
+ *
  * @note No cosmological parameter enters: the cosmology is seen only through
  * sigma and deriv_variance, i.e. through nu = B / sigma along the walk and the
  * shape of P(k). Trained over CDM-like spectra and Sheth-Mo-Tormen barriers
@@ -234,6 +259,17 @@ typedef struct {
  * use for it: differencing it off a covariance converges only at first order,
  * which would make the answer depend on how finely `radii` was sampled -- the
  * one property this entry point exists to avoid.
+ * @param collapse Optional, n_radii collapse thresholds delta_c (constant or
+ * moving), strictly positive, as sif_ep_first_crossing_counts takes them:
+ * with it the result is the multiplicity of voids NOT inside a cloud, the
+ * single-barrier answer times an emulated void-in-cloud factor K <= 1. NULL
+ * for the single void barrier.
+ * @param cov The packed covariance between the radii, as
+ * sif_delta_covariance_pk returns it alongside sigma. Required with
+ * `collapse`, ignored without: the void-in-cloud baseline conditions on how a
+ * walk ending on the void barrier was correlated with its larger scales, which
+ * the diagonal alone cannot say. O(n_radii^2) work, under a millisecond at
+ * 128 radii.
  * @param domain Optional report; pass NULL to skip
  * @param opt SIF_EP_EMU_AT_RADII (default): the first-crossing density per
  * unit R at each of the n_radii radii. SIF_EP_EMU_BIN_CENTRES: its average
@@ -249,6 +285,7 @@ typedef struct {
  */
 SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
   uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
-  const double* deriv_variance, sif_emu_domain_t* domain, sif_option opt);
+  const double* deriv_variance, const sif_real* collapse, const double* cov,
+  sif_emu_domain_t* domain, sif_option opt);
 
 #endif /* SIF_MODEL_EXCURSION_SET_H */

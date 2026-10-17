@@ -399,3 +399,50 @@ def draw_barriers_4(sigma_scan, radii_scan, cosmo_index,
     return draw_barriers_2(sigma_scan, radii_scan, cosmo_index, n_barrier,
                            seed, origin_range=(R_ORIGIN_LO_4, R_ORIGIN_HI_4),
                            beta_log=BETA_LOG_3)
+
+
+# =============================================================================
+# Void-in-cloud: the collapse barrier
+# =============================================================================
+#
+# Every training curve above is replayed with a collapse barrier and the SAME
+# seed, so the walks are the same and the void counts with it are an exact
+# subset of the stored ones: K = counts_vic / counts per bin is the fraction
+# of voids at that radius whose walk was not inside a cloud at a larger one,
+# measured as a binomial fraction rather than a Poisson count.
+#
+# Half the curves get a constant delta_c, half the ellipsoidal form
+# delta_c [1 + beta_e (sigma / delta_c)^(2 gamma_e)] (Sheth, Mo & Tormen 2001
+# have beta_e = 0.47, gamma_e = 0.615). The network sees only delta_c / sigma
+# and its slope, so the ranges are wider than any one physical choice: what
+# they buy is coverage of the ratio of the two barriers, which the void
+# barrier's own spread already varies by two orders of magnitude.
+
+COLLAPSE_BOX = dict(
+    delta_c=(1.2, 2.2),
+    beta_e=(0.0, 0.7),
+    gamma_e=(0.4, 0.8),
+)
+COLLAPSE_MOVING_FRACTION = 0.5
+SEED_VIC = SEED + 9_000_000
+
+
+def draw_collapse(campaign, cosmo_index, barrier_index, seed=SEED_VIC):
+    """The collapse barrier of one curve, a pure function of its identity."""
+    rng = np.random.default_rng(
+        [seed, int(campaign), int(cosmo_index), int(barrier_index)])
+    p = dict(delta_c=float(rng.uniform(*COLLAPSE_BOX["delta_c"])),
+             beta_e=0.0, gamma_e=0.5)
+    if rng.uniform() < COLLAPSE_MOVING_FRACTION:
+        p["beta_e"] = float(rng.uniform(*COLLAPSE_BOX["beta_e"]))
+        p["gamma_e"] = float(rng.uniform(*COLLAPSE_BOX["gamma_e"]))
+    return p
+
+
+def collapse_values(sigma, params):
+    """delta_c [1 + beta_e (sigma / delta_c)^(2 gamma_e)]: constant at
+    beta_e = 0, rising with sigma like ellipsoidal collapse otherwise."""
+    dc = params["delta_c"]
+    return dc * (1.0 + params["beta_e"]
+                 * (np.asarray(sigma, dtype=float) / dc)
+                 ** (2.0 * params["gamma_e"]))
