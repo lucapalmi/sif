@@ -38,6 +38,7 @@ set(SIF_TESTS
   test_gadget       # GADGET snapshots, all formats, from tests/data/gadget
   test_cosmology    # comoving distances, sky coordinates, and their refusals
   test_fits         # FITS tables: columns, expressions, filters, subsamples
+  test_thread_invariance # every pipeline product bit for bit at 1-8 threads
 )
 
 foreach(test_name IN LISTS SIF_TESTS)

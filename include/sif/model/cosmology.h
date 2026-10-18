@@ -69,8 +69,10 @@ typedef struct {
   double omega_m;
   /** Dark energy. */
   double omega_de;
-  /** Radiation, massless neutrinos included; 0 is fine below z of a few
-   * hundred, where it no longer matters. */
+  /**
+   * Radiation, massless neutrinos included; 0 is fine below z of a few
+   * hundred, where it no longer matters.
+   */
   double omega_r;
   /** Dark-energy equation of state today; -1 for a cosmological constant. */
   double w0;

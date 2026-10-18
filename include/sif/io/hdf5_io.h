@@ -244,8 +244,10 @@ typedef enum {
   SIF_HDF5_ATTR_REAL,
   /** A string, read with sif_hdf5_get_attr_string(). */
   SIF_HDF5_ATTR_STRING,
-  /** Anything else -- an array, a compound -- that another tool put there
-   * and these functions do not read. */
+  /**
+   * Anything else -- an array, a compound -- that another tool put there
+   * and these functions do not read.
+   */
   SIF_HDF5_ATTR_OTHER
 } sif_hdf5_attr_kind_t;
 

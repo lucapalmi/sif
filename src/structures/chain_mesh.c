@@ -631,16 +631,37 @@ static int chain_mesh_sum_weights(sif_chain_mesh_t* mesh) {
   /* One pass does both: the cells partition the tracers, so the cell sums add
    * up to the total. Summed per cell rather than per tracer so each thread
    * writes its own cells and the table needs no reduction. */
-  double total = 0.0;
-#pragma omp parallel for schedule(static) reduction(+ : total)
-  for (uint64_t c = 0; c < mesh->total_cells; c++) {
-    double cell = 0.0;
-    for (uint64_t p = mesh->cell_offsets[c]; p < mesh->cell_offsets[c + 1]; p++)
-      cell += (double)mesh->weights[p];
+  /* The total is assembled from fixed blocks of cells, added serially, rather
+   * than by an OpenMP reduction whose order follows the thread count: the
+   * exodus finder measures every radius against it, so its last bit has to be
+   * a property of the data alone. */
+  enum { WEIGHT_BLOCKS = 64 };
+  double block_total[WEIGHT_BLOCKS];
+  const uint64_t block = (mesh->total_cells + WEIGHT_BLOCKS - 1) / WEIGHT_BLOCKS;
 
-    mesh->cell_weights[c] = (sif_real)cell;
-    total += cell;
+#pragma omp parallel for schedule(static, 1)
+  for (int b = 0; b < WEIGHT_BLOCKS; b++) {
+    const uint64_t c_start = (uint64_t)b * block;
+    const uint64_t c_end = (c_start + block < mesh->total_cells)
+                             ? c_start + block
+                             : mesh->total_cells;
+
+    double sum = 0.0;
+    for (uint64_t c = c_start; c < c_end; c++) {
+      double cell = 0.0;
+      for (uint64_t p = mesh->cell_offsets[c]; p < mesh->cell_offsets[c + 1];
+           p++)
+        cell += (double)mesh->weights[p];
+
+      mesh->cell_weights[c] = (sif_real)cell;
+      sum += cell;
+    }
+    block_total[b] = sum;
   }
+
+  double total = 0.0;
+  for (int b = 0; b < WEIGHT_BLOCKS; b++)
+    total += block_total[b];
 
   mesh->total_weight = total;
   return SIF_OK;

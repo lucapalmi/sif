@@ -48,8 +48,10 @@ typedef struct {
   /** Void radii. */
   sif_real* radii;
 
-  /** Backing arena for the two footprint views, or NULL when the catalogue
-   * carries none. Owned; not for callers. */
+  /**
+   * Backing arena for the two footprint views, or NULL when the catalogue
+   * carries none. Owned; not for callers.
+   */
   sif_real* _footprint_block;
 
   /**
@@ -77,8 +79,10 @@ typedef struct {
    */
   sif_coordinates_t units;
 
-  /** Named values describing the catalogue; see the catalogue_meta group.
-   * Owned; not for callers. */
+  /**
+   * Named values describing the catalogue; see the catalogue_meta group.
+   * Owned; not for callers.
+   */
   struct sif_catalogue_meta_entry* _meta;
   uint32_t _n_meta;
 
@@ -270,8 +274,10 @@ typedef enum {
 int sif_catalogue_meta_int_set(
   sif_catalogue_t* catalogue, const char* key, int64_t value);
 
-/** @brief Set a real value; see sif_catalogue_meta_int_set(). Not finite is
- * refused, as no format but HDF5 could keep it. */
+/**
+ * @brief Set a real value; see sif_catalogue_meta_int_set(). Not finite is
+ * refused, as no format but HDF5 could keep it.
+ */
 int sif_catalogue_meta_real_set(
   sif_catalogue_t* catalogue, const char* key, double value);
 
@@ -289,8 +295,10 @@ sif_catalogue_meta_kind_t sif_catalogue_meta_kind(
 /** @brief An integer value; 0 for a key that is missing or not an integer. */
 int64_t sif_catalogue_meta_int_get(const sif_catalogue_t* catalogue, const char* key);
 
-/** @brief A numeric value, integer or real; 0 for a key that is missing or
- * holds a string. */
+/**
+ * @brief A numeric value, integer or real; 0 for a key that is missing or
+ * holds a string.
+ */
 double sif_catalogue_meta_real_get(const sif_catalogue_t* catalogue, const char* key);
 
 /**

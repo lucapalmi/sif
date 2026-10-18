@@ -33,6 +33,27 @@
  * grid_cic_deposit_tile(). */
 #define GRID_CIC_CHUNKS 256
 
+/*
+ * Planes per CIC slab, and why the slab count is not the thread count.
+ *
+ * A cell on the first plane of a slab is summed in two parts: its own slab's
+ * deposits, in particle order, and then the previous slab's ghost plane, added
+ * whole by grid_cic_reduce_ghost_cells(). A cell anywhere else gets the same
+ * contributions interleaved in particle order. Float addition does not
+ * associate, so the two orders differ in the last bit -- and where the slab
+ * boundaries fall is therefore part of the answer.
+ *
+ * Tied to the thread count, that made the grid differ bitwise between, say, 56
+ * and 72 cores; the smoothed field then differed at threshold crossings and
+ * the near-ties in the candidate sort, and the finders' greedy acceptance
+ * turned that into a few hundred different voids. Fixing the width makes the
+ * boundaries a property of the grid size alone.
+ *
+ * 16 planes keeps the ghost planes at 1/16 of the grid in extra memory, and
+ * leaves 64 slabs at 1024^3 for the deposit to share among threads.
+ */
+#define GRID_CIC_SLAB_WIDTH 16u
+
 static inline uint64_t grid_flat_index(
   const sif_grid_t* grid, uint32_t ix, uint32_t iy, uint32_t iz) {
   return (uint64_t)ix * grid->n_cells * grid->n_cells +
@@ -506,8 +527,11 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   const uint32_t N = grid->n_cells;
   const sif_real idx = (sif_real)N / (sif_real)grid->box_length;
 
-  int32_t n_slabs = sif__system_max_threads();
-  n_slabs = ((int)N < n_slabs) ? (int)N : n_slabs;
+  /* From the grid size alone, never the thread count: see
+   * GRID_CIC_SLAB_WIDTH. The last slab takes the remainder. */
+  int32_t n_slabs = (int32_t)(N / GRID_CIC_SLAB_WIDTH);
+  if (n_slabs < 1)
+    n_slabs = 1;
 
   grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
   if (!slabs)
@@ -595,7 +619,7 @@ static int grid_cache_enabled(void) {
  *
  * Bump it whenever grid_compute_cic() stops producing bit-identical output.
  */
-#define GRID_CIC_VERSION 2u
+#define GRID_CIC_VERSION 3u
 
 /* Blocks the content hash splits each array into. Fixed rather than derived
  * from the thread count, so the key is a property of the data alone: a grid
@@ -856,11 +880,27 @@ int sif_grid_to_density_contrast(sif_grid_t* grid) {
 
   const uint64_t total_cells = grid->total_cells;
 
-  double total_mass = 0.0;
-#pragma omp parallel for schedule(static) reduction(+ : total_mass)
-  for (uint64_t i = 0; i < total_cells; i++) {
-    total_mass += (double)grid->values[i];
+  /* Summed in fixed blocks and the blocks added serially, rather than with an
+   * OpenMP reduction: a reduction's order follows the thread count, and the
+   * mean would then differ in its last bit from one machine to the next. */
+  double block_mass[GRID_HASH_BLOCKS];
+  const uint64_t block = (total_cells + GRID_HASH_BLOCKS - 1) / GRID_HASH_BLOCKS;
+
+#pragma omp parallel for schedule(static, 1)
+  for (int b = 0; b < GRID_HASH_BLOCKS; b++) {
+    const uint64_t start = (uint64_t)b * block;
+    const uint64_t end =
+      (start + block < total_cells) ? start + block : total_cells;
+
+    double sum = 0.0;
+    for (uint64_t i = start; i < end; i++)
+      sum += (double)grid->values[i];
+    block_mass[b] = sum;
   }
+
+  double total_mass = 0.0;
+  for (int b = 0; b < GRID_HASH_BLOCKS; b++)
+    total_mass += block_mass[b];
 
   const double rho_mean = total_mass / (double)total_cells;
 

@@ -309,8 +309,10 @@ typedef struct {
   char magic[4];
   /** #SIF_FINDER_CHECKPOINT_VERSION. */
   uint32_t version;
-  /** 0x01020304 as the writer stored it; reads otherwise on a machine of the
-   * other byte order. */
+  /**
+   * 0x01020304 as the writer stored it; reads otherwise on a machine of the
+   * other byte order.
+   */
   uint32_t byte_order;
   /** 1 if written with a 64-bit sif_real. */
   uint32_t is_double;
@@ -318,8 +320,10 @@ typedef struct {
   uint32_t is_survey;
   /** 1 if the (data) mesh carries weights. */
   uint32_t is_weighted;
-  /** The options that change the catalogue: the SIF_FINDER_SEARCH_* factor
-   * and SIF_FINDER_KEEP_CIC_WINDOW. */
+  /**
+   * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor
+   * and SIF_FINDER_KEEP_CIC_WINDOW.
+   */
   uint32_t options;
   /** Rungs on the ladder. */
   uint32_t n_radii;
@@ -339,23 +343,33 @@ typedef struct {
   uint64_t random_n_particles;
   /** The random mesh's total weight; 0 for a box. */
   double random_total_weight;
-  /** What the survey was moved into the box by; zero for a box, or for a
-   * survey that was not moved. */
+  /**
+   * What the survey was moved into the box by; zero for a box, or for a
+   * survey that was not moved.
+   */
   double offset[3];
-  /** How many of the voids came from sif_finder_exodus_extras_t::prior,
-   * which are the first ones. */
+  /**
+   * How many of the voids came from sif_finder_exodus_extras_t::prior,
+   * which are the first ones.
+   */
   uint64_t n_prior;
-  /** CRC32 of the prior catalogue's four columns as the caller gave them, so
+  /**
+   * CRC32 of the prior catalogue's four columns as the caller gave them, so
    * that a resumed run can tell it was given the same one. 0 when there were
-   * none. */
+   * none.
+   */
   uint32_t prior_crc32;
-  /** CRC32 of this header, with this field zero, followed by everything after
-   * it. */
+  /**
+   * CRC32 of this header, with this field zero, followed by everything after
+   * it.
+   */
   uint32_t crc32;
   /** Voids saved. */
   uint64_t n_voids;
-  /** Of those the finder added, how many are more than twice the rung that
-   * found them, carried for the warning the finished run gives. */
+  /**
+   * Of those the finder added, how many are more than twice the rung that
+   * found them, carried for the warning the finished run gives.
+   */
   uint64_t n_mismatched;
   /** Reserved, zero, to hold the header at 192 bytes. */
   char reserved[40];

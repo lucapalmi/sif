@@ -464,18 +464,24 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 #  define SIF_PURE_FUNCTION __attribute__((pure))
 /** @brief Hint that a function sits on a hot path. */
 #  define SIF_HOT_LOOP __attribute__((hot))
-/** @brief Inline even where the compiler would rather not: for a body that
- * takes a compile-time flag and has to be specialised on it at every call. */
+/**
+ * @brief Inline even where the compiler would rather not: for a body that
+ * takes a compile-time flag and has to be specialised on it at every call.
+ */
 #  define SIF_ALWAYS_INLINE inline __attribute__((always_inline))
 /** @brief Align an object on a cache line. */
 #  define SIF_ALIGN_T __attribute__((aligned(SIF_CACHE_LINE)))
 /** @brief One instance of a static object per thread. */
 #  define SIF_THREAD_LOCAL __thread
-/** @brief Check the arguments against a printf format: argument @p f is the
- * format, the variadic ones start at @p a. */
+/**
+ * @brief Check the arguments against a printf format: argument @p f is the
+ * format, the variadic ones start at @p a.
+ */
 #  define SIF_PRINTF_LIKE(f, a) __attribute__((format(printf, f, a)))
-/** @brief Warn at every call site that the function is on its way out, with
- * @p msg saying what replaces it. */
+/**
+ * @brief Warn at every call site that the function is on its way out, with
+ * @p msg saying what replaces it.
+ */
 #  define SIF_DEPRECATED(msg) __attribute__((deprecated(msg)))
 
 #else
