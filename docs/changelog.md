@@ -1,64 +1,46 @@
 # Changelog
 
-Current version: v0.3 release 0
+Current version: v0.4 release 0
 
 
-## Unreleased
+## v0.4.0 -- 18/10/2026
 
 ### Added
 
-- Exodus checkpoints: every run saves its voids after each rung (to
-  `exodus-<hex>.ckpt` unless named) and a run cut short resumes from it with
-  `sif_finder_exodus_ex()`, bit for bit; `SIF_FINDER_NO_CHECKPOINT` turns it off
-- `sif_finder_exodus_ex()` / `sif_finder_exodus_survey_ex()` also take a prior
-  catalogue to extend, e.g. down to smaller radii;
+- Exodus checkpoints: a run saves its voids after every rung and resumes
+  from them bit for bit (`sif_finder_exodus_ex()`); off with
+  `SIF_FINDER_NO_CHECKPOINT`
+- Exodus can extend a prior catalogue, e.g. down to smaller radii;
   `sif_finder_exodus_checkpoint_read()` reads a checkpoint
-- `sif-exodus`: `run.checkpoint` (default: the output + `.ckpt`, so a
-  resubmitted job resumes), `--checkpoint` / `--no-checkpoint`, a `prior`
+- `sif-exodus`: `run.checkpoint`, `--checkpoint` / `--no-checkpoint`, a `prior`
   section, and `--check` on checkpoints
-- Python: `checkpoint=` and `prior=` on `finders.exodus()` and
-  `exodus_survey()`, and `finders.read_checkpoint()`
+- Python: `checkpoint=` and `prior=` on the exodus finders, and
+  `finders.read_checkpoint()`
 - `sif_catalogue_to_cartesian()` (`Catalogue.to_cartesian()`), the inverse of
   `sif_catalogue_to_sky()`
-- `sif_system_init()` warns when there are more threads than processors the
-  process may run on (an inherited CPU affinity, a cpu-bind or a cgroup
-  narrower than the thread count): the threads would share them, and until
-  now the log showed the full thread count while the run crawled
-- Void-in-cloud in the excursion-set Monte Carlo: a collapse barrier
-  (`collapse=` in Python, delta_c or one value per radius) discards walks
-  that reach it before the void barrier
-- `sif_ep_multiplicity_function_emu()`: void-in-cloud too, given the
-  collapse barrier and the covariance (`collapse=`, `cov=`); about 0.09% where
-  it matters, against 0.8% if it is ignored
+- `sif_system_init()` warns when there are more threads than processors to
+  run them
+- Void-in-cloud in the excursion-set Monte Carlo and emulator (`collapse=`, and
+  `cov=` for the emulator; about 0.09%)
+- `SIF_SANITIZE` CMake option, for sanitizer builds
 
 ### Changed
 
 - `sif_ep_first_crossing_counts()` and `sif_ep_multiplicity_function()` take
-  the collapse barrier after the void barrier (NULL for none), and the counts
-  function a `collapse_counts` output before `opt`
-
-- `sif_ep_multiplicity_function_emu()`: retrained for walks starting out to
-  250 Mpc/h (shallow void thresholds); about 0.06% below 80 Mpc/h, and
-  no longer dependent on the radius sampling
-- `sif_ep_multiplicity_function_emu()` takes `collapse` and `cov` after
-  `deriv_variance` (NULL for the single barrier)
+  the collapse barrier after the void barrier; the counts gain `collapse_counts`
+- `sif_ep_multiplicity_function_emu()`: retrained out to 250 Mpc/h (about 0.06%
+  below 80 Mpc/h); takes `collapse` and `cov` after `deriv_variance`
 - `sif_ep_multiplicity_function_emu()` returns the density at the n radii;
-  `SIF_EP_EMU_BIN_CENTRES` (`binned=True`) gives the old n - 1 bin averages
-- `sif_ep_multiplicity_function_emu()`: a grid started further out than
-  the training walks is no longer reported out of domain, nor extrapolated
-  (up to 0.4% off before); barriers rising with sigma are. Warnings give the
-  radii affected and the value against its trained range
+  `SIF_EP_EMU_BIN_CENTRES` (`binned=True`) gives the old bin averages
+- `sif_ep_multiplicity_function_emu()`: grids starting beyond the training
+  walks are no longer out of domain; barriers rising with sigma are
 
 ### Fixed
 
-- `sif-exodus` installed by pip ran every thread on one core when
-  `OMP_PROC_BIND` was set: its launcher imported pysif, whose OpenMP runtime
-  pinned the launcher to the first core, and the program inherited the mask.
-  The launchers are now in their own package, `_pysif_cli`, which never
-  imports pysif. Reinstall the wheel to get the new `sif-exodus` command
+- pip-installed `sif-exodus` ran on one core when `OMP_PROC_BIND` was set;
+  reinstall the wheel to get the fixed launcher
 - CIC grids, density contrasts, spectral moments and exodus catalogues no
-  longer change with the thread count; cached `.xgrid` files are recomputed
-  once
+  longer change with the thread count; cached `.xgrid` files are recomputed once
 
 ## v0.3.0 -- 13/10/2026
 
