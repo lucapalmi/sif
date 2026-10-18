@@ -65,6 +65,45 @@ jobs:
             exit 1
           fi
 
+  # The suite under ThreadSanitizer, for the races that happen not to change a
+  # result on the run that tested it -- test_thread_invariance catches the
+  # ones that do.
+  #
+  # Clang and LLVM's libomp rather than GCC: TSan only sees OpenMP's barriers
+  # and reductions through LLVM's archer tool, loaded with OMP_TOOL_LIBRARIES,
+  # and libgomp has nothing like it. FFTW on its pthreads backend, since
+  # Debian's OpenMP FFTW is built against libgomp, and two OpenMP runtimes in
+  # one process is a fault of its own. Debug, so the reports have lines.
+  tsan:
+    name: C library (ThreadSanitizer)
+    runs-on: ubuntu-24.04
+    container: debian:trixie
+    steps:
+      - name: Install dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            clang libclang-rt-dev libomp-dev llvm cmake make libfftw3-dev \
+            git ca-certificates
+      - uses: actions/checkout@v7
+      - name: Build
+        run: |
+          cmake -S . -B build -DCMAKE_C_COMPILER=clang -DCMAKE_BUILD_TYPE=Debug \
+            -DSIF_SANITIZE=thread -DSIF_HDF5_SUPPORT=OFF \
+            -DSIF_FFTW_THREADING=threads -DSIF_NATIVE_ARCH=OFF
+          cmake --build build -j "$(nproc)"
+      - name: Test
+        run: |
+          OMP_TOOL_LIBRARIES="$(find /usr/lib -name 'libarcher.so*' | head -1)"
+          test -n "$OMP_TOOL_LIBRARIES"
+          export OMP_TOOL_LIBRARIES
+          # libomp itself is not instrumented, and its internals read as
+          # races unless TSan is told to ignore modules it did not build.
+          export TSAN_OPTIONS="halt_on_error=1 second_deadlock_stack=1 ignore_noninstrumented_modules=1"
+          ctest --test-dir build --output-on-failure --timeout 1800
+
   # The bindings, built the way `pip install .` builds them: the same smoke
   # test the release wheels must pass, then the binding tests in tests/python.
   python:

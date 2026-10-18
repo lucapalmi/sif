@@ -61,6 +61,8 @@ The library is compiled through CMake. These are the available options
 
 - **SIF_BUILD_PROGRAMS:** builds the command-line programs (`sif-exodus`) into `build/bin/`; `cmake --install` puts them in the `bin/` directory of the install prefix. Options **(ON|OFF)**, default **ON**.
 
+- **SIF_SANITIZE:** builds everything with the given sanitizers, passed to `-fsanitize=` (e.g. `thread`, or `address,undefined`); for development, not for production runs. ThreadSanitizer needs Clang with LLVM's OpenMP runtime, and, when the tests run, `OMP_TOOL_LIBRARIES` set to LLVM's `libarcher` and `TSAN_OPTIONS=ignore_noninstrumented_modules=1`. Default empty (off).
+
 :::{admonition} HPC cluster usage
 :class: tip
 If you are on an HPC cluster, check that the login nodes have the same architecture of the compute nodes. If not, compile with `-DSIF_NATIVE_ARCH=OFF`.

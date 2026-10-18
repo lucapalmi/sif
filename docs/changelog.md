@@ -56,8 +56,9 @@ Current version: v0.3 release 0
   pinned the launcher to the first core, and the program inherited the mask.
   The launchers are now in their own package, `_pysif_cli`, which never
   imports pysif. Reinstall the wheel to get the new `sif-exodus` command
-- CIC grids, density contrasts and exodus catalogues no longer change with
-  the thread count; cached `.xgrid` files are recomputed once
+- CIC grids, density contrasts, spectral moments and exodus catalogues no
+  longer change with the thread count; cached `.xgrid` files are recomputed
+  once
 
 ## v0.3.0 -- 13/10/2026
 

@@ -53,6 +53,24 @@ endif()
 
 option(SIF_VECTORISATION_REPORT "Enable compiler vectorisation reports" OFF)
 
+# A sanitizer build: the value goes to -fsanitize=, so "thread", or
+# "address,undefined". On everything, the library, the tests and the programs
+# alike, since a race between the library and its caller is still a race. The
+# tests scale their problem sizes down when they see one (tests/test_util.h).
+#
+# ThreadSanitizer only understands OpenMP's synchronisation through LLVM's
+# archer tool: build with Clang against LLVM's libomp, and run with
+# OMP_TOOL_LIBRARIES pointing at libarcher -- without it every barrier reads as
+# a race -- and TSAN_OPTIONS=ignore_noninstrumented_modules=1, for libomp's own
+# internals. GCC's libgomp has no such tool. See the tsan job in
+# .github/workflows/tests.yml for a working setup.
+set(SIF_SANITIZE "" CACHE STRING "Sanitizers to build with (-fsanitize=), e.g. thread")
+if(SIF_SANITIZE)
+  add_compile_options(-fsanitize=${SIF_SANITIZE} -fno-omit-frame-pointer -g)
+  add_link_options(-fsanitize=${SIF_SANITIZE})
+  message(STATUS "Sanitizers: ${SIF_SANITIZE}")
+endif()
+
 # Build the tests when sif is the project being built, but not when it is
 # pulled in as a subdirectory, nor when pip is building the Python extension.
 # SKBUILD is set by scikit-build-core, the build backend in pyproject.toml.

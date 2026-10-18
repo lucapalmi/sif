@@ -29,6 +29,12 @@ static inline uint64_t fft_complex_count(uint32_t n) {
  * then simply fail to open, which is the right outcome: no wisdom, no crash. */
 #define PATH_CAP 512
 
+/* Blocks of x planes the spectral moments are summed over. Fixed rather than
+ * taken from the thread count, so the order of summation -- and with it the
+ * last bits of every moment -- is a property of the grid alone; see
+ * sif__fft_spectral_moments(). */
+#define SPECTRAL_MOMENT_BLOCKS 64u
+
 sif_fft_manager_t* sif__fft_manager_init(
   bool skip_tuning, const char* wisdom_dir) {
   sif_fft_manager_t* mgr = malloc(sizeof(sif_fft_manager_t));
@@ -916,16 +922,20 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
    * Three accumulators per order -- the measured sum, the window sum behind
    * the shot-noise term, and the part of the measured sum above half Nyquist.
    *
-   * Explicit per-thread scratch rather than an array reduction because the
-   * three live in one allocation and are indexed together; the padding below
-   * is the part that matters. Every thread updates its row once per mode, and
-   * at order 4 three rows of doubles come to 120 bytes -- two threads' rows
-   * would share a cache line and bounce it between cores for the whole triple
-   * loop. Rounding the stride up to a whole line is the same trick
-   * SIF__EP_ROW_PAD plays in the excursion-set walker.
+   * One row of scratch per fixed block of x planes, rather than per thread or
+   * an OpenMP reduction: either of those sums in an order that follows the
+   * thread count, and the moments -- and every BBKS or excursion-set model fed
+   * from them -- would then differ in their last bits from one machine to the
+   * next. The blocks are summed in index order at the end.
+   *
+   * The padding below matters too. Each block's row is updated once per mode,
+   * and at order 4 three rows of doubles come to 120 bytes -- two neighbouring
+   * blocks' rows would share a cache line and bounce it between cores for the
+   * whole triple loop. Rounding the stride up to a whole line is the same
+   * trick SIF__EP_ROW_PAD plays in the excursion-set walker.
    */
-  const int n_threads =
-    sif__system_max_threads() > 0 ? sif__system_max_threads() : 1;
+  const uint32_t n_blocks =
+    N < SPECTRAL_MOMENT_BLOCKS ? N : SPECTRAL_MOMENT_BLOCKS;
 
   const size_t row = 3 * (size_t)n_moments;
   const size_t per_line = SIF_CACHE_LINE / sizeof(double);
@@ -934,7 +944,7 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   /* Aligned, so that the padded stride actually starts each row on a line
    * boundary rather than merely spacing the rows apart. */
   double* scratch =
-    sif_calloc_aligned((size_t)n_threads * stride, sizeof(double));
+    sif_calloc_aligned((size_t)n_blocks * stride, sizeof(double));
   if (!scratch) {
     SIF_LOG_ERROR("fft_context", "failed to allocate the moment scratch");
     free(lut);
@@ -944,15 +954,17 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   /* Isotropic cut at half the Nyquist frequency, in integer mode units. */
   const double high_k2 = (double)N * (double)N / 16.0;
 
-#pragma omp parallel num_threads(n_threads)
-  {
-    double* local = scratch + (size_t)sif__system_thread_num() * stride;
+#pragma omp parallel for schedule(static, 1)
+  for (uint32_t b = 0; b < n_blocks; b++) {
+    double* local = scratch + (size_t)b * stride;
     double* l_sum = local;
     double* l_win = local + n_moments;
     double* l_high = local + 2 * n_moments;
 
-#pragma omp for schedule(static)
-    for (uint32_t ix = 0; ix < N; ix++) {
+    const uint32_t ix_lo = (uint32_t)((uint64_t)b * N / n_blocks);
+    const uint32_t ix_hi = (uint32_t)((uint64_t)(b + 1) * N / n_blocks);
+
+    for (uint32_t ix = ix_lo; ix < ix_hi; ix++) {
       int32_t kx = (ix > N_half) ? (int32_t)ix - (int32_t)N : (int32_t)ix;
       uint32_t kx2 = (uint32_t)(kx * kx);
 
@@ -1011,8 +1023,8 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   for (int j = 0; j < n_moments; j++) {
     double sum = 0.0, win = 0.0, high = 0.0;
 
-    for (int t = 0; t < n_threads; t++) {
-      const double* local = scratch + (size_t)t * stride;
+    for (uint32_t b = 0; b < n_blocks; b++) {
+      const double* local = scratch + (size_t)b * stride;
       sum += local[j];
       win += local[n_moments + j];
       high += local[2 * n_moments + j];

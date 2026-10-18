@@ -320,8 +320,17 @@ static void run_non_separable(void) {
     CHECK(status == SIF_OK && v > 0.0f,
       "a non-separable footprint should still be measured: '%s'",
       sif_error_message());
+    /* The short half ends at 300; what the warning reports is the farthest
+     * random found there, which falls short of it by the gap between
+     * randoms -- so how close it comes scales with their density, and the
+     * sanitizer-scaled count lands further off than the full one. */
+    const char* found = strstr(log, "found ");
+    double r_found = 0.0;
+    if (found)
+      r_found = strtod(found + strlen("found "), NULL);
     CHECK(strstr(log, "radial range differs across the sky") &&
-            strstr(log, "end short of r_max") && strstr(log, "found 299.9"),
+            strstr(log, "end short of r_max") &&
+            fabs(r_found - 300.0) < 0.1 * TOLERANCE * 300.0,
       "expected a warning naming the short half, logged '%s'", log);
   }
 

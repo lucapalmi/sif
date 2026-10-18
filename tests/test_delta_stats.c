@@ -1651,7 +1651,13 @@ int main(void) {
     return 1;
   }
 
-  const uint32_t n = (uint32_t)SIF_TEST_SCALE(64);
+  /* Not scaled under sanitizers. The radii are physical, 20 to 45 in a box of
+   * 500, chosen against cells of about 8; SIF_TEST_SCALE would leave 3 cells
+   * per side, finer than none of them, and every check would fail on
+   * resolution rather than on anything it tests. A 64^3 transform costs
+   * little even instrumented: the expense the scaling exists for is the
+   * brute-force references elsewhere, and this file has none. */
+  const uint32_t n = 64;
 
   test_moments_match_field(n, SIF_DELTA_SHUFFLE_NONE, "unshuffled");
   test_moments_match_field(n, SIF_DELTA_SHUFFLE_PHASES, "phases");
