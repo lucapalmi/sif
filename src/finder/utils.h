@@ -116,6 +116,12 @@ int sif__finder_deconvolve_cic(const char* tag, sif_fft_workspace_t* ws,
 /** @brief One candidate cell: its depth and where it sits in the grid. */
 typedef struct {
   sif_real delta;
+  /**
+   * 0 for a centre on the node; otherwise 1 + the index of its offset from
+   * the node, set by sif__finder_scan_refined(). Sits in what would be
+   * padding, so a candidate stays 16 bytes in a float build.
+   */
+  uint32_t refined;
   uint64_t flat_idx;
 } sif_candidate_t;
 
@@ -143,6 +149,84 @@ void sif__candidate_buffer_free(sif_candidate_buffer_t* buf);
  */
 int sif__finder_scan_candidates(const sif_grid_t* grid,
   const sif_bitmask_t* mask, sif_real threshold, sif_candidate_buffer_t* buf);
+
+/* --- centres between the nodes --- */
+
+/**
+ * What a cell outside a survey's footprint holds on the scanned field: far
+ * above any threshold, so it is never a candidate, and passed over by the
+ * smoothing in sif__finder_scan_refined(). Finite, since the build is
+ * -ffast-math and an infinity is not something it has to respect.
+ */
+#define SIF__FINDER_UNOBSERVED ((sif_real)1e30)
+
+/** @brief Where a refined centre sits off its node, in cells, each within
+ * half a cell. */
+typedef struct {
+  sif_real dx, dy, dz;
+} sif_offset_t;
+
+/** @brief A reusable, self-growing list of offsets. Zero-initialise. */
+typedef struct {
+  sif_offset_t* items;
+  uint64_t count;
+  uint64_t capacity;
+} sif_offset_buffer_t;
+
+/** @brief Release an offset buffer's storage. */
+void sif__offset_buffer_free(sif_offset_buffer_t* buf);
+
+/** @brief What one refinement saw, for the per-radius report. */
+typedef struct {
+  uint64_t n_minima;   /**< Candidates that are local minima. */
+  uint64_t n_fallback; /**< Minima left on their node, see below. */
+} sif_refine_stats_t;
+
+/**
+ * @brief Collect the same candidates as sif__finder_scan_candidates(), with
+ * the ones at a local minimum placed where that minimum actually lies between
+ * the nodes, and every one ordered by depth on the field the centres are
+ * placed on.
+ *
+ * The threshold is tested on the field as given, so the set of candidates is
+ * the plain scan's. Everything after is on that field smoothed once more by a
+ * Gaussian of one cell: the top-hat leaves ripple at the cell scale that no
+ * stencil can resolve, and without it a sub-cell position follows the ripple
+ * rather than the void. The order is on the same field, so that the deepest
+ * candidate of a basin -- the one accepted first -- is its minimum.
+ *
+ * A minimum is a candidate strictly below its 26 neighbours, ties going to
+ * the lower flat index. Its centre is one Newton step on the 27 cells around
+ * it; the candidate moves to the node nearest that centre, its depth becomes
+ * the field's there, and `refined` points at its offset. A minimum whose
+ * stencil is not convex, or whose step leaves the cell's neighbourhood or
+ * lands on a cell that is not itself a candidate, keeps its node and is
+ * counted in @p stats. Every other candidate is centred on its node.
+ *
+ * Cells holding #SIF__FINDER_UNOBSERVED (@p survey only) are left as they are
+ * and do not enter their neighbours' smoothing.
+ *
+ * Deterministic: the result depends on neither the thread count nor the
+ * schedule.
+ *
+ * @param grid The field to scan. Its values are overwritten with the smoothed
+ * field the candidates were ordered and placed on.
+ * @param mask Cells already covered by an accepted void.
+ * @param below Scratch of grid->total_cells bits, overwritten.
+ * @param survey Non-zero if @p grid may hold #SIF__FINDER_UNOBSERVED.
+ * @param refine Zero to leave every minimum on its node; @p offsets is then
+ * left empty.
+ * @param minima_only Non-zero to keep only the minima as candidates -- a void
+ * centre is then always a minimum of the field it was found on.
+ * @param offsets Filled with one entry per minimum.
+ * @param stats Filled in, also when the scan fails.
+ * @return SIF_OK, where a count of 0 is a legitimate result, SIF_ERR_ALLOC, or
+ * SIF_ERR_RANGE for more minima than an index can hold.
+ */
+int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
+  sif_bitmask_t* below, sif_real threshold, int survey, int refine,
+  int minima_only, sif_candidate_buffer_t* candidates,
+  sif_offset_buffer_t* offsets, sif_refine_stats_t* stats);
 
 /* --- per-radius reporting --- */
 

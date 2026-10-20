@@ -3,6 +3,28 @@
 Current version: v0.4 release 0
 
 
+## Unreleased
+
+### Added
+
+- `SIF_FINDER_NODE_CENTRES` (`centre_refinement_hessian=False`, same in Lua)
+  keeps every exodus centre on its grid node, as before
+- `SIF_FINDER_CENTRE_IS_MINIMUM` (`centre_is_minimum=True`, same in Lua) takes
+  only minima of the smoothed field as exodus candidates
+
+### Changed
+
+- Exodus centres a void found at a local minimum of the smoothed field where
+  that minimum lies between the grid nodes, so centres no longer sit on the grid
+- FFTs are bit-identical across thread counts, and 10-35% faster
+- Exodus checkpoints are version 2; version 1 ones resume only with node centres
+
+### Fixed
+
+- With an overlap fraction above 0, a void could overlap one smaller than
+  itself by more than the fraction allows
+
+
 ## v0.4.0 -- 18/10/2026
 
 ### Added

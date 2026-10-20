@@ -511,8 +511,15 @@ static void run_workflow(void) {
     sif_chain_mesh_alloc(cells_d, box, fd, SIF_MESH_DROP_INDICES);
   sif_chain_mesh_t* mr =
     sif_chain_mesh_alloc(cells_r, box, fr, SIF_MESH_DROP_INDICES);
-  sif_field_free(fd);
-  sif_field_free(fr);
+
+  /* Every run below is compared bit for bit with another, so each starts
+   * from grids built afresh: the ones a finder hands back are restored to
+   * float precision, not to the bit, and centres between the nodes follow
+   * the field's last bits. */
+#define REGRID()                                                               \
+  CHECK(sif_grid_assign_cic(gd, fd) == SIF_OK &&                               \
+          sif_grid_assign_cic(gr, fr) == SIF_OK,                               \
+    "rebuilding the grids failed")
 
   /* Given the offset, the finder hands the voids back in the caller's
    * frame. */
@@ -545,11 +552,13 @@ static void run_workflow(void) {
   unlink(path);
   const sif_option none = SIF_FINDER_NO_CHECKPOINT;
   const uint32_t split = 2;
+  REGRID();
   sif_catalogue_t* head = sif_finder_exodus_survey_ex(
     gd, gr, md, mr, offset, radii, split, -0.7f, 0.0f, none, NULL);
 
   sif__exodus_halt_after_set(split);
   const sif_finder_exodus_extras_t named = {.checkpoint = path};
+  REGRID();
   sif_catalogue_t* halted = sif_finder_exodus_survey_ex(
     gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, &named);
   sif__exodus_halt_after_set(0);
@@ -565,6 +574,7 @@ static void run_workflow(void) {
   same_voids("survey checkpoint, read back", saved, head);
   sif_catalogue_free(saved);
 
+  REGRID();
   sif_catalogue_t* resumed = sif_finder_exodus_survey_ex(
     gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, &named);
   same_voids("survey, resumed", resumed, cat);
@@ -572,15 +582,19 @@ static void run_workflow(void) {
   CHECK(access(path, F_OK) != 0, "survey run left its checkpoint");
 
   const sif_finder_exodus_extras_t extend = {.prior = head};
+  REGRID();
   sif_catalogue_t* extended = sif_finder_exodus_survey_ex(gd, gr, md, mr,
     offset, radii + split, n_radii - split, -0.7f, 0.0f, none, &extend);
   same_voids("survey, extended", extended, cat);
   sif_catalogue_free(extended);
   sif_catalogue_free(head);
 
+#undef REGRID
   sif_catalogue_free(cat);
   sif_chain_mesh_free(md);
   sif_chain_mesh_free(mr);
+  sif_field_free(fd);
+  sif_field_free(fr);
   sif_grid_free(gd);
   sif_grid_free(gr);
   free(dx);

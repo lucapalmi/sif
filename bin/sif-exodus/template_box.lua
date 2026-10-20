@@ -77,6 +77,12 @@ finder = {
   threshold = -0.7,          -- the density contrast a void is grown to
   overlap_fraction = 0,      -- of the smaller radius; 0: no overlap
   search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2
+  -- A centre at a minimum of the smoothed field goes where the minimum lies
+  -- between the grid nodes; false leaves every centre on its node.
+  centre_refinement_hessian = true,
+  -- true: only those minima are candidates, so every void is centred on one
+  -- (with overlap_fraction = 1, the excursion-set definition of a void).
+  centre_is_minimum = false,
 }
 
 -- Voids to start from: the run adds its own and writes both, these first.

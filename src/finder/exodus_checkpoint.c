@@ -239,6 +239,11 @@ int sif__exodus_checkpoint_load(const char* path,
       (unsigned)SIF_FINDER_CHECKPOINT_VERSION);
     goto done;
   }
+  /* Version 1 predates off-grid centres: everything it holds was found with
+   * centres on the nodes, which is what the flag now says. */
+  if (h.version < 2)
+    h.options |= SIF_FINDER_NODE_CENTRES;
+
   const uint32_t is_double = (sizeof(sif_real) == 8) ? 1u : 0u;
   if (h.is_double != is_double) {
     read_failed(path, "%s values, this build is %s",
@@ -362,6 +367,16 @@ int sif__exodus_checkpoint_match(const char* path,
     MISMATCH("CIC window %s (this run %s it)",
       (got->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved",
       (want->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "keeps" : "deconvolves");
+  if ((got->options ^ want->options) & SIF_FINDER_NODE_CENTRES)
+    MISMATCH("centres %s (this run %s them)",
+      (got->options & SIF_FINDER_NODE_CENTRES) ? "on the nodes" : "refined",
+      (want->options & SIF_FINDER_NODE_CENTRES) ? "leaves" : "refines");
+  if ((got->options ^ want->options) & SIF_FINDER_CENTRE_IS_MINIMUM)
+    MISMATCH("candidates %s (this run's: %s)",
+      (got->options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only"
+                                                    : "every cell",
+      (want->options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only"
+                                                     : "every cell");
 
   if (got->grid_n_cells != want->grid_n_cells ||
       got->box_length != want->box_length)
@@ -493,6 +508,11 @@ int sif_finder_exodus_checkpoint_check(const char* filepath, FILE* report) {
       (double)sif__finder_search_factor(h.options));
     fprintf(report, "CIC window    %s\n",
       (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved");
+    fprintf(report, "centres       %s\n",
+      (h.options & SIF_FINDER_NODE_CENTRES) ? "on the nodes" : "refined");
+    fprintf(report, "candidates    %s\n",
+      (h.options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only"
+                                                 : "every cell");
     fprintf(report, "grid          %u^3 cells over %.8g\n", h.grid_n_cells,
       h.box_length);
     fprintf(report, "tracers       %" PRIu64 ", total weight %.10g\n",

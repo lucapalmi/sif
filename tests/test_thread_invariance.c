@@ -575,6 +575,14 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
     snprintf(what, sizeof(what), "%sexodus", w);
     put_catalogue(p, what, cat);
 
+    /* The minima-only scan takes its own path through the candidates. */
+    if (m && !weighted) {
+      sif_catalogue_t* minima = sif_finder_exodus(g, m, radii, n_radii,
+        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_CENTRE_IS_MINIMUM);
+      put_catalogue(p, "exodus, centre is minimum", minima);
+      sif_catalogue_free(minima);
+    }
+
     if (cat && !weighted) {
       n_found[1] = cat->n_voids;
 

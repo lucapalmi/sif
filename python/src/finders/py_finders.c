@@ -272,17 +272,19 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   double search_factor = 1.5;
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
+  int refine = 1;
+  int centre_is_minimum = 0;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
     "overlap_fraction", "consume_grid", "search_factor", "checkpoint", "prior",
-    NULL};
+    "centre_refinement_hessian", "centre_is_minimum", NULL};
 
   /* The '|' character denotes that everything after it is optional.
    * 'p' safely converts a Python boolean to a C int (1 or 0). */
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd$OO", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd$OOpp", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
         &threshold, &overlap_frac, &consume_grid, &search_factor, &checkpoint,
-        &prior)) {
+        &prior, &refine, &centre_is_minimum)) {
     return NULL;
   }
 
@@ -307,6 +309,10 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
 
   if (consume_grid)
     options |= SIF_FINDER_CONSUME_GRID;
+  if (!refine)
+    options |= SIF_FINDER_NODE_CENTRES;
+  if (centre_is_minimum)
+    options |= SIF_FINDER_CENTRE_IS_MINIMUM;
 
   sif_option reach;
   if (search_factor_option(search_factor, &reach) < 0) {
@@ -398,16 +404,19 @@ PyObject* py_sif_finder_exodus_survey(
   double search_factor = 1.5;
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
+  int refine = 1;
+  int centre_is_minimum = 0;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
     "random_mesh", "offset", "radii", "threshold", "overlap_fraction",
-    "consume_grid", "search_factor", "checkpoint", "prior", NULL};
+    "consume_grid", "search_factor", "checkpoint", "prior",
+    "centre_refinement_hessian", "centre_is_minimum", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd$OO", kwlist,
-        &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd$OOpp",
+        kwlist, &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
         &ox, &oy, &oz, &radii_obj, &threshold, &overlap_frac, &consume_grid,
-        &search_factor, &checkpoint, &prior)) {
+        &search_factor, &checkpoint, &prior, &refine, &centre_is_minimum)) {
     return NULL;
   }
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
@@ -421,6 +430,10 @@ PyObject* py_sif_finder_exodus_survey(
   }
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : SIF_DEFAULT;
+  if (!refine)
+    options |= SIF_FINDER_NODE_CENTRES;
+  if (centre_is_minimum)
+    options |= SIF_FINDER_CENTRE_IS_MINIMUM;
   sif_option reach;
   if (search_factor_option(search_factor, &reach) < 0)
     return NULL;
@@ -562,8 +575,8 @@ PyObject* py_sif_finder_read_checkpoint(
   }
 
   PyObject* info = Py_BuildValue(
-    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:d,s:O,s:I,s:d,s:K,s:d,s:K,s:d,"
-    "s:(ddd)}",
+    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:d,s:O,s:O,s:O,s:I,s:d,s:K,s:d,"
+    "s:K,s:d,s:(ddd)}",
     "mode", h.is_survey ? "survey" : "box", "weighted",
     h.is_weighted ? Py_True : Py_False, "radii", radii, "rungs_done",
     (unsigned)h.next_rung, "n_voids", (unsigned long long)h.n_voids, "n_prior",
@@ -571,6 +584,10 @@ PyObject* py_sif_finder_read_checkpoint(
     h.overlap_fraction, "search_factor",
     (double)sif__finder_search_factor(h.options), "keep_cic_window",
     (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? Py_True : Py_False,
+    "centre_refinement_hessian",
+    (h.options & SIF_FINDER_NODE_CENTRES) ? Py_False : Py_True,
+    "centre_is_minimum",
+    (h.options & SIF_FINDER_CENTRE_IS_MINIMUM) ? Py_True : Py_False,
     "grid_n_cells", (unsigned)h.grid_n_cells, "box_length", h.box_length,
     "n_particles", (unsigned long long)h.n_particles, "total_weight",
     h.total_weight, "n_randoms", (unsigned long long)h.random_n_particles,

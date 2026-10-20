@@ -371,7 +371,7 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
   const bool gaussian =
     (opt & SIF__DELTA_FILTER_MASK) == SIF_DELTA_FILTER_GAUSSIAN;
 
-  SIF_LOG_INFO(TAG,
+  SIF_LOG_TRACE(TAG,
     "building a %u x %u covariance from a %u-point P(k) (%s window)", n_radii,
     n_radii, n_points, gaussian ? "Gaussian" : "top-hat");
 
@@ -608,7 +608,7 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
   free(high_d);
   free(alias_d);
 
-  SIF_LOG_INFO(TAG, "covariance over %u radii evaluated from P(k)", n_radii);
+  SIF_LOG_TRACE(TAG, "covariance over %u radii evaluated from P(k)", n_radii);
 
   return cov;
 }

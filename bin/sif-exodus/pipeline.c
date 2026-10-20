@@ -294,6 +294,10 @@ static void describe_catalogue(
   s |= sif_catalogue_meta_real_set(
     cat, "overlap_fraction", p->finder.overlap_fraction);
   s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
+  s |= sif_catalogue_meta_int_set(
+    cat, "centre_refinement_hessian", p->finder.centre_refinement_hessian);
+  s |= sif_catalogue_meta_int_set(
+    cat, "centre_is_minimum", p->finder.centre_is_minimum);
   s |= sif_catalogue_meta_int_set(cat, "n_radii", p->finder.n_radii);
   s |= sif_catalogue_meta_real_set(cat, "r_min", r->r_min);
   s |= sif_catalogue_meta_real_set(cat, "r_max", r->r_max);
@@ -597,6 +601,8 @@ int pipeline_box(const exodus_params_t* p) {
   cat = sif_finder_exodus_ex(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
     SIF_FINDER_CONSUME_GRID | search |
+      (p->finder.centre_refinement_hessian ? 0 : SIF_FINDER_NODE_CENTRES) |
+      (p->finder.centre_is_minimum ? SIF_FINDER_CENTRE_IS_MINIMUM : 0) |
       (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(mesh);
@@ -1037,6 +1043,8 @@ int pipeline_survey(const exodus_params_t* p) {
     random_mesh, offset, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
     SIF_FINDER_CONSUME_GRID | search |
+      (p->finder.centre_refinement_hessian ? 0 : SIF_FINDER_NODE_CENTRES) |
+      (p->finder.centre_is_minimum ? SIF_FINDER_CENTRE_IS_MINIMUM : 0) |
       (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(random_mesh);

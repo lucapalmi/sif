@@ -58,6 +58,20 @@
  * (and of weights, if the run is meant to be unweighted) when the mesh is
  * being built for the finder alone.
  *
+ * Every cell at or below the threshold is a candidate, deepest first. One at
+ * a local minimum of the smoothed field is centred where that minimum lies
+ * between the nodes, so its centre follows the tracers rather than the grid;
+ * the others stay on their nodes. Minima, centres and the order are found on
+ * the field smoothed by one more cell of Gaussian, which removes the
+ * cell-scale ripple a top-hat leaves; the threshold is tested on the top-hat
+ * alone. SIF_FINDER_NODE_CENTRES leaves every centre on its node, and
+ * SIF_FINDER_CENTRE_IS_MINIMUM keeps only the minima as candidates.
+ *
+ * A catalogue does not depend on the thread count, bit for bit. It does
+ * depend on the grid's last bits: a grid this hands back is restored to float
+ * precision, not to the bit, so a run meant to repeat another bit for bit
+ * starts from a grid built afresh.
+ *
  * @param grid Density contrast field, as produced by
  * sif_grid_to_density_contrast(). Smoothed in place and restored at the end,
  * as in sif_finder_spherical(); see the warning there about `grid->values`
@@ -72,7 +86,8 @@
  * @param overlap_fraction How much two voids may overlap, as a fraction of
  * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
  * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
- * SIF_FINDER_KEEP_CIC_WINDOW and SIF_FINDER_SEARCH_*. The box is always
+ * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_NODE_CENTRES,
+ * SIF_FINDER_CENTRE_IS_MINIMUM and SIF_FINDER_SEARCH_*. The box is always
  * periodic; a survey, with edges, is sif_finder_exodus_survey().
  *
  * @note The grid is assumed to have been built by sif_grid_assign_cic(), whose
@@ -156,7 +171,8 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * in (-1, 0).
  * @param overlap_fraction As in sif_finder_exodus().
  * @param opt Finder options: SIF_FINDER_CONSUME_GRID (both grids),
- * SIF_FINDER_KEEP_CIC_WINDOW and SIF_FINDER_SEARCH_*.
+ * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_NODE_CENTRES,
+ * SIF_FINDER_CENTRE_IS_MINIMUM and SIF_FINDER_SEARCH_*.
  *
  * @return Newly allocated catalogue, with its footprint columns, in the
  * caller's frame, released with sif_catalogue_free(); NULL on invalid input
@@ -289,7 +305,7 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_ex(
 /** @brief Magic number at the start of every exodus checkpoint. */
 #define SIF_FINDER_CHECKPOINT_MAGIC "XCKP"
 /** @brief Version of the checkpoint layout this build reads and writes. */
-#define SIF_FINDER_CHECKPOINT_VERSION 1
+#define SIF_FINDER_CHECKPOINT_VERSION 2
 
 /**
  * @brief The fixed 192-byte header of an exodus checkpoint.
@@ -321,8 +337,11 @@ typedef struct {
   /** 1 if the (data) mesh carries weights. */
   uint32_t is_weighted;
   /**
-   * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor
-   * and SIF_FINDER_KEEP_CIC_WINDOW.
+   * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor,
+   * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_NODE_CENTRES and
+   * SIF_FINDER_CENTRE_IS_MINIMUM. A version 1
+   * file reads with SIF_FINDER_NODE_CENTRES set, since that is how it was
+   * written.
    */
   uint32_t options;
   /** Rungs on the ladder. */

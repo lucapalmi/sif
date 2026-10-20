@@ -21,6 +21,7 @@
 #include "sif/structures/grid.h"
 
 #include "finder/exodus_checkpoint.h"
+#include "finder/utils.h"
 
 #include <dirent.h>
 #include <math.h>
@@ -104,8 +105,9 @@ static void make_field(sif_real* x, sif_real* y, sif_real* z) {
 }
 
 /*
- * Each recovered void must sit on a distinct injected hole. The finder snaps
- * centres to grid cells, so allow a couple of cells of slack.
+ * Each recovered void must sit on a distinct injected hole. A centre is where
+ * the smoothed field puts it, which shot noise moves by more than a cell, so
+ * allow a couple of cells of slack.
  */
 static void check_catalogue(const char* label, const sif_catalogue_t* cat,
   sif_real r_lo_factor, sif_real r_hi_factor) {
@@ -601,12 +603,27 @@ static void run_invariance(sif_config_t* cfg) {
 typedef struct {
   sif_grid_t* grid;
   sif_chain_mesh_t* mesh;
+  sif_field_t* field;
 } setup_t;
+
+/*
+ * The grid as the tracers make it. A finder hands its grid back through an
+ * inverse transform, which restores it to float precision but not to the
+ * bit; centres placed between the nodes follow the field's last bits, so
+ * runs compared bit for bit each start from a grid built afresh -- as a
+ * resumed run in a new process does.
+ */
+static void regrid(const setup_t* s) {
+  CHECK(sif_grid_assign_cic(s->grid, s->field) == SIF_OK &&
+          sif_grid_to_density_contrast(s->grid) == SIF_OK,
+    "rebuilding the grid failed");
+}
 
 static sif_catalogue_t* exodus_x(const setup_t* s, const sif_real* r,
   uint32_t n, sif_real threshold, sif_option opt, const char* checkpoint,
   const sif_catalogue_t* prior) {
 
+  regrid(s);
   const sif_finder_exodus_extras_t extras = {
     .checkpoint = checkpoint, .prior = prior};
   return sif_finder_exodus_ex(
@@ -651,12 +668,8 @@ static void run_checkpoints(void) {
   sif_field_t* f = sif_field_alloc(N_P);
   CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
     "sif_field_assign_positions failed");
-  setup_t s = {sif_grid_alloc(N_GRID, BOX), NULL};
-  CHECK(sif_grid_assign_cic(s.grid, f) == SIF_OK, "CIC assignment failed");
-  CHECK(
-    sif_grid_to_density_contrast(s.grid) == SIF_OK, "density contrast failed");
+  setup_t s = {sif_grid_alloc(N_GRID, BOX), NULL, f};
   s.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
-  sif_field_free(f);
   free(x);
   free(y);
   free(z);
@@ -671,6 +684,7 @@ static void run_checkpoints(void) {
   const int auto_before = auto_checkpoints(NULL, 0);
 
   /* A plain run checkpoints under a name of its own, and clears it up. */
+  regrid(&s);
   sif_catalogue_t* cat =
     sif_finder_exodus(s.grid, s.mesh, radii, n_radii, -0.7f, 0.0f, 0);
   check_same_catalogue("plain run", cat, ref);
@@ -731,6 +745,20 @@ static void run_checkpoints(void) {
   cat = exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_SEARCH_2_00, path, NULL);
   CHECK(!cat && error_has("not this run: search factor"),
     "another search factor was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat =
+    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_NODE_CENTRES, path, NULL);
+  CHECK(!cat && error_has("not this run: centres"),
+    "centres on the nodes were not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat = exodus_x(
+    &s, radii, n_radii, -0.7f, SIF_FINDER_CENTRE_IS_MINIMUM, path, NULL);
+  CHECK(!cat && error_has("not this run: candidates"),
+    "minima-only candidates were not refused (%s)", sif_error_message());
   sif_catalogue_free(cat);
   CHECK(file_exists(path), "a refused resume removed the checkpoint");
 
@@ -835,6 +863,318 @@ static void run_checkpoints(void) {
   sif_catalogue_free(ref);
   sif_chain_mesh_free(s.mesh);
   sif_grid_free(s.grid);
+  sif_field_free(s.field);
+  printf("  ok\n");
+}
+
+/* --- centres between the nodes --- */
+
+/* Periodic displacement a - b on a box of side L, into [-L/2, L/2). */
+static double wrap_delta(double a, double b, double L) {
+  double d = fmod(a - b, L);
+  if (d < -0.5 * L)
+    d += L;
+  if (d >= 0.5 * L)
+    d -= L;
+  return d;
+}
+
+/*
+ * The scan on fields whose minimum is known: a well, anisotropic and turned
+ * off the axes, centred between the nodes -- and across the box face, where
+ * the stencil and the centre both wrap. The extra Gaussian the scan smooths
+ * with is symmetric, so it moves nothing about a symmetric well. A flat field
+ * has one minimum, by the tie rule, and no curvature to place it by.
+ */
+static void run_minimum_scan(void) {
+  printf("minimum scan\n");
+
+  const uint32_t n = 32;
+  const double L = 32.0; /* cells of one */
+  sif_grid_t* g = sif_grid_alloc(n, (sif_real)L);
+  sif_bitmask_t* mask = sif_bitmask_alloc(g->total_cells);
+  sif_bitmask_t* below = sif_bitmask_alloc(g->total_cells);
+  sif_candidate_buffer_t cands = {0};
+  sif_offset_buffer_t offs = {0};
+  sif_refine_stats_t st;
+  sif_real* well = malloc(g->total_cells * sizeof(sif_real));
+
+  /* Q = R diag(1/9, 1/16, 1/25) R^T, R a turn about z then about x. */
+  const double a = 0.6, b = 0.9, ca = cos(a), sa = sin(a), cb = cos(b),
+               sb = sin(b);
+  const double R[3][3] = {
+    {ca, -sa, 0.0}, {sa * cb, ca * cb, -sb}, {sa * sb, ca * sb, cb}};
+  const double inv_s2[3] = {1.0 / 9.0, 1.0 / 16.0, 1.0 / 25.0};
+  double Q[3][3];
+  for (int i = 0; i < 3; i++)
+    for (int j = 0; j < 3; j++) {
+      Q[i][j] = 0.0;
+      for (int k = 0; k < 3; k++)
+        Q[i][j] += R[i][k] * inv_s2[k] * R[j][k];
+    }
+
+  const double centres[][3] = {
+    {10.3, 20.7, 5.5}, {0.2, 31.9, 15.0}, {16.49, 16.51, 16.0}};
+  for (int c = 0; c < 3; c++) {
+    for (uint32_t i = 0; i < n; i++)
+      for (uint32_t j = 0; j < n; j++)
+        for (uint32_t k = 0; k < n; k++) {
+          const double d[3] = {wrap_delta(i, centres[c][0], L),
+            wrap_delta(j, centres[c][1], L), wrap_delta(k, centres[c][2], L)};
+          double q = 0.0;
+          for (int u = 0; u < 3; u++)
+            for (int v = 0; v < 3; v++)
+              q += d[u] * Q[u][v] * d[v];
+          g->values[((uint64_t)i * n + j) * n + k] =
+            (sif_real)(-0.95 * exp(-0.5 * q));
+        }
+
+    /* The scan smooths the grid in place; the minima-only runs below start
+     * from the well again. */
+    memcpy(well, g->values, g->total_cells * sizeof(sif_real));
+
+    CHECK(sif__finder_scan_refined(
+            g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st) == SIF_OK,
+      "well %d: scan failed", c);
+    CHECK(cands.count > 1 && st.n_minima == 1 && st.n_fallback == 0,
+      "well %d: %llu candidates, %llu minima, %llu left on their node", c,
+      (unsigned long long)cands.count, (unsigned long long)st.n_minima,
+      (unsigned long long)st.n_fallback);
+
+    /* The deepest candidate is the minimum, and the only one refined. */
+    uint64_t n_refined = 0;
+    for (uint64_t k = 0; k < cands.count; k++)
+      n_refined += cands.items[k].refined != 0;
+    CHECK(n_refined == 1 && cands.items[0].refined != 0,
+      "well %d: %llu candidates refined, the deepest %s", c,
+      (unsigned long long)n_refined,
+      cands.items[0].refined ? "among them" : "not");
+    if (cands.count == 0 || cands.items[0].refined == 0)
+      continue;
+
+    const sif_offset_t* m = &offs.items[cands.items[0].refined - 1];
+    const uint64_t f = cands.items[0].flat_idx;
+    const double got[3] = {(double)(f / ((uint64_t)n * n)) + m->dx,
+      (double)((f / n) % n) + m->dy, (double)(f % n) + m->dz};
+    double err = 0.0;
+    for (int u = 0; u < 3; u++)
+      err = fmax(err, fabs(wrap_delta(got[u], centres[c][u], L)));
+    CHECK(err < 0.05,
+      "well %d: centre (%.3f, %.3f, %.3f), expected (%.3f, %.3f, %.3f)", c,
+      got[0], got[1], got[2], centres[c][0], centres[c][1], centres[c][2]);
+    CHECK(fabs(m->dx) <= 0.5f && fabs(m->dy) <= 0.5f && fabs(m->dz) <= 0.5f,
+      "well %d: offset (%g, %g, %g) is off its own node", c, (double)m->dx,
+      (double)m->dy, (double)m->dz);
+
+    /* Minima only: the minimum alone, refined to the same centre -- or, not
+     * refined, on the node it was found at. */
+    const sif_offset_t first = *m;
+    memcpy(g->values, well, g->total_cells * sizeof(sif_real));
+    CHECK(sif__finder_scan_refined(
+            g, mask, below, -0.5f, 0, 1, 1, &cands, &offs, &st) == SIF_OK &&
+            cands.count == 1 && cands.items[0].flat_idx == f &&
+            cands.items[0].refined != 0 &&
+            offs.items[cands.items[0].refined - 1].dx == first.dx,
+      "well %d, minima only: %llu candidates", c,
+      (unsigned long long)cands.count);
+    memcpy(g->values, well, g->total_cells * sizeof(sif_real));
+    CHECK(sif__finder_scan_refined(
+            g, mask, below, -0.5f, 0, 0, 1, &cands, &offs, &st) == SIF_OK &&
+            cands.count == 1 && cands.items[0].refined == 0 && offs.count == 0,
+      "well %d, minima only on the nodes: %llu candidates, %llu offsets", c,
+      (unsigned long long)cands.count, (unsigned long long)offs.count);
+  }
+  free(well);
+
+  for (uint64_t i = 0; i < g->total_cells; i++)
+    g->values[i] = -0.9f;
+  CHECK(sif__finder_scan_refined(
+          g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st) == SIF_OK &&
+          cands.count == g->total_cells && st.n_minima == 1 &&
+          st.n_fallback == 1,
+    "flat field: %llu candidates, %llu minima, %llu left on their node",
+    (unsigned long long)cands.count, (unsigned long long)st.n_minima,
+    (unsigned long long)st.n_fallback);
+  for (uint64_t k = 0; k < cands.count; k++)
+    CHECK(cands.items[k].refined == 0, "flat field: candidate %llu refined",
+      (unsigned long long)k);
+
+  sif__candidate_buffer_free(&cands);
+  sif__offset_buffer_free(&offs);
+  sif_bitmask_free(below);
+  sif_bitmask_free(mask);
+  sif_grid_free(g);
+  printf("  ok\n");
+}
+
+/* The grid the shift test runs on: twice the usual resolution, so the
+ * smallest rung spans three cells -- inside the two or more a radius is meant
+ * to have, where the usual grid's 1.6 is not. */
+#define SHIFT_GRID (2 * N_GRID)
+#define SHIFT_CELL (BOX / (sif_real)SHIFT_GRID)
+
+/* Whether void i sits off the grid. A centre left on its node is exactly
+ * i * SHIFT_CELL, so any fraction of a cell in it was put there by the
+ * refinement. */
+static int off_the_nodes(const sif_catalogue_t* c, uint64_t i) {
+  const double p[3] = {
+    c->cx[i] / SHIFT_CELL, c->cy[i] / SHIFT_CELL, c->cz[i] / SHIFT_CELL};
+  for (int a = 0; a < 3; a++)
+    if (fabs(p[a] - nearbyint(p[a])) > 1e-4)
+      return 1;
+  return 0;
+}
+
+/* The median of how far each void of `a` -- each one off the nodes, if
+ * `refined_only` -- moved by `shift`, is from the nearest void of `b`, over
+ * those within 1.5 cells of one. */
+static double shift_residual(const sif_catalogue_t* a, const sif_catalogue_t* b,
+  const double shift[3], int refined_only, uint64_t* n_matched) {
+
+  double* r = malloc(a->n_voids * sizeof(double));
+  uint64_t m = 0;
+  for (uint64_t i = 0; r && i < a->n_voids; i++) {
+    if (refined_only && !off_the_nodes(a, i))
+      continue;
+    double best = 1e300;
+    for (uint64_t j = 0; j < b->n_voids; j++) {
+      const double dx = wrap_delta(b->cx[j], a->cx[i] + shift[0], BOX);
+      const double dy = wrap_delta(b->cy[j], a->cy[i] + shift[1], BOX);
+      const double dz = wrap_delta(b->cz[j], a->cz[i] + shift[2], BOX);
+      best = fmin(best, sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    if (best < 1.5 * SHIFT_CELL)
+      r[m++] = best / SHIFT_CELL;
+  }
+  qsort(r, m, sizeof(double), cmp_double);
+  const double med = m ? r[m / 2] : 1e300;
+  free(r);
+  *n_matched = m;
+  return med;
+}
+
+/*
+ * What refined centres are for: moving every tracer by a fraction of a cell
+ * moves a centre by the same, rather than leaving it on whichever node the
+ * void now falls nearest. On a Poisson field full of marginal voids, the
+ * centres placed between the nodes follow the shift to a small part of a
+ * cell, and the ones on the nodes cannot. The catalogue is still the one the
+ * nodes give, near enough: the same candidates, only their centres and their
+ * order differ.
+ */
+static void run_grid_shift(void) {
+  printf("grid shift\n");
+
+  /* A quarter of the usual tracers, so a Poisson field reaches the threshold
+   * often enough to give a few dozen voids to compare. */
+  const uint64_t np = N_P / 4;
+  const double shift_cells[3] = {0.37, 0.61, 0.13};
+  const double shift[3] = {shift_cells[0] * SHIFT_CELL,
+    shift_cells[1] * SHIFT_CELL, shift_cells[2] * SHIFT_CELL};
+
+  sif_real* x = malloc(2 * 3 * np * sizeof(sif_real));
+  rng_state = 0x9E3779B97F4A7C15ULL;
+  for (uint64_t i = 0; i < 3 * np; i++)
+    x[i] = (sif_real)(next_uniform() * BOX);
+  for (uint64_t i = 0; i < np; i++)
+    for (int a = 0; a < 3; a++) {
+      double v = (double)x[a * np + i] + shift[a];
+      if (v >= BOX)
+        v -= BOX;
+      x[3 * np + a * np + i] = (sif_real)v;
+    }
+
+  sif_catalogue_t* cat[2][2] = {{NULL, NULL}, {NULL, NULL}};
+  for (int moved = 0; moved < 2; moved++) {
+    const sif_real* p = x + 3 * np * moved;
+    sif_field_t* f = sif_field_alloc(np);
+    CHECK(sif_field_assign_positions(f, p, p + np, p + 2 * np) == SIF_OK,
+      "positions failed");
+    sif_grid_t* g = sif_grid_alloc(SHIFT_GRID, BOX);
+    sif_chain_mesh_t* mesh =
+      sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+    for (int node = 0; node < 2; node++) {
+      CHECK(sif_grid_assign_cic(g, f) == SIF_OK &&
+              sif_grid_to_density_contrast(g) == SIF_OK,
+        "grid failed");
+      cat[moved][node] = sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f,
+        SIF_FINDER_NO_CHECKPOINT | (node ? SIF_FINDER_NODE_CENTRES : 0));
+      CHECK(cat[moved][node] && cat[moved][node]->n_voids >= 20,
+        "%s centres%s: %llu voids, too few to measure by",
+        node ? "node" : "refined", moved ? ", moved" : "",
+        (unsigned long long)(cat[moved][node] ? cat[moved][node]->n_voids : 0));
+    }
+    sif_chain_mesh_free(mesh);
+    sif_grid_free(g);
+    sif_field_free(f);
+  }
+
+  if (cat[0][0] && cat[1][0] && cat[0][1] && cat[1][1]) {
+    uint64_t m_refined, m_node, n_off = 0;
+    for (uint64_t i = 0; i < cat[0][0]->n_voids; i++)
+      n_off += off_the_nodes(cat[0][0], i);
+    const double refined =
+      shift_residual(cat[0][0], cat[1][0], shift, 1, &m_refined);
+    const double node = shift_residual(cat[0][1], cat[1][1], shift, 0, &m_node);
+    printf("  %llu voids, %llu between the nodes; on the nodes only, %llu\n",
+      (unsigned long long)cat[0][0]->n_voids, (unsigned long long)n_off,
+      (unsigned long long)cat[0][1]->n_voids);
+    printf("  median miss, in cells: between the nodes %.3f (%llu matched), "
+           "on the nodes %.3f (%llu matched)\n",
+      refined, (unsigned long long)m_refined, node, (unsigned long long)m_node);
+    CHECK(refined < 0.25 && refined < 0.5 * node,
+      "refined centres missed the shift by a median %.3f cells (on the "
+      "nodes: %.3f)",
+      refined, node);
+    const double ratio =
+      (double)cat[0][0]->n_voids / (double)cat[0][1]->n_voids;
+    CHECK(ratio > 0.9 && ratio < 1.1,
+      "%llu voids against %llu on the nodes: not the same catalogue",
+      (unsigned long long)cat[0][0]->n_voids,
+      (unsigned long long)cat[0][1]->n_voids);
+  }
+
+  for (int a = 0; a < 2; a++)
+    for (int b = 0; b < 2; b++)
+      sif_catalogue_free(cat[a][b]);
+  free(x);
+  printf("  ok\n");
+}
+
+/*
+ * The exact overlap test reaches every void it can collide with -- including
+ * when the candidate is larger than every void accepted so far, as a rescaled
+ * radius often is. A void of 10 centred 55 inside a candidate of 60 collides
+ * at any overlap fraction; the search used to stop at 10 + 60 * (1 - f).
+ */
+static void run_overlap_reach(void) {
+  printf("overlap reach\n");
+
+  const sif_real L = 1000.0f;
+  sif_catalogue_t* cat = sif_catalogue_alloc(1);
+  sif_cell_linked_list_t* cll =
+    sif_cell_linked_list_alloc(32, L, 1, SIF_PBC_PERIODIC);
+  CHECK(cat && cll && sif_catalogue_append(cat, 500, 500, 500, 10) == SIF_OK &&
+          sif_cell_linked_list_insert(cll, 0, 500, 500, 500) == SIF_OK,
+    "setup failed");
+
+  const sif_real fractions[] = {0.0f, 0.5f, 1.0f};
+  for (int k = 0; cat && cll && k < 3; k++) {
+    const sif_real f = fractions[k];
+    const sif_real collide = 60.0f + 10.0f - f * 10.0f;
+    for (sif_real sep = 5.0f; sep < 80.0f; sep += 2.5f) {
+      const int hit =
+        sif__overlap_exact(cat, 500 + sep, 500, 500, 60, 10, L, cll, 0, f);
+      CHECK(hit == (sep < collide),
+        "f = %.1f: a void of 60 at %.1f from one of 10 %s (collides below "
+        "%.1f)",
+        (double)f, (double)sep, hit ? "collided" : "did not collide",
+        (double)collide);
+    }
+  }
+
+  sif_cell_linked_list_free(cll);
+  sif_catalogue_free(cat);
   printf("  ok\n");
 }
 
@@ -1011,6 +1351,11 @@ int main(void) {
   run_invariance(&cfg);
 #endif
   run_checkpoints();
+  run_minimum_scan();
+  run_overlap_reach();
+#if !SIF_TEST_INSTRUMENTED
+  run_grid_shift();
+#endif
   run_refusals();
   run_grid_cells();
 

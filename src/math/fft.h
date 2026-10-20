@@ -43,6 +43,11 @@ typedef fftw_plan sif_real_fftw_plan;
 #  define real_fftw_destroy_plan                fftw_destroy_plan
 #  define real_fftw_plan_dft_r2c_3d             fftw_plan_dft_r2c_3d
 #  define real_fftw_plan_dft_c2r_3d             fftw_plan_dft_c2r_3d
+#  define real_fftw_plan_dft_r2c_2d             fftw_plan_dft_r2c_2d
+#  define real_fftw_plan_dft_c2r_2d             fftw_plan_dft_c2r_2d
+#  define real_fftw_plan_many_dft               fftw_plan_many_dft
+#  define real_fftw_execute_dft                 fftw_execute_dft
+#  define real_fftw_export_wisdom_to_string     fftw_export_wisdom_to_string
 #  define real_fftw_malloc                      fftw_malloc
 #  define real_fftw_free                        fftw_free
 #  define real_fftw_execute_dft_r2c             fftw_execute_dft_r2c
@@ -75,6 +80,11 @@ typedef fftwf_plan sif_real_fftw_plan;
 #  define real_fftw_destroy_plan              fftwf_destroy_plan
 #  define real_fftw_plan_dft_r2c_3d           fftwf_plan_dft_r2c_3d
 #  define real_fftw_plan_dft_c2r_3d           fftwf_plan_dft_c2r_3d
+#  define real_fftw_plan_dft_r2c_2d           fftwf_plan_dft_r2c_2d
+#  define real_fftw_plan_dft_c2r_2d           fftwf_plan_dft_c2r_2d
+#  define real_fftw_plan_many_dft             fftwf_plan_many_dft
+#  define real_fftw_execute_dft               fftwf_execute_dft
+#  define real_fftw_export_wisdom_to_string   fftwf_export_wisdom_to_string
 #  define real_fftw_malloc                    fftwf_malloc
 #  define real_fftw_free                      fftwf_free
 #  define real_fftw_execute_dft_r2c           fftwf_execute_dft_r2c
@@ -97,6 +107,16 @@ typedef struct {
 /**
  * @brief Ephemeral workspace for specific grid operations.
  *
+ * The 3D transforms are not FFTW's own. sif runs them as a 2D transform of
+ * every x-plane and a 1D transform along x of every (y, kz) pencil, each a
+ * single-threaded plan, and parallelises over the planes and pencils itself.
+ * FFTW's threaded 3D plans are not bit-identical across thread counts -- the
+ * planner picks a different decomposition for a different count -- and
+ * everything downstream of the smoothed field inherits the last bits. Here
+ * every plane and every pencil goes through the same plan whatever the thread
+ * count, so the output does not depend on it. It is also faster: 10-35% on
+ * 256^3 to 512^3, tuned or not.
+ *
  * @note delta_k_cpy doubles as the real-space output buffer: the backward
  * transform is executed in place on it. It is owned by the workspace until
  * sif__fft_workspace_take_real_buffer() hands it over.
@@ -106,8 +126,13 @@ typedef struct {
   uint32_t n_cells;
   sif_real_complex* delta_k;
   sif_real_complex* delta_k_cpy;
-  sif_real_fftw_plan forward_plan;
-  sif_real_fftw_plan backward_plan;
+
+  /* Forward: plane_r2c over every x-plane, then pencil_forward along x.
+   * Backward: pencil_backward, then plane_c2r. NULL until planned. */
+  sif_real_fftw_plan plane_r2c;
+  sif_real_fftw_plan pencil_forward;
+  sif_real_fftw_plan pencil_backward;
+  sif_real_fftw_plan plane_c2r;
 
   /**
    * Planner quality, resolved once from the manager and used for **both**
@@ -118,7 +143,7 @@ typedef struct {
    * for FFTW_ESTIMATE, so `skip_tuning` described only half of what the
    * workspace did. Whatever this says, both transforms are planned to it or
    * neither is -- including when it is downgraded mid-flight, which is why it
-   * is mutable. See fft_ensure_forward_plan().
+   * is mutable. See fft_plan_stage().
    */
   unsigned int plan_flags;
 
@@ -167,9 +192,9 @@ void sif__fft_manager_finalise(sif_fft_manager_t* mgr);
  *
  * Also fixes the planner quality for both transforms, from @p mgr and the
  * `fft_tuning_max_gib` ceiling, which is what makes `skip_tuning` mean the
- * same thing in both directions. A tuned workspace with no wisdom for this
- * size pays for that with a transient scratch buffer during forward planning;
- * see sif_fft_workspace_t::plan_flags and #SIF__FFT_TUNING_MAX_GIB_DEFAULT.
+ * same thing in both directions. Tuning measures on scratch buffers of one
+ * plane, never on the caller's grid; see sif_fft_workspace_t::plan_flags and
+ * #SIF__FFT_TUNING_MAX_GIB_DEFAULT.
  *
  * @param mgr The global fft manager
  * @param n_cells the number of cells for the fft

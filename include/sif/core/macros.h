@@ -66,7 +66,8 @@ typedef uint32_t sif_option;
  * A finder smooths the grid in place at every radius, so the input is gone by
  * the time it finishes. By default it is transformed back at the end; this flag
  * skips that, saving one inverse FFT for a caller that is going to discard the
- * grid anyway.
+ * grid anyway. Unless SIF_FINDER_NODE_CENTRES is set, the exodus finder leaves
+ * that field smoothed by one more cell of Gaussian, which it centres on.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
 
@@ -140,6 +141,34 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * for a caller that runs many small searches and has no use for it.
  */
 #define SIF_FINDER_NO_CHECKPOINT (1u << 11)
+
+/**
+ * Leave every exodus centre on its grid node, as before 0.5.
+ *
+ * By default a candidate at a local minimum of the smoothed field is centred
+ * where that minimum actually lies between the nodes -- see
+ * sif_finder_exodus(). This keeps it on its node, as every other candidate
+ * is. The candidates and their order are the same either way.
+ */
+#define SIF_FINDER_NODE_CENTRES (1u << 10)
+
+/**
+ * Take as exodus candidates only the local minima of the smoothed field.
+ *
+ * By default every cell below the threshold is a candidate. When a minimum is
+ * refused -- its sphere overlaps a void already accepted -- the cell next to
+ * it, on the slope, can then be accepted in its place, a void tangent to the
+ * larger one and centred on no minimum at all: on a lognormal mock that is 40%
+ * of the catalogue. With this flag a void is centred on a minimum of the field
+ * smoothed at its rung or there is no void. Combined with an overlap fraction
+ * of 1, which allows a void anywhere its centre is outside every larger one,
+ * that is the void definition of the excursion-set models. It is also cheaper:
+ * there are far fewer minima than cells below threshold.
+ *
+ * Minima are found on the field smoothed by one more cell of Gaussian, the
+ * one SIF_FINDER_NODE_CENTRES refers to, with or without that flag.
+ */
+#define SIF_FINDER_CENTRE_IS_MINIMUM (1u << 9)
 /** @} */
 
 /**
@@ -518,6 +547,7 @@ typedef char sif__cache_line_check[SIF__CACHE_LINE_IS_VALID ? 1 : -1];
 
 #  define SIF_POPCOUNT_U64(x) ((uint32_t)__builtin_popcountll((uint64_t)(x)))
 #  define SIF_CTZ_U32(x)      ((uint32_t)__builtin_ctz((uint32_t)(x)))
+#  define SIF_CTZ_U64(x)      ((uint32_t)__builtin_ctzll((uint64_t)(x)))
 
 #else
 
@@ -543,8 +573,21 @@ static inline uint32_t sif__ctz_u32(uint32_t x) {
   return n;
 }
 
+/** @brief Trailing zeros in a 64-bit word. Undefined for x == 0, matching
+ * __builtin_ctzll.
+ */
+static inline uint32_t sif__ctz_u64(uint64_t x) {
+  uint32_t n = 0;
+  while ((x & 1u) == 0u) {
+    x >>= 1;
+    n++;
+  }
+  return n;
+}
+
 #  define SIF_POPCOUNT_U64(x) sif__popcount_u64((uint64_t)(x))
 #  define SIF_CTZ_U32(x)      sif__ctz_u32((uint32_t)(x))
+#  define SIF_CTZ_U64(x)      sif__ctz_u64((uint64_t)(x))
 
 #endif
 /** @} */

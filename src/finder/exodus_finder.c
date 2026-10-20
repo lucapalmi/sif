@@ -76,6 +76,22 @@
  * depend on the batch size or the thread count; see BATCH_MAX.
  *
  *
+ * Where a centre sits
+ * -------------------
+ *
+ * The radius is measured off the grid, so a centre left on a node would be
+ * the one quantity still snapped to it: a lattice imprint on the centres, and
+ * a catalogue that moves when the grid does. A candidate at a local minimum of
+ * the smoothed field is therefore centred where that minimum actually lies
+ * between the nodes, by one Newton step on the 27 cells around it -- found,
+ * like the order the candidates are tried in, on the field smoothed by one
+ * more cell of Gaussian, see sif__finder_scan_refined(). Shifting every
+ * tracer by a fraction of a cell then shifts such a centre by the same, to a
+ * tenth or two of a cell. The other candidates, on the shoulders of a basin,
+ * have no minimum of their own to move to and stay on their nodes; keeping
+ * them is what keeps the catalogue the one the nodes give.
+ *
+ *
  * Surveys
  * -------
  *
@@ -1755,7 +1771,20 @@ typedef struct {
   sif_cell_linked_list_t* void_cll;
   const sif_chain_mesh_t* mesh; /* borrowed from the caller, never freed */
   sif_fft_workspace_t* fft_ws;
+
+  /*
+   * A rung's candidates: every cell below the threshold, or under
+   * SIF_FINDER_CENTRE_IS_MINIMUM only the local minima of the smoothed field.
+   * By default a minimum is placed between the nodes, its offset in
+   * `offsets`; under SIF_FINDER_NODE_CENTRES every centre stays on its node.
+   * `below` is the refined scan's scratch, allocated unless neither applies --
+   * the plain scan of 0.4.
+   */
+  int node_centres;
+  int minima_only;
   sif_candidate_buffer_t candidates;
+  sif_offset_buffer_t offsets;
+  sif_bitmask_t* below;
 
   batch_result_t* batch_results;
   uint64_t* batch_indices;
@@ -1786,6 +1815,75 @@ typedef struct {
   sif_fft_workspace_t* random_ws;
   sif_bitmask_t* occupied;
 } exodus_ctx_t;
+
+/* The node the rung's k-th candidate sits on. */
+static inline uint64_t candidate_node(const exodus_ctx_t* ctx, uint64_t k) {
+  return ctx->candidates.items[k].flat_idx;
+}
+
+/*
+ * The rung's k-th candidate centre, from its node and its offset off that
+ * node -- none for a candidate that was not refined, where this is
+ * i * cell_length exactly as it always was. An offset can carry a centre on
+ * node 0 or n - 1 across the face, and it is wrapped back into the box; that
+ * only happens in a periodic box, since a survey's observed nodes are a margin
+ * away from the faces.
+ */
+static inline void candidate_centre(const exodus_ctx_t* ctx, uint64_t k,
+  const sif_grid_t* grid, uint32_t ix, uint32_t iy, uint32_t iz,
+  sif_real c[3]) {
+
+  const uint32_t node[3] = {ix, iy, iz};
+  sif_real off[3] = {0.0f, 0.0f, 0.0f};
+  const uint32_t refined = ctx->candidates.items[k].refined;
+  if (refined) {
+    const sif_offset_t* o = &ctx->offsets.items[refined - 1];
+    off[0] = o->dx;
+    off[1] = o->dy;
+    off[2] = o->dz;
+  }
+
+  const sif_real box = grid->box_length;
+  for (int a = 0; a < 3; a++) {
+    sif_real x = ((sif_real)node[a] + off[a]) * grid->cell_length;
+    if (x < 0.0f)
+      x += box;
+    if (x >= box)
+      x -= box;
+    c[a] = x;
+  }
+}
+
+/*
+ * Whether the rung's k-th candidate, at radius r, certainly overlaps an
+ * accepted void because its node is masked -- the cheap rejection, taken
+ * before anything is measured.
+ *
+ * A masked node lies within r_acc of an accepted centre, so a centre on the
+ * node is within r_acc too, and two voids collide below r + r_acc - f *
+ * min(r, r_acc), which is at least r_acc. A centre refined off its node is a
+ * further |off| away, and the mask then proves a collision only while
+ * |off| < r - f * min(r, r_acc) -- of which r * (1 - f) is the bound that
+ * holds whatever r_acc is. Short of that, near f = 1, the candidate goes on to
+ * the exact test rather than being dropped on its node's word.
+ *
+ * The collision distance grows with r, so a rejection at the rung holds at
+ * every radius the rescaling can return.
+ */
+static inline int masked_overlap(const exodus_ctx_t* ctx, uint64_t k,
+  sif_real r, sif_real overlap_fraction, sif_real cell_length) {
+
+  const sif_candidate_t* c = &ctx->candidates.items[k];
+  if (!sif_bitmask_get(ctx->mask, c->flat_idx))
+    return 0;
+  if (!c->refined)
+    return 1;
+
+  const sif_offset_t* o = &ctx->offsets.items[c->refined - 1];
+  const sif_real off =
+    SIF_REAL_SQRT(o->dx * o->dx + o->dy * o->dy + o->dz * o->dz) * cell_length;
+  return off < r * (1.0f - overlap_fraction);
+}
 
 static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   if (!ctx)
@@ -1820,6 +1918,8 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   sif_free_aligned(ctx->batch_results);
   sif_free_aligned(ctx->batch_indices);
   sif__candidate_buffer_free(&ctx->candidates);
+  sif__offset_buffer_free(&ctx->offsets);
+  sif_bitmask_free(ctx->below);
   sif_cell_linked_list_free(ctx->void_cll);
   sif_bitmask_free(ctx->mask);
   sif_free_aligned(ctx->sorted_radii);
@@ -1831,6 +1931,7 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   ctx->batch_indices = NULL;
   ctx->mesh = NULL;
   ctx->void_cll = NULL;
+  ctx->below = NULL;
   ctx->mask = NULL;
   ctx->sorted_radii = NULL;
   ctx->cat = NULL;
@@ -2075,6 +2176,14 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   if (!ctx->mask)
     return SIF_ERR_ALLOC;
 
+  ctx->node_centres = (opt & SIF_FINDER_NODE_CENTRES) != 0;
+  ctx->minima_only = (opt & SIF_FINDER_CENTRE_IS_MINIMUM) != 0;
+  if (!ctx->node_centres || ctx->minima_only) {
+    ctx->below = sif_bitmask_alloc(grid->total_cells);
+    if (!ctx->below)
+      return SIF_ERR_ALLOC;
+  }
+
   ctx->void_cll = sif_cell_linked_list_alloc(
     VOID_CLL_CELLS, grid->box_length, ctx->cat->capacity, SIF_PBC_PERIODIC);
   if (!ctx->void_cll)
@@ -2128,10 +2237,10 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
 
 /*
  * What an unobserved cell reads as on the scanned field: far above any
- * threshold, so it is never a candidate. Finite, since the build is
- * -ffast-math and an infinity is not something it has to respect.
+ * threshold, so it is never a candidate, and the value the minimum scan knows
+ * to keep out of its smoothing.
  */
-#define SURVEY_OUTSIDE ((sif_real)1e30)
+#define SURVEY_OUTSIDE SIF__FINDER_UNOBSERVED
 
 /*
  * The field the survey finder scans, written over the smoothed data grid:
@@ -2545,8 +2654,9 @@ static void mesh_extent(
  *     r_search + cell - m past the face, into the far side's padding of m:
  *     m >= (r_search + cell) / 2. The FFT's top-hat, never wider than the
  *     largest rung, is covered by either.
- *   - A candidate sits on the grid node nearest to observed space, up to half
- *     a grid cell further out than the randoms themselves: plus a grid cell.
+ *   - A candidate's node is observed, so it is within half a grid cell of a
+ *     random, and a centre refined off its node is within another half cell
+ *     of that: plus a grid cell.
  */
 static int survey_check_margin(const sif_chain_mesh_t* mesh, const char* what,
   sif_real margin, const char* hint) {
@@ -2964,7 +3074,9 @@ static int run_start(checkpoint_t* ck, run_start_t* start,
   sif_finder_exodus_checkpoint_t* h = &ck->header;
   h->is_survey = random_mesh != NULL;
   h->is_weighted = mesh->weights != NULL;
-  h->options = options & (SIF__FINDER_SEARCH_MASK | SIF_FINDER_KEEP_CIC_WINDOW);
+  h->options =
+    options & (SIF__FINDER_SEARCH_MASK | SIF_FINDER_KEEP_CIC_WINDOW |
+                SIF_FINDER_NODE_CENTRES | SIF_FINDER_CENTRE_IS_MINIMUM);
   h->n_radii = n_radii;
   h->grid_n_cells = grid->n_cells;
   h->box_length = (double)grid->box_length;
@@ -3167,6 +3279,9 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
     sif_real ratio_max = 0.0f;
     uint64_t n_mismatched = 0;
 
+    /* Accepted voids whose centre was refined off its node. */
+    uint64_t n_refined = 0;
+
     /* Every rescaling this rung asks for, whatever becomes of it. */
     rescale_report_t rescale = {0};
 
@@ -3186,11 +3301,27 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
         survey_alpha, grid->total_cells);
     }
 
-    status =
-      sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
+    sif_refine_stats_t refine = {0};
+    const int plain = ctx.node_centres && !ctx.minima_only;
+    if (plain)
+      status =
+        sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
+    else
+      status = sif__finder_scan_refined(grid, ctx.mask, ctx.below, threshold,
+        survey, !ctx.node_centres, ctx.minima_only, &ctx.candidates,
+        &ctx.offsets, &refine);
     if (status != SIF_OK)
       break;
-    stats.n_candidates = ctx.candidates.count;
+
+    const uint64_t n_candidates = ctx.candidates.count;
+    stats.n_candidates = n_candidates;
+
+    if (!plain) {
+      SIF_LOG_TRACE(
+        TAG, "local minima:              %7" PRIu64, refine.n_minima);
+      SIF_LOG_TRACE(
+        TAG, "minima left on their node: %7" PRIu64, refine.n_fallback);
+    }
 
     const sif_real rmin = RMIN_FACTOR * radius;
 
@@ -3268,14 +3399,15 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
     uint32_t resolve_window = RESOLVE_INITIAL;
 
     uint64_t k = 0;
-    while (k < ctx.candidates.count && status == SIF_OK) {
+    while (k < n_candidates && status == SIF_OK) {
       uint64_t batch_count = 0;
 
       /* Phase 0: skip already-masked candidates sequentially. Doing this
        * outside the parallel region avoids paying thread sync for millions of
        * trivially dead candidates. */
-      while (k < ctx.candidates.count && batch_count < batch_cap) {
-        if (sif_bitmask_get(ctx.mask, ctx.candidates.items[k].flat_idx)) {
+      while (k < n_candidates && batch_count < batch_cap) {
+        if (masked_overlap(
+              &ctx, k, radius, overlap_fraction, grid->cell_length)) {
           stats.rejected_masked++;
         } else {
           ctx.batch_indices[batch_count++] = k;
@@ -3294,8 +3426,8 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
 #pragma omp parallel for schedule(dynamic, 16) num_threads(ctx.n_threads)
       for (uint64_t b = 0; b < batch_count; b++) {
         const int tid = sif__system_thread_num();
-        const uint64_t flat =
-          ctx.candidates.items[ctx.batch_indices[b]].flat_idx;
+        const uint64_t cand = ctx.batch_indices[b];
+        const uint64_t flat = candidate_node(&ctx, cand);
         batch_result_t* res = &ctx.batch_results[b];
 
         uint32_t ix, iy, iz;
@@ -3312,9 +3444,16 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
           continue;
         }
 
-        const sif_real cx = (sif_real)ix * grid->cell_length;
-        const sif_real cy = (sif_real)iy * grid->cell_length;
-        const sif_real cz = (sif_real)iz * grid->cell_length;
+        /* The pole probe above read the node, which is within half a cell
+         * of the centre on every axis. A masked pole p cells out is then
+         * within sqrt((p + 1/2)^2 + 1/2) < p + 1 cells of the centre, and the
+         * "- 1" in proxy_pole is that cell: the probe still only rejects a
+         * candidate that certainly overlaps. */
+        sif_real c[3];
+        candidate_centre(&ctx, cand, grid, ix, iy, iz, c);
+        const sif_real cx = c[0];
+        const sif_real cy = c[1];
+        const sif_real cz = c[2];
 
         res->cx = cx;
         res->cy = cy;
@@ -3382,10 +3521,8 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
          * below go on to decide about the void itself. */
         rescale_report_add(&rescale, res->r_scaled / radius);
 
-        const uint64_t flat =
-          ctx.candidates.items[ctx.batch_indices[b]].flat_idx;
-
-        if (sif_bitmask_get(ctx.mask, flat)) {
+        if (masked_overlap(&ctx, ctx.batch_indices[b], res->r_scaled,
+              overlap_fraction, grid->cell_length)) {
           stats.rejected_masked++;
           continue;
         }
@@ -3418,6 +3555,7 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
         if (status != SIF_OK)
           break;
         stats.accepted++;
+        n_refined += ctx.candidates.items[ctx.batch_indices[b]].refined != 0;
 
         const sif_real ratio = res->r_scaled / radius;
         ratio_sum += (double)ratio;
@@ -3475,6 +3613,9 @@ static sif_catalogue_t* exodus_run(sif_grid_t* grid,
     sif_timer_stop(&timer);
 
     rescale_report_log(&rescale);
+
+    if (!ctx.node_centres)
+      SIF_LOG_TRACE(TAG, "accepted between the nodes: %6" PRIu64, n_refined);
 
     /* The same ratio again, but over the voids that survived to the catalogue:
      * that is the population the localisation warning below is about. */

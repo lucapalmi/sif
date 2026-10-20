@@ -81,7 +81,8 @@ static const char* const MESH_KEYS[] = {"n_cells", NULL};
 static const char* const SURVEY_MESH_KEYS[] = {
   "n_cells_data", "n_cells_random", NULL};
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
-  "overlap_fraction", "search_factor", NULL};
+  "overlap_fraction", "search_factor", "centre_refinement_hessian",
+  "centre_is_minimum", NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
 static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
 static const char* const RUN_KEYS[] = {
@@ -534,6 +535,7 @@ static void set_defaults(exodus_config_t* c) {
 
   p->finder.overlap_fraction = 0.0;
   p->finder.search_factor = 1.5;
+  p->finder.centre_refinement_hessian = true;
   p->output.kind = EXODUS_OUTPUT_HDF5;
 
   c->run.n_threads = 0;
@@ -1425,6 +1427,11 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
       report(
         r, "finder.search_factor", "must be 1.25, 1.5, 1.75 or 2, got %g", x);
   }
+  bool b;
+  if (get_bool(r, t, "finder", "centre_refinement_hessian", &b))
+    p->finder.centre_refinement_hessian = b;
+  if (get_bool(r, t, "finder", "centre_is_minimum", &b))
+    p->finder.centre_is_minimum = b;
   lua_settop(L, t - 1);
 }
 
@@ -1950,7 +1957,12 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
   format_double(num, sizeof num, p->finder.overlap_fraction);
   fprintf(out, "  overlap_fraction = %s,\n", num);
   format_double(num, sizeof num, p->finder.search_factor);
-  fprintf(out, "  search_factor = %s,\n}\n\n", num);
+  fprintf(out, "  search_factor = %s,\n", num);
+  if (!p->finder.centre_refinement_hessian)
+    fputs("  centre_refinement_hessian = false,\n", out);
+  if (p->finder.centre_is_minimum)
+    fputs("  centre_is_minimum = true,\n", out);
+  fputs("}\n\n", out);
 
   if (p->prior.path) {
     fputs("prior = { path = ", out);
@@ -2711,6 +2723,16 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
   else if (factor != p->finder.search_factor)
     snprintf(why, sizeof why, "search factor %g (this run's: %g)", factor,
       p->finder.search_factor);
+  else if (((h.options & SIF_FINDER_NODE_CENTRES) == 0) !=
+           p->finder.centre_refinement_hessian)
+    snprintf(why, sizeof why, "centres %s (this run %s them)",
+      (h.options & SIF_FINDER_NODE_CENTRES) ? "on the nodes" : "refined",
+      p->finder.centre_refinement_hessian ? "refines" : "leaves");
+  else if (((h.options & SIF_FINDER_CENTRE_IS_MINIMUM) != 0) !=
+           p->finder.centre_is_minimum)
+    snprintf(why, sizeof why, "candidates %s (this run's: %s)",
+      (h.options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only" : "every cell",
+      p->finder.centre_is_minimum ? "minima only" : "every cell");
   for (uint32_t i = 0; !why[0] && ladder && i < n; i++) {
     if (saved[i] != ladder[i])
       snprintf(why, sizeof why,

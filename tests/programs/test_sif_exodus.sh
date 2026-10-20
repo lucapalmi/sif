@@ -129,6 +129,28 @@ tail -n +2 resolved.lua >a.txt
 tail -n +2 out.txt >b.txt
 cmp -s a.txt b.txt || fail "resolving the resolved configuration changed it"
 
+# The centre options: left out of the resolved configuration at their
+# defaults, carried through it otherwise -- which still resolves to itself --
+# and refused as anything but a boolean.
+grep -q 'centre_' resolved.lua && fail "centre options written at their defaults"
+sed -e 's/centre_refinement_hessian = true/centre_refinement_hessian = false/' \
+  -e 's/centre_is_minimum = false/centre_is_minimum = true/' template.lua >centres.lua
+run --check centres.lua
+expect_status 0 "centre options --check"
+grep -q '^  centre_refinement_hessian = false,' out.txt ||
+  fail "centre_refinement_hessian: not in the resolved configuration"
+grep -q '^  centre_is_minimum = true,' out.txt ||
+  fail "centre_is_minimum: not in the resolved configuration"
+cp out.txt centres_resolved.lua
+run --check centres_resolved.lua
+tail -n +2 centres_resolved.lua >a.txt
+tail -n +2 out.txt >b.txt
+cmp -s a.txt b.txt || fail "centre options: resolving them again changed them"
+sed 's/centre_is_minimum = false/centre_is_minimum = 1/' template.lua >centres_bad.lua
+run --check centres_bad.lua
+expect_status 2 "centre_is_minimum = 1"
+expect_error "finder.centre_is_minimum" "centre_is_minimum = 1"
+
 # --- mistakes -------------------------------------------------------------
 
 cat >typos.lua <<'EOF'

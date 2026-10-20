@@ -222,8 +222,10 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
   ws->delta_k = NULL;
   ws->delta_k_cpy = NULL;
   ws->cic_inv = NULL;
-  ws->forward_plan = NULL;
-  ws->backward_plan = NULL;
+  ws->plane_r2c = NULL;
+  ws->pencil_forward = NULL;
+  ws->plane_c2r = NULL;
+  ws->pencil_backward = NULL;
 
   const uint64_t complex_cells = fft_complex_count(n_cells);
   const uint64_t spectrum_bytes = complex_cells * sizeof(sif_real_complex);
@@ -247,121 +249,176 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
     return NULL;
   }
 
-  /* The forward plan is created on first use, see fft_ensure_forward_plan. */
+  /* The forward plans are created on first use, see fft_plan_stage(). */
   return ws;
 }
 
 /*
- * Plans the forward transform, at the workspace's one planner quality.
- *
- * The awkward part is that measuring means *executing*, repeatedly, over
- * whatever arrays the planner is handed -- and the natural input here is the
- * caller's own density field, which is not ours to destroy. That used to be
- * settled by quietly dropping the forward plan to FFTW_ESTIMATE while the
- * backward plan went on measuring, which made `skip_tuning` a statement about
- * half the workspace. It is settled here instead by giving the planner a
- * scratch input of its own, so a tuned workspace really does tune both
- * transforms.
- *
- * Three paths, in order of preference:
- *
- *   1. Wisdom. FFTW_WISDOM_ONLY returns NULL rather than measuring, so it
- *      cannot touch `in`, and when it succeeds there is nothing left to
- *      measure -- the usual case for a grid size that has been run before.
- *   2. Not tuning. FFTW_ESTIMATE does not execute anything, so it plans
- *      against `in` directly and costs nothing.
- *   3. Tuning, no wisdom. Allocate n^3 reals, measure against that, free it.
- *      The scratch is alive only across the planning call, but it is the size
- *      of the grid (42 GiB at n_cells = 2250) and it is alive at exactly the
- *      moment the caller is still holding the density field -- so this is the
- *      expensive path, and the warning says so.
- *
- * If that scratch cannot be had, the *workspace* drops to FFTW_ESTIMATE rather
- * than this plan alone: the backward transform reads plan_flags too, and the
- * one thing this function must not do is reintroduce the split it exists to
- * remove.
+ * Pencils transformed together along x: gathered from the spectrum into a
+ * contiguous buffer of n_cells x FFT_PENCIL_BLOCK, transformed there and
+ * scattered back. The gather is what lets the pencil plan be measured on a
+ * buffer of that size rather than on the spectrum itself, and it keeps the
+ * transform's working set in cache. Fixed, not taken from the thread count:
+ * which pencils share a block is then a property of the grid alone.
  */
-static int fft_ensure_forward_plan(
-  sif_fft_workspace_t* ws, const sif_real* in) {
+#define FFT_PENCIL_BLOCK 16
 
-  if (ws->forward_plan)
-    return SIF_OK;
+/* Elements of one x-plane: reals in the grid, complex slots in the
+ * spectrum. */
+static inline uint64_t fft_plane_reals(uint32_t n) { return (uint64_t)n * n; }
+static inline uint64_t fft_plane_modes(uint32_t n) {
+  return (uint64_t)n * (n / 2 + 1);
+}
+
+/*
+ * FFTW's new-array interface only accepts arrays aligned as the ones a plan
+ * was made on, and the planes are executed in place in the grid and the
+ * spectrum. Plane x starts x planes in, so it is aligned for every x exactly
+ * when one plane's span is a multiple of the alignment -- a cache line, which
+ * covers every SIMD width FFTW uses. When it is not, the plane plans are made
+ * unaligned. Decided by n alone, so it never depends on where an allocation
+ * happened to land.
+ */
+static unsigned int fft_plane_alignment_flag(uint32_t n) {
+  const uint64_t real_bytes = fft_plane_reals(n) * sizeof(sif_real);
+  const uint64_t mode_bytes = fft_plane_modes(n) * sizeof(sif_real_complex);
+  return (real_bytes % SIF_CACHE_LINE == 0 && mode_bytes % SIF_CACHE_LINE == 0)
+           ? 0u
+           : (unsigned int)FFTW_UNALIGNED;
+}
+
+/*
+ * Plans one direction of the workspace's transform: the plane plan and the
+ * pencil plan, single-threaded, at the workspace's one planner quality.
+ *
+ * Measuring means executing, repeatedly, over whatever the planner is handed,
+ * so both are planned on scratch buffers of their own -- a plane and a pencil
+ * block, never the caller's grid -- and run on the real arrays through the
+ * new-array interface. That is also why tuning no longer needs a scratch copy
+ * of the whole grid.
+ *
+ * Wisdom is written back only when planning added to it: comparing FFTW's
+ * wisdom before and after is the one way to tell a plan that came out of the
+ * file from one that was measured.
+ */
+static int fft_plan_stage(sif_fft_workspace_t* ws, int forward) {
+  const uint32_t n = ws->n_cells;
+  const int len[1] = {(int)n};
+  const unsigned int flags = ws->plan_flags;
+
+  sif_real* plane_r = real_fftw_malloc(fft_plane_reals(n) * sizeof(sif_real));
+  sif_real_complex* plane_c =
+    real_fftw_malloc(fft_plane_modes(n) * sizeof(sif_real_complex));
+  sif_real_complex* pencils =
+    real_fftw_malloc((uint64_t)n * FFT_PENCIL_BLOCK * sizeof(sif_real_complex));
+
+  char* before = NULL;
+  if (fft_is_tuned(ws))
+    before = real_fftw_export_wisdom_to_string();
+
+  int status = SIF_ERR_ALLOC;
+  if (plane_r && plane_c && pencils) {
+    real_fftw_plan_with_nthreads(1);
+
+    const unsigned int plane_flags = flags | fft_plane_alignment_flag(n);
+    sif_real_fftw_plan* plane = forward ? &ws->plane_r2c : &ws->plane_c2r;
+    sif_real_fftw_plan* pencil =
+      forward ? &ws->pencil_forward : &ws->pencil_backward;
+
+    *plane = forward
+               ? real_fftw_plan_dft_r2c_2d(n, n, plane_r, plane_c, plane_flags)
+               : real_fftw_plan_dft_c2r_2d(n, n, plane_c, plane_r, plane_flags);
+    *pencil = real_fftw_plan_many_dft(1, len, FFT_PENCIL_BLOCK, pencils, NULL,
+      FFT_PENCIL_BLOCK, 1, pencils, NULL, FFT_PENCIL_BLOCK, 1,
+      forward ? FFTW_FORWARD : FFTW_BACKWARD, flags);
+
+    if (*plane && *pencil)
+      status = SIF_OK;
+  }
+
+  if (status == SIF_OK && before) {
+    char* after = real_fftw_export_wisdom_to_string();
+    if (after && strcmp(before, after) != 0)
+      fft_save_wisdom(ws->mgr);
+    free(after);
+  }
+  free(before);
+
+  real_fftw_free(plane_r);
+  real_fftw_free(plane_c);
+  real_fftw_free(pencils);
+
+  if (status != SIF_OK) {
+    SIF_LOG_ERROR("fft_context", "failed to create the %s plans for %u^3",
+      forward ? "forward" : "backward", n);
+    return status;
+  }
+
+  SIF_LOG_TRACE("fft_context", "%s plans created (%s)",
+    forward ? "forward" : "backward", fft_is_tuned(ws) ? "tuned" : "estimated");
+  return SIF_OK;
+}
+
+/*
+ * The 1D transforms along x, over every (y, kz) pencil of `c`, a block of
+ * FFT_PENCIL_BLOCK at a time. The last block is padded with zeros: every
+ * pencil goes through the one plan, and a padded lane never feeds another.
+ */
+static int fft_pencils(
+  const sif_fft_workspace_t* ws, sif_real_complex* c, sif_real_fftw_plan plan) {
 
   const uint32_t n = ws->n_cells;
+  const uint64_t n_pencils = fft_plane_modes(n);
+  const uint64_t n_blocks =
+    (n_pencils + FFT_PENCIL_BLOCK - 1) / FFT_PENCIL_BLOCK;
+  const size_t block_bytes = FFT_PENCIL_BLOCK * sizeof(sif_real_complex);
+  int failed = 0;
 
-  real_fftw_plan_with_nthreads(sif__system_max_threads());
-
-  /* 1. Wisdom, at this workspace's quality. */
-  ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-    n, n, n, (sif_real*)in, ws->delta_k, ws->plan_flags | FFTW_WISDOM_ONLY);
-
-  /* 3. Tuning with nothing in the wisdom file: buy the planner a scratch. */
-  if (!ws->forward_plan && fft_is_tuned(ws)) {
-    const uint64_t real_bytes = (uint64_t)n * n * n * sizeof(sif_real);
-    const double gib = (double)real_bytes / (1024.0 * 1024.0 * 1024.0);
-
-    /* Only worth interrupting anyone over once the scratch is a real amount of
-     * memory. Below that it is an implementation detail. */
-    if (real_bytes >= (1ull << 30)) {
-      SIF_LOG_WARNING("fft_context",
-        "no wisdom for a %u^3 grid, so tuning the forward transform needs a "
-        "scratch copy of it (%.1f GiB) alongside the caller's own, for the "
-        "duration of the planning; pass skip_tuning to plan both transforms "
-        "with FFTW_ESTIMATE instead",
-        n, gib);
-    } else {
-      SIF_LOG_TRACE("fft_context",
-        "tuning the forward transform for a %u^3 grid on a %.1f MiB scratch "
-        "buffer",
-        n, gib * 1024.0);
+#pragma omp parallel
+  {
+    sif_real_complex* g = real_fftw_malloc(
+      (uint64_t)n * FFT_PENCIL_BLOCK * sizeof(sif_real_complex));
+    if (!g) {
+#pragma omp atomic write
+      failed = 1;
     }
 
-    sif_real* scratch = sif_malloc_aligned((size_t)real_bytes);
+    /* Every thread reaches the barrier, buffer or not, and then all of them
+     * agree on whether to go on: a worksharing loop has to be met by the
+     * whole team or by none of it. */
+#pragma omp barrier
 
-    /* The plan is executed later against `in` through the new-array interface,
-     * which only accepts a buffer of the same alignment class as the one it
-     * was planned on. Everything sif allocates is cache-line aligned, so this
-     * holds -- but it is cheap to confirm and fatal to assume. */
-    if (scratch && real_fftw_alignment_of(scratch) ==
-                     real_fftw_alignment_of((sif_real*)in)) {
-      ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-        n, n, n, scratch, ws->delta_k, ws->plan_flags);
+    if (!failed) {
+#pragma omp for schedule(static)
+      for (uint64_t b = 0; b < n_blocks; b++) {
+        const uint64_t j0 = b * FFT_PENCIL_BLOCK;
+        const uint64_t w =
+          n_pencils - j0 < FFT_PENCIL_BLOCK ? n_pencils - j0 : FFT_PENCIL_BLOCK;
+        const size_t bytes = w * sizeof(sif_real_complex);
 
-      /* Banked before the scratch is even released: this is the only point in
-       * the run where the measurement exists and has not yet been paid for
-       * twice. */
-      if (ws->forward_plan)
-        fft_save_wisdom(ws->mgr);
+        for (uint32_t x = 0; x < n; x++) {
+          sif_real_complex* row = g + (uint64_t)x * FFT_PENCIL_BLOCK;
+          memcpy(row, c + x * n_pencils + j0, bytes);
+          if (w < FFT_PENCIL_BLOCK)
+            memset(row + w, 0, block_bytes - bytes);
+        }
+
+        real_fftw_execute_dft(plan, g, g);
+
+        for (uint32_t x = 0; x < n; x++)
+          memcpy(
+            c + x * n_pencils + j0, g + (uint64_t)x * FFT_PENCIL_BLOCK, bytes);
+      }
     }
 
-    sif_free_aligned(scratch); /* NULL-safe */
-
-    /* Whichever way it failed -- no scratch, wrong alignment, no plan -- the
-     * fall-through below is about to plan against `in`, and that is only safe
-     * for a planner that does not execute. Downgrading the workspace rather
-     * than this one plan is also what keeps the two transforms in step. */
-    if (!ws->forward_plan) {
-      SIF_LOG_WARNING("fft_context",
-        "could not tune the forward transform; dropping the whole workspace "
-        "to FFTW_ESTIMATE so both transforms are planned alike");
-      ws->plan_flags = FFTW_ESTIMATE;
-    }
+    real_fftw_free(g);
   }
 
-  /* 2. Not tuning, either by request or by the downgrade above. */
-  if (!ws->forward_plan) {
-    ws->forward_plan = real_fftw_plan_dft_r2c_3d(
-      n, n, n, (sif_real*)in, ws->delta_k, ws->plan_flags);
-  }
-
-  if (!ws->forward_plan) {
-    SIF_LOG_ERROR("fft_context", "failed to create the forward plan");
+  if (failed) {
+    SIF_LOG_ERROR("fft_context",
+      "failed to allocate the pencil buffers for a %u^3 transform", n);
     return SIF_ERR_ALLOC;
   }
-
-  SIF_LOG_TRACE("fft_context", "forward plan created (%s)",
-    fft_is_tuned(ws) ? "tuned" : "estimated");
-
   return SIF_OK;
 }
 
@@ -370,7 +427,7 @@ int sif__fft_workspace_init_backward(
   if (!ws || !mgr)
     return SIF_ERR_INVALID;
 
-  if (ws->backward_plan)
+  if (ws->plane_c2r)
     return SIF_OK;
 
   const uint64_t complex_cells = fft_complex_count(ws->n_cells);
@@ -384,44 +441,20 @@ int sif__fft_workspace_init_backward(
     return SIF_ERR_ALLOC;
   }
 
-  /*
-   * ws->plan_flags, not mgr->flags: the forward plan may have had to downgrade
-   * the workspace, and the two are planned alike or not at all. The buffer is
-   * the workspace's own, so measuring here is free of the scratch the forward
-   * plan needs.
-   *
-   * Wisdom is asked first even though a plain plan call would consult it
-   * anyway, because the two-step is what makes "did we have to measure?"
-   * answerable -- and there is nothing to write back for a plan that came out
-   * of the file.
-   *
-   * The thread count is set here as well as for the forward plan, so neither
-   * depends on the other having been planned first.
-   */
-  real_fftw_plan_with_nthreads(sif__system_max_threads());
-  ws->backward_plan = real_fftw_plan_dft_c2r_3d(ws->n_cells, ws->n_cells,
-    ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy,
-    ws->plan_flags | FFTW_WISDOM_ONLY);
-
-  if (!ws->backward_plan) {
-    ws->backward_plan = real_fftw_plan_dft_c2r_3d(ws->n_cells, ws->n_cells,
-      ws->n_cells, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy, ws->plan_flags);
-
-    if (ws->backward_plan && fft_is_tuned(ws))
-      fft_save_wisdom(ws->mgr);
-  }
-
-  if (!ws->backward_plan) {
-    SIF_LOG_ERROR("fft_context", "failed to create the backward plan");
+  /* ws->plan_flags, not mgr->flags: the two directions are planned alike or
+   * not at all. */
+  const int status = fft_plan_stage(ws, 0);
+  if (status != SIF_OK) {
     sif_free_aligned(ws->delta_k_cpy);
     ws->delta_k_cpy = NULL;
-    return SIF_ERR_ALLOC;
   }
+  return status;
+}
 
-  SIF_LOG_TRACE("fft_context", "backward plan created (%s)",
-    fft_is_tuned(ws) ? "tuned" : "estimated");
-
-  return SIF_OK;
+static void fft_destroy_plan(sif_real_fftw_plan* p) {
+  if (*p)
+    real_fftw_destroy_plan(*p);
+  *p = NULL;
 }
 
 sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
@@ -431,11 +464,9 @@ sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
   sif_real* buffer = (sif_real*)ws->delta_k_cpy;
   ws->delta_k_cpy = NULL;
 
-  /* The plan points at a buffer we no longer own, so it must not be reused. */
-  if (ws->backward_plan) {
-    real_fftw_destroy_plan(ws->backward_plan);
-    ws->backward_plan = NULL;
-  }
+  /* No backward transform without the buffer it runs in. */
+  fft_destroy_plan(&ws->plane_c2r);
+  fft_destroy_plan(&ws->pencil_backward);
 
   return buffer;
 }
@@ -447,12 +478,12 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
   }
 
   /* Nothing to save here: wisdom is written the moment a plan is measured,
-   * see fft_save_wisdom(). */
+   * see fft_plan_stage(). */
 
-  if (ws->forward_plan)
-    real_fftw_destroy_plan(ws->forward_plan);
-  if (ws->backward_plan)
-    real_fftw_destroy_plan(ws->backward_plan);
+  fft_destroy_plan(&ws->plane_r2c);
+  fft_destroy_plan(&ws->pencil_forward);
+  fft_destroy_plan(&ws->plane_c2r);
+  fft_destroy_plan(&ws->pencil_backward);
   if (ws->delta_k)
     real_fftw_free(ws->delta_k);
   if (ws->delta_k_cpy)
@@ -596,51 +627,97 @@ int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
     return SIF_ERR_INVALID;
   }
 
-  if (fft_ensure_forward_plan(ws, grid->values) != SIF_OK)
+  if (!ws->plane_r2c && fft_plan_stage(ws, 1) != SIF_OK)
     return SIF_ERR_ALLOC;
 
-  real_fftw_execute_dft_r2c(
-    ws->forward_plan, (sif_real*)grid->values, ws->delta_k);
-  SIF_LOG_TRACE("fft_context", "forward fft on cubic grid executed");
+  const uint32_t n = ws->n_cells;
+  const uint64_t plane_reals = fft_plane_reals(n);
+  const uint64_t plane_modes = fft_plane_modes(n);
+  sif_real* in = grid->values;
 
-  return SIF_OK;
+  /* The plans were made on FFTW's own allocations; a grid's values come from
+   * sif's aligned allocator, which is at least as strict. */
+  SIF_ASSERT(real_fftw_alignment_of(in) == 0);
+
+  /* r2c leaves its input alone, so the caller's grid survives. */
+#pragma omp parallel for schedule(static)
+  for (uint32_t x = 0; x < n; x++)
+    real_fftw_execute_dft_r2c(
+      ws->plane_r2c, in + x * plane_reals, ws->delta_k + x * plane_modes);
+
+  const int status = fft_pencils(ws, ws->delta_k, ws->pencil_forward);
+  if (status == SIF_OK)
+    SIF_LOG_TRACE("fft_context", "forward fft on cubic grid executed");
+  return status;
 }
 
 sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
-  if (!ws || !ws->backward_plan || !ws->delta_k_cpy) {
+  if (!ws || !ws->plane_c2r || !ws->delta_k_cpy) {
     SIF_LOG_ERROR("fft_context", "the backward stage is not initialised");
     return NULL;
   }
 
-  real_fftw_execute_dft_c2r(
-    ws->backward_plan, ws->delta_k_cpy, (sif_real*)ws->delta_k_cpy);
+  if (fft_pencils(ws, ws->delta_k_cpy, ws->pencil_backward) != SIF_OK)
+    return NULL;
 
+  const uint32_t n = ws->n_cells;
+  const uint64_t plane_reals = fft_plane_reals(n);
+  const uint64_t plane_modes = fft_plane_modes(n);
+  const sif_real norm = 1.0f / (sif_real)((uint64_t)n * n * n);
+  sif_real_complex* spectrum = ws->delta_k_cpy;
   sif_real* data = (sif_real*)ws->delta_k_cpy;
+  int failed = 0;
 
-  const uint64_t n = ws->n_cells;
-  const uint64_t n_padded = 2 * (n / 2 + 1);
-  const uint64_t total_cells = n * n * n;
-  const sif_real norm = 1.0f / (sif_real)total_cells;
+  /*
+   * The planes come back compact, n^2 reals each, into the buffer still
+   * holding the spectrum -- so plane x lands on top of the spectrum of the
+   * planes before it, and of its own, but never of a later one: a real plane
+   * is smaller than a plane of modes. The team therefore takes the planes a
+   * chunk at a time, one plane per thread: every thread transforms its plane
+   * into a buffer of its own, and only once the whole chunk has read its
+   * spectrum does any of it write back.
+   */
+#pragma omp parallel
+  {
+    const uint32_t team = (uint32_t)omp_get_num_threads();
+    const uint32_t me = (uint32_t)omp_get_thread_num();
+    sif_real* plane = real_fftw_malloc(plane_reals * sizeof(sif_real));
+    if (!plane) {
+#pragma omp atomic write
+      failed = 1;
+    }
 
-  /* An in-place r2c/c2r pair always pads the last dimension, so n_padded > n
-   * unconditionally and the rows have to be compacted.
-   *
-   * The compaction cannot be parallelised row-wise: row r writes into
-   * [r*n, (r+1)*n) while row r-1 reads from [(r-1)*n_padded, +n), and those
-   * overlap. Sequentially it is safe because the write cursor never overtakes
-   * the read cursor. So compact serially with memmove (bandwidth-bound, no
-   * per-element loop) and do the arithmetic in a separate parallel pass. */
-  for (uint64_t row = 1; row < n * n; row++) {
-    memmove(data + row * n, data + row * n_padded, n * sizeof(sif_real));
+#pragma omp barrier
+
+    if (!failed) {
+      for (uint32_t x0 = 0; x0 < n; x0 += team) {
+        const uint32_t x = x0 + me;
+        if (x < n)
+          real_fftw_execute_dft_c2r(
+            ws->plane_c2r, spectrum + x * plane_modes, plane);
+
+#pragma omp barrier
+
+        if (x < n) {
+          sif_real* out = data + x * plane_reals;
+          for (uint64_t i = 0; i < plane_reals; i++)
+            out[i] = plane[i] * norm;
+        }
+
+#pragma omp barrier
+      }
+    }
+
+    real_fftw_free(plane);
   }
 
-#pragma omp parallel for schedule(static)
-  for (uint64_t i = 0; i < total_cells; i++) {
-    data[i] *= norm;
+  if (failed) {
+    SIF_LOG_ERROR("fft_context",
+      "failed to allocate the plane buffers for a %u^3 transform", n);
+    return NULL;
   }
 
   SIF_LOG_TRACE("fft_context", "backward fft on cubic grid executed");
-
   return data;
 }
 

@@ -221,6 +221,11 @@ typedef struct {
     /* How far past a rung the rescaling looks, as a multiple of it: 1.25,
      * 1.5, 1.75 or 2.0 (the SIF_FINDER_SEARCH_* family). */
     double search_factor;
+    /* Refine a centre at a minimum off the grid; false is
+     * SIF_FINDER_NODE_CENTRES. */
+    bool centre_refinement_hessian;
+    /* Only minima as candidates: SIF_FINDER_CENTRE_IS_MINIMUM. */
+    bool centre_is_minimum;
   } finder;
 
   /* --- prior catalogue ------------------------------------------------ */
