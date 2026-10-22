@@ -137,8 +137,9 @@ static void test_vic_reference(void) {
     sif_real* barrier = as_real(EP_VIC_BARRIER[c], n);
     sif_real* collapse = as_real(EP_VIC_COLLAPSE[c], n);
 
+    sif_emu_domain_t dom;
     sif_real* f = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
-      EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], NULL, SIF_DEFAULT);
+      EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], &dom, SIF_DEFAULT);
     sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
       EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], NULL, SIF_EP_EMU_BIN_CENTRES);
     sif_real* f1 = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
@@ -173,6 +174,14 @@ static void test_vic_reference(void) {
         "void-in-cloud case %d departs from the Python model by %.3e", c,
         worst);
       CHECK(k_max <= 1.0 + 1e-6, "void-in-cloud raised f: K = %.8f", k_max);
+      /* These grids start at nu_origin well above the trained 5.77. That is
+       * the same walk started further out, not a gap in the training: the
+       * network holds nu_origin at its maximum and the guard does not flag it
+       * (it used to, and K moved by up to 2.7% unclamped). */
+      CHECK(dom.in_domain == 1,
+        "void-in-cloud case %d (nu_origin %.1f) was flagged out of domain, "
+        "%u bins",
+        c, (double)dom.nu_origin, dom.n_bins_outside);
       printf("  case %d: worst relative departure %.2e, K %.4f to %.4f\n", c,
         worst, k_min, k_max);
     }

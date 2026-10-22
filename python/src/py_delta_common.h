@@ -23,7 +23,8 @@
  * @return 0, or -1 with a Python exception set on an unrecognised name.
  */
 static inline int py_sif_delta_parse_options(const char* shuffle,
-  const char* window, int keep_cic_window, sif_option* out) {
+  const char* window, int keep_cic_window, const char* deconvolution,
+  sif_option* out) {
 
   sif_option options = SIF_DEFAULT;
 
@@ -50,8 +51,18 @@ static inline int py_sif_delta_parse_options(const char* shuffle,
     return -1;
   }
 
+  /* keep_cic_window=True is the older spelling of deconvolution='none'. */
+  if (keep_cic_window && deconvolution && strcmp(deconvolution, "none") != 0) {
+    PyErr_Format(PyExc_ValueError,
+      "keep_cic_window=True asks for deconvolution='none', not '%s'",
+      deconvolution);
+    return -1;
+  }
   if (keep_cic_window)
     options |= SIF_DELTA_KEEP_CIC_WINDOW;
+  if (py_sif_parse_deconvolution(deconvolution, SIF_DELTA_KEEP_CIC_WINDOW,
+        SIF_DELTA_ALIASING_WINDOW, &options) < 0)
+    return -1;
 
   *out = options;
   return 0;

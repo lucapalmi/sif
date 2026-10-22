@@ -83,14 +83,19 @@ mesh = pysif.ChainMesh(
 )
 
 # now we can finally run exodus
-# we make it consume the grid because we don't need it anymore
+# we make it consume the grid because we don't need it anymore.
+# centres="optimised" moves every void to where the tracers give the
+# largest radius, which makes the catalogue independent of the grid; start
+# the ladder about 1.5x below the smallest radius you report (see the
+# exodus guide). The default, "legacy", is the finder of 0.4
 threshold = -0.7
 catalogue = pysif.finders.exodus(
     grid=grid,
     mesh=mesh,
     radii=search_radii,
     threshold=threshold,
-    consume_grid=True
+    consume_grid=True,
+    centres="optimised"
 )
 
 # we finally save the catalogue and release the system state

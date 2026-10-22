@@ -58,14 +58,14 @@
  * (and of weights, if the run is meant to be unweighted) when the mesh is
  * being built for the finder alone.
  *
- * Every cell at or below the threshold is a candidate, deepest first. One at
- * a local minimum of the smoothed field is centred where that minimum lies
- * between the nodes, so its centre follows the tracers rather than the grid;
- * the others stay on their nodes. Minima, centres and the order are found on
- * the field smoothed by one more cell of Gaussian, which removes the
- * cell-scale ripple a top-hat leaves; the threshold is tested on the top-hat
- * alone. SIF_FINDER_NODE_CENTRES leaves every centre on its node, and
- * SIF_FINDER_CENTRE_IS_MINIMUM keeps only the minima as candidates.
+ * The candidates and where a void is centred are one of three finders, the
+ * SIF_FINDER_CENTRES_* options. By default (SIF_FINDER_CENTRES_LEGACY) every
+ * cell at or below the threshold is a candidate, deepest first, on its node:
+ * the finder of 0.4. SIF_FINDER_CENTRES_MINIMA takes the minima of the
+ * rung's field smoothed at the rung's scale, refined off their nodes;
+ * SIF_FINDER_CENTRES_OPTIMISED moves each of those to where the tracers give
+ * the largest radius, which no longer depends on the grid. The threshold is
+ * always tested on the top-hat alone.
  *
  * A catalogue does not depend on the thread count, bit for bit. It does
  * depend on the grid's last bits: a grid this hands back is restored to float
@@ -86,8 +86,8 @@
  * @param overlap_fraction How much two voids may overlap, as a fraction of
  * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
  * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
- * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_NODE_CENTRES,
- * SIF_FINDER_CENTRE_IS_MINIMUM and SIF_FINDER_SEARCH_*. The box is always
+ * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
+ * SIF_FINDER_CENTRES_* and SIF_FINDER_SEARCH_*. The box is always
  * periodic; a survey, with edges, is sif_finder_exodus_survey().
  *
  * @note The grid is assumed to have been built by sif_grid_assign_cic(), whose
@@ -171,8 +171,8 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * in (-1, 0).
  * @param overlap_fraction As in sif_finder_exodus().
  * @param opt Finder options: SIF_FINDER_CONSUME_GRID (both grids),
- * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_NODE_CENTRES,
- * SIF_FINDER_CENTRE_IS_MINIMUM and SIF_FINDER_SEARCH_*.
+ * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW and
+ * SIF_FINDER_SEARCH_*. The centres are SIF_FINDER_CENTRES_LEGACY's, for now.
  *
  * @return Newly allocated catalogue, with its footprint columns, in the
  * caller's frame, released with sif_catalogue_free(); NULL on invalid input
@@ -305,7 +305,7 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_ex(
 /** @brief Magic number at the start of every exodus checkpoint. */
 #define SIF_FINDER_CHECKPOINT_MAGIC "XCKP"
 /** @brief Version of the checkpoint layout this build reads and writes. */
-#define SIF_FINDER_CHECKPOINT_VERSION 2
+#define SIF_FINDER_CHECKPOINT_VERSION 4
 
 /**
  * @brief The fixed 192-byte header of an exodus checkpoint.
@@ -338,10 +338,11 @@ typedef struct {
   uint32_t is_weighted;
   /**
    * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor,
-   * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_NODE_CENTRES and
-   * SIF_FINDER_CENTRE_IS_MINIMUM. A version 1
-   * file reads with SIF_FINDER_NODE_CENTRES set, since that is how it was
-   * written.
+   * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW and the
+   * SIF_FINDER_CENTRES_*. Version 3 and before kept the centres as two other
+   * bits; a file of theirs reads as SIF_FINDER_CENTRES_LEGACY if it was
+   * written with every cell on its node, and otherwise as the reserved value
+   * SIF__FINDER_CENTRES_MASK, a finder this build no longer has.
    */
   uint32_t options;
   /** Rungs on the ladder. */
@@ -390,8 +391,14 @@ typedef struct {
    * found them, carried for the warning the finished run gives.
    */
   uint64_t n_mismatched;
+  /**
+   * How the (data) grid was deposited: the #sif_assignment_t in the low byte,
+   * 1 in the next if interlaced. Written since version 3; an older checkpoint
+   * reads as CIC, which is what every grid was then.
+   */
+  uint32_t assignment;
   /** Reserved, zero, to hold the header at 192 bytes. */
-  char reserved[40];
+  char reserved[36];
 } sif_finder_exodus_checkpoint_t;
 
 /**

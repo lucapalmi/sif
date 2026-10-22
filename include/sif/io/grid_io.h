@@ -74,8 +74,15 @@ typedef struct {
    * file simply declines to prove anything, which is what it could always do.
    */
   uint64_t source_key[2];
+  /**
+   * How the cells were deposited: the #sif_assignment_t in the low byte, 1 in
+   * the next if interlaced. Zero in every file written before it was recorded
+   * -- it sat in the reserved padding -- which reads as an unknown scheme, the
+   * same as a grid filled by hand; no version bump.
+   */
+  uint32_t assignment;
   /** Reserved, to hold the header at 64 bytes. */
-  char padding[8];
+  char padding[4];
 } sif_xgrid_header_t;
 
 /**

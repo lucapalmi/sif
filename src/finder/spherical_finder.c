@@ -120,7 +120,7 @@ static int ctx_init(spherical_ctx_t* ctx, sif_grid_t* grid,
   /* Before the first filter and after the transform, which is the only window
    * in which the assignment window is separable from the smoothing one. The
    * radii are sorted descending, so the last is the smallest. */
-  if (sif__finder_deconvolve_cic(
+  if (sif__finder_deconvolve_window(
         TAG, ctx->fft_ws, grid, ctx->sorted_radii[n_radii - 1], opt) != SIF_OK)
     return SIF_ERR_INVALID;
 

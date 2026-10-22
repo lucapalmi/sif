@@ -743,7 +743,19 @@ class VICEmulator:
         return np.column_stack([cand[name] for name in self.features])
 
     def ln_k(self, X, lam_cond):
-        h = (np.asarray(X, dtype=float) - self.mu) / self.sd
+        """ln K = -Lambda_cond exp(z).
+
+        nu_origin is held at the trained maximum, as in EPEmulator.correction:
+        a grid started further out is the same walk, and the history that
+        matters to K is in the accumulated collapse hazard, not in where the
+        grid happens to begin. Unclamped, a grid started at nu = 7.5 moved K by
+        up to 2.7%; clamped, starts from 6 to 9 agree to 1e-4 in ln K.
+        """
+        X = np.array(X, dtype=float)
+        if self.box is not None and "nu_origin" in self.features:
+            j = self.features.index("nu_origin")
+            X[:, j] = np.minimum(X[:, j], self.box[1][j])
+        h = (X - self.mu) / self.sd
         for i, (W, b) in enumerate(self.layers):
             h = h @ W + b
             if i < len(self.layers) - 1:

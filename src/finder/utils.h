@@ -80,7 +80,7 @@ int sif__finder_check_args(const char* tag, const sif_real* radii,
 /* --- field preparation, shared by every finder --- */
 
 /**
- * @brief Arrange for the CIC assignment window to come back out of every
+ * @brief Arrange for the assignment window to come back out of every
  * smoothed field, so the top-hat is the only window a finder ever sees.
  *
  * A finder that skipped this would be smoothing an already-smoothed field: the
@@ -103,12 +103,13 @@ int sif__finder_check_args(const char* tag, const sif_real* radii,
  * @param ws Workspace holding the forward transform.
  * @param grid The grid the transform came from, read for its cell size.
  * @param min_radius Smallest smoothing radius the run will use.
- * @param opt Honours #SIF_FINDER_KEEP_CIC_WINDOW, under which this is a no-op.
+ * @param opt Honours #SIF_FINDER_KEEP_CIC_WINDOW, under which this is a no-op,
+ * and #SIF_FINDER_ALIASING_WINDOW.
  *
  * @return SIF_OK, including when the flag skipped the work, or SIF_ERR_* if
  * the correction could not be set up.
  */
-int sif__finder_deconvolve_cic(const char* tag, sif_fft_workspace_t* ws,
+int sif__finder_deconvolve_window(const char* tag, sif_fft_workspace_t* ws,
   const sif_grid_t* grid, sif_real min_radius, sif_option opt);
 
 /* --- candidate scanning, shared by every finder --- */
@@ -223,10 +224,14 @@ typedef struct {
  * @return SIF_OK, where a count of 0 is a legitimate result, SIF_ERR_ALLOC, or
  * SIF_ERR_RANGE for more minima than an index can hold.
  */
+/* resmooth, when not NULL, is called once the candidates are known: it
+ * re-smooths grid->values in place, and the minima are found on what it
+ * leaves there. NULL finds them on the field as it is. */
 int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
   sif_bitmask_t* below, sif_real threshold, int survey, int refine,
   int minima_only, sif_candidate_buffer_t* candidates,
-  sif_offset_buffer_t* offsets, sif_refine_stats_t* stats);
+  sif_offset_buffer_t* offsets, sif_refine_stats_t* stats,
+  int (*resmooth)(void*), void* resmooth_arg);
 
 /* --- per-radius reporting --- */
 

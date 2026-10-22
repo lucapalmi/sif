@@ -65,27 +65,44 @@ int sif__finder_check_args(const char* tag, const sif_real* radii,
  */
 #define FINDER_MIN_CELLS_PER_RADIUS 2.0f
 
-int sif__finder_deconvolve_cic(const char* tag, sif_fft_workspace_t* ws,
+static const char* window_name(int order) {
+  static const char* names[] = {"unknown", "NGP", "CIC", "TSC", "PCS"};
+  return (order >= 0 && order <= 4) ? names[order] : "unknown";
+}
+
+int sif__finder_deconvolve_window(const char* tag, sif_fft_workspace_t* ws,
   const sif_grid_t* grid, sif_real min_radius, sif_option opt) {
 
   if (opt & SIF_FINDER_KEEP_CIC_WINDOW) {
-    SIF_LOG_TRACE(tag, "keeping the CIC window, as requested");
+    SIF_LOG_TRACE(tag, "keeping the assignment window, as requested");
     return SIF_OK;
   }
+
+  const int order = sif__fft_grid_window_order(grid);
+  const sif_window_mode_t mode = (opt & SIF_FINDER_ALIASING_WINDOW)
+                                   ? SIF__WINDOW_ALIASING
+                                   : SIF__WINDOW_FULL;
+  const int interlaced = grid->interlaced != 0;
 
   if (min_radius < FINDER_MIN_CELLS_PER_RADIUS * grid->cell_length) {
     SIF_LOG_WARNING(tag,
       "the smallest radius is %g, under %.0f cells of %g; deconvolving the "
-      "CIC window amplifies the smallest scales more than the top-hat there "
-      "suppresses them. Refine the grid, drop that radius, or pass "
+      "%s window multiplies the Nyquist corner by %.3g, more than the top-hat "
+      "there suppresses. Refine the grid, drop that radius, or pass "
       "SIF_FINDER_KEEP_CIC_WINDOW",
       (double)min_radius, (double)FINDER_MIN_CELLS_PER_RADIUS,
-      (double)grid->cell_length);
+      (double)grid->cell_length, window_name(order),
+      sif__fft_window_corner_gain(order, mode, interlaced));
   }
 
-  const int status = sif__fft_set_cic_correction(ws, 1);
+  if (grid->assignment == SIF_ASSIGNMENT_UNKNOWN)
+    SIF_LOG_TRACE(tag, "the grid does not record its assignment; taking CIC");
+
+  const int status =
+    sif__fft_set_window_correction(ws, order, mode, interlaced);
   if (status != SIF_OK)
-    SIF_LOG_ERROR(tag, "failed to set up the CIC window correction");
+    SIF_LOG_ERROR(tag, "failed to set up the %s window correction",
+      window_name(order));
 
   return status;
 }
@@ -195,34 +212,6 @@ int sif__finder_scan_candidates(const sif_grid_t* grid,
 
 /* --- 3b. Minimum scanning --- */
 
-/*
- * The Gaussian the minima are found on: sigma of one cell, truncated two cells
- * either side, exp(-o^2 / 2) normalised over o = -2..2. Written out rather
- * than computed, so a catalogue does not depend on how a platform's expf()
- * rounds.
- *
- * Why it is there at all: a top-hat's transform falls only as (kR)^-2, and the
- * CIC deconvolution lifts what is left near the Nyquist corner, so the
- * smoothed field carries ripple a cell across. The grid samples that ripple
- * but cannot resolve it, and a sub-cell position fitted to it follows wherever
- * the nodes happened to fall: on lognormal mocks, shifting every tracer by a
- * fraction of a cell moved the fitted centres by 0.3-0.5 cells more than the
- * shift. One cell of Gaussian removes the ripple and brings that to 0.07-0.15,
- * while leaving the scale the rung asked for alone -- it widens a window of
- * radius R by a fraction of order (cell / R)^2. Half a cell did not help.
- *
- * Minima are found on the smoothed field too, not only fitted on it. Ripple
- * makes minima of its own, which the Gaussian then erases, and a fit at one of
- * those has no minimum to find.
- */
-#define GAUSS_W0 0.40261995f
-#define GAUSS_W1 0.24420134f
-#define GAUSS_W2 0.05448868f
-
-/* Columns smoothed together on the two strided axes, sized to a cache line
- * of floats so a gathered row is one line rather than sixteen. */
-#define GAUSS_TILE 16
-
 /* How far the Newton step may move a centre off its node, in cells per axis.
  * A discrete minimum is not always within half a cell of the continuous one:
  * in a basin elongated off the axes it can be most of a cell away, and at
@@ -231,144 +220,6 @@ int sif__finder_scan_candidates(const sif_grid_t* grid,
  * from. */
 #define MINIMUM_MAX_STEP 1.0
 
-static SIF_ALWAYS_INLINE sif_real gauss5(
-  sif_real m2, sif_real m1, sif_real c, sif_real p1, sif_real p2) {
-
-  return GAUSS_W0 * c + GAUSS_W1 * (m1 + p1) + GAUSS_W2 * (m2 + p2);
-}
-
-/* The same, renormalised over the observed taps. An unobserved cell stays
- * unobserved; an observed one always has at least its own tap. */
-static SIF_ALWAYS_INLINE sif_real gauss5_observed(
-  sif_real m2, sif_real m1, sif_real c, sif_real p1, sif_real p2) {
-
-  if (!(c < SIF__FINDER_UNOBSERVED))
-    return c;
-
-  sif_real acc = GAUSS_W0 * c;
-  sif_real w = GAUSS_W0;
-  if (m1 < SIF__FINDER_UNOBSERVED) {
-    acc += GAUSS_W1 * m1;
-    w += GAUSS_W1;
-  }
-  if (p1 < SIF__FINDER_UNOBSERVED) {
-    acc += GAUSS_W1 * p1;
-    w += GAUSS_W1;
-  }
-  if (m2 < SIF__FINDER_UNOBSERVED) {
-    acc += GAUSS_W2 * m2;
-    w += GAUSS_W2;
-  }
-  if (p2 < SIF__FINDER_UNOBSERVED) {
-    acc += GAUSS_W2 * p2;
-    w += GAUSS_W2;
-  }
-  return acc / w;
-}
-
-/* Smooths one contiguous line of n values in place, through a copy padded
- * with its periodic images. */
-static void gauss_line(sif_real* line, sif_real* pad, uint32_t n, int survey) {
-  for (uint32_t j = 0; j < n + 4; j++)
-    pad[j] = line[(j + 2 * n - 2) % n];
-
-  if (survey) {
-    for (uint32_t k = 0; k < n; k++)
-      line[k] =
-        gauss5_observed(pad[k], pad[k + 1], pad[k + 2], pad[k + 3], pad[k + 4]);
-  } else {
-    for (uint32_t k = 0; k < n; k++)
-      line[k] = gauss5(pad[k], pad[k + 1], pad[k + 2], pad[k + 3], pad[k + 4]);
-  }
-}
-
-/*
- * Smooths `width` adjacent columns of n rows in place, along the rows. Row r
- * starts at base + r * stride. The rows are gathered whole into the tile
- * first, so the writes back never feed a later read.
- */
-static void gauss_tile(sif_real* base, uint64_t stride, uint32_t n,
-  uint32_t width, sif_real* tile, int survey) {
-
-  for (uint32_t r = 0; r < n; r++)
-    memcpy(tile + (uint64_t)r * GAUSS_TILE, base + r * stride,
-      width * sizeof(sif_real));
-
-  for (uint32_t r = 0; r < n; r++) {
-    const sif_real* m2 = tile + (uint64_t)((r + 2 * n - 2) % n) * GAUSS_TILE;
-    const sif_real* m1 = tile + (uint64_t)((r + n - 1) % n) * GAUSS_TILE;
-    const sif_real* c = tile + (uint64_t)r * GAUSS_TILE;
-    const sif_real* p1 = tile + (uint64_t)((r + 1) % n) * GAUSS_TILE;
-    const sif_real* p2 = tile + (uint64_t)((r + 2) % n) * GAUSS_TILE;
-    sif_real* out = base + r * stride;
-
-    if (survey) {
-      for (uint32_t b = 0; b < width; b++)
-        out[b] = gauss5_observed(m2[b], m1[b], c[b], p1[b], p2[b]);
-    } else {
-      for (uint32_t b = 0; b < width; b++)
-        out[b] = gauss5(m2[b], m1[b], c[b], p1[b], p2[b]);
-    }
-  }
-}
-
-/*
- * The Gaussian, in place and one axis at a time. A pass only ever mixes
- * values along its own axis, so every line is independent and needs nothing
- * larger than itself: no second grid, which at 2250^3 would be 45 GB.
- */
-static int gauss_smooth(sif_real* f, uint32_t n, int survey) {
-  const uint64_t n2 = (uint64_t)n * n;
-  const uint32_t n_blocks = (n + GAUSS_TILE - 1) / GAUSS_TILE;
-  int failed = 0;
-
-#pragma omp parallel
-  {
-    sif_real* pad = malloc(((uint64_t)n + 4) * sizeof(sif_real));
-    sif_real* tile = malloc((uint64_t)n * GAUSS_TILE * sizeof(sif_real));
-    int ok = (pad && tile);
-    if (!ok) {
-#pragma omp atomic write
-      failed = 1;
-    }
-
-    /* Every thread reaches every barrier below, with or without its buffers:
-     * a thread that returned early would leave the others waiting. */
-#pragma omp barrier
-
-    if (ok && !failed) {
-#pragma omp for schedule(static)
-      for (uint64_t l = 0; l < n2; l++)
-        gauss_line(f + l * n, pad, n, survey);
-
-#pragma omp for schedule(static)
-      for (uint64_t t = 0; t < (uint64_t)n * n_blocks; t++) {
-        const uint32_t ix = (uint32_t)(t / n_blocks);
-        const uint32_t z0 = (uint32_t)(t % n_blocks) * GAUSS_TILE;
-        const uint32_t width = (n - z0 < GAUSS_TILE ? n - z0 : GAUSS_TILE);
-        gauss_tile(f + ix * n2 + z0, n, n, width, tile, survey);
-      }
-
-#pragma omp for schedule(static)
-      for (uint64_t t = 0; t < (uint64_t)n * n_blocks; t++) {
-        const uint32_t iy = (uint32_t)(t / n_blocks);
-        const uint32_t z0 = (uint32_t)(t % n_blocks) * GAUSS_TILE;
-        const uint32_t width = (n - z0 < GAUSS_TILE ? n - z0 : GAUSS_TILE);
-        gauss_tile(f + (uint64_t)iy * n + z0, n2, n, width, tile, survey);
-      }
-    }
-
-    free(pad);
-    free(tile);
-  }
-
-  if (failed) {
-    SIF_LOG_ERROR(
-      "finder", "failed to allocate smoothing buffers for %u cells", n);
-    return SIF_ERR_ALLOC;
-  }
-  return SIF_OK;
-}
 
 /* Gathers the 27 values around node (ix, iy, iz), s[(a+1)*9 + (b+1)*3 + c+1]
  * holding the one at offset (a, b, c), and the flat indices alongside. */
@@ -554,7 +405,8 @@ void sif__offset_buffer_free(sif_offset_buffer_t* buf) {
 int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
   sif_bitmask_t* below, sif_real threshold, int survey, int refine,
   int minima_only, sif_candidate_buffer_t* candidates,
-  sif_offset_buffer_t* offsets, sif_refine_stats_t* stats) {
+  sif_offset_buffer_t* offsets, sif_refine_stats_t* stats,
+  int (*resmooth)(void*), void* resmooth_arg) {
 
   const uint32_t n = grid->n_cells;
   const uint64_t total_cells = grid->total_cells;
@@ -595,9 +447,14 @@ int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
   if (n_below == 0)
     return SIF_OK;
 
-  int status = gauss_smooth(f, n, survey);
-  if (status != SIF_OK)
-    return status;
+  /* The minima are found on what the caller re-smooths the field to -- the
+   * rung's scale, see exodus_finder.c -- or on the field as it is. */
+  if (resmooth) {
+    const int status = resmooth(resmooth_arg);
+    if (status != SIF_OK)
+      return status;
+    f = grid->values;
+  }
 
 #pragma omp parallel for schedule(static, 1)
   for (int c = 0; c < FINDER_SCAN_CHUNKS; c++) {
@@ -641,8 +498,8 @@ int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
     return SIF_ERR_RANGE;
   }
 
-  status = buffer_reserve((void**)&candidates->items, &candidates->capacity,
-    n_below, sizeof(sif_candidate_t));
+  int status = buffer_reserve((void**)&candidates->items,
+    &candidates->capacity, n_below, sizeof(sif_candidate_t));
   if (status == SIF_OK && refine)
     status = buffer_reserve((void**)&offsets->items, &offsets->capacity,
       n_minima, sizeof(sif_offset_t));

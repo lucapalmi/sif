@@ -413,6 +413,128 @@ static void test_tuning_cap_and_wisdom(void) {
   printf("  ok\n");
 }
 
+/* sinc^order(x), with sinc(0) = 1. */
+static double ref_window(double x, int order) {
+  const double s = fabs(x) < 1e-12 ? 1.0 : sin(x) / x;
+  return pow(s, order);
+}
+
+/* The alias images along one axis by brute force: the sum over n of
+ * W^2(x + pi n), and the same with the sign (-1)^n an interlaced grid gives the
+ * odd images. */
+static void ref_images(double x, int order, double* plain, double* alternating) {
+  *plain = *alternating = 0.0;
+  for (int n = -100000; n <= 100000; n++) {
+    const double w = ref_window(x + 3.14159265358979323846 * n, order);
+    *plain += w * w;
+    *alternating += (n & 1 ? -1.0 : 1.0) * w * w;
+  }
+}
+
+/*
+ * The window corrections, against the textbook definitions summed by brute
+ * force: on a unit spectrum sif__fft_deconvolve_window() leaves the factor
+ * itself at every mode -- 1 / W in full mode, W / sum_n W^2(k + 2 pi n / l) in
+ * aliasing mode, and for an interlaced grid that sum over the even images only.
+ */
+static void test_window_factors(uint32_t n) {
+  printf("assignment window corrections, n=%u\n", n);
+
+  sif_fft_manager_t* mgr = sif__fft_manager_init(true, NULL);
+  sif_grid_t* grid = sif_grid_alloc(n, 100.0f);
+  sif_fft_workspace_t* ws = mgr ? sif__fft_workspace_alloc(mgr, n) : NULL;
+  if (!mgr || !grid || !ws) {
+    CHECK(0, "setup failed");
+    sif__fft_workspace_free(ws);
+    sif_grid_free(grid);
+    sif__fft_manager_finalise(mgr);
+    return;
+  }
+  for (uint64_t i = 0; i < (uint64_t)n * n * n; i++)
+    grid->values[i] = 1.0f;
+  sif__fft_grid_forward(ws, grid);
+
+  const uint32_t z_dim = n / 2 + 1;
+  const uint64_t n_modes = (uint64_t)n * n * z_dim;
+  double* x = malloc(n * sizeof(double));
+  double *w = malloc(n * sizeof(double)), *s = malloc(n * sizeof(double)),
+         *a = malloc(n * sizeof(double));
+  for (uint32_t i = 0; i < n; i++) {
+    const int32_t k = i > n / 2 ? (int32_t)i - (int32_t)n : (int32_t)i;
+    x[i] = 3.14159265358979323846 * k / n;
+  }
+
+  for (int order = 1; order <= 4; order++) {
+    for (uint32_t i = 0; i < n; i++) {
+      w[i] = ref_window(x[i], order);
+      ref_images(x[i], order, &s[i], &a[i]);
+    }
+    for (int mode = 0; mode < 2; mode++)
+      for (int interlaced = 0; interlaced < 2; interlaced++) {
+        for (uint64_t m = 0; m < n_modes; m++) {
+          ws->delta_k[m][0] = 1.0f;
+          ws->delta_k[m][1] = 0.0f;
+        }
+        CHECK(sif__fft_deconvolve_window(ws, order, (sif_window_mode_t)mode,
+                interlaced) == SIF_OK,
+          "order %d mode %d interlaced %d: failed", order, mode, interlaced);
+
+        double worst = 0.0;
+        for (uint32_t ix = 0; ix < n; ix++)
+          for (uint32_t iy = 0; iy < n; iy++)
+            for (uint32_t iz = 0; iz < z_dim; iz++) {
+              const double ww = w[ix] * w[iy] * w[iz];
+              const double ss = s[ix] * s[iy] * s[iz];
+              const double aa = a[ix] * a[iy] * a[iz];
+              const double expect = mode == SIF__WINDOW_FULL ? 1.0 / ww
+                                    : interlaced ? ww / (0.5 * (ss + aa))
+                                                 : ww / ss;
+              const uint64_t idx = ((uint64_t)ix * n + iy) * z_dim + iz;
+              worst = fmax(worst,
+                fabs((double)ws->delta_k[idx][0] - expect) / expect +
+                  fabs((double)ws->delta_k[idx][1]));
+            }
+        CHECK(worst < 1e-5,
+          "order %d mode %d interlaced %d: off the image sums by %.3g", order,
+          mode, interlaced, worst);
+
+        /* The corner gain is the factor at (N/2, N/2, N/2), a mode only an
+         * even grid has. */
+        if (n % 2)
+          continue;
+        const uint32_t c = n / 2;
+        const double ww = w[c] * w[c] * w[c], ss = s[c] * s[c] * s[c],
+                     aa = a[c] * a[c] * a[c];
+        const double corner = mode == SIF__WINDOW_FULL ? 1.0 / ww
+                              : interlaced ? ww / (0.5 * (ss + aa))
+                                           : ww / ss;
+        const double gain = sif__fft_window_corner_gain(
+          order, (sif_window_mode_t)mode, interlaced);
+        CHECK(fabs(gain - corner) < 1e-5 * corner,
+          "order %d mode %d interlaced %d: corner gain %.6g, expected %.6g",
+          order, mode, interlaced, gain, corner);
+      }
+  }
+
+  /* The figures quoted for CIC: (pi/2)^6 undone in full, 1.8 aliasing-aware. */
+  CHECK(fabs(sif__fft_window_corner_gain(2, SIF__WINDOW_FULL, 0) - 15.0217) < 1e-3,
+    "CIC full corner gain");
+  CHECK(fabs(sif__fft_window_corner_gain(2, SIF__WINDOW_ALIASING, 0) - 1.7972) <
+          1e-3,
+    "CIC aliasing-aware corner gain");
+  CHECK(sif__fft_deconvolve_window(ws, 5, SIF__WINDOW_FULL, 0) == SIF_ERR_INVALID,
+    "order 5 was accepted");
+  printf("  ok\n");
+
+  free(x);
+  free(w);
+  free(s);
+  free(a);
+  sif__fft_workspace_free(ws);
+  sif_grid_free(grid);
+  sif__fft_manager_finalise(mgr);
+}
+
 int main(void) {
   /* Odd and even n exercise different padding widths. */
   test_roundtrip(16);
@@ -422,6 +544,8 @@ int main(void) {
   test_tuned_plan_roundtrip(16);
   test_tuned_plan_roundtrip(15);
   test_tuning_cap_and_wisdom();
+  test_window_factors(16);
+  test_window_factors(15);
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

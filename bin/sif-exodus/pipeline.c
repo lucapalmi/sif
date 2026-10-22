@@ -282,6 +282,43 @@ typedef struct {
   uint64_t n_prior;
 } run_facts_t;
 
+/* A scheme's name, for the log. */
+static const char* scheme_label(sif_assignment_t scheme) {
+  static const char* const names[] = {"?", "NGP", "CIC", "TSC", "PCS"};
+  return (scheme >= SIF_ASSIGNMENT_NGP && scheme <= SIF_ASSIGNMENT_PCS)
+           ? names[scheme]
+           : "?";
+}
+
+/* The sif_grid_assign() options the configuration asks for. */
+static sif_option grid_option(const exodus_params_t* p) {
+  return p->grid.interlace ? SIF_GRID_INTERLACE : 0;
+}
+
+/* The SIF_FINDER_CENTRES_* for finder.centres. */
+static sif_option centres_option(const exodus_params_t* p) {
+  switch (p->finder.centres) {
+  case EXODUS_CENTRES_MINIMA:
+    return SIF_FINDER_CENTRES_MINIMA;
+  case EXODUS_CENTRES_OPTIMISED:
+    return SIF_FINDER_CENTRES_OPTIMISED;
+  default:
+    return SIF_FINDER_CENTRES_LEGACY;
+  }
+}
+
+/* The finder options for finder.deconvolution. */
+static sif_option window_option(const exodus_params_t* p) {
+  switch (p->finder.deconvolution) {
+  case EXODUS_DECONVOLVE_ALIASING:
+    return SIF_FINDER_ALIASING_WINDOW;
+  case EXODUS_DECONVOLVE_NONE:
+    return SIF_FINDER_KEEP_CIC_WINDOW;
+  default:
+    return 0;
+  }
+}
+
 /* Record what made the catalogue in its metadata, which every format then
  * writes: attributes of /catalogue in HDF5, keywords of the VOIDS table in
  * FITS, '#key=value' lines in the ASCII header. A value that cannot be
@@ -294,10 +331,16 @@ static void describe_catalogue(
   s |= sif_catalogue_meta_real_set(
     cat, "overlap_fraction", p->finder.overlap_fraction);
   s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
-  s |= sif_catalogue_meta_int_set(
-    cat, "centre_refinement_hessian", p->finder.centre_refinement_hessian);
-  s |= sif_catalogue_meta_int_set(
-    cat, "centre_is_minimum", p->finder.centre_is_minimum);
+  static const char* const centres[] = {"legacy", "minima", "optimised"};
+  s |= sif_catalogue_meta_string_set(
+    cat, "centres", centres[p->finder.centres]);
+  static const char* const deconvolutions[] = {"full", "aliasing", "none"};
+  s |= sif_catalogue_meta_string_set(
+    cat, "deconvolution", deconvolutions[p->finder.deconvolution]);
+  static const char* const schemes[] = {"", "ngp", "cic", "tsc", "pcs"};
+  s |= sif_catalogue_meta_string_set(
+    cat, "grid_assignment", schemes[p->grid.assignment]);
+  s |= sif_catalogue_meta_int_set(cat, "grid_interlace", p->grid.interlace);
   s |= sif_catalogue_meta_int_set(cat, "n_radii", p->finder.n_radii);
   s |= sif_catalogue_meta_real_set(cat, "r_min", r->r_min);
   s |= sif_catalogue_meta_real_set(cat, "r_max", r->r_max);
@@ -555,15 +598,16 @@ int pipeline_box(const exodus_params_t* p) {
     status = SIF_ERR_ALLOC;
     goto done;
   }
-  status = sif_grid_assign_cic(grid, field);
+  status = sif_grid_assign(grid, field, p->grid.assignment, grid_option(p));
   if (status != SIF_OK)
     goto done;
   status = sif_grid_to_density_contrast(grid);
   if (status != SIF_OK)
     goto done;
-  SIF_LOG_INFO(TAG, "grid: %u^3 cells of %g%s, %.2f GiB (%.2f s)", r.grid_cells,
-    (double)grid->cell_length,
+  SIF_LOG_INFO(TAG, "grid: %u^3 cells of %g%s, %s%s, %.2f GiB (%.2f s)",
+    r.grid_cells, (double)grid->cell_length,
     p->grid.n_cells ? "" : " (one per mean separation)",
+    scheme_label(p->grid.assignment), p->grid.interlace ? " interlaced" : "",
     (double)grid->total_cells * sizeof(sif_real) / (1024.0 * 1024.0 * 1024.0),
     seconds_since(&t));
 
@@ -601,9 +645,8 @@ int pipeline_box(const exodus_params_t* p) {
   cat = sif_finder_exodus_ex(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
     SIF_FINDER_CONSUME_GRID | search |
-      (p->finder.centre_refinement_hessian ? 0 : SIF_FINDER_NODE_CENTRES) |
-      (p->finder.centre_is_minimum ? SIF_FINDER_CENTRE_IS_MINIMUM : 0) |
-      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+      centres_option(p) |
+      window_option(p) | (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(mesh);
   mesh = NULL;
@@ -979,14 +1022,17 @@ int pipeline_survey(const exodus_params_t* p) {
     status = SIF_ERR_ALLOC;
     goto done;
   }
-  status = sif_grid_assign_cic(data_grid, data);
+  status =
+    sif_grid_assign(data_grid, data, p->grid.assignment, grid_option(p));
   if (status == SIF_OK)
-    status = sif_grid_assign_cic(random_grid, randoms);
+    status = sif_grid_assign(
+      random_grid, randoms, p->grid.assignment, grid_option(p));
   if (status != SIF_OK)
     goto done;
-  SIF_LOG_INFO(TAG, "grids: 2 x %u^3 cells of %g%s, %.2f GiB (%.2f s)",
+  SIF_LOG_INFO(TAG, "grids: 2 x %u^3 cells of %g%s, %s%s, %.2f GiB (%.2f s)",
     r.grid_cells, (double)data_grid->cell_length,
     p->grid.n_cells ? "" : " (one per mean separation)",
+    scheme_label(p->grid.assignment), p->grid.interlace ? " interlaced" : "",
     2.0 * (double)data_grid->total_cells * sizeof(sif_real) /
       (1024.0 * 1024.0 * 1024.0),
     seconds_since(&t));
@@ -1043,9 +1089,8 @@ int pipeline_survey(const exodus_params_t* p) {
     random_mesh, offset, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
     SIF_FINDER_CONSUME_GRID | search |
-      (p->finder.centre_refinement_hessian ? 0 : SIF_FINDER_NODE_CENTRES) |
-      (p->finder.centre_is_minimum ? SIF_FINDER_CENTRE_IS_MINIMUM : 0) |
-      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+      centres_option(p) |
+      window_option(p) | (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);

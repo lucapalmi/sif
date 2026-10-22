@@ -76,13 +76,14 @@ static const char* const SKY_COLUMN_KEYS[] = {"ra", "dec", "z", "w", NULL};
  * are refused with a message of their own, rather than as unknown. */
 static const char* const COLUMN_NAMES[] = {
   "x", "y", "z", "w", "vx", "vy", "vz", "ra", "dec", NULL};
-static const char* const GRID_KEYS[] = {"n_cells", NULL};
+static const char* const GRID_KEYS[] = {
+  "n_cells", "assignment", "interlace", NULL};
 static const char* const MESH_KEYS[] = {"n_cells", NULL};
 static const char* const SURVEY_MESH_KEYS[] = {
   "n_cells_data", "n_cells_random", NULL};
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
-  "overlap_fraction", "search_factor", "centre_refinement_hessian",
-  "centre_is_minimum", NULL};
+  "overlap_fraction", "search_factor", "centres", "centre_refinement_hessian",
+  "centre_is_minimum", "deconvolution", NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
 static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
 static const char* const RUN_KEYS[] = {
@@ -108,6 +109,10 @@ static const char* const LAYOUTS[] = {"rows", "blocks", NULL};
 static const char* const PRECISIONS[] = {"float32", "float64", NULL};
 static const char* const ENDIANS[] = {"native", "little", "big", NULL};
 static const char* const LENGTHS[] = {"kpc", "mpc", "auto", NULL};
+/* From SIF_ASSIGNMENT_NGP on. */
+static const char* const ASSIGNMENTS[] = {"ngp", "cic", "tsc", "pcs", NULL};
+static const char* const DECONVOLUTIONS[] = {"full", "aliasing", "none", NULL};
+static const char* const CENTRES[] = {"legacy", "minima", "optimised", NULL};
 static const char* const LOG_LEVELS[] = {
   "trace", "debug", "info", "warning", "error", "none", NULL};
 
@@ -535,7 +540,7 @@ static void set_defaults(exodus_config_t* c) {
 
   p->finder.overlap_fraction = 0.0;
   p->finder.search_factor = 1.5;
-  p->finder.centre_refinement_hessian = true;
+  p->grid.assignment = SIF_ASSIGNMENT_CIC;
   p->output.kind = EXODUS_OUTPUT_HDF5;
 
   c->run.n_threads = 0;
@@ -1276,18 +1281,22 @@ static void read_input(reader_t* r, int root, exodus_config_t* c) {
   lua_settop(L, base);
 }
 
-/* grid: one setting, the same in either mode. */
-static void read_cells(reader_t* r, int root, const char* name,
-  const char* const* keys, int64_t min, uint32_t* n_cells) {
-
+/* grid: its cells, and how the tracers are deposited onto it. */
+static void read_grid(reader_t* r, int root, exodus_config_t* c) {
   lua_State* L = r->L;
-  const int type = field(L, root, name);
+  const int type = field(L, root, "grid");
   const int t = lua_gettop(L);
   if (type == LUA_TTABLE) {
-    check_keys(r, t, name, keys);
-    get_count(r, t, name, "n_cells", min, 1 << 16, n_cells);
+    check_keys(r, t, "grid", GRID_KEYS);
+    get_count(r, t, "grid", "n_cells", 8, 1 << 16, &c->params.grid.n_cells);
+    int i;
+    if (get_enum(r, t, "grid", "assignment", ASSIGNMENTS, &i))
+      c->params.grid.assignment = (sif_assignment_t)(SIF_ASSIGNMENT_NGP + i);
+    bool b;
+    if (get_bool(r, t, "grid", "interlace", &b))
+      c->params.grid.interlace = b;
   } else if (type != LUA_TNIL) {
-    report(r, name, "must be a table, got a %s", lua_typename(L, type));
+    report(r, "grid", "must be a table, got a %s", lua_typename(L, type));
   }
   lua_settop(L, t - 1);
 }
@@ -1401,6 +1410,15 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
       "drop the key, and give a ladder of mean separations multiplied by the "
       "mean separation --check reports");
   lua_pop(r->L, 1);
+  if (field(r->L, t, "centre_refinement_hessian") != LUA_TNIL)
+    report(r, "finder.centre_refinement_hessian",
+      "removed: centres = \"minima\" or \"optimised\" refines them, "
+      "\"legacy\" leaves them on the nodes");
+  lua_pop(r->L, 1);
+  if (field(r->L, t, "centre_is_minimum") != LUA_TNIL)
+    report(r, "finder.centre_is_minimum",
+      "removed: centres = \"minima\" or \"optimised\" takes only minima");
+  lua_pop(r->L, 1);
 
   if (get_number(r, t, "finder", "threshold", &x)) {
     if (x > -1.0 && x < 0.0)
@@ -1427,11 +1445,18 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
       report(
         r, "finder.search_factor", "must be 1.25, 1.5, 1.75 or 2, got %g", x);
   }
-  bool b;
-  if (get_bool(r, t, "finder", "centre_refinement_hessian", &b))
-    p->finder.centre_refinement_hessian = b;
-  if (get_bool(r, t, "finder", "centre_is_minimum", &b))
-    p->finder.centre_is_minimum = b;
+  int which;
+  if (get_enum(r, t, "finder", "centres", CENTRES, &which)) {
+    p->finder.centres = (exodus_centres_t)which;
+    if (p->mode == EXODUS_MODE_SURVEY && which != EXODUS_CENTRES_LEGACY)
+      report(r, "finder.centres",
+        "\"%s\" is for a periodic box, for now (expected \"legacy\" in a "
+        "survey)",
+        CENTRES[which]);
+  }
+  int kind;
+  if (get_enum(r, t, "finder", "deconvolution", DECONVOLUTIONS, &kind))
+    p->finder.deconvolution = (exodus_deconvolution_t)kind;
   lua_settop(L, t - 1);
 }
 
@@ -1928,9 +1953,15 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
   fputs("}\n\n", out);
 
   if (p->grid.n_cells)
-    fprintf(out, "grid = { n_cells = %u }\n", p->grid.n_cells);
+    fprintf(out, "grid = { n_cells = %u", p->grid.n_cells);
   else
-    fputs("grid = { n_cells = \"auto\" }\n", out);
+    fputs("grid = { n_cells = \"auto\"", out);
+  if (p->grid.assignment != SIF_ASSIGNMENT_CIC)
+    fprintf(out, ", assignment = \"%s\"",
+      ASSIGNMENTS[p->grid.assignment - SIF_ASSIGNMENT_NGP]);
+  if (p->grid.interlace)
+    fputs(", interlace = true", out);
+  fputs(" }\n", out);
   if (survey) {
     char data_cells[16] = "\"auto\"", random_cells[16] = "\"auto\"";
     if (p->mesh.n_cells)
@@ -1958,10 +1989,11 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
   fprintf(out, "  overlap_fraction = %s,\n", num);
   format_double(num, sizeof num, p->finder.search_factor);
   fprintf(out, "  search_factor = %s,\n", num);
-  if (!p->finder.centre_refinement_hessian)
-    fputs("  centre_refinement_hessian = false,\n", out);
-  if (p->finder.centre_is_minimum)
-    fputs("  centre_is_minimum = true,\n", out);
+  if (p->finder.centres != EXODUS_CENTRES_LEGACY)
+    fprintf(out, "  centres = \"%s\",\n", CENTRES[p->finder.centres]);
+  if (p->finder.deconvolution != EXODUS_DECONVOLVE_FULL)
+    fprintf(out, "  deconvolution = \"%s\",\n",
+      DECONVOLUTIONS[p->finder.deconvolution]);
   fputs("}\n\n", out);
 
   if (p->prior.path) {
@@ -2082,7 +2114,7 @@ int config_load(const char* path, const config_define_t* defines,
     return -1;
   }
   read_input(&r, root, c);
-  read_cells(&r, root, "grid", GRID_KEYS, 8, &c->params.grid.n_cells);
+  read_grid(&r, root, c);
   read_mesh(&r, root, c);
   read_finder(&r, root, c);
   read_prior(&r, root, c);
@@ -2660,6 +2692,29 @@ int config_check(
  * without the library; whether it describes this run is the finder's to
  * check, against what only the run knows.
  */
+/* A checkpoint's deconvolution, as finder.deconvolution names it. */
+static exodus_deconvolution_t saved_deconvolution(uint32_t options) {
+  if (options & SIF_FINDER_KEEP_CIC_WINDOW)
+    return EXODUS_DECONVOLVE_NONE;
+  if (options & SIF_FINDER_ALIASING_WINDOW)
+    return EXODUS_DECONVOLVE_ALIASING;
+  return EXODUS_DECONVOLVE_FULL;
+}
+
+/* A checkpoint's centres, as finder.centres names them. */
+static const char* saved_centres(uint32_t options) {
+  const uint32_t c = (options & SIF__FINDER_CENTRES_MASK) >> 9;
+  return c < 3 ? CENTRES[c] : "a finder this sif-exodus no longer has";
+}
+
+/* A checkpoint's assignment scheme, as grid.assignment names it. */
+static const char* saved_assignment(uint32_t assignment) {
+  const uint32_t s = assignment & 0xffu;
+  return (s >= SIF_ASSIGNMENT_NGP && s <= SIF_ASSIGNMENT_PCS)
+           ? ASSIGNMENTS[s - SIF_ASSIGNMENT_NGP]
+           : "unknown";
+}
+
 static int descending(const void* a, const void* b) {
   const sif_real x = *(const sif_real*)a, y = *(const sif_real*)b;
   return (x < y) - (x > y);
@@ -2723,16 +2778,20 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
   else if (factor != p->finder.search_factor)
     snprintf(why, sizeof why, "search factor %g (this run's: %g)", factor,
       p->finder.search_factor);
-  else if (((h.options & SIF_FINDER_NODE_CENTRES) == 0) !=
-           p->finder.centre_refinement_hessian)
-    snprintf(why, sizeof why, "centres %s (this run %s them)",
-      (h.options & SIF_FINDER_NODE_CENTRES) ? "on the nodes" : "refined",
-      p->finder.centre_refinement_hessian ? "refines" : "leaves");
-  else if (((h.options & SIF_FINDER_CENTRE_IS_MINIMUM) != 0) !=
-           p->finder.centre_is_minimum)
-    snprintf(why, sizeof why, "candidates %s (this run's: %s)",
-      (h.options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only" : "every cell",
-      p->finder.centre_is_minimum ? "minima only" : "every cell");
+  else if ((h.options & SIF__FINDER_CENTRES_MASK) !=
+           ((uint32_t)p->finder.centres << 9))
+    snprintf(why, sizeof why, "centres %s (this run's: %s)",
+      saved_centres(h.options), CENTRES[p->finder.centres]);
+  else if (saved_deconvolution(h.options) != p->finder.deconvolution)
+    snprintf(why, sizeof why, "window deconvolution %s (this run's: %s)",
+      DECONVOLUTIONS[saved_deconvolution(h.options)],
+      DECONVOLUTIONS[p->finder.deconvolution]);
+  else if ((h.assignment & 0xffu) != (uint32_t)p->grid.assignment ||
+           ((h.assignment >> 8) != 0) != p->grid.interlace)
+    snprintf(why, sizeof why, "grid assigned with %s%s (this run's: %s%s)",
+      saved_assignment(h.assignment), (h.assignment >> 8) ? ", interlaced" : "",
+      ASSIGNMENTS[p->grid.assignment - SIF_ASSIGNMENT_NGP],
+      p->grid.interlace ? ", interlaced" : "");
   for (uint32_t i = 0; !why[0] && ladder && i < n; i++) {
     if (saved[i] != ladder[i])
       snprintf(why, sizeof why,

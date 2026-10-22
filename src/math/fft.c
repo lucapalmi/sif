@@ -221,7 +221,8 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
   ws->mgr = mgr;
   ws->delta_k = NULL;
   ws->delta_k_cpy = NULL;
-  ws->cic_inv = NULL;
+  ws->window_axis = NULL;
+  ws->window_wsa = NULL;
   ws->plane_r2c = NULL;
   ws->pencil_forward = NULL;
   ws->plane_c2r = NULL;
@@ -488,8 +489,8 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
     real_fftw_free(ws->delta_k);
   if (ws->delta_k_cpy)
     sif_free_aligned(ws->delta_k_cpy);
-  if (ws->cic_inv)
-    free(ws->cic_inv);
+  free(ws->window_axis);
+  free(ws->window_wsa);
 
   free(ws);
 }
@@ -505,8 +506,8 @@ static inline uint64_t get_flat_complex_index(
  * Shared by sif__fft_apply_filter and fft_filtered_variance so the two can
  * never disagree about what the filter actually is.
  */
-static sif_real* fft_build_filter_lut(
-  sif_filter_type_t filter, sif_real r, sif_real box_length, uint32_t n_cells) {
+static sif_real* fft_build_filter_lut(sif_filter_type_t filter, sif_real r,
+  sif_real sigma, sif_real box_length, uint32_t n_cells) {
 
   const uint32_t N_half = n_cells >> 1;
   const uint32_t max_k2 = 3 * N_half * N_half;
@@ -521,6 +522,8 @@ static sif_real* fft_build_filter_lut(
 
   const sif_real factor = (sif_real)(r * 2.0 * SIF_PI / box_length);
   const sif_real factor2 = factor * factor;
+  const sif_real gfactor = (sif_real)(sigma * 2.0 * SIF_PI / box_length);
+  const sif_real gfactor2 = gfactor * gfactor;
 
 #pragma omp parallel for schedule(static)
   for (uint32_t k2 = 0; k2 <= max_k2; k2++) {
@@ -545,13 +548,23 @@ static sif_real* fft_build_filter_lut(
     } else {
       lut[k2] = SIF_REAL_EXP((sif_real)-0.5 * factor2 * (sif_real)k2);
     }
+    if (sigma > 0.0f && k2 > 0)
+      lut[k2] *= SIF_REAL_EXP((sif_real)-0.5 * gfactor2 * (sif_real)k2);
   }
 
   return lut;
 }
 
+static inline double fft_window_mode_factor(
+  const double* wsa, uint32_t N, uint32_t ix, uint32_t iy, uint32_t iz);
+
 int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
   sif_real r, sif_real box_length) {
+  return sif__fft_apply_filter_smoothed(ws, filter, r, 0.0f, box_length);
+}
+
+int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
+  sif_filter_type_t filter, sif_real r, sif_real sigma, sif_real box_length) {
 
   if (!ws || !ws->delta_k_cpy) {
     SIF_LOG_ERROR(
@@ -578,14 +591,15 @@ int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
   const uint32_t N = ws->n_cells;
   const uint32_t N_half = N >> 1;
 
-  sif_real* lut = fft_build_filter_lut(filter, r, box_length, N);
+  sif_real* lut = fft_build_filter_lut(filter, r, sigma, box_length, N);
   if (!lut)
     return SIF_ERR_ALLOC;
 
   /* Carried through the same multiply as the filter itself: the assignment
    * window is separable and the filter is radial, so neither can be folded
    * into the other's table, but both land on the mode together. */
-  const double* cic = ws->cic_inv;
+  const double* cic = ws->window_axis;
+  const double* wsa = ws->window_wsa;
 
 #pragma omp parallel for schedule(static)
   for (uint32_t ix = 0; ix < N; ix++) {
@@ -606,6 +620,9 @@ int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
 
         if (cic)
           smoothing = (sif_real)((double)smoothing * cxy * cic[iz]);
+        else if (wsa)
+          smoothing = (sif_real)((double)smoothing *
+                                 fft_window_mode_factor(wsa, N, ix, iy, iz));
 
         ws->delta_k_cpy[idx][0] = ws->delta_k[idx][0] * smoothing;
         ws->delta_k_cpy[idx][1] = ws->delta_k[idx][1] * smoothing;
@@ -721,7 +738,7 @@ sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
   return data;
 }
 
-/* --- CIC window deconvolution --- */
+/* --- Assignment window deconvolution --- */
 
 /* sinc(x) = sin(x)/x, continuous at 0. */
 static inline double fft_sinc(double x) {
@@ -730,72 +747,183 @@ static inline double fft_sinc(double x) {
   return sin(x) / x;
 }
 
-/*
- * The window is separable, so the per-axis factor depends only on that axis's
- * index and one table of N entries covers all three. Built as the reciprocal,
- * so the hot loops multiply.
- */
-static double* fft_build_cic_inverse_axis(uint32_t n_cells) {
+/* The window's per-axis transform, sinc^p, by repeated multiplication so
+ * that p = 2 is s * s exactly as the CIC table has always been built. */
+static inline double fft_window_w(double x, int order) {
+  const double s = fft_sinc(x);
+  double w = 1.0;
+  for (int j = 0; j < order; j++)
+    w *= s;
+  return w;
+}
+
+/* S_p and A_p of sif__fft_deconvolve_window()'s documentation. */
+static inline double fft_window_s(double x, int order) {
+  const double s2 = sin(x) * sin(x);
+  switch (order) {
+  case 1:
+    return 1.0;
+  case 2:
+    return 1.0 - 2.0 * s2 / 3.0;
+  case 3:
+    return 1.0 - s2 + 2.0 * s2 * s2 / 15.0;
+  default:
+    return 1.0 - 4.0 * s2 / 3.0 + 2.0 * s2 * s2 / 5.0 -
+           4.0 * s2 * s2 * s2 / 315.0;
+  }
+}
+
+static inline double fft_window_a(double x, int order) {
+  const double c = cos(x), c2 = c * c;
+  switch (order) {
+  case 1:
+    return c;
+  case 2:
+    return c * (c2 + 5.0) / 6.0;
+  case 3:
+    return c * (c2 * c2 + 58.0 * c2 + 61.0) / 120.0;
+  default:
+    return c * (c2 * c2 * c2 + 543.0 * c2 * c2 + 3111.0 * c2 + 1385.0) /
+           5040.0;
+  }
+}
+
+/* x = k l / 2 for grid index i: pi k / N, with k signed. */
+static inline double fft_axis_x(uint32_t i, uint32_t n_cells) {
   const uint32_t N_half = n_cells >> 1;
+  const int32_t k = (i > N_half) ? (int32_t)i - (int32_t)n_cells : (int32_t)i;
+  return SIF_PI * (double)k / (double)n_cells;
+}
+
+/* Whether the correction factorises over the axes: everything but the
+ * aliasing-aware correction of an interlaced grid. */
+static inline int fft_window_separable(sif_window_mode_t mode, int interlaced) {
+  return !(mode == SIF__WINDOW_ALIASING && interlaced);
+}
+
+/*
+ * The per-axis factor of a separable correction, built as the factor itself
+ * so the hot loops multiply: 1 / W in full mode, W / S in aliasing mode. One
+ * table of N entries covers all three axes.
+ */
+static double* fft_build_window_axis(
+  uint32_t n_cells, int order, sif_window_mode_t mode) {
 
   double* axis = malloc((size_t)n_cells * sizeof(double));
   if (!axis) {
-    SIF_LOG_ERROR("fft_context", "failed to allocate the CIC window table");
+    SIF_LOG_ERROR("fft_context", "failed to allocate the window table");
     return NULL;
   }
 
   for (uint32_t i = 0; i < n_cells; i++) {
-    int32_t k = (i > N_half) ? (int32_t)i - (int32_t)n_cells : (int32_t)i;
-    double s = fft_sinc(SIF_PI * (double)k / (double)n_cells);
-    axis[i] = 1.0 / (s * s); /* CIC is the NGP window squared */
+    const double x = fft_axis_x(i, n_cells);
+    const double w = fft_window_w(x, order);
+    axis[i] =
+      (mode == SIF__WINDOW_ALIASING) ? w / fft_window_s(x, order) : 1.0 / w;
   }
 
   return axis;
 }
 
-int sif__fft_set_cic_correction(sif_fft_workspace_t* ws, int enable) {
+/* W, S and A per axis, laid out as three runs of N, for the interlaced
+ * aliasing-aware correction, which has to be assembled mode by mode. */
+static double* fft_build_window_wsa(uint32_t n_cells, int order) {
+  double* t = malloc((size_t)3 * n_cells * sizeof(double));
+  if (!t) {
+    SIF_LOG_ERROR("fft_context", "failed to allocate the window tables");
+    return NULL;
+  }
+  for (uint32_t i = 0; i < n_cells; i++) {
+    const double x = fft_axis_x(i, n_cells);
+    t[i] = fft_window_w(x, order);
+    t[n_cells + i] = fft_window_s(x, order);
+    t[2 * (uint64_t)n_cells + i] = fft_window_a(x, order);
+  }
+  return t;
+}
+
+/* W / ((prod S + prod A) / 2) at one mode, from fft_build_window_wsa(). */
+static inline double fft_window_mode_factor(
+  const double* wsa, uint32_t N, uint32_t ix, uint32_t iy, uint32_t iz) {
+  const double* w = wsa;
+  const double* s = wsa + N;
+  const double* a = wsa + 2 * (uint64_t)N;
+  return w[ix] * w[iy] * w[iz] /
+         (0.5 * (s[ix] * s[iy] * s[iz] + a[ix] * a[iy] * a[iz]));
+}
+
+double sif__fft_window_corner_gain(
+  int order, sif_window_mode_t mode, int interlaced) {
+  const double x = 0.5 * SIF_PI;
+  const double w = fft_window_w(x, order);
+  if (mode == SIF__WINDOW_FULL)
+    return 1.0 / (w * w * w);
+  const double s = fft_window_s(x, order), a = fft_window_a(x, order);
+  const double images = interlaced ? 0.5 * (s * s * s + a * a * a) : s * s * s;
+  return w * w * w / images;
+}
+
+int sif__fft_set_window_correction(sif_fft_workspace_t* ws, int order,
+  sif_window_mode_t mode, int interlaced) {
   if (!ws || ws->n_cells == 0) {
     SIF_LOG_ERROR("fft_context", "invalid workspace");
     return SIF_ERR_INVALID;
   }
-
-  if (!enable) {
-    free(ws->cic_inv);
-    ws->cic_inv = NULL;
-    return SIF_OK;
+  if (order < 0 || order > 4) {
+    SIF_LOG_ERROR("fft_context", "window order %d (expected 0 to 4)", order);
+    return SIF_ERR_INVALID;
   }
 
-  if (ws->cic_inv)
+  free(ws->window_axis);
+  free(ws->window_wsa);
+  ws->window_axis = NULL;
+  ws->window_wsa = NULL;
+
+  if (order == 0)
     return SIF_OK;
 
-  ws->cic_inv = fft_build_cic_inverse_axis(ws->n_cells);
-  if (!ws->cic_inv)
+  if (fft_window_separable(mode, interlaced))
+    ws->window_axis = fft_build_window_axis(ws->n_cells, order, mode);
+  else
+    ws->window_wsa = fft_build_window_wsa(ws->n_cells, order);
+  if (!ws->window_axis && !ws->window_wsa)
     return SIF_ERR_ALLOC;
 
-  SIF_LOG_TRACE("fft_context", "filtering will correct the CIC window");
+  SIF_LOG_TRACE("fft_context",
+    "filtering will correct a window of order %d (%s%s)", order,
+    mode == SIF__WINDOW_ALIASING ? "aliasing-aware" : "full",
+    interlaced ? ", interlaced" : "");
   return SIF_OK;
 }
 
-int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
+int sif__fft_deconvolve_window(sif_fft_workspace_t* ws, int order,
+  sif_window_mode_t mode, int interlaced) {
   if (!ws || !ws->delta_k) {
     SIF_LOG_ERROR("fft_context", "no spectrum to deconvolve");
+    return SIF_ERR_INVALID;
+  }
+  if (order < 1 || order > 4) {
+    SIF_LOG_ERROR("fft_context", "window order %d (expected 1 to 4)", order);
     return SIF_ERR_INVALID;
   }
 
   const uint32_t N = ws->n_cells;
   const uint32_t z_dim = N / 2 + 1;
+  const int separable = fft_window_separable(mode, interlaced);
 
-  double* axis = fft_build_cic_inverse_axis(N);
-  if (!axis)
+  double* axis = separable ? fft_build_window_axis(N, order, mode) : NULL;
+  double* wsa = separable ? NULL : fft_build_window_wsa(N, order);
+  if (!axis && !wsa)
     return SIF_ERR_ALLOC;
 
 #pragma omp parallel for schedule(static)
   for (uint32_t ix = 0; ix < N; ix++) {
-    const double wx = axis[ix];
+    const double wx = axis ? axis[ix] : 1.0;
     for (uint32_t iy = 0; iy < N; iy++) {
-      const double wxy = wx * axis[iy];
+      const double wxy = wx * (axis ? axis[iy] : 1.0);
       for (uint32_t iz = 0; iz < z_dim; iz++) {
-        const double inv = wxy * axis[iz];
+        const double inv =
+          axis ? wxy * axis[iz] : fft_window_mode_factor(wsa, N, ix, iy, iz);
 
         uint64_t idx = get_flat_complex_index(ix, iy, iz, N);
         ws->delta_k[idx][0] = (sif_real)(ws->delta_k[idx][0] * inv);
@@ -805,8 +933,9 @@ int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws) {
   }
 
   free(axis);
+  free(wsa);
 
-  SIF_LOG_TRACE("fft_context", "CIC window deconvolved");
+  SIF_LOG_TRACE("fft_context", "window of order %d deconvolved", order);
   return SIF_OK;
 }
 
@@ -990,7 +1119,7 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
 
   sif_real* lut = NULL;
   if (filter != SIF__FILTER_NONE) {
-    lut = fft_build_filter_lut(filter, r, box_length, N);
+    lut = fft_build_filter_lut(filter, r, 0.0f, box_length, N);
     if (!lut)
       return SIF_ERR_ALLOC;
   }

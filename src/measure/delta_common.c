@@ -104,8 +104,12 @@ sif_fft_workspace_t* sif__delta_prepare_spectrum(
   }
 
   if (!(opt & SIF_DELTA_KEEP_CIC_WINDOW)) {
-    if (sif__fft_deconvolve_cic(ws) != SIF_OK) {
-      SIF_LOG_ERROR(SIF__DELTA_TAG, "failed to deconvolve the CIC window");
+    const sif_window_mode_t mode = (opt & SIF_DELTA_ALIASING_WINDOW)
+                                     ? SIF__WINDOW_ALIASING
+                                     : SIF__WINDOW_FULL;
+    if (sif__fft_deconvolve_window(ws, sif__fft_grid_window_order(grid), mode,
+          grid->interlaced != 0) != SIF_OK) {
+      SIF_LOG_ERROR(SIF__DELTA_TAG, "failed to deconvolve the assignment window");
       sif__fft_workspace_free(ws);
       return NULL;
     }

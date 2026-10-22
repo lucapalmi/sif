@@ -12,6 +12,7 @@
 
 #include "sif/core/macros.h"
 #include "sif/utils/logger.h"
+#include <string.h>
 
 #define NPY_NO_DEPRECATED_API  NPY_1_7_API_VERSION
 #define PY_ARRAY_UNIQUE_SYMBOL pysif_ARRAY_API
@@ -97,6 +98,31 @@ static inline PyObject* py_sif_raise(int status, const char* what) {
     type = PyExc_RuntimeError;
   PyErr_SetString(type, msg);
   return NULL;
+}
+
+/*
+ * @brief Maps a deconvolution= keyword onto the options bitmask: "full"
+ * (or None) leaves it alone, "aliasing" sets `aliasing`, "none" sets `keep`.
+ *
+ * The finders and pysif.measure share the names; the flags are theirs.
+ *
+ * @return 0, or -1 with a ValueError set on an unrecognised name.
+ */
+static inline int py_sif_parse_deconvolution(
+  const char* name, sif_option keep, sif_option aliasing, sif_option* options) {
+  if (name == NULL || strcmp(name, "full") == 0)
+    return 0;
+  if (strcmp(name, "aliasing") == 0) {
+    *options |= aliasing;
+    return 0;
+  }
+  if (strcmp(name, "none") == 0) {
+    *options |= keep;
+    return 0;
+  }
+  PyErr_Format(PyExc_ValueError,
+    "deconvolution must be 'full', 'aliasing' or 'none', not '%s'", name);
+  return -1;
 }
 
 #endif /* SIF_PY_PY_COMMON_H */

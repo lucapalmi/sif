@@ -1114,7 +1114,25 @@ barrier, and the emulator returns that (ln K within 4×10⁻⁶). It matters at
 small radii, where σ approaches δ_c. No validation curve is flagged by the
 guard.
 
-### 11.6 Cost and limits
+### 11.6 Where the grid must start
+
+The single barrier needs the walk to start where ν = B/σ ≳ 3.5. With a collapse
+barrier **both** must be far out, and the collapse one is the lower for a void
+(ν_c = ν δ_c/δ_v, 0.61 ν for the shell-crossing δ_v = 2.78): start where
+ν_c ≳ 4. The test: K at fixed radii for a constant void barrier 2.78 with
+δ_c = 1.686, as the start moves out (−ln K at R_L = 0.6 Mpc/h):
+
+| grid starts at ν_void | 4.5 (ν_c 2.8) | 6.0 | 7.5 | 9.0 |
+|---|---|---|---|---|
+| −ln K | 0.0573 | 0.0553 | 0.0554 | 0.0554 |
+
+A start at 4.5 misses the clouds beyond it and leaves K 0.2% high; from 6 on it
+has converged (to 10⁻⁴ in ln K). That needs `nu_origin` held at its trained
+maximum (5.77) before the network, as for the single barrier: unclamped, the
+same grids moved ln K by up to 2.7·10⁻². An earlier version did not clamp, and
+reported every call that started past ν = 5.77 as out of domain.
+
+### 11.7 Cost and limits
 
 Void-in-cloud is O(n²) where the single barrier is O(n): about 1 ms at 128
 radii (1.4 ms measured on a loaded machine), about six times the
@@ -1122,7 +1140,48 @@ single-barrier call, threaded over radii (bit-identical at any thread count). Wi
 
 - The collapse barrier is constant or ellipsoidal-like, rising with σ; other
   shapes are untested.
-- The guard checks the void-in-cloud inputs only where Λ_cond > 0 and ν is
-  inside the trained range: elsewhere K = 1 exactly, whatever the inputs.
+- The guard checks the void-in-cloud inputs only where Λ_cond ≥ 10⁻⁶ and ν is
+  inside the trained range (every training bin with K < 0.999 had Λ_cond above
+  it; below, K = 1 to 10⁻⁵ whatever the inputs), and counts an input outside
+  only beyond 1% of its trained span: for a constant collapse barrier
+  d ln ν_c / d ln S is exactly −½ and the trained edge is −0.5002, so a grid
+  twice as coarse as training's lands at −0.5011 and would be flagged.
 - Where void-in-cloud is strong (K < 0.99) the emulated K adds ~0.03–0.05% to
   the single-barrier error.
+
+### 11.8 The Vdn void size function
+
+Jennings, Li & Hu (2013) build their Vdn model (eqs. 15–17) from the
+excursion-set multiplicity of a **constant** void barrier, the linear
+threshold δ_v that the non-linear one maps to (−2.78 for δ_NL = −0.8 by the
+spherical-expansion fit; the paper quotes −2.7), with a second constant
+barrier δ_c = 1.686 for void-in-cloud. The void expands by
+F = (1 + δ_NL)^(−1/3), r = F r_L, and the abundance is conserved in *volume*:
+
+```
+dn/dln r = V(r_L)/V(r) · dn_L/dln r_L · dln r_L/dln r = r_L f(r_L) / V(r)
+```
+
+with f the first-crossing density per unit r_L (what the emulator returns) and
+V the Eulerian volume; dln r_L/dln r = 1 for a constant F. SvdW (eq. 12) is the
+same with V(r_L): Vdn = SvdW × (1 + δ_NL). `sif_size_function_vdn` evaluates
+this with the paper's multiplicity, `f_ln σ` of uncorrelated steps; the emulator
+supplies the top-hat, correlated one instead.
+
+They differ, by a known factor. At high ν the smooth walk crosses at half the
+rate of the uncorrelated one (ν e^{−ν²/2}/√2π against √(2/π) ν e^{−ν²/2}: the
+fudge factor 2 of Press–Schechter), so the emulated Vdn is the paper's × 0.5 at
+large radii (fiducial cosmology, z = 0, δ_NL = −0.8, δ_c = 1.686):
+
+| r_E (Mpc/h) | 1.0 | 1.6 | 2.5 | 3.9 | 6.1 | 9.7 | 15 | 30 |
+|---|---|---|---|---|---|---|---|---|
+| emulated / paper | 1.15 | 0.81 | 0.65 | 0.56 | 0.53 | 0.51 | 0.50 | 0.50 |
+
+Below ~1.5 Mpc/h the emulated value is the higher one.
+
+Against the Monte Carlo on the same problem (constant barrier 2.781 and 1.686,
+10⁸ walks each, with and without the collapse barrier, identical inputs):
+median |f_emu/f_MC − 1| = 0.19% with void-in-cloud (0.15% single barrier)
+against a Monte Carlo noise of 0.20%; 95th percentile 0.76%. K itself is within
+0.1% for R_L ≳ 0.8 Mpc/h and 0.5% too weak at R_L ≈ 0.5–0.6 Mpc/h (K ≈ 0.93),
+the strongest void-in-cloud in the range, where −ln K is 0.06–0.08.

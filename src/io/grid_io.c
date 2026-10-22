@@ -70,6 +70,8 @@ int sif__grid_write_keyed(
   /* What the cells hold travels with them: weights and density contrast are
    * the same bytes, and a reader cannot tell them apart by looking. */
   header.content = (uint32_t)grid->content;
+  header.assignment =
+    ((uint32_t)grid->assignment & 0xffu) | ((grid->interlaced ? 1u : 0u) << 8);
 
   /* Left at the zero memset put there when there is no key, which is how a
    * reader tells "no provenance recorded" from "provenance that disagrees". */
@@ -209,6 +211,12 @@ int sif__grid_read_into_keyed(
   fclose(file);
 
   grid->content = (sif_grid_content_t)header.content;
+  {
+    const uint32_t scheme = header.assignment & 0xffu;
+    grid->assignment = scheme <= SIF_ASSIGNMENT_PCS ? (sif_assignment_t)scheme
+                                                    : SIF_ASSIGNMENT_UNKNOWN;
+    grid->interlaced = (header.assignment >> 8) & 1u;
+  }
 
   /* A version 1 file predates the checksum and carries a zero, which is why
    * the version rather than the value decides whether to check. */

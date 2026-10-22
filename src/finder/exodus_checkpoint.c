@@ -182,6 +182,40 @@ int sif__exodus_checkpoint_write(const char* path,
 
 /* --- reading --- */
 
+/* What a header's centres mean, for messages; SIF__FINDER_CENTRES_MASK is a
+ * finder an old checkpoint was written by and this build no longer has. */
+static const char* centres_label(uint32_t options) {
+  switch (options & SIF__FINDER_CENTRES_MASK) {
+  case SIF_FINDER_CENTRES_LEGACY:
+    return "legacy (every cell, on its node)";
+  case SIF_FINDER_CENTRES_MINIMA:
+    return "minima (smoothed at the rung's scale)";
+  case SIF_FINDER_CENTRES_OPTIMISED:
+    return "optimised (minima climbed to the largest radius)";
+  default:
+    return "refined or one-cell minima, which this build no longer has";
+  }
+}
+
+/* Version 3 and before kept two bits where the centres now are: 1 << 9 for
+ * minima only, 1 << 10 for centres left on their nodes, the latter implied by
+ * version 1. Every cell on its node is SIF_FINDER_CENTRES_LEGACY; every other
+ * combination is a finder this build does not have, and reads as one. */
+static uint32_t upgrade_centres(uint32_t version, uint32_t options) {
+  const int minima = (options & (1u << 9)) != 0;
+  const int nodes = version < 2 || (options & (1u << 10)) != 0;
+  options &= ~SIF__FINDER_CENTRES_MASK;
+  return options | ((nodes && !minima) ? SIF_FINDER_CENTRES_LEGACY
+                                       : SIF__FINDER_CENTRES_MASK);
+}
+
+/* The assignment scheme a header records, for messages. */
+static const char* scheme_label(uint32_t assignment) {
+  static const char* names[] = {"unknown", "NGP", "CIC", "TSC", "PCS"};
+  const uint32_t s = assignment & 0xffu;
+  return s <= 4 ? names[s] : "unknown";
+}
+
 static int read_failed(const char* path, const char* fmt, ...)
   SIF_PRINTF_LIKE(2, 3);
 
@@ -239,11 +273,6 @@ int sif__exodus_checkpoint_load(const char* path,
       (unsigned)SIF_FINDER_CHECKPOINT_VERSION);
     goto done;
   }
-  /* Version 1 predates off-grid centres: everything it holds was found with
-   * centres on the nodes, which is what the flag now says. */
-  if (h.version < 2)
-    h.options |= SIF_FINDER_NODE_CENTRES;
-
   const uint32_t is_double = (sizeof(sif_real) == 8) ? 1u : 0u;
   if (h.is_double != is_double) {
     read_failed(path, "%s values, this build is %s",
@@ -296,6 +325,14 @@ int sif__exodus_checkpoint_load(const char* path,
     read_failed(path, "corrupt: checksum %08x (expected %08x)", got, h.crc32);
     goto done;
   }
+
+  /* Brought up to date only now, the checksum being over the header as it
+   * was written. Version 3 and before recorded the centres differently. */
+  if (h.version < 4)
+    h.options = upgrade_centres(h.version, h.options);
+  /* And version 2 predates the assignment schemes: CIC, not interlaced. */
+  if (h.version < 3)
+    h.assignment = SIF_ASSIGNMENT_CIC;
 
   *header = h;
   status = SIF_OK;
@@ -367,21 +404,25 @@ int sif__exodus_checkpoint_match(const char* path,
     MISMATCH("CIC window %s (this run %s it)",
       (got->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved",
       (want->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "keeps" : "deconvolves");
-  if ((got->options ^ want->options) & SIF_FINDER_NODE_CENTRES)
-    MISMATCH("centres %s (this run %s them)",
-      (got->options & SIF_FINDER_NODE_CENTRES) ? "on the nodes" : "refined",
-      (want->options & SIF_FINDER_NODE_CENTRES) ? "leaves" : "refines");
-  if ((got->options ^ want->options) & SIF_FINDER_CENTRE_IS_MINIMUM)
-    MISMATCH("candidates %s (this run's: %s)",
-      (got->options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only"
-                                                    : "every cell",
-      (want->options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only"
-                                                     : "every cell");
+  if ((got->options ^ want->options) & SIF__FINDER_CENTRES_MASK)
+    MISMATCH("centres %s (this run's: %s)", centres_label(got->options),
+      centres_label(want->options));
 
   if (got->grid_n_cells != want->grid_n_cells ||
       got->box_length != want->box_length)
     MISMATCH("grid of %u cells over %g (expected %u over %g)",
       got->grid_n_cells, got->box_length, want->grid_n_cells, want->box_length);
+  if ((got->options ^ want->options) & SIF_FINDER_ALIASING_WINDOW)
+    MISMATCH("window deconvolved %s (this run's: %s)",
+      (got->options & SIF_FINDER_ALIASING_WINDOW) ? "allowing for aliasing"
+                                                  : "in full",
+      (want->options & SIF_FINDER_ALIASING_WINDOW) ? "allowing for aliasing"
+                                                   : "in full");
+  if (got->assignment != want->assignment)
+    MISMATCH("grid assigned with %s%s (this run's: %s%s)",
+      scheme_label(got->assignment), (got->assignment >> 8) ? ", interlaced" : "",
+      scheme_label(want->assignment),
+      (want->assignment >> 8) ? ", interlaced" : "");
 
   if (got->n_particles != want->n_particles ||
       !weight_matches(got->total_weight, want->total_weight))
@@ -508,13 +549,13 @@ int sif_finder_exodus_checkpoint_check(const char* filepath, FILE* report) {
       (double)sif__finder_search_factor(h.options));
     fprintf(report, "CIC window    %s\n",
       (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved");
-    fprintf(report, "centres       %s\n",
-      (h.options & SIF_FINDER_NODE_CENTRES) ? "on the nodes" : "refined");
-    fprintf(report, "candidates    %s\n",
-      (h.options & SIF_FINDER_CENTRE_IS_MINIMUM) ? "minima only"
-                                                 : "every cell");
-    fprintf(report, "grid          %u^3 cells over %.8g\n", h.grid_n_cells,
-      h.box_length);
+    fprintf(report, "centres       %s\n", centres_label(h.options));
+    fprintf(report, "grid          %u^3 cells over %.8g, %s%s\n",
+      h.grid_n_cells, h.box_length, scheme_label(h.assignment),
+      (h.assignment >> 8) ? " interlaced" : "");
+    fprintf(report, "window        deconvolved %s\n",
+      (h.options & SIF_FINDER_ALIASING_WINDOW) ? "allowing for aliasing"
+                                               : "in full");
     fprintf(report, "tracers       %" PRIu64 ", total weight %.10g\n",
       h.n_particles, h.total_weight);
     if (h.is_survey) {

@@ -482,6 +482,11 @@ static void run_radius_oracle(void) {
     {16.0f, 0, 1.5},
     {20.0f, SIF_FINDER_SEARCH_2_00, 2.0},
     {13.0f, SIF_FINDER_SEARCH_1_25, 1.25},
+    /* Moved centres: the radius reported is still exactly the tracers' at
+     * the centre reported. */
+    {16.0f, SIF_FINDER_CENTRES_OPTIMISED, 1.5},
+    {13.0f, SIF_FINDER_CENTRES_OPTIMISED, 1.5},
+    {16.0f, SIF_FINDER_CENTRES_MINIMA, 1.5},
   };
 
   for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
@@ -749,16 +754,37 @@ static void run_checkpoints(void) {
 
   sif_error_clear();
   cat =
-    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_NODE_CENTRES, path, NULL);
-  CHECK(!cat && error_has("not this run: centres"),
-    "centres on the nodes were not refused (%s)", sif_error_message());
+    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_CENTRES_MINIMA, path, NULL);
+  CHECK(!cat && error_has("not this run: centres legacy"),
+    "minima centres were not refused (%s)", sif_error_message());
   sif_catalogue_free(cat);
 
   sif_error_clear();
   cat = exodus_x(
-    &s, radii, n_radii, -0.7f, SIF_FINDER_CENTRE_IS_MINIMUM, path, NULL);
-  CHECK(!cat && error_has("not this run: candidates"),
-    "minima-only candidates were not refused (%s)", sif_error_message());
+    &s, radii, n_radii, -0.7f, SIF_FINDER_CENTRES_OPTIMISED, path, NULL);
+  CHECK(!cat && error_has("not this run: centres legacy"),
+    "optimised centres were not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat =
+    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_ALIASING_WINDOW, path, NULL);
+  CHECK(!cat && error_has("not this run: window deconvolved"),
+    "the aliasing-aware window was not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  /* The same tracers on a TSC grid: another field, so another run. */
+  sif_error_clear();
+  CHECK(sif_grid_assign(s.grid, s.field, SIF_ASSIGNMENT_TSC, 0) == SIF_OK &&
+          sif_grid_to_density_contrast(s.grid) == SIF_OK,
+    "TSC grid failed");
+  {
+    const sif_finder_exodus_extras_t extras = {.checkpoint = path};
+    cat = sif_finder_exodus_ex(
+      s.grid, s.mesh, radii, n_radii, -0.7f, 0.0f, 0, &extras);
+  }
+  CHECK(!cat && error_has("not this run: grid assigned with CIC (this run's: TSC)"),
+    "a TSC grid was not refused (%s)", sif_error_message());
   sif_catalogue_free(cat);
   CHECK(file_exists(path), "a refused resume removed the checkpoint");
 
@@ -934,7 +960,7 @@ static void run_minimum_scan(void) {
     memcpy(well, g->values, g->total_cells * sizeof(sif_real));
 
     CHECK(sif__finder_scan_refined(
-            g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st) == SIF_OK,
+            g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st, NULL, NULL) == SIF_OK,
       "well %d: scan failed", c);
     CHECK(cands.count > 1 && st.n_minima == 1 && st.n_fallback == 0,
       "well %d: %llu candidates, %llu minima, %llu left on their node", c,
@@ -971,7 +997,7 @@ static void run_minimum_scan(void) {
     const sif_offset_t first = *m;
     memcpy(g->values, well, g->total_cells * sizeof(sif_real));
     CHECK(sif__finder_scan_refined(
-            g, mask, below, -0.5f, 0, 1, 1, &cands, &offs, &st) == SIF_OK &&
+            g, mask, below, -0.5f, 0, 1, 1, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
             cands.count == 1 && cands.items[0].flat_idx == f &&
             cands.items[0].refined != 0 &&
             offs.items[cands.items[0].refined - 1].dx == first.dx,
@@ -979,7 +1005,7 @@ static void run_minimum_scan(void) {
       (unsigned long long)cands.count);
     memcpy(g->values, well, g->total_cells * sizeof(sif_real));
     CHECK(sif__finder_scan_refined(
-            g, mask, below, -0.5f, 0, 0, 1, &cands, &offs, &st) == SIF_OK &&
+            g, mask, below, -0.5f, 0, 0, 1, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
             cands.count == 1 && cands.items[0].refined == 0 && offs.count == 0,
       "well %d, minima only on the nodes: %llu candidates, %llu offsets", c,
       (unsigned long long)cands.count, (unsigned long long)offs.count);
@@ -989,7 +1015,7 @@ static void run_minimum_scan(void) {
   for (uint64_t i = 0; i < g->total_cells; i++)
     g->values[i] = -0.9f;
   CHECK(sif__finder_scan_refined(
-          g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st) == SIF_OK &&
+          g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
           cands.count == g->total_cells && st.n_minima == 1 &&
           st.n_fallback == 1,
     "flat field: %llu candidates, %llu minima, %llu left on their node",
@@ -1054,14 +1080,18 @@ static double shift_residual(const sif_catalogue_t* a, const sif_catalogue_t* b,
 }
 
 /*
- * What refined centres are for: moving every tracer by a fraction of a cell
- * moves a centre by the same, rather than leaving it on whichever node the
- * void now falls nearest. On a Poisson field full of marginal voids, the
- * centres placed between the nodes follow the shift to a small part of a
- * cell, and the ones on the nodes cannot. The catalogue is still the one the
- * nodes give, near enough: the same candidates, only their centres and their
- * order differ.
+ * Moving every tracer by a fraction of a cell should move every centre by the
+ * same. Legacy centres sit on nodes and cannot; minima are placed between the
+ * nodes, to a tenth or two of a cell. An optimised centre is wherever the
+ * climb stopped on its maximum, and the crossing radius changes only when a
+ * tracer crosses the sphere, so that maximum is a small region rather than a
+ * point: the centre follows the shift to within it, and the radius -- what
+ * the climb is for -- follows it far more closely than either grid's. On a
+ * Poisson field full of marginal voids.
  */
+static double radius_spread(
+  const sif_catalogue_t* a, const sif_catalogue_t* b, double* matched);
+
 static void run_grid_shift(void) {
   printf("grid shift\n");
 
@@ -1084,7 +1114,13 @@ static void run_grid_shift(void) {
       x[3 * np + a * np + i] = (sif_real)v;
     }
 
-  sif_catalogue_t* cat[2][2] = {{NULL, NULL}, {NULL, NULL}};
+  const struct {
+    const char* name;
+    sif_option opt;
+  } modes[3] = {{"legacy", SIF_FINDER_CENTRES_LEGACY},
+    {"minima", SIF_FINDER_CENTRES_MINIMA},
+    {"optimised", SIF_FINDER_CENTRES_OPTIMISED}};
+  sif_catalogue_t* cat[2][3] = {{NULL, NULL, NULL}, {NULL, NULL, NULL}};
   for (int moved = 0; moved < 2; moved++) {
     const sif_real* p = x + 3 * np * moved;
     sif_field_t* f = sif_field_alloc(np);
@@ -1093,50 +1129,149 @@ static void run_grid_shift(void) {
     sif_grid_t* g = sif_grid_alloc(SHIFT_GRID, BOX);
     sif_chain_mesh_t* mesh =
       sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
-    for (int node = 0; node < 2; node++) {
+    for (int k = 0; k < 3; k++) {
       CHECK(sif_grid_assign_cic(g, f) == SIF_OK &&
               sif_grid_to_density_contrast(g) == SIF_OK,
         "grid failed");
-      cat[moved][node] = sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f,
-        SIF_FINDER_NO_CHECKPOINT | (node ? SIF_FINDER_NODE_CENTRES : 0));
-      CHECK(cat[moved][node] && cat[moved][node]->n_voids >= 20,
-        "%s centres%s: %llu voids, too few to measure by",
-        node ? "node" : "refined", moved ? ", moved" : "",
-        (unsigned long long)(cat[moved][node] ? cat[moved][node]->n_voids : 0));
+      cat[moved][k] = sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f,
+        SIF_FINDER_NO_CHECKPOINT | modes[k].opt);
+      CHECK(cat[moved][k] && cat[moved][k]->n_voids >= 20,
+        "%s centres%s: %llu voids, too few to measure by", modes[k].name,
+        moved ? ", moved" : "",
+        (unsigned long long)(cat[moved][k] ? cat[moved][k]->n_voids : 0));
     }
     sif_chain_mesh_free(mesh);
     sif_grid_free(g);
     sif_field_free(f);
   }
 
-  if (cat[0][0] && cat[1][0] && cat[0][1] && cat[1][1]) {
-    uint64_t m_refined, m_node, n_off = 0;
-    for (uint64_t i = 0; i < cat[0][0]->n_voids; i++)
-      n_off += off_the_nodes(cat[0][0], i);
-    const double refined =
-      shift_residual(cat[0][0], cat[1][0], shift, 1, &m_refined);
-    const double node = shift_residual(cat[0][1], cat[1][1], shift, 0, &m_node);
-    printf("  %llu voids, %llu between the nodes; on the nodes only, %llu\n",
-      (unsigned long long)cat[0][0]->n_voids, (unsigned long long)n_off,
-      (unsigned long long)cat[0][1]->n_voids);
-    printf("  median miss, in cells: between the nodes %.3f (%llu matched), "
-           "on the nodes %.3f (%llu matched)\n",
-      refined, (unsigned long long)m_refined, node, (unsigned long long)m_node);
-    CHECK(refined < 0.25 && refined < 0.5 * node,
-      "refined centres missed the shift by a median %.3f cells (on the "
-      "nodes: %.3f)",
-      refined, node);
-    const double ratio =
-      (double)cat[0][0]->n_voids / (double)cat[0][1]->n_voids;
-    CHECK(ratio > 0.9 && ratio < 1.1,
-      "%llu voids against %llu on the nodes: not the same catalogue",
-      (unsigned long long)cat[0][0]->n_voids,
-      (unsigned long long)cat[0][1]->n_voids);
+  double miss[3] = {1e300, 1e300, 1e300}, dr[3] = {1e300, 1e300, 1e300};
+  for (int k = 0; k < 3; k++) {
+    if (!cat[0][k] || !cat[1][k])
+      continue;
+    uint64_t m;
+    double matched;
+    miss[k] = shift_residual(cat[0][k], cat[1][k], shift, k == 1, &m);
+    dr[k] = radius_spread(cat[0][k], cat[1][k], &matched);
+    printf("  %-9s %3llu voids, median miss %.3f cells (%llu matched), "
+           "median |log r ratio| %.4f\n",
+      modes[k].name, (unsigned long long)cat[0][k]->n_voids, miss[k],
+      (unsigned long long)m, dr[k]);
   }
+  CHECK(miss[1] < 0.25 && miss[1] < 0.5 * miss[0],
+    "minima missed the shift by a median %.3f cells (legacy: %.3f)", miss[1],
+    miss[0]);
+  CHECK(miss[2] < miss[0] && dr[2] < 0.5 * dr[1] && dr[2] < 0.5 * dr[0],
+    "optimised voids under the shift: centres miss by %.3f cells (legacy "
+    "%.3f), radii by %.4f in log (minima %.4f, legacy %.4f)",
+    miss[2], miss[0], dr[2], dr[1], dr[0]);
 
   for (int a = 0; a < 2; a++)
-    for (int b = 0; b < 2; b++)
+    for (int b = 0; b < 3; b++)
       sif_catalogue_free(cat[a][b]);
+  free(x);
+  printf("  ok\n");
+}
+
+/* Radii of the voids b matches to a's, centres closer than half a's radius:
+ * the median |log(r_b / r_a)| over the matches, the fraction matched. */
+static double radius_spread(const sif_catalogue_t* a, const sif_catalogue_t* b,
+  double* matched) {
+  double* d = malloc(a->n_voids * sizeof(double));
+  uint64_t m = 0;
+  for (uint64_t i = 0; d && i < a->n_voids; i++) {
+    double best = 1e300;
+    uint64_t jb = 0;
+    for (uint64_t j = 0; j < b->n_voids; j++) {
+      const double dx = wrap_delta(b->cx[j], a->cx[i], BOX);
+      const double dy = wrap_delta(b->cy[j], a->cy[i], BOX);
+      const double dz = wrap_delta(b->cz[j], a->cz[i], BOX);
+      const double dd = dx * dx + dy * dy + dz * dz;
+      if (dd < best) {
+        best = dd;
+        jb = j;
+      }
+    }
+    if (sqrt(best) < 0.5 * (double)a->radii[i])
+      d[m++] = fabs(log((double)b->radii[jb] / (double)a->radii[i]));
+  }
+  qsort(d, m, sizeof(double), cmp_double);
+  const double med = m ? d[m / 2] : 1e300;
+  *matched = a->n_voids ? (double)m / (double)a->n_voids : 0.0;
+  free(d);
+  return med;
+}
+
+/*
+ * What SIF_FINDER_CENTRES_OPTIMISED is for. The same tracers on a fine and a
+ * coarse grid: the grid places a candidate at a minimum it samples, and the
+ * radius depends on where that is, so the same void comes out with another
+ * radius on another grid. Moved to where the tracers give the largest radius,
+ * the radii agree about twice as closely. Not exactly: on a field this sparse
+ * the radius has many local maxima, and the two starts climb different ones.
+ */
+static void run_optimised_grid_size(void) {
+  printf("optimised centres across grids\n");
+
+  const uint64_t np = N_P / 4;
+  sif_real* x = malloc(3 * np * sizeof(sif_real));
+  rng_state = 0x2545F4914F6CDD1DULL;
+  for (uint64_t i = 0; i < 3 * np; i++)
+    x[i] = (sif_real)(next_uniform() * BOX);
+
+  sif_field_t* f = sif_field_alloc(np);
+  CHECK(sif_field_assign_positions(f, x, x + np, x + 2 * np) == SIF_OK,
+    "positions failed");
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+
+  const struct {
+    const char* name;
+    sif_option opt;
+  } modes[] = {
+    {"legacy", SIF_FINDER_CENTRES_LEGACY},
+    {"minima", SIF_FINDER_CENTRES_MINIMA},
+    {"optimised", SIF_FINDER_CENTRES_OPTIMISED},
+  };
+  const int n_modes = (int)(sizeof(modes) / sizeof(modes[0]));
+  const uint32_t grids[3] = {SHIFT_GRID, 48, 40};
+  double spread[8] = {0};
+
+  for (int md = 0; md < n_modes; md++) {
+    sif_catalogue_t* cat[3] = {NULL, NULL, NULL};
+    for (int k = 0; k < 3; k++) {
+      sif_grid_t* g = sif_grid_alloc(grids[k], BOX);
+      CHECK(sif_grid_assign_cic(g, f) == SIF_OK &&
+              sif_grid_to_density_contrast(g) == SIF_OK,
+        "grid failed");
+      cat[k] = sif_finder_exodus(g, mesh, radii, n_radii, -0.7f, 0.0f,
+        SIF_FINDER_NO_CHECKPOINT | modes[md].opt);
+      CHECK(cat[k] && cat[k]->n_voids >= 20, "%s, %u^3: %llu voids",
+        modes[md].name, grids[k],
+        (unsigned long long)(cat[k] ? cat[k]->n_voids : 0));
+      sif_grid_free(g);
+    }
+    if (cat[0] && cat[1] && cat[2]) {
+      double m1, m2;
+      spread[md] = radius_spread(cat[0], cat[1], &m1);
+      const double s2 = radius_spread(cat[0], cat[2], &m2);
+      printf("  %-34s voids %3llu/%3llu/%3llu (x%.2f, x%.2f), median |log r| "
+             "%.4f, %.4f\n",
+        modes[md].name, (unsigned long long)cat[0]->n_voids,
+        (unsigned long long)cat[1]->n_voids, (unsigned long long)cat[2]->n_voids,
+        (double)cat[1]->n_voids / (double)cat[0]->n_voids,
+        (double)cat[2]->n_voids / (double)cat[0]->n_voids, spread[md], s2);
+    }
+    for (int k = 0; k < 3; k++)
+      sif_catalogue_free(cat[k]);
+  }
+  CHECK(spread[2] < 0.6 * spread[0],
+    "optimised radii differ across grids by a median %.4f in log (legacy "
+    "%.4f)",
+    spread[2], spread[0]);
+
+  sif_chain_mesh_free(mesh);
+  sif_field_free(f);
   free(x);
   printf("  ok\n");
 }
@@ -1232,6 +1367,31 @@ static void run_refusals(void) {
       "spherical case %zu: '%s', status %d", i, sif_error_message(),
       sif_error_status());
     sif_catalogue_free(cat);
+  }
+
+  /* Centres: no fourth setting, and no climb on weighted tracers yet. */
+  sif_error_clear();
+  sif_catalogue_t* bad = sif_finder_exodus(
+    g, mesh, radii, n_radii, -0.7f, 0.0f, SIF__FINDER_CENTRES_MASK);
+  CHECK(!bad && error_has("options: centres: 3 << 9") &&
+          sif_error_status() == SIF_ERR_INVALID,
+    "an unknown centres setting: '%s'", sif_error_message());
+  sif_catalogue_free(bad);
+  {
+    sif_real* w = malloc(N_P * sizeof(sif_real));
+    for (uint64_t i = 0; i < N_P; i++)
+      w[i] = 1.0f + 0.5f * (sif_real)(i % 3);
+    sif_field_t* fw = weighted_field(x, y, z, w);
+    sif_chain_mesh_t* mw = sif_chain_mesh_alloc(MESH_CELLS, BOX, fw, 0);
+    sif_error_clear();
+    bad = sif_finder_exodus(
+      g, mw, radii, n_radii, -0.7f, 0.0f, SIF_FINDER_CENTRES_OPTIMISED);
+    CHECK(!bad && error_has("SIF_FINDER_CENTRES_OPTIMISED: weighted tracers"),
+      "optimised centres on weighted tracers: '%s'", sif_error_message());
+    sif_catalogue_free(bad);
+    sif_chain_mesh_free(mw);
+    sif_field_free(fw);
+    free(w);
   }
 
   /* A search sphere wider than the mesh: the first rung smooths the grid, then
@@ -1343,6 +1503,8 @@ int main(void) {
      is enough to cover the pipeline without a multi-minute test. */
   run_case("overlap 0.2", 0, 0.2f);
   run_case("consume_grid", SIF_FINDER_CONSUME_GRID, 0.0f);
+  run_case("minima centres", SIF_FINDER_CENTRES_MINIMA, 0.0f);
+  run_case("optimised centres", SIF_FINDER_CENTRES_OPTIMISED, 0.0f);
 #endif
 
   run_weighted_cases();
@@ -1355,6 +1517,7 @@ int main(void) {
   run_overlap_reach();
 #if !SIF_TEST_INSTRUMENTED
   run_grid_shift();
+  run_optimised_grid_size();
 #endif
   run_refusals();
   run_grid_cells();

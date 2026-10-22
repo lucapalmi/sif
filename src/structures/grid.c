@@ -13,6 +13,7 @@
 
 #include "core/system_internal.h"
 #include "io/internal.h"
+#include "math/fft.h"
 #include "sif/core/settings.h"
 #include "sif/io/grid_io.h"
 #include "sif/utils/align.h"
@@ -96,6 +97,8 @@ sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length) {
   grid->p2_shift = grid->p2_mask ? SIF_CTZ_U32(n_cells) : 0;
 
   grid->content = SIF_GRID_EMPTY;
+  grid->assignment = SIF_ASSIGNMENT_UNKNOWN;
+  grid->interlaced = 0;
   grid->values = sif_calloc_aligned(grid->total_cells, sizeof(sif_real));
   if (!grid->values) {
     SIF_LOG_ERROR("grid", "grid: cannot allocate %u^3 cells (%.2f GiB)",
@@ -145,9 +148,15 @@ typedef struct {
   sif_real* values;
   uint32_t ix_start;
   uint32_t ix_end;
-  /** Planes this slab owns; values holds width + 1, the last being the ghost.
+  /**
+   * Planes this slab owns. values holds lo + width + hi: lo ghost planes
+   * below the owned ones and hi above, the reach of the assignment kernel
+   * either side of a particle's base cell -- 0 and 1 for CIC, 1 and 1 for
+   * TSC, 1 and 2 for PCS.
    */
   uint32_t width;
+  uint32_t lo;
+  uint32_t hi;
   uint32_t n_cells;
 } grid_slab_t;
 
@@ -168,7 +177,8 @@ SIF_PURE_FUNCTION static inline uint64_t grid_slab_flat_index(
  * whole cache line so that two threads depositing into neighbouring slabs
  * never share the line at their boundary.
  */
-static grid_slab_t* grid_slabs_alloc(uint32_t n_cells, int n_threads) {
+static grid_slab_t* grid_slabs_alloc(
+  uint32_t n_cells, int n_threads, uint32_t lo, uint32_t hi) {
   grid_slab_t* slabs = malloc(n_threads * sizeof(grid_slab_t));
   if (!slabs) {
     SIF_LOG_ERROR("grid_cic", "grid: cannot allocate %d CIC slab headers",
@@ -186,7 +196,7 @@ static grid_slab_t* grid_slabs_alloc(uint32_t n_cells, int n_threads) {
                         : (uint32_t)(t + 1) * (n_cells / n_threads);
     uint32_t width = ix_end - ix_start;
 
-    uint64_t slab_cells = (uint64_t)(width + 1) * n_cells * n_cells;
+    uint64_t slab_cells = (uint64_t)(lo + width + hi) * n_cells * n_cells;
 
     slab_cells = (slab_cells + align_elements - 1) & ~(align_elements - 1);
     total_slab_cells += slab_cells;
@@ -214,8 +224,11 @@ static grid_slab_t* grid_slabs_alloc(uint32_t n_cells, int n_threads) {
                         ? n_cells
                         : (uint32_t)(t + 1) * (n_cells / n_threads);
     slabs[t].width = slabs[t].ix_end - slabs[t].ix_start;
+    slabs[t].lo = lo;
+    slabs[t].hi = hi;
 
-    uint64_t slab_cells = (uint64_t)(slabs[t].width + 1) * n_cells * n_cells;
+    uint64_t slab_cells =
+      (uint64_t)(lo + slabs[t].width + hi) * n_cells * n_cells;
     slab_cells = (slab_cells + align_elements - 1) & ~(align_elements - 1);
 
     slabs[t].values = arena + current_offset;
@@ -252,16 +265,41 @@ static void grid_slabs_free(grid_slab_t* slabs, int n_threads) {
  * for nothing.
  */
 static void grid_cic_reduce_ghost_cells(grid_slab_t* slabs, int n_threads) {
+  /* Upper ghosts first, into the next slab's first planes, then lower ghosts
+   * into the previous slab's last ones; for CIC, which has only the one upper
+   * plane, this is exactly the fold it always was. Serial, so the order the
+   * planes are added in is fixed. */
   for (int t = 0; t < n_threads; t++) {
     grid_slab_t* slab = &slabs[t];
     grid_slab_t* slab_next = &slabs[(t + 1) % n_threads];
     const uint32_t N = slab->n_cells;
 
-    for (uint32_t iy = 0; iy < N; iy++) {
-      for (uint32_t iz = 0; iz < N; iz++) {
-        uint64_t ghost_idx = grid_slab_flat_index(slab, slab->width, iy, iz);
-        uint64_t target_idx = grid_slab_flat_index(slab_next, 0, iy, iz);
-        slab_next->values[target_idx] += slab->values[ghost_idx];
+    for (uint32_t g = 0; g < slab->hi; g++) {
+      for (uint32_t iy = 0; iy < N; iy++) {
+        for (uint32_t iz = 0; iz < N; iz++) {
+          uint64_t ghost_idx =
+            grid_slab_flat_index(slab, slab->lo + slab->width + g, iy, iz);
+          uint64_t target_idx =
+            grid_slab_flat_index(slab_next, slab_next->lo + g, iy, iz);
+          slab_next->values[target_idx] += slab->values[ghost_idx];
+        }
+      }
+    }
+  }
+
+  for (int t = 0; t < n_threads; t++) {
+    grid_slab_t* slab = &slabs[t];
+    grid_slab_t* slab_prev = &slabs[(t + n_threads - 1) % n_threads];
+    const uint32_t N = slab->n_cells;
+
+    for (uint32_t g = 0; g < slab->lo; g++) {
+      for (uint32_t iy = 0; iy < N; iy++) {
+        for (uint32_t iz = 0; iz < N; iz++) {
+          uint64_t ghost_idx = grid_slab_flat_index(slab, g, iy, iz);
+          uint64_t target_idx = grid_slab_flat_index(slab_prev,
+            slab_prev->lo + slab_prev->width - slab->lo + g, iy, iz);
+          slab_prev->values[target_idx] += slab->values[ghost_idx];
+        }
       }
     }
   }
@@ -291,7 +329,7 @@ static void grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
       uint32_t global_ix = slab->ix_start + local_ix;
       for (uint32_t iy = 0; iy < N; iy++) {
         for (uint32_t iz = 0; iz < N; iz++) {
-          uint64_t src = grid_slab_flat_index(slab, local_ix, iy, iz);
+          uint64_t src = grid_slab_flat_index(slab, slab->lo + local_ix, iy, iz);
           uint64_t dst = grid_flat_index(grid, global_ix, iy, iz);
           grid->values[dst] = slab->values[src] * inv_cell_volume;
         }
@@ -309,6 +347,90 @@ static void grid_cic_merge_slabs_to_grid(sif_grid_t* grid,
 static inline uint32_t cic_cell_x(sif_real x, sif_real inv_cell, uint32_t N) {
   uint32_t ix = (uint32_t)(x * inv_cell);
   return (ix >= N) ? 0u : ix;
+}
+
+/*
+ * The base cell a scheme's kernel is anchored on: the cell below the particle
+ * for the even-order kernels (CIC, PCS), the nearest node for the odd ones
+ * (NGP, TSC), which are centred on it. Like cic_cell_x(), the one derivation
+ * every pass shares, wrapped into [0, N).
+ */
+static inline uint32_t base_cell(
+  sif_real u, sif_assignment_t scheme, uint32_t N) {
+  const uint32_t i = (scheme == SIF_ASSIGNMENT_NGP ||
+                       scheme == SIF_ASSIGNMENT_TSC)
+                       ? (uint32_t)(u + 0.5f)
+                       : (uint32_t)u;
+  return (i >= N) ? i - N : i;
+}
+
+/* The kernel's reach below and above the base cell. */
+static inline uint32_t kernel_lo(sif_assignment_t scheme) {
+  return (scheme == SIF_ASSIGNMENT_TSC || scheme == SIF_ASSIGNMENT_PCS) ? 1u
+                                                                        : 0u;
+}
+static inline uint32_t kernel_hi(sif_assignment_t scheme) {
+  switch (scheme) {
+  case SIF_ASSIGNMENT_NGP:
+    return 0u;
+  case SIF_ASSIGNMENT_PCS:
+    return 2u;
+  default:
+    return 1u;
+  }
+}
+
+/*
+ * The kernel's weights along one axis, for the particle at u (in cells) whose
+ * base cell is `base`, lowest first: w[j] goes to cell base - lo + j. The
+ * fractional distances are taken from the unwrapped base, so a particle that
+ * rounded up to the top face has the distance it really has.
+ *
+ *   NGP  1
+ *   TSC  (1/2 - d)^2 / 2, 3/4 - d^2, (1/2 + d)^2 / 2   with d = u - nearest
+ *   PCS  (1 - t)^3 / 6, (4 - 6t^2 + 3t^3) / 6,
+ *        (4 - 6(1-t)^2 + 3(1-t)^3) / 6, t^3 / 6        with t = u - floor(u)
+ *
+ * Each set sums to one.
+ */
+static inline void kernel_weights(
+  sif_real u, sif_assignment_t scheme, sif_real w[4]) {
+  switch (scheme) {
+  case SIF_ASSIGNMENT_NGP:
+    w[0] = 1.0f;
+    break;
+  case SIF_ASSIGNMENT_TSC: {
+    const sif_real d = u - (sif_real)(uint32_t)(u + 0.5f);
+    const sif_real a = 0.5f - d, b = 0.5f + d;
+    w[0] = 0.5f * a * a;
+    w[1] = 0.75f - d * d;
+    w[2] = 0.5f * b * b;
+    break;
+  }
+  case SIF_ASSIGNMENT_PCS: {
+    const sif_real t = u - (sif_real)(uint32_t)u;
+    const sif_real r = 1.0f - t;
+    const sif_real t2 = t * t, r2 = r * r;
+    w[0] = r2 * r / 6.0f;
+    w[1] = (4.0f - 6.0f * t2 + 3.0f * t2 * t) / 6.0f;
+    w[2] = (4.0f - 6.0f * r2 + 3.0f * r2 * r) / 6.0f;
+    w[3] = t2 * t / 6.0f;
+    break;
+  }
+  default: {
+    const sif_real t = u - (sif_real)(uint32_t)u;
+    w[0] = 1.0f - t;
+    w[1] = t;
+    break;
+  }
+  }
+}
+
+/* A coordinate as the passes read it: moved by `shift` -- half a cell for the
+ * second grid of an interlaced deposit, otherwise none -- and folded into the
+ * box. With no shift the coordinate is read untouched. */
+static inline sif_real deposit_coord(sif_real v, sif_real shift, sif_real box) {
+  return sif__box_fold(shift != 0.0f ? v + shift : v, box);
 }
 
 /*
@@ -331,7 +453,7 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
   const sif_real* xs, const sif_real* ys, const sif_real* zs,
   const sif_real* weights, uint64_t tile_lo, uint64_t tile_hi, uint64_t* counts,
   uint64_t* sorted, uint32_t N, sif_real idx, uint32_t base_width,
-  sif_real box) {
+  sif_real box, sif_assignment_t scheme, sif_real shift) {
 
   const int n_chunks = GRID_CIC_CHUNKS;
   const uint64_t tile_n = tile_hi - tile_lo;
@@ -348,7 +470,8 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
       (start + chunk_size > tile_hi) ? tile_hi : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
-      uint32_t ix = cic_cell_x(sif__box_fold(xs[p], box), idx, N);
+      uint32_t ix =
+        base_cell(deposit_coord(xs[p], shift, box) * idx, scheme, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
       counts[(uint64_t)c * n_slabs + target_slab]++;
     }
@@ -384,7 +507,8 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
       (start + chunk_size > tile_hi) ? tile_hi : start + chunk_size;
 
     for (uint64_t p = start; p < end; p++) {
-      uint32_t ix = cic_cell_x(sif__box_fold(xs[p], box), idx, N);
+      uint32_t ix =
+        base_cell(deposit_coord(xs[p], shift, box) * idx, scheme, N);
       uint32_t target_slab = MIN(ix / base_width, (uint32_t)(n_slabs - 1));
 
       uint64_t flat_idx = (uint64_t)c * n_slabs + target_slab;
@@ -412,6 +536,49 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
 
     sif_real* s_values = SIF_ASSUME_ALIGNED(slab->values);
 
+    if (scheme != SIF_ASSIGNMENT_CIC) {
+      /* The general kernel: p weights per axis, p^3 writes. The x index runs
+       * from the slab's lower ghost planes up into its upper ones, never past
+       * them, since a particle is routed by its base cell; y and z wrap. */
+      const uint32_t lo = kernel_lo(scheme);
+      const uint32_t width = lo + 1 + kernel_hi(scheme);
+
+      for (uint64_t p = slab_start; p < slab_end; p++) {
+        const uint64_t orig_p = sorted[p];
+        const sif_real ux = deposit_coord(xs[orig_p], shift, box) * idx;
+        const sif_real uy = deposit_coord(ys[orig_p], shift, box) * idx;
+        const sif_real uz = deposit_coord(zs[orig_p], shift, box) * idx;
+
+        sif_real wx[4], wy[4], wz[4];
+        kernel_weights(ux, scheme, wx);
+        kernel_weights(uy, scheme, wy);
+        kernel_weights(uz, scheme, wz);
+
+        const uint32_t lix = base_cell(ux, scheme, N) - x0;
+        const uint32_t by = base_cell(uy, scheme, N);
+        const uint32_t bz = base_cell(uz, scheme, N);
+
+        uint32_t jy[4], jz[4];
+        for (uint32_t j = 0; j < width; j++) {
+          jy[j] = (by + N + j - lo) % N;
+          jz[j] = (bz + N + j - lo) % N;
+        }
+
+        const sif_real particle_weight = weights ? weights[orig_p] : 1.0f;
+
+        for (uint32_t a = 0; a < width; a++) {
+          const sif_real wa = particle_weight * wx[a];
+          for (uint32_t b = 0; b < width; b++) {
+            const sif_real wab = wa * wy[b];
+            const uint64_t row = grid_slab_flat_index(slab, lix + a, jy[b], 0);
+            for (uint32_t c = 0; c < width; c++)
+              s_values[row + jz[c]] += wab * wz[c];
+          }
+        }
+      }
+      continue;
+    }
+
     for (uint64_t p = slab_start; p < slab_end; p++) {
       /* The indirection costs less than it looks: consecutive entries in a
        * slab's run come from the same chunk, so the reads walk the coordinate
@@ -421,10 +588,9 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
       /* Folded, as in passes 1 and 3: a coordinate within rounding of a face
        * was accepted by the validator, and all three passes have to see it at
        * the same place. A no-op for every coordinate already in the box. */
-      const sif_real cx = sif__box_fold(xs[orig_p], box) * idx;
-      const sif_real cy = sif__box_fold(ys[orig_p], box) * idx;
-      const sif_real cz = sif__box_fold(zs[orig_p], box) * idx;
-
+      const sif_real cx = deposit_coord(xs[orig_p], shift, box) * idx;
+      const sif_real cy = deposit_coord(ys[orig_p], shift, box) * idx;
+      const sif_real cz = deposit_coord(zs[orig_p], shift, box) * idx;
       /* The same >= N fallback cic_cell_x applies, spelled out here because
        * the fractional part is needed anyway. The two must agree exactly: this
        * derives the cell a second time, and a particle that lands in a
@@ -522,7 +688,7 @@ static uint64_t grid_cic_tile_size(void) {
  */
 static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   const sif_real* ys, const sif_real* zs, const sif_real* weights,
-  uint64_t n_particles) {
+  uint64_t n_particles, sif_assignment_t scheme, sif_real shift) {
 
   const uint32_t N = grid->n_cells;
   const sif_real idx = (sif_real)N / (sif_real)grid->box_length;
@@ -533,7 +699,8 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   if (n_slabs < 1)
     n_slabs = 1;
 
-  grid_slab_t* slabs = grid_slabs_alloc(N, n_slabs);
+  grid_slab_t* slabs =
+    grid_slabs_alloc(N, n_slabs, kernel_lo(scheme), kernel_hi(scheme));
   if (!slabs)
     return SIF_ERR_ALLOC;
 
@@ -570,7 +737,7 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
     const uint64_t hi = (lo + tile_n > n_particles) ? n_particles : lo + tile_n;
 
     grid_cic_deposit_tile(slabs, n_slabs, xs, ys, zs, weights, lo, hi, counts,
-      sorted_indices, N, idx, base_width, grid->box_length);
+      sorted_indices, N, idx, base_width, grid->box_length, scheme, shift);
   }
 
   grid_cic_reduce_ghost_cells(slabs, n_slabs);
@@ -584,7 +751,7 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
   free(counts);
   grid_slabs_free(slabs, n_slabs);
 
-  SIF_LOG_TRACE("grid", "cic assignment completed");
+  SIF_LOG_TRACE("grid", "assignment completed");
   return SIF_OK;
 }
 
@@ -730,12 +897,19 @@ static void key_fold_array(grid_key_t* key, const sif_real* a, uint64_t n) {
  * positions with different weights produced the same key, and the second
  * silently received the first one's grid.
  */
-static grid_key_t grid_cache_key(
-  const sif_grid_t* grid, const sif_field_t* field) {
+static grid_key_t grid_cache_key(const sif_grid_t* grid,
+  const sif_field_t* field, sif_assignment_t scheme, int interlace) {
 
   grid_key_t key = {0xcbf29ce484222325ULL, 0x9e3779b97f4a7c15ULL};
 
   key_mix(&key, GRID_CIC_VERSION);
+
+  /* Mixed in only when it is not plain CIC, so every key cached before the
+   * schemes existed -- all of them CIC -- still names the same grid. */
+  if (scheme != SIF_ASSIGNMENT_CIC || interlace) {
+    key_mix(&key, (uint64_t)scheme);
+    key_mix(&key, interlace ? 0x1a7e41aceULL : 0u);
+  }
   key_mix(&key, grid->n_cells);
   key_mix(&key, grid_real_bits(grid->box_length));
   key_mix(&key, field->n_particles);
@@ -753,12 +927,152 @@ static grid_key_t grid_cache_key(
   return key;
 }
 
-int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
+/*
+ * The interlaced deposit, into grid->values: the plain grid and the one with
+ * every particle moved by half a cell, combined in Fourier space as
+ *
+ *   delta(k) = [ delta_0(k) + delta_s(k) exp(i k . s) ] / 2,   s = (l/2)(1,1,1)
+ *
+ * The phase undoes the shift for the true modes, while an aliased image at
+ * k + 2 pi n / l picks up exp(i pi (n_x + n_y + n_z)) on top -- +1 or -1 --
+ * so the images with an odd index sum cancel between the two grids.
+ *
+ * Memory: the shifted spectrum is kept while the plain grid is deposited and
+ * transformed, and the combination needs the workspace's backward buffer, so
+ * three spectrum-sized buffers are alive at the peak. The real-space cells are
+ * released before the last of them is allocated and replaced by the result.
+ */
+static int grid_compute_interlaced(sif_grid_t* grid, const sif_field_t* field,
+  sif_assignment_t scheme) {
+
+  sif_system_state_t* state = sif__system_state();
+  if (!state)
+    return SIF_ERR_UNINITIALISED;
+
+  const uint32_t N = grid->n_cells;
+  const sif_real half_cell = 0.5f * grid->cell_length;
+
+  sif_fft_workspace_t* ws = sif__fft_workspace_alloc(state->fft_mgr, N);
+  if (!ws)
+    return SIF_ERR_ALLOC;
+
+  const uint64_t n_modes = (uint64_t)N * N * (N / 2 + 1);
+  sif_real_complex* shifted = NULL;
+  int status = grid_compute_cic(grid, field->x, field->y, field->z,
+    field->weights, field->n_particles, scheme, half_cell);
+  if (status == SIF_OK)
+    status = sif__fft_grid_forward(ws, grid);
+  if (status == SIF_OK) {
+    shifted = sif_malloc_aligned(n_modes * sizeof(sif_real_complex));
+    if (!shifted) {
+      SIF_LOG_ERROR("grid", "interlacing: cannot allocate a %u^3 spectrum "
+        "(%.2f GiB)", N, SIF__GIB(n_modes * sizeof(sif_real_complex)));
+      status = SIF_ERR_ALLOC;
+    } else {
+      memcpy(shifted, ws->delta_k, n_modes * sizeof(sif_real_complex));
+    }
+  }
+  if (status == SIF_OK)
+    status = grid_compute_cic(grid, field->x, field->y, field->z,
+      field->weights, field->n_particles, scheme, 0.0f);
+  if (status == SIF_OK)
+    status = sif__fft_grid_forward(ws, grid);
+
+  /* From here the cells are not needed; letting them go before the backward
+   * buffer is allocated is what keeps the peak at three spectra. */
+  if (status == SIF_OK) {
+    sif_free_aligned(grid->values);
+    grid->values = NULL;
+    status = sif__fft_workspace_init_backward(ws, state->fft_mgr);
+  }
+
+  if (status == SIF_OK) {
+    const uint32_t half = N / 2;
+    sif_real_complex* out = ws->delta_k_cpy;
+    const sif_real_complex* plain = ws->delta_k;
+
+#pragma omp parallel for schedule(static)
+    for (uint32_t ix = 0; ix < N; ix++) {
+      const int32_t kx = (ix > half) ? (int32_t)ix - (int32_t)N : (int32_t)ix;
+      for (uint32_t iy = 0; iy < N; iy++) {
+        const int32_t ky =
+          (iy > half) ? (int32_t)iy - (int32_t)N : (int32_t)iy;
+        for (uint32_t iz = 0; iz <= half; iz++) {
+          const double phase =
+            SIF_PI * (double)(kx + ky + (int32_t)iz) / (double)N;
+          const double c = cos(phase), sn = sin(phase);
+          const uint64_t m = ((uint64_t)ix * N + iy) * (half + 1) + iz;
+          const double re = shifted[m][0] * c - shifted[m][1] * sn;
+          const double im = shifted[m][0] * sn + shifted[m][1] * c;
+          out[m][0] = (sif_real)(0.5 * (plain[m][0] + re));
+          out[m][1] = (sif_real)(0.5 * (plain[m][1] + im));
+        }
+      }
+    }
+    sif_free_aligned(shifted);
+    shifted = NULL;
+
+    if (!sif__fft_grid_backward(ws)) {
+      status = SIF_ERR_ALLOC;
+    } else {
+      grid->values = sif__fft_workspace_take_real_buffer(ws);
+    }
+  }
+
+  sif_free_aligned(shifted);
+  sif__fft_workspace_free(ws);
+
+  /* A failure after the cells were released leaves an empty grid rather than
+   * a dangling one, as the header promises. */
+  if (!grid->values) {
+    grid->values = sif_calloc_aligned(grid->total_cells, sizeof(sif_real));
+    grid->content = SIF_GRID_EMPTY;
+    grid->assignment = SIF_ASSIGNMENT_UNKNOWN;
+    grid->interlaced = 0;
+    if (status == SIF_OK)
+      status = SIF_ERR_ALLOC;
+  }
+
+  if (status == SIF_OK)
+    SIF_LOG_TRACE("grid", "interlaced assignment completed");
+  return status;
+}
+
+static const char* scheme_name(sif_assignment_t scheme) {
+  switch (scheme) {
+  case SIF_ASSIGNMENT_NGP:
+    return "NGP";
+  case SIF_ASSIGNMENT_CIC:
+    return "CIC";
+  case SIF_ASSIGNMENT_TSC:
+    return "TSC";
+  case SIF_ASSIGNMENT_PCS:
+    return "PCS";
+  default:
+    return "unknown";
+  }
+}
+
+int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
+  sif_assignment_t scheme, sif_option opt) {
   if (!grid || !grid->values) {
     SIF_LOG_ERROR("grid_cic", "grid: %s", !grid ? "NULL" : "no cell values");
     return SIF_ERR_INVALID;
   }
-
+  if (scheme < SIF_ASSIGNMENT_NGP || scheme > SIF_ASSIGNMENT_PCS) {
+    SIF_LOG_ERROR("grid", "scheme: %d (expected NGP, CIC, TSC or PCS)",
+      (int)scheme);
+    return SIF_ERR_INVALID;
+  }
+  /* A PCS kernel reaches four cells; on fewer it would deposit a particle
+   * onto the same cell twice through the wrap, and the slabs' ghost planes
+   * would overrun the slab they fold into. */
+  if (grid->n_cells < 4) {
+    SIF_LOG_ERROR("grid", "n_cells: %u (expected at least 4 to assign onto)",
+      grid->n_cells);
+    return SIF_ERR_INVALID;
+  }
+  const int interlace = (opt & SIF_GRID_INTERLACE) != 0;
   /* An empty field would deposit nothing and come back a grid of zeros, which
    * no later step can tell from a real one until a mean of zero divides
    * something. A field emptied by sif_chain_mesh_alloc_consume() is the usual
@@ -788,7 +1102,7 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
      * enabled, and against the assignment below -- which reads the same arrays
      * and then scatters eight read-modify-writes per particle across a grid
      * far larger than cache -- it is a small fraction of what a hit saves. */
-    key = grid_cache_key(grid, field);
+    key = grid_cache_key(grid, field, scheme, interlace);
 
     /* sif_system_init() puts cache_directory in the settings table and creates
      * it, so this is the one source of truth; re-deriving $HOME/.sif/grid_cache
@@ -815,11 +1129,17 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
     }
   }
 
-  const int status = grid_compute_cic(
-    grid, field->x, field->y, field->z, field->weights, field->n_particles);
+  const int status =
+    interlace ? grid_compute_interlaced(grid, field, scheme)
+              : grid_compute_cic(grid, field->x, field->y, field->z,
+                  field->weights, field->n_particles, scheme, 0.0f);
   if (status != SIF_OK)
     return status;
   grid->content = SIF_GRID_DENSITY;
+  grid->assignment = scheme;
+  grid->interlaced = (uint32_t)interlace;
+  SIF_LOG_TRACE("grid", "%s%s assignment onto %u^3", interlace ? "interlaced " : "",
+    scheme_name(scheme), grid->n_cells);
 
   /* final_path stays empty when the cache is off, or on when the directory
    * could not be resolved -- both mean there is nothing to write. */
@@ -858,6 +1178,10 @@ int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
    * they asked for is in their hands either way. */
   SIF_LOG_FLUSH();
   return SIF_OK;
+}
+
+int sif_grid_assign_cic(sif_grid_t* grid, const sif_field_t* field) {
+  return sif_grid_assign(grid, field, SIF_ASSIGNMENT_CIC, 0);
 }
 
 int sif_grid_to_density_contrast(sif_grid_t* grid) {

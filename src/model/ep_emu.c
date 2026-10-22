@@ -76,6 +76,20 @@ _Static_assert(V_COUNT == SIF_EP_VIC_N_CAND,
 #define VIC_LOG_FLOOR 1e-30
 #define VIC_Z_MAX     10.0
 
+/* Bins whose collapse baseline is below this are not checked against the
+ * trained region: every training bin with K < 0.999 had Lambda_cond above it,
+ * and the network would have to multiply it by e^z > 100 to matter. Without
+ * the cut, bins at high nu -- where the lookbacks reach past the trained
+ * range and K is 1 to 1e-9 -- flagged sound calls. */
+#define VIC_GUARD_LAMBDA 1e-6
+
+/* An input counts as outside only beyond this fraction of its trained span.
+ * For a constant collapse barrier d ln nu_c / d ln S is exactly -1/2, the
+ * trained edge is -0.5002 from the spacing training used, and a grid only 2x
+ * coarser gives -0.5011: 0.17% of the span, below anything the network can
+ * resolve. */
+#define VIC_GUARD_SLACK 0.01
+
 /* The lookback: nu and gamma^2 where the variance was half its current
  * value. */
 #define EP_EMU_LOOKBACK 0.5
@@ -638,24 +652,32 @@ static int vic_ln_k(const sif_real* radii, uint32_t n, const double* S,
     const double lc = 0.5 * (hz[i] + hz[i + 1]);
     row[V_LOG_LAM_VALUE] = log(lv > VIC_LOG_FLOOR ? lv : VIC_LOG_FLOOR);
     row[V_LOG_LAM_COND] = log(lc > VIC_LOG_FLOOR ? lc : VIC_LOG_FLOOR);
-    for (uint32_t k = 0; k < SIF_EP_VIC_N_IN; k++)
-      Xv[(size_t)i * SIF_EP_VIC_N_IN + k] = row[SIF_EP_VIC_INPUTS[k]];
+    for (uint32_t k = 0; k < SIF_EP_VIC_N_IN; k++) {
+      double v = row[SIF_EP_VIC_INPUTS[k]];
+      /* nu_origin held at the trained maximum, as for the single barrier: a
+       * grid started further out is the same walk. Unclamped, K moved by up
+       * to 2.7% on a grid started at nu = 7.5. */
+      if (SIF_EP_VIC_INPUTS[k] == F_NU_ORIGIN && v > SIF_EP_VIC_BOX_HI[k])
+        v = SIF_EP_VIC_BOX_HI[k];
+      Xv[(size_t)i * SIF_EP_VIC_N_IN + k] = v;
+    }
   }
 
   status = sif__nn_eval(&SIF_EP_VIC_NN, Xv, n_bins, z);
   if (status != SIF_OK)
     goto done;
 
-  /* Bins where the baseline sees no cloud have K = 1 exactly, whatever the
-   * inputs, and bins above the trained nu nothing crosses: neither is a gap
-   * in what the network knows. */
+  /* Bins where the baseline sees almost no cloud have K = 1 to better than
+   * 1e-5 whatever the inputs, and bins above the trained nu nothing crosses:
+   * neither is a gap in what the network knows. */
   uint32_t outside = 0, worst = 0;
   double worst_excess = 0.0, worst_value = 0.0;
   for (uint32_t i = 0; i < n_bins; i++) {
     const double lc = 0.5 * (hz[i] + hz[i + 1]);
     const double zz = z[i] < VIC_Z_MAX ? z[i] : VIC_Z_MAX;
     ln_k[i] = -lc * exp(zz);
-    if (!(lc > 0.0) || X[(size_t)i * F_COUNT + F_NU] > SIF_EP_EMU_BOX_HI[F_NU])
+    if (!(lc >= VIC_GUARD_LAMBDA) ||
+        X[(size_t)i * F_COUNT + F_NU] > SIF_EP_EMU_BOX_HI[F_NU])
       continue;
     int out = 0;
     for (uint32_t k = 0; k < SIF_EP_VIC_N_IN; k++) {
@@ -664,9 +686,9 @@ static int vic_ln_k(const sif_real* radii, uint32_t n, const double* S,
       const double span = hi - lo > 0.0 ? hi - lo : 1.0;
       const double ex =
         v < lo ? (lo - v) / span : (v > hi ? (v - hi) / span : 0.0);
-      if (ex > 0.0)
+      if (ex > VIC_GUARD_SLACK)
         out = 1;
-      if (ex > worst_excess) {
+      if (ex > VIC_GUARD_SLACK && ex > worst_excess) {
         worst_excess = ex;
         worst = k;
         worst_value = v;

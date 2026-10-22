@@ -261,6 +261,39 @@ static int exodus_extras(
   return 0;
 }
 
+/* centres='legacy' (or None), 'minima' or 'optimised'. */
+static int centres_option(const char* name, sif_option* options) {
+  if (name == NULL || strcmp(name, "legacy") == 0) {
+    *options |= SIF_FINDER_CENTRES_LEGACY;
+    return 0;
+  }
+  if (strcmp(name, "minima") == 0) {
+    *options |= SIF_FINDER_CENTRES_MINIMA;
+    return 0;
+  }
+  if (strcmp(name, "optimised") == 0) {
+    *options |= SIF_FINDER_CENTRES_OPTIMISED;
+    return 0;
+  }
+  PyErr_Format(PyExc_ValueError,
+    "centres must be 'legacy', 'minima' or 'optimised', not '%s'", name);
+  return -1;
+}
+
+/* The centres a checkpoint records, as centres= names them. */
+static const char* checkpoint_centres(uint32_t options) {
+  switch (options & SIF__FINDER_CENTRES_MASK) {
+  case SIF_FINDER_CENTRES_LEGACY:
+    return "legacy";
+  case SIF_FINDER_CENTRES_MINIMA:
+    return "minima";
+  case SIF_FINDER_CENTRES_OPTIMISED:
+    return "optimised";
+  default:
+    return "retired";
+  }
+}
+
 /* --- Exodus Finder Wrapper --- */
 PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject *grid_obj = NULL, *mesh_obj = NULL, *radii_obj = NULL;
@@ -272,21 +305,25 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   double search_factor = 1.5;
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
-  int refine = 1;
-  int centre_is_minimum = 0;
+  const char* deconvolution = NULL;
+  const char* centres = NULL;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
     "overlap_fraction", "consume_grid", "search_factor", "checkpoint", "prior",
-    "centre_refinement_hessian", "centre_is_minimum", NULL};
+    "deconvolution", "centres", NULL};
 
   /* The '|' character denotes that everything after it is optional.
    * 'p' safely converts a Python boolean to a C int (1 or 0). */
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd$OOpp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|dpd$OOzz", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
         &threshold, &overlap_frac, &consume_grid, &search_factor, &checkpoint,
-        &prior, &refine, &centre_is_minimum)) {
+        &prior, &deconvolution, &centres)) {
     return NULL;
   }
+  sif_option window = 0;
+  if (py_sif_parse_deconvolution(deconvolution, SIF_FINDER_KEEP_CIC_WINDOW,
+        SIF_FINDER_ALIASING_WINDOW, &window) < 0)
+    return NULL;
 
   exodus_extras_t x;
   if (exodus_extras(checkpoint, prior, &x) < 0)
@@ -309,10 +346,9 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
 
   if (consume_grid)
     options |= SIF_FINDER_CONSUME_GRID;
-  if (!refine)
-    options |= SIF_FINDER_NODE_CENTRES;
-  if (centre_is_minimum)
-    options |= SIF_FINDER_CENTRE_IS_MINIMUM;
+  if (centres_option(centres, &options) < 0)
+    return NULL;
+  options |= window;
 
   sif_option reach;
   if (search_factor_option(search_factor, &reach) < 0) {
@@ -353,14 +389,20 @@ PyObject* py_sif_finder_spherical(
 
   /* Optional keyword arguments with safe defaults */
   int consume_grid = 0;
+  const char* deconvolution = NULL;
 
-  static char* kwlist[] = {
-    "grid", "radii", "threshold", "overlap_fraction", "consume_grid", NULL};
+  static char* kwlist[] = {"grid", "radii", "threshold", "overlap_fraction",
+    "consume_grid", "deconvolution", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Od|dp", kwlist, &sifGridType,
-        &grid_obj, &radii_obj, &threshold, &overlap_frac, &consume_grid)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Od|dp$z", kwlist,
+        &sifGridType, &grid_obj, &radii_obj, &threshold, &overlap_frac,
+        &consume_grid, &deconvolution)) {
     return NULL;
   }
+  sif_option window = 0;
+  if (py_sif_parse_deconvolution(deconvolution, SIF_FINDER_KEEP_CIC_WINDOW,
+        SIF_FINDER_ALIASING_WINDOW, &window) < 0)
+    return NULL;
 
   PyArrayObject* radii_arr = radii_from_object(radii_obj);
   if (!radii_arr)
@@ -371,7 +413,7 @@ PyObject* py_sif_finder_spherical(
   sif_grid_t* c_grid = ((sifGridObject*)grid_obj)->grid;
 
   /* --- Parse Options to Bitmask --- */
-  sif_option options = 0;
+  sif_option options = window;
 
   if (consume_grid)
     options |= SIF_FINDER_CONSUME_GRID;
@@ -404,21 +446,25 @@ PyObject* py_sif_finder_exodus_survey(
   double search_factor = 1.5;
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
-  int refine = 1;
-  int centre_is_minimum = 0;
+  const char* deconvolution = NULL;
+  const char* centres = NULL;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
     "random_mesh", "offset", "radii", "threshold", "overlap_fraction",
     "consume_grid", "search_factor", "checkpoint", "prior",
-    "centre_refinement_hessian", "centre_is_minimum", NULL};
+    "deconvolution", "centres", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd$OOpp",
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|dpd$OOzz",
         kwlist, &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
         &ox, &oy, &oz, &radii_obj, &threshold, &overlap_frac, &consume_grid,
-        &search_factor, &checkpoint, &prior, &refine, &centre_is_minimum)) {
+        &search_factor, &checkpoint, &prior, &deconvolution, &centres)) {
     return NULL;
   }
+  sif_option window = 0;
+  if (py_sif_parse_deconvolution(deconvolution, SIF_FINDER_KEEP_CIC_WINDOW,
+        SIF_FINDER_ALIASING_WINDOW, &window) < 0)
+    return NULL;
   const sif_real offset[3] = {(sif_real)ox, (sif_real)oy, (sif_real)oz};
 
   /* One grid passed as both would be smoothed twice in two workspaces, and
@@ -430,10 +476,9 @@ PyObject* py_sif_finder_exodus_survey(
   }
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : SIF_DEFAULT;
-  if (!refine)
-    options |= SIF_FINDER_NODE_CENTRES;
-  if (centre_is_minimum)
-    options |= SIF_FINDER_CENTRE_IS_MINIMUM;
+  if (centres_option(centres, &options) < 0)
+    return NULL;
+  options |= window;
   sif_option reach;
   if (search_factor_option(search_factor, &reach) < 0)
     return NULL;
@@ -531,6 +576,14 @@ PyObject* py_sif_finder_survey_box(
 }
 
 /* --- Checkpoint Reader --- */
+/* The scheme a checkpoint's grid was assigned with, as Grid.assignment names
+ * it; checkpoints from before schemes were recorded read as CIC. */
+static const char* checkpoint_scheme(uint32_t assignment) {
+  static const char* names[] = {"cic", "ngp", "cic", "tsc", "pcs"};
+  const uint32_t s = assignment & 0xffu;
+  return s <= 4 ? names[s] : "cic";
+}
+
 PyObject* py_sif_finder_read_checkpoint(
   PyObject* self, PyObject* args, PyObject* kwds) {
 
@@ -575,8 +628,8 @@ PyObject* py_sif_finder_read_checkpoint(
   }
 
   PyObject* info = Py_BuildValue(
-    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:d,s:O,s:O,s:O,s:I,s:d,s:K,s:d,"
-    "s:K,s:d,s:(ddd)}",
+    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:d,s:O,s:s,s:s,s:I,s:d,s:s,s:O,"
+    "s:K,s:d,s:K,s:d,s:(ddd)}",
     "mode", h.is_survey ? "survey" : "box", "weighted",
     h.is_weighted ? Py_True : Py_False, "radii", radii, "rungs_done",
     (unsigned)h.next_rung, "n_voids", (unsigned long long)h.n_voids, "n_prior",
@@ -584,11 +637,14 @@ PyObject* py_sif_finder_read_checkpoint(
     h.overlap_fraction, "search_factor",
     (double)sif__finder_search_factor(h.options), "keep_cic_window",
     (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? Py_True : Py_False,
-    "centre_refinement_hessian",
-    (h.options & SIF_FINDER_NODE_CENTRES) ? Py_False : Py_True,
-    "centre_is_minimum",
-    (h.options & SIF_FINDER_CENTRE_IS_MINIMUM) ? Py_True : Py_False,
+    "deconvolution",
+    (h.options & SIF_FINDER_KEEP_CIC_WINDOW)   ? "none"
+    : (h.options & SIF_FINDER_ALIASING_WINDOW) ? "aliasing"
+                                               : "full",
+    "centres", checkpoint_centres(h.options),
     "grid_n_cells", (unsigned)h.grid_n_cells, "box_length", h.box_length,
+    "assignment", checkpoint_scheme(h.assignment), "interlaced",
+    (h.assignment >> 8) ? Py_True : Py_False,
     "n_particles", (unsigned long long)h.n_particles, "total_weight",
     h.total_weight, "n_randoms", (unsigned long long)h.random_n_particles,
     "random_total_weight", h.random_total_weight, "offset", h.offset[0],

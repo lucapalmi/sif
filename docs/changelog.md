@@ -7,22 +7,30 @@ Current version: v0.4 release 0
 
 ### Added
 
-- `SIF_FINDER_NODE_CENTRES` (`centre_refinement_hessian=False`, same in Lua)
-  keeps every exodus centre on its grid node, as before
-- `SIF_FINDER_CENTRE_IS_MINIMUM` (`centre_is_minimum=True`, same in Lua) takes
-  only minima of the smoothed field as exodus candidates
+- Exodus `centres` (`SIF_FINDER_CENTRES_*`, `centres=`, `finder.centres`):
+  `"legacy"` (default, as 0.4), `"minima"` (rung-scale minima, refined off the
+  nodes) or `"optimised"` (minima climbed to where the tracers give the largest
+  radius: the VSF no longer depends on the grid); boxes only for the last two
+- `sif_grid_assign()`: NGP, CIC, TSC and PCS assignment, optionally interlaced
+  (`Grid.assign(field, scheme, interlace=)`; `grid.assignment`, `grid.interlace`
+  in Lua); the finders and `measure` undo the scheme the grid records
+- Aliasing-aware window deconvolution, `SIF_FINDER_ALIASING_WINDOW` and
+  `SIF_DELTA_ALIASING_WINDOW` (`deconvolution="aliasing"`, same in Lua)
 
 ### Changed
 
-- Exodus centres a void found at a local minimum of the smoothed field where
-  that minimum lies between the grid nodes, so centres no longer sit on the grid
 - FFTs are bit-identical across thread counts, and 10-35% faster
-- Exodus checkpoints are version 2; version 1 ones resume only with node centres
+- Exodus checkpoints are version 4 and record the grid's assignment and the
+  centres; older ones resume only as `"legacy"` on CIC grids
 
 ### Fixed
 
 - With an overlap fraction above 0, a void could overlap one smaller than
   itself by more than the fraction allows
+- Version 1 exodus checkpoints failed their own checksum
+- `sif_ep_multiplicity_function_emu()` with `collapse`: a grid started at a
+  large nu was reported out of domain and its void-in-cloud factor was off by
+  up to 2.7%; start the grid where delta_c / sigma is large too
 
 
 ## v0.4.0 -- 18/10/2026

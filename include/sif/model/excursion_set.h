@@ -242,8 +242,12 @@ typedef struct {
  * @param radii Smoothing radii, strictly positive and strictly increasing, at
  * least 4. Place the largest where nu = B / sigma is ~3.5 or more: few walks
  * then start above the barrier, and the answer does not depend on exactly
- * where the grid starts (further out costs nothing). Keep nu above ~0.21 at
- * the smallest. `domain` reports a start too low and an end too deep.
+ * where the grid starts (further out costs nothing). With `collapse`, the same
+ * for delta_c / sigma, which is the lower of the two for a void: start where
+ * both are ~4 or more (nu of the void barrier ~1.6 times that for
+ * delta_v = 2.7). A void-in-cloud grid started at nu = 4.5 for the void barrier
+ * alone misses the clouds beyond it and puts K 0.2% high. Keep nu above ~0.21
+ * at the smallest. `domain` reports a start too low and an end too deep.
  * @param n_radii Number of radii
  * @param sigma R.m.s. density contrast per radius, strictly positive. Take it
  * from sif_delta_covariance_pk so the barrier and the walk share one variance.

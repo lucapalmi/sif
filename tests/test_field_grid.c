@@ -8,6 +8,7 @@
  * helpers, CIC mass weighting and the box contract. */
 #include "sif/core/settings.h"
 #include "sif/core/system.h"
+#include "sif/io/grid_io.h"
 #include "sif/structures/field.h"
 #include "sif/structures/grid.h"
 #include "sif/utils/align.h"
@@ -709,6 +710,262 @@ static void test_grid_content_tag(void) {
   sif_grid_free(g);
 }
 
+/* --- assignment schemes --- */
+
+#define TEST_PI 3.14159265358979323846
+
+/* The scheme's kernel at distance d (cells) from a node, written from the
+ * textbook forms rather than from grid.c, so the two can disagree. */
+static double ref_kernel(int scheme, double d) {
+  const double a = fabs(d);
+  switch (scheme) {
+  case SIF_ASSIGNMENT_NGP:
+    return (d >= -0.5 && d < 0.5) ? 1.0 : 0.0;
+  case SIF_ASSIGNMENT_CIC:
+    return a < 1.0 ? 1.0 - a : 0.0;
+  case SIF_ASSIGNMENT_TSC:
+    return a < 0.5 ? 0.75 - a * a : (a < 1.5 ? 0.5 * (1.5 - a) * (1.5 - a) : 0.0);
+  default:
+    return a < 1.0   ? (4.0 - 6.0 * a * a + 3.0 * a * a * a) / 6.0
+           : a < 2.0 ? (2.0 - a) * (2.0 - a) * (2.0 - a) / 6.0
+                     : 0.0;
+  }
+}
+
+/* The deposit by brute force, in double: every node within reach of every
+ * particle, periodic, divided by the cell volume as the grid does. */
+static void ref_deposit(double* out, uint32_t n, double box, const sif_real* x,
+  const sif_real* y, const sif_real* z, uint64_t np, int scheme) {
+  const double l = box / n;
+  memset(out, 0, (size_t)n * n * n * sizeof(double));
+  for (uint64_t p = 0; p < np; p++) {
+    const double u[3] = {x[p] / l, y[p] / l, z[p] / l};
+    double w[3][6];
+    int64_t node[3][6];
+    for (int ax = 0; ax < 3; ax++) {
+      const int64_t f = (int64_t)floor(u[ax]);
+      for (int j = 0; j < 6; j++) {
+        node[ax][j] = f - 2 + j;
+        w[ax][j] = ref_kernel(scheme, u[ax] - (double)node[ax][j]);
+      }
+    }
+    for (int a = 0; a < 6; a++)
+      for (int b = 0; b < 6; b++)
+        for (int c = 0; c < 6; c++) {
+          const double ww = w[0][a] * w[1][b] * w[2][c];
+          if (ww == 0.0)
+            continue;
+          const uint64_t i = (uint64_t)((node[0][a] % n + n) % n);
+          const uint64_t j = (uint64_t)((node[1][b] % n + n) % n);
+          const uint64_t k = (uint64_t)((node[2][c] % n + n) % n);
+          out[(i * n + j) * n + k] += ww / (l * l * l);
+        }
+  }
+}
+
+/*
+ * Every scheme against the brute-force deposit, on a grid of four slabs, with
+ * particles placed where the slab machinery can go wrong: on the slab
+ * boundaries, where a kernel spills into a neighbour's planes either way, and
+ * against both box faces, where it wraps.
+ */
+static void test_assignment_schemes(void) {
+  printf("assignment schemes against a brute-force deposit\n");
+
+  const uint32_t n = 64; /* four slabs of 16 planes */
+  const double l = (double)BOX / n;
+  const uint64_t np = N_P + 12;
+  sif_real *x = malloc(np * sizeof(sif_real)), *y = malloc(np * sizeof(sif_real)),
+           *z = malloc(np * sizeof(sif_real));
+  make_positions(x, y, z);
+  const double edge_u[12] = {0.01, 0.49, 0.51, 15.5, 15.97, 16.02, 31.6, 32.3,
+    47.99, 48.4, 63.49, 63.97};
+  for (int e = 0; e < 12; e++) {
+    x[N_P + e] = (sif_real)(edge_u[e] * l);
+    y[N_P + e] = (sif_real)(edge_u[11 - e] * l);
+    z[N_P + e] = (sif_real)(edge_u[(e * 5) % 12] * l);
+  }
+
+  sif_field_t* f = sif_field_alloc(np);
+  CHECK(f && sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "positions failed");
+  double* ref = malloc((size_t)n * n * n * sizeof(double));
+
+  const int schemes[4] = {SIF_ASSIGNMENT_NGP, SIF_ASSIGNMENT_CIC,
+    SIF_ASSIGNMENT_TSC, SIF_ASSIGNMENT_PCS};
+  for (int s = 0; s < 4; s++) {
+    sif_grid_t* g = sif_grid_alloc(n, BOX);
+    CHECK(sif_grid_assign(g, f, (sif_assignment_t)schemes[s], 0) == SIF_OK,
+      "scheme %d: assignment failed", schemes[s]);
+    CHECK(g->assignment == (sif_assignment_t)schemes[s] && g->interlaced == 0 &&
+            g->content == SIF_GRID_DENSITY,
+      "scheme %d: recorded as %d, interlaced %u", schemes[s], (int)g->assignment,
+      g->interlaced);
+
+    ref_deposit(ref, n, BOX, x, y, z, np, schemes[s]);
+    double worst = 0.0, peak = 0.0, mass = 0.0;
+    for (uint64_t i = 0; i < (uint64_t)n * n * n; i++) {
+      worst = fmax(worst, fabs((double)g->values[i] - ref[i]));
+      peak = fmax(peak, ref[i]);
+      mass += (double)g->values[i] * l * l * l;
+    }
+    CHECK(worst < 1e-5 * peak, "scheme %d: off the reference by %.3g of a peak of %.3g",
+      schemes[s], worst, peak);
+    CHECK(fabs(mass - (double)np) < 1e-4 * (double)np,
+      "scheme %d: mass %.6f, expected %llu", schemes[s], mass,
+      (unsigned long long)np);
+    sif_grid_free(g);
+  }
+
+  /* CIC by name and by sif_grid_assign() are the same deposit, to the bit. */
+  sif_grid_t* a = sif_grid_alloc(n, BOX);
+  sif_grid_t* b = sif_grid_alloc(n, BOX);
+  CHECK(sif_grid_assign_cic(a, f) == SIF_OK &&
+          sif_grid_assign(b, f, SIF_ASSIGNMENT_CIC, 0) == SIF_OK &&
+          memcmp(a->values, b->values, (size_t)n * n * n * sizeof(sif_real)) == 0,
+    "sif_grid_assign_cic() and sif_grid_assign(CIC) differ");
+  sif_grid_free(a);
+  sif_grid_free(b);
+
+  /* Refusals: an unknown scheme, and a grid the PCS kernel would wrap onto
+   * itself. */
+  sif_grid_t* small = sif_grid_alloc(3, BOX);
+  sif_grid_t* g = sif_grid_alloc(8, BOX);
+  CHECK(sif_grid_assign(g, f, (sif_assignment_t)7, 0) == SIF_ERR_INVALID,
+    "an unknown scheme was accepted");
+  CHECK(sif_grid_assign(small, f, SIF_ASSIGNMENT_TSC, 0) == SIF_ERR_INVALID,
+    "a 3-cell grid was accepted");
+  sif_grid_free(small);
+  sif_grid_free(g);
+
+  free(ref);
+  sif_field_free(f);
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
+/* Coefficient of mode m along x of a grid, summed over y and z. */
+static void x_mode(const sif_grid_t* g, uint32_t m, double* re, double* im) {
+  const uint32_t n = g->n_cells;
+  *re = *im = 0.0;
+  for (uint32_t i = 0; i < n; i++) {
+    double plane = 0.0;
+    for (uint64_t c = 0; c < (uint64_t)n * n; c++)
+      plane += g->values[(uint64_t)i * n * n + c];
+    *re += plane * cos(2.0 * TEST_PI * m * i / n);
+    *im -= plane * sin(2.0 * TEST_PI * m * i / n);
+  }
+}
+
+/*
+ * Interlacing cancels aliasing. Weighted particles on a fine lattice carry a
+ * density mode above the grid's Nyquist frequency, at 29 of 32 along x, which a
+ * plain grid folds onto mode 3 -- an image with an odd index, so the shifted
+ * grid brings it back with the opposite sign and the interlaced grid has
+ * nothing there. A resolved mode, 2, is untouched.
+ */
+static void test_interlacing_cancels_aliasing(void) {
+  printf("interlacing cancels the leading aliasing\n");
+
+  const uint32_t n = 32;
+  const uint32_t fine = 8 * n, side = 4;
+  const uint64_t np = (uint64_t)fine * side * side;
+  sif_real *x = malloc(np * sizeof(sif_real)), *y = malloc(np * sizeof(sif_real)),
+           *z = malloc(np * sizeof(sif_real)), *w = malloc(np * sizeof(sif_real));
+  uint64_t p = 0;
+  for (uint32_t i = 0; i < fine; i++)
+    for (uint32_t j = 0; j < side; j++)
+      for (uint32_t k = 0; k < side; k++, p++) {
+        const double u = (i + 0.37) / fine;
+        x[p] = (sif_real)(u * BOX);
+        y[p] = (sif_real)((j + 0.5) / side * BOX);
+        z[p] = (sif_real)((k + 0.5) / side * BOX);
+        w[p] = (sif_real)(1.0 + 0.5 * cos(2.0 * TEST_PI * 2 * u) +
+                          0.5 * cos(2.0 * TEST_PI * 29 * u));
+      }
+
+  sif_field_t* f = sif_field_alloc(np);
+  CHECK(f && sif_field_assign_positions(f, x, y, z) == SIF_OK &&
+          sif_field_assign_weights(f, w) == SIF_OK,
+    "field failed");
+
+  const int schemes[2] = {SIF_ASSIGNMENT_CIC, SIF_ASSIGNMENT_TSC};
+  for (int s = 0; s < 2; s++) {
+    sif_grid_t* plain = sif_grid_alloc(n, BOX);
+    sif_grid_t* inter = sif_grid_alloc(n, BOX);
+    CHECK(sif_grid_assign(plain, f, (sif_assignment_t)schemes[s], 0) == SIF_OK &&
+            sif_grid_assign(inter, f, (sif_assignment_t)schemes[s],
+              SIF_GRID_INTERLACE) == SIF_OK,
+      "scheme %d: assignment failed", schemes[s]);
+    CHECK(inter->interlaced == 1 && inter->content == SIF_GRID_DENSITY,
+      "scheme %d: the interlaced grid is not recorded as such", schemes[s]);
+
+    double pr, pi, ir, ii, p2r, p2i, i2r, i2i, p0, i0, dummy;
+    x_mode(plain, 3, &pr, &pi);
+    x_mode(inter, 3, &ir, &ii);
+    x_mode(plain, 2, &p2r, &p2i);
+    x_mode(inter, 2, &i2r, &i2i);
+    x_mode(plain, 0, &p0, &dummy);
+    x_mode(inter, 0, &i0, &dummy);
+    const double alias_plain = hypot(pr, pi), alias_inter = hypot(ir, ii);
+    const double mode_plain = hypot(p2r, p2i), mode_inter = hypot(i2r, i2i);
+    printf("  scheme %d: aliased mode %.3g plain, %.3g interlaced; resolved "
+           "%.6g / %.6g\n",
+      schemes[s], alias_plain, alias_inter, mode_plain, mode_inter);
+    CHECK(alias_plain > 1e-4 * mode_plain,
+      "scheme %d: the plain grid shows no alias to remove", schemes[s]);
+    CHECK(alias_inter < 1e-2 * alias_plain,
+      "scheme %d: interlacing left %.3g of the alias", schemes[s],
+      alias_inter / alias_plain);
+    CHECK(fabs(mode_inter - mode_plain) < 1e-4 * mode_plain,
+      "scheme %d: interlacing changed a resolved mode by %.3g", schemes[s],
+      (mode_inter - mode_plain) / mode_plain);
+    CHECK(fabs(i0 - p0) < 1e-5 * p0, "scheme %d: interlacing changed the mean",
+      schemes[s]);
+    sif_grid_free(plain);
+    sif_grid_free(inter);
+  }
+
+  sif_field_free(f);
+  free(x);
+  free(y);
+  free(z);
+  free(w);
+  printf("  ok\n");
+}
+
+/* The scheme and the interlacing survive a write and a read. */
+static void test_assignment_round_trip(void) {
+  printf("assignment recorded in .xgrid files\n");
+
+  sif_real *x = malloc(N_P * sizeof(sif_real)), *y = malloc(N_P * sizeof(sif_real)),
+           *z = malloc(N_P * sizeof(sif_real));
+  make_positions(x, y, z);
+  sif_field_t* f = sif_field_alloc(N_P);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK, "positions failed");
+
+  sif_grid_t* g = sif_grid_alloc(16, BOX);
+  CHECK(sif_grid_assign(g, f, SIF_ASSIGNMENT_PCS, SIF_GRID_INTERLACE) == SIF_OK,
+    "assignment failed");
+  const char* path = "test_field_grid_assignment.xgrid";
+  CHECK(sif_grid_write(path, g) == SIF_OK, "write failed");
+  sif_grid_t* back = sif_grid_read(path);
+  CHECK(back && back->assignment == SIF_ASSIGNMENT_PCS && back->interlaced == 1,
+    "read back as scheme %d, interlaced %u", back ? (int)back->assignment : -1,
+    back ? back->interlaced : 0);
+  remove(path);
+
+  sif_grid_free(back);
+  sif_grid_free(g);
+  sif_field_free(f);
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
 int main(void) {
   /* Needed by the cache test and nothing else here: the grid cache is driven
    * through the settings table, which does not exist until the library is
@@ -730,6 +987,9 @@ int main(void) {
   test_wrap_periodic();
   test_wrap_counts_nonfinite();
   test_grid_content_tag();
+  test_assignment_schemes();
+  test_interlacing_cancels_aliasing();
+  test_assignment_round_trip();
 
   sif_system_finalise();
 

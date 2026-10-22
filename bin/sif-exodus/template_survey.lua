@@ -56,6 +56,13 @@ grid = {
   -- around the footprint the randoms trace. auto: one cell per mean
   -- separation of the data inside the footprint.
   n_cells = "auto",
+  -- How each tracer, data and random alike, is spread over the cells:
+  -- ngp | cic | tsc | pcs, over 1, 2, 3 or 4 cells per axis. Higher orders
+  -- alias less, and cost more.
+  assignment = "cic",
+  -- true: also deposit shifted by half a cell and average the two, which
+  -- cancels the leading aliasing; a second deposit and two FFTs per grid.
+  interlace = false,
 }
 
 mesh = {
@@ -72,12 +79,14 @@ finder = {
   threshold = -0.7,          -- the density contrast a void is grown to
   overlap_fraction = 0,      -- of the smaller radius; 0: no overlap
   search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2
-  -- A centre at a minimum of the smoothed field goes where the minimum lies
-  -- between the grid nodes; false leaves every centre on its node.
-  centre_refinement_hessian = true,
-  -- true: only those minima are candidates, so every void is centred on one
-  -- (with overlap_fraction = 1, the excursion-set definition of a void).
-  centre_is_minimum = false,
+  -- Where voids are centred: legacy, every cell below the threshold on its
+  -- grid node. minima and optimised are periodic boxes only, for now.
+  centres = "legacy",
+  -- How the grids' assignment window is undone before smoothing: full
+  -- divides it out (boosting aliasing and shot noise near the grid scale);
+  -- aliasing divides out the window with its aliases (least squares); none
+  -- keeps it.
+  deconvolution = "full",
 }
 
 -- Voids to start from: the run adds its own and writes both, these first.

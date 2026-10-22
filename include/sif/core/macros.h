@@ -56,7 +56,7 @@ typedef uint32_t sif_option;
 
 /**
  * @defgroup opt_finder Finder options
- * @brief Bits 11-15. Bits 8-10 are free.
+ * @brief Bits 8-15 (16-17 are the chain mesh's).
  * @{
  */
 /**
@@ -66,8 +66,9 @@ typedef uint32_t sif_option;
  * A finder smooths the grid in place at every radius, so the input is gone by
  * the time it finishes. By default it is transformed back at the end; this flag
  * skips that, saving one inverse FFT for a caller that is going to discard the
- * grid anyway. Unless SIF_FINDER_NODE_CENTRES is set, the exodus finder leaves
- * that field smoothed by one more cell of Gaussian, which it centres on.
+ * grid anyway. Under SIF_FINDER_CENTRES_MINIMA and SIF_FINDER_CENTRES_OPTIMISED
+ * the exodus finder leaves that field smoothed by the Gaussian its minima are
+ * found on as well.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
 
@@ -116,22 +117,38 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 /** @} */
 
 /**
- * Skip deconvolution of the CIC assignment window.
+ * Skip deconvolution of the assignment window.
  *
- * sif_grid_assign_cic() convolves the field with its own window before the
- * finder ever sees it, so a top-hat applied on top of that smooths twice: the
+ * sif_grid_assign() convolves the field with its own window before the finder
+ * ever sees it, so a top-hat applied on top of that smooths twice: the
  * effective window is wider than the radius asked for, and it has soft edges
  * about a cell thick. Both push the measured contrast in a void upward, which
  * for the exodus finder shows up directly as rescaled radii biased large.
- * Deconvolution is therefore the default; this flag disables it for grids that
- * were not built by CIC -- one filled by hand, or from a tessellation, or read
- * from a file whose assignment is unknown.
+ * Deconvolution is therefore the default, of the window the grid records
+ * (sif_grid_t::assignment, CIC when unknown); this flag disables it for a grid
+ * filled some other way. The name predates the other schemes.
  *
  * @note The correction grows towards the Nyquist corner, so it is only safe
  * while the top-hat that follows suppresses those modes. The finders check the
  * smallest radius against the cell size and warn when it does not.
  */
 #define SIF_FINDER_KEEP_CIC_WINDOW (1u << 14)
+
+/**
+ * Deconvolve the assignment window allowing for aliasing.
+ *
+ * The plain correction divides every mode by the window W, which recovers the
+ * field the grid would hold without aliasing -- but a grid does alias: the
+ * power above its Nyquist frequency, shot noise above all, folds back onto the
+ * resolved modes, and dividing by W amplifies it most where it dominates, up
+ * to 15 times at the Nyquist corner for CIC. With this flag every mode is
+ * multiplied by W over the sum of W^2 over the images that reach the grid
+ * instead, the least-squares estimate of the band-limited field when the power
+ * near Nyquist is white. The two agree on large scales; at the CIC corner the
+ * gain is 1.8 rather than 15. Accounts for interlacing, which keeps only half
+ * the images. See sif__fft_deconvolve_window() in src/math/fft.h for the sums.
+ */
+#define SIF_FINDER_ALIASING_WINDOW (1u << 8)
 
 /**
  * Write no checkpoint.
@@ -143,32 +160,55 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 #define SIF_FINDER_NO_CHECKPOINT (1u << 11)
 
 /**
- * Leave every exodus centre on its grid node, as before 0.5.
+ * @name Where exodus voids are centred
+ * Bits 9-10, one of three. Each is a different finder, not a refinement of
+ * another; the overlap fraction, the search factor and the window options
+ * apply to all three alike.
  *
- * By default a candidate at a local minimum of the smoothed field is centred
- * where that minimum actually lies between the nodes -- see
- * sif_finder_exodus(). This keeps it on its node, as every other candidate
- * is. The candidates and their order are the same either way.
+ * The void definition they approximate: a void is a point q and a radius R
+ * such that q is a minimum of the density field smoothed at R, R is the
+ * largest scale at which the contrast about q crosses the threshold, and q is
+ * not inside a larger void. Write R(x) for that crossing radius at any point
+ * x; then R is stationary exactly where x is stationary in the field smoothed
+ * at R(x), and a maximum of R(x) is a minimum of that field -- so a void
+ * centre is a local maximum of R(x), a property of the tracers alone.
+ * @{
  */
-#define SIF_FINDER_NODE_CENTRES (1u << 10)
-
 /**
- * Take as exodus candidates only the local minima of the smoothed field.
- *
- * By default every cell below the threshold is a candidate. When a minimum is
- * refused -- its sphere overlaps a void already accepted -- the cell next to
- * it, on the slope, can then be accepted in its place, a void tangent to the
- * larger one and centred on no minimum at all: on a lognormal mock that is 40%
- * of the catalogue. With this flag a void is centred on a minimum of the field
- * smoothed at its rung or there is no void. Combined with an overlap fraction
- * of 1, which allows a void anywhere its centre is outside every larger one,
- * that is the void definition of the excursion-set models. It is also cheaper:
- * there are far fewer minima than cells below threshold.
- *
- * Minima are found on the field smoothed by one more cell of Gaussian, the
- * one SIF_FINDER_NODE_CENTRES refers to, with or without that flag.
+ * Every cell below the threshold at a rung is a candidate, centred on its
+ * grid node. Exactly the finder of 0.4 and before, kept to reproduce its
+ * catalogues. Where a minimum is refused, the cell next to it on the slope can
+ * be accepted instead: a void centred on no minimum, tangent to a larger one.
+ * The catalogue depends on the grid: on a 600^3 grid of a 1876 Mpc/h box it
+ * holds 15-25% fewer voids than on a 1500^3 one. The default, for now.
  */
-#define SIF_FINDER_CENTRE_IS_MINIMUM (1u << 9)
+#define SIF_FINDER_CENTRES_LEGACY (0u << 9)
+/**
+ * The local minima of the rung's field are the candidates, centred where the
+ * minimum lies between the nodes by a Newton step on the 3x3x3 Hessian.
+ * Minima are found on the field smoothed by a Gaussian of 0.15 of the rung on
+ * top of the top-hat -- one more transform per rung -- a smoothing tied to
+ * the void, so a grid that resolves the rung finds the same minima as any
+ * finer one. A void is centred on a minimum of its rung's field or there is
+ * none. Fast; within 1-3% of a finer grid's VSF from a cell of about a mean
+ * tracer separation, but the centre is the grid's, and so, through it, is the
+ * radius. Periodic boxes only, for now.
+ */
+#define SIF_FINDER_CENTRES_MINIMA (1u << 9)
+/**
+ * The minima of SIF_FINDER_CENTRES_MINIMA, each moved before any overlap test
+ * to the nearby point at which the tracers give the largest crossing radius:
+ * the definition above, measured on the tracers, which the grid only seeds.
+ * The catalogue no longer depends on the grid above the bottom of the ladder:
+ * within 1-2% of a 1500^3 VSF from 600^3 up in a 1876 Mpc/h box. Start the
+ * ladder about 1.5 times below the smallest radius to be reported: a void
+ * near the bottom rung can only be seeded by the last rung or two. Costs
+ * 1.3-6 times SIF_FINDER_CENTRES_MINIMA, more for large voids in units of
+ * the tracer separation. Periodic boxes and unweighted tracers only, for now.
+ */
+#define SIF_FINDER_CENTRES_OPTIMISED (2u << 9)
+#define SIF__FINDER_CENTRES_MASK     (3u << 9)
+/** @} */
 /** @} */
 
 /**
@@ -326,14 +366,21 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 /** @} */
 
 /**
- * @brief Skip deconvolution of the CIC assignment window.
+ * @brief Skip deconvolution of the assignment window.
  *
- * The CIC assignment in sif_grid_assign_cic convolves the field with its own
- * window, which has to come back out before the top-hat is applied or the
- * field is smoothed twice. Deconvolution is therefore the default; this flag
- * disables it for grids that were not built by CIC.
+ * The assignment in sif_grid_assign() convolves the field with its own window,
+ * which has to come back out before the top-hat is applied or the field is
+ * smoothed twice. Deconvolution of the window the grid records is therefore
+ * the default; this flag disables it for a grid filled some other way. The
+ * name predates the other schemes.
  */
 #define SIF_DELTA_KEEP_CIC_WINDOW (1u << 10)
+
+/**
+ * @brief Deconvolve the assignment window allowing for aliasing, as
+ * #SIF_FINDER_ALIASING_WINDOW does for the finders.
+ */
+#define SIF_DELTA_ALIASING_WINDOW (1u << 12)
 
 /**
  * @defgroup opt_delta_filter Smoothing window

@@ -134,7 +134,8 @@ static PyMethodDef measure_methods[] = {
   {"delta_distribution_grid", (PyCFunction)py_sif_delta_distribution_grid,
     METH_VARARGS | METH_KEYWORDS,
     "delta_distribution_grid(grid, radii, n_bins, delta_min, delta_max, "
-    "shuffle='none', window='top_hat', seed=0, keep_cic_window=False)\n"
+    "shuffle='none', window='top_hat', seed=0, keep_cic_window=False, *, "
+    "deconvolution='full')\n"
     "--\n\n"
     "Measure the one-point PDF of the smoothed density contrast.\n\n"
     "Pass shuffle='phases' or 'gaussian' to measure the same field with its\n"
@@ -157,8 +158,11 @@ static PyMethodDef measure_methods[] = {
     "    shuffle: 'none', 'phases' or 'gaussian'.\n"
     "    window: 'top_hat' or 'gaussian'.\n"
     "    seed: Seed for the phase shuffle.\n"
-    "    keep_cic_window: Skip deconvolving the CIC assignment window. Set\n"
-    "        this only for a grid that was not built by CIC.\n\n"
+    "    keep_cic_window: Skip deconvolving the assignment window: the\n"
+    "        older spelling of deconvolution='none'.\n"
+    "    deconvolution: How the window of the scheme the grid was assigned\n"
+    "        with is undone: 'full', 'aliasing' (allowing for the aliases,\n"
+    "        and for interlacing) or 'none'; see pysif.finders.exodus().\n\n"
     "Returns:\n"
     "    DeltaDistribution: One PDF per radius.\n\n"
     "Raises:\n"
@@ -168,7 +172,8 @@ static PyMethodDef measure_methods[] = {
   {"delta_moments_grid", (PyCFunction)py_sif_delta_moments_grid,
     METH_VARARGS | METH_KEYWORDS,
     "delta_moments_grid(grid, radii, order, shuffle='none', "
-    "window='top_hat', n_tracers=0, seed=0, keep_cic_window=False)\n"
+    "window='top_hat', n_tracers=0, seed=0, keep_cic_window=False, *, "
+    "deconvolution='full')\n"
     "--\n\n"
     "Measure the spectral moments of a gridded density field.\n\n"
     "Pass window='gaussian' when order >= 2 has to be meaningful: the\n"
@@ -185,7 +190,8 @@ static PyMethodDef measure_methods[] = {
     "        noise. 0 leaves it in.\n"
     "    seed: Seed for the phase shuffle; shared with\n"
     "        delta_distribution_grid().\n"
-    "    keep_cic_window: Skip deconvolving the CIC assignment window.\n\n"
+    "    keep_cic_window: As in delta_distribution_grid().\n"
+    "    deconvolution: As in delta_distribution_grid().\n\n"
     "Returns:\n"
     "    DeltaMoments: sigma_0..sigma_order at every radius.\n\n"
     "Raises:\n"

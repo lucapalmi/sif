@@ -62,7 +62,7 @@ def write_vic_cases(fh, emu, args):
              f"#define EP_VIC_CASE_N {VIC_N}\n\n")
     names = []
     for i, c in enumerate(VIC_CASES):
-        radii = np.geomspace(0.6, 40.0, VIC_N).astype(np.float32)
+        radii = np.geomspace(0.8, 40.0, VIC_N).astype(np.float32)
         cov, sig, _, dv = model.delta_covariance_pk(
             k, np.ascontiguousarray(sp["pk"][c["cosmo"]]), radii)
         sigma = np.asarray(sig, np.float32)

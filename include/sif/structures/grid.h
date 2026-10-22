@@ -9,8 +9,8 @@
  * @brief Cubic mesh holding a scalar field sampled on cells.
  *
  * The usual sequence is to allocate a grid, deposit a particle field onto it
- * with sif_grid_assign_cic(), then convert the result in place to the density
- * contrast with sif_grid_to_density_contrast().
+ * with sif_grid_assign() (or sif_grid_assign_cic()), then convert the result
+ * in place to the density contrast with sif_grid_to_density_contrast().
  */
 
 #ifndef SIF_STRUCTURES_GRID_H
@@ -48,6 +48,39 @@ typedef enum {
 } sif_grid_content_t;
 
 /**
+ * @brief How particles were deposited onto a grid: the mass-assignment window.
+ *
+ * Each scheme spreads a particle over p cells per axis with a kernel whose
+ * transform is sinc^p(k_i l / 2) per axis, and the enumerator's value is that
+ * p. Higher orders are smoother in real space and alias less -- the images
+ * above the grid's Nyquist frequency fold back weighted by sinc^p -- at the
+ * price of p^3 cells touched per particle.
+ *
+ * A filter applied later has to divide this window back out, and the finders
+ * and the delta statistics do, reading which window from
+ * sif_grid_t::assignment. UNKNOWN is a grid filled some other way -- by hand,
+ * or read from a file written before the scheme was recorded -- and is treated
+ * as CIC, which is what every grid was before the choice existed.
+ */
+typedef enum {
+  SIF_ASSIGNMENT_UNKNOWN = 0,
+  SIF_ASSIGNMENT_NGP = 1, /**< Nearest grid point: 1 cell. */
+  SIF_ASSIGNMENT_CIC = 2, /**< Cloud in cell: 2 cells, trilinear. */
+  SIF_ASSIGNMENT_TSC = 3, /**< Triangular-shaped cloud: 3 cells. */
+  SIF_ASSIGNMENT_PCS = 4  /**< Piecewise cubic spline: 4 cells. */
+} sif_assignment_t;
+
+/**
+ * Deposit an interlaced grid: a second grid with every particle moved by half
+ * a cell along each axis, combined with the first in Fourier space with the
+ * phase that undoes the shift. The aliased images whose index sum is odd
+ * arrive in the two grids with opposite signs and cancel, which removes the
+ * leading aliasing (Hockney & Eastwood 1981; Sefusatti et al. 2016). Costs a
+ * second deposit and two FFTs, once.
+ */
+#define SIF_GRID_INTERLACE (1u << 8)
+
+/**
  * @brief A cubic grid of `n_cells^3` cells over a periodic box.
  */
 typedef struct {
@@ -62,6 +95,16 @@ typedef struct {
 
   /** What #values currently holds. */
   sif_grid_content_t content;
+
+  /**
+   * The window the cells were deposited with, set by sif_grid_assign() and
+   * read by everything that deconvolves it. #SIF_ASSIGNMENT_UNKNOWN for a grid
+   * filled any other way.
+   */
+  sif_assignment_t assignment;
+
+  /** 1 if deposited with #SIF_GRID_INTERLACE. */
+  uint32_t interlaced;
 
   /** Cells per side. */
   uint32_t n_cells;
@@ -101,6 +144,34 @@ SIF_NODISCARD sif_grid_t* sif_grid_alloc(uint32_t n_cells, sif_real box_length);
  * @param grid Grid to free. NULL is accepted and ignored.
  */
 void sif_grid_free(sif_grid_t* grid);
+
+/**
+ * @brief Deposit a particle field onto the grid with a chosen assignment
+ * scheme, optionally interlaced.
+ *
+ * As sif_grid_assign_cic() in everything but the window: the same box check,
+ * the same density per unit volume on the way out, the same independence of
+ * the thread count, and the same grid cache, keyed on the scheme too. The
+ * scheme and the interlacing are recorded in the grid, so that a finder or a
+ * delta statistic divides out the window the grid actually has. CIC without
+ * interlacing is sif_grid_assign_cic(), bit for bit.
+ *
+ * #SIF_GRID_INTERLACE needs sif_system_init(), for the FFTs. It works with
+ * three buffers the size of the grid's spectrum rather than one, so at the
+ * largest grids it is the step that sets the memory needed.
+ *
+ * @param grid Destination grid, overwritten. At least 4 cells per side.
+ * @param field Particle field to deposit. Read only.
+ * @param scheme One of NGP, CIC, TSC, PCS.
+ * @param opt #SIF_GRID_INTERLACE, or 0.
+ * @return As sif_grid_assign_cic(), plus SIF_ERR_INVALID for an unknown scheme
+ * or a grid smaller than 4 cells, and SIF_ERR_UNINITIALISED for an interlaced
+ * deposit without sif_system_init(). On failure the grid is left as it was --
+ * except that an interlaced deposit failing after its first transform leaves
+ * it zeroed and empty, since its cells were already overwritten by then.
+ */
+SIF_NODISCARD int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
+  sif_assignment_t scheme, sif_option opt);
 
 /**
  * @brief Deposit a particle field onto the grid by Cloud-In-Cell assignment.

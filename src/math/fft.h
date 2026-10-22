@@ -148,16 +148,41 @@ typedef struct {
   unsigned int plan_flags;
 
   /**
-   * Per-axis reciprocal of the CIC assignment window, or NULL when no
-   * correction is wanted. Set by sif__fft_set_cic_correction().
+   * The assignment-window correction every filter carries, or NULL when none
+   * is wanted. Set by sif__fft_set_window_correction().
    *
    * It corrects the *filtered* copy rather than delta_k, so the spectrum the
    * workspace was given stays untouched and an unfiltered backward transform
-   * still reproduces the caller's input exactly. The window is separable, so
-   * n_cells entries cover all three axes.
+   * still reproduces the caller's input exactly.
+   *
+   * window_axis is the per-axis factor when the correction is separable --
+   * n_cells entries cover all three axes -- and window_wsa holds W, S and A
+   * per axis (3 n_cells) for the one case that is not, the aliasing-aware
+   * correction of an interlaced grid; see sif__fft_set_window_correction().
    */
-  double* cic_inv;
+  double* window_axis;
+  double* window_wsa;
 } sif_fft_workspace_t;
+
+/**
+ * @brief The order of the window a grid was deposited with: the
+ * sif_assignment_t, or CIC for a grid that does not say -- what every grid
+ * was before the scheme was recorded.
+ */
+static inline int sif__fft_grid_window_order(const sif_grid_t* grid) {
+  return grid->assignment == SIF_ASSIGNMENT_UNKNOWN ? (int)SIF_ASSIGNMENT_CIC
+                                                    : (int)grid->assignment;
+}
+
+/** @brief How an assignment window is divided out of a spectrum. */
+typedef enum {
+  /** Divide by the window: exact for the field the grid would hold without
+   * aliasing, and amplifies whatever aliased power sits near Nyquist. */
+  SIF__WINDOW_FULL = 0,
+  /** The least-squares estimate under white power near Nyquist: multiply by
+   * W over the sum of W^2 over the images that reach the grid. */
+  SIF__WINDOW_ALIASING = 1
+} sif_window_mode_t;
 
 typedef enum {
   SIF__FILTER_NONE,
@@ -247,6 +272,13 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws);
  * @return SIF_OK on success, SIF_ERR_INVALID if the backward stage was never
  * initialised or the filter is unsupported, SIF_ERR_ALLOC on failure
  */
+/**
+ * @brief sif__fft_apply_filter() with a Gaussian of width `sigma` on top of
+ * the filter; 0 for none, which is sif__fft_apply_filter().
+ */
+int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
+  sif_filter_type_t filter, sif_real r, sif_real sigma, sif_real box_length);
+
 int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
   sif_real r, sif_real box_length);
 
@@ -268,46 +300,77 @@ int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
 int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid);
 
 /**
- * @brief Divide out the Cloud-In-Cell assignment window from delta_k
- *
- * CIC deposition convolves the field with a triangular kernel, whose transform
- * is prod_i sinc^2(pi k_i / N). Any subsequent filtering sees a field that has
- * already been smoothed by it, so it has to be removed first. Operates in
- * place on delta_k and is independent of any filter radius, so it belongs
- * between sif__fft_grid_forward and the first sif__fft_apply_filter.
- *
- * @note The correction diverges towards the Nyquist corner, where it reaches a
- * factor of ~15. That is harmless as long as the filter applied afterwards
- * suppresses those modes, which a top-hat of radius >= 2 cells does.
- *
- * @param ws The fft workspace, after a forward transform
- *
- * @return SIF_OK, or SIF_ERR_INVALID if the workspace has no spectrum
+ * @brief The factor that undoes an assignment window of order @p order at the
+ * Nyquist corner (k_x = k_y = k_z = N/2): the largest a correction ever
+ * multiplies a mode by, for the warnings that say how much a small filter
+ * radius lets through.
  */
-int sif__fft_deconvolve_cic(sif_fft_workspace_t* ws);
+double sif__fft_window_corner_gain(
+  int order, sif_window_mode_t mode, int interlaced);
 
 /**
- * @brief Divide the CIC window out of every filtered field this workspace
- * produces from here on, instead of out of delta_k itself.
+ * @brief Divide an assignment window out of delta_k, in place.
  *
- * For callers that filter repeatedly and must also hand the input field back:
- * a filter applied to a CIC-assigned grid smooths a field that the assignment
- * already smoothed, so the effective window is wider than the radius named and
- * its edge is about a cell thick. Correcting inside the filter fixes that
- * without touching delta_k, so sif__fft_apply_filter() with #SIF__FILTER_NONE
- * still restores the original field bit for bit.
+ * Mass assignment of order p (1 NGP, 2 CIC, 3 TSC, 4 PCS) convolves the field
+ * with a kernel whose transform is W = prod_i sinc^p(pi k_i / N), and any
+ * filter applied afterwards sees a field that kernel already smoothed. In
+ * #SIF__WINDOW_FULL mode the correction is 1 / W. It diverges towards the
+ * Nyquist corner -- ~15 there for CIC, ~230 for PCS -- and what it amplifies
+ * is mostly aliased power, the images above Nyquist that the grid folds back.
  *
- * Enabling twice is harmless. The correction diverges towards the Nyquist
- * corner and is only held in check by the filter that carries it, so this is
- * for top-hat or Gaussian radii of at least about two cells.
+ * #SIF__WINDOW_ALIASING instead multiplies by W / sum_n W^2(k + 2 pi n / l),
+ * the least-squares estimate of the band-limited field when the power near
+ * Nyquist is white, as shot noise is. The image sum is separable, per axis
+ *
+ *   S_p(x) = sum_n sinc^(2p)(x + pi n),   x = pi k_i / N, s = sin x, c = cos x
+ *     S_1 = 1                  S_2 = 1 - 2 s^2 / 3
+ *     S_3 = 1 - s^2 + 2 s^4 / 15
+ *     S_4 = 1 - 4 s^2 / 3 + 2 s^4 / 5 - 4 s^6 / 315
+ *
+ * An interlaced grid keeps only the images with an even index sum, whose
+ * weight is (prod S + prod A) / 2 with the alternating sums
+ *
+ *   A_p(x) = sum_n (-1)^n sinc^(2p)(x + pi n)
+ *     A_1 = c                  A_2 = c (c^2 + 5) / 6
+ *     A_3 = c (c^4 + 58 c^2 + 61) / 120
+ *     A_4 = c (c^6 + 543 c^4 + 3111 c^2 + 1385) / 5040
+ *
+ * which is not separable. Both sums come from differentiating
+ * sum_n 1 / (x + pi n) = cot x and sum_n (-1)^n / (x + pi n) = csc x
+ * 2p - 1 times. The two modes agree at large scales and part at the Nyquist
+ * corner: for CIC 1.22 per axis instead of 2.47.
+ *
+ * @param ws The fft workspace, after a forward transform
+ * @param order The window's order p, 1 to 4
+ * @param mode How to divide it out
+ * @param interlaced Non-zero for an interlaced grid
+ *
+ * @return SIF_OK, SIF_ERR_INVALID if the workspace has no spectrum or the
+ * order is out of range, or SIF_ERR_ALLOC
+ */
+int sif__fft_deconvolve_window(sif_fft_workspace_t* ws, int order,
+  sif_window_mode_t mode, int interlaced);
+
+/**
+ * @brief Divide an assignment window out of every filtered field this
+ * workspace produces from here on, instead of out of delta_k itself.
+ *
+ * The same correction as sif__fft_deconvolve_window(), for callers that
+ * filter repeatedly and must also hand the input field back: correcting inside
+ * the filter leaves delta_k alone, so sif__fft_apply_filter() with
+ * #SIF__FILTER_NONE still restores the original field bit for bit.
+ *
+ * Setting it again replaces the previous correction.
  *
  * @param ws The workspace, which must know its grid size
- * @param enable Non-zero to correct, zero to stop correcting and release the
- * table
+ * @param order The window's order p, 1 to 4; 0 to stop correcting
+ * @param mode How to divide it out
+ * @param interlaced Non-zero for an interlaced grid
  *
- * @return SIF_OK, or SIF_ERR_* if the table could not be built
+ * @return SIF_OK, or SIF_ERR_* if the tables could not be built
  */
-int sif__fft_set_cic_correction(sif_fft_workspace_t* ws, int enable);
+int sif__fft_set_window_correction(sif_fft_workspace_t* ws, int order,
+  sif_window_mode_t mode, int interlaced);
 
 /**
  * @brief Replace the phases of delta_k with random ones, in place

@@ -809,6 +809,57 @@ Use the same search factor for `survey_box` and the finder, and pass the data
 as well as the randoms: the padding is checked around both.
 :::
 
+## Onto a grid
+
+The finders and `pysif.measure` work on a density grid, made by depositing the
+field with a mass-assignment scheme: each particle is spread over 1, 2, 3 or 4
+cells per axis by nearest grid point (NGP), cloud-in-cell (CIC, the default),
+triangular-shaped cloud (TSC) or piecewise cubic spline (PCS). A grid can only
+hold the modes up to its Nyquist frequency; the field's power above it folds
+back onto them -- aliasing -- and a higher order folds back less, at the cost
+of a deposit touching more cells. Interlacing deposits the field a second time
+shifted by half a cell and averages the two in Fourier space, which cancels
+the leading aliases outright, for a second deposit and two FFTs.
+
+The grid records its scheme, and whatever smooths it undoes that scheme's
+window first. By default the window is divided out in full, which also boosts
+the aliases and shot noise near the grid scale (up to 15 times at the corner
+of a CIC grid's Fourier cube); `aliasing` divides by the window and its
+aliases together, a least-squares correction that boosts nothing by more than
+about 2 for CIC, and accounts for interlacing.
+
+:::::{tab-set}
+
+::::{tab-item} Python
+```python
+grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
+grid.assign(field, "tsc", interlace=True)  # assign(field) is assign_cic(field)
+grid.to_density_contrast()
+voids = pysif.finders.exodus(grid, mesh, radii, -0.7, deconvolution="aliasing")
+```
+::::
+
+::::{tab-item} C
+```c
+#include "sif/structures/grid.h"
+
+if (sif_grid_assign(grid, field, SIF_ASSIGNMENT_TSC, SIF_GRID_INTERLACE) !=
+      SIF_OK ||
+    sif_grid_to_density_contrast(grid) != SIF_OK)
+  goto done;
+// ... sif_finder_exodus(..., SIF_FINDER_ALIASING_WINDOW)
+```
+::::
+
+::::{tab-item} sif-exodus
+```lua
+grid = { n_cells = 512, assignment = "tsc", interlace = true }
+finder = { ..., deconvolution = "aliasing" }
+```
+::::
+
+:::::
+
 ## Memory
 
 A chain mesh can take over the memory of a field instead of copying it

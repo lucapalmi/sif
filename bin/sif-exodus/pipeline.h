@@ -44,6 +44,7 @@
 #include "sif/io/fits_io.h"
 #include "sif/io/gadget_io.h"
 #include "sif/model/cosmology.h"
+#include "sif/structures/grid.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -85,6 +86,25 @@ typedef enum {
   /* A survey: data and randoms, with edges, possibly on the sky. */
   EXODUS_MODE_SURVEY
 } exodus_mode_t;
+
+/* finder.centres: which of the three exodus finders, in the order of the
+ * SIF_FINDER_CENTRES_* values. */
+typedef enum {
+  EXODUS_CENTRES_LEGACY,
+  EXODUS_CENTRES_MINIMA,
+  EXODUS_CENTRES_OPTIMISED
+} exodus_centres_t;
+
+/* finder.deconvolution: how the grid's assignment window is undone before
+ * smoothing. */
+typedef enum {
+  /* Divided out: the library's default. */
+  EXODUS_DECONVOLVE_FULL,
+  /* Divided out together with its aliases: SIF_FINDER_ALIASING_WINDOW. */
+  EXODUS_DECONVOLVE_ALIASING,
+  /* Kept: SIF_FINDER_KEEP_CIC_WINDOW. */
+  EXODUS_DECONVOLVE_NONE
+} exodus_deconvolution_t;
 
 /* One particle file, or set of files, and how to read it: the tracers of a
  * box, or a survey's data or randoms. */
@@ -196,6 +216,11 @@ typedef struct {
      * up to a size the FFT is fast at. In a survey the separation is the
      * data's inside the footprint, and the cells span the padded box. */
     uint32_t n_cells;
+    /* The mass-assignment scheme the tracers (and a survey's randoms) are
+     * deposited with, and whether with a half-cell-shifted second deposit:
+     * sif_grid_assign(). */
+    sif_assignment_t assignment;
+    bool interlace;
   } grid;
 
   /* --- chain mesh ----------------------------------------------------- */
@@ -221,11 +246,11 @@ typedef struct {
     /* How far past a rung the rescaling looks, as a multiple of it: 1.25,
      * 1.5, 1.75 or 2.0 (the SIF_FINDER_SEARCH_* family). */
     double search_factor;
-    /* Refine a centre at a minimum off the grid; false is
-     * SIF_FINDER_NODE_CENTRES. */
-    bool centre_refinement_hessian;
-    /* Only minima as candidates: SIF_FINDER_CENTRE_IS_MINIMUM. */
-    bool centre_is_minimum;
+    /* Where voids are centred: exodus_centres_t, the SIF_FINDER_CENTRES_*
+     * in that order. */
+    exodus_centres_t centres;
+    /* How the assignment window is undone. */
+    exodus_deconvolution_t deconvolution;
   } finder;
 
   /* --- prior catalogue ------------------------------------------------ */

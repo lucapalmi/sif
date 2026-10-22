@@ -38,13 +38,15 @@ PyObject* py_sif_delta_distribution_grid(
   const char* window = NULL;
   unsigned long long seed = 42;
   int keep_cic_window = 0;
+  const char* deconvolution = NULL;
 
   static char* kwlist[] = {"grid", "radii", "n_bins", "delta_min", "delta_max",
-    "shuffle", "window", "seed", "keep_cic_window", NULL};
+    "shuffle", "window", "seed", "keep_cic_window",
+    "deconvolution", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OIdd|zzKp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OIdd|zzKp$z", kwlist,
         &sifGridType, &grid_obj, &radii_obj, &n_bins, &delta_min, &delta_max,
-        &shuffle, &window, &seed, &keep_cic_window)) {
+        &shuffle, &window, &seed, &keep_cic_window, &deconvolution)) {
     return NULL;
   }
 
@@ -55,8 +57,8 @@ PyObject* py_sif_delta_distribution_grid(
   }
 
   sif_option options = SIF_DEFAULT;
-  if (py_sif_delta_parse_options(shuffle, window, keep_cic_window, &options) <
-      0)
+  if (py_sif_delta_parse_options(
+        shuffle, window, keep_cic_window, deconvolution, &options) < 0)
     return NULL;
 
   PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
@@ -106,19 +108,21 @@ PyObject* py_sif_delta_moments_grid(
   unsigned long long n_tracers = 0;
   unsigned long long seed = 42;
   int keep_cic_window = 0;
+  const char* deconvolution = NULL;
 
   static char* kwlist[] = {"grid", "radii", "order", "shuffle", "window",
-    "n_tracers", "seed", "keep_cic_window", NULL};
+    "n_tracers", "seed", "keep_cic_window",
+    "deconvolution", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O|bzzKKp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O|bzzKKp$z", kwlist,
         &sifGridType, &grid_obj, &radii_obj, &order, &shuffle, &window,
-        &n_tracers, &seed, &keep_cic_window)) {
+        &n_tracers, &seed, &keep_cic_window, &deconvolution)) {
     return NULL;
   }
 
   sif_option options = SIF_DEFAULT;
-  if (py_sif_delta_parse_options(shuffle, window, keep_cic_window, &options) <
-      0)
+  if (py_sif_delta_parse_options(
+        shuffle, window, keep_cic_window, deconvolution, &options) < 0)
     return NULL;
 
   PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");

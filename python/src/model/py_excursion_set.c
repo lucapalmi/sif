@@ -81,7 +81,7 @@ PyObject* py_sif_delta_covariance_pk(
   }
 
   sif_option options = SIF_DEFAULT;
-  if (py_sif_delta_parse_options(NULL, window, 0, &options) < 0)
+  if (py_sif_delta_parse_options(NULL, window, 0, NULL, &options) < 0)
     return NULL;
 
   PyArrayObject* k_arr = py_sif_as_real_array(k_obj, "k");

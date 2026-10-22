@@ -35,10 +35,17 @@ def tracers():
 
 @pytest.fixture
 def grid(tracers):
-    g = pysif.Grid(n_cells=N_GRID, box_length=BOX)
-    g.assign_cic(field=pysif.field_from_numpy(*tracers))
-    g.to_density_contrast()
-    return g
+    """Builds the grid afresh for every run. A finder hands its grid back
+    restored to float precision but not to the bit, and centres placed
+    between the nodes follow the field's last bits, so runs compared bit for
+    bit each start from a new grid -- as a resumed run in a new process
+    does."""
+    def make(scheme="cic", interlace=False):
+        g = pysif.Grid(n_cells=N_GRID, box_length=BOX)
+        g.assign(pysif.field_from_numpy(*tracers), scheme, interlace=interlace)
+        g.to_density_contrast()
+        return g
+    return make
 
 
 @pytest.fixture(scope="module")
@@ -52,13 +59,19 @@ def columns(cat):
 
 
 def run(grid, mesh, radii=RADII, **kw):
-    return pysif.finders.exodus(grid, mesh, radii, THRESHOLD, **kw)
+    return pysif.finders.exodus(grid(), mesh, radii, THRESHOLD, **kw)
 
 
-def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID):
+CIC = 2  # sif_assignment_t
+
+
+def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID, version=4,
+                     options=0, assignment=CIC):
     """A checkpoint of a box run over RADII, from the layout in
     exodus_finder.h: the 192-byte header, the ladder largest first, then x,
-    y, z and r as four columns."""
+    y, z and r as four columns. Options 0 are the defaults: search factor
+    1.5, centres='legacy', the window divided out in
+    full."""
     real = np.dtype(pysif.real)
     ladder = np.sort(RADII)[::-1].astype(real).tobytes()
     voids = b"".join(np.ascontiguousarray(c, dtype=real).tobytes()
@@ -66,13 +79,14 @@ def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID):
 
     def header(crc):
         return struct.pack(
-            "=4s9I3dQdQd3dQIIQQ40s",
-            b"XCKP", 1, 0x01020304, int(real.itemsize == 8), 0, 0, 0,
+            "=4s9I3dQdQd3dQIIQQI36s",
+            b"XCKP", version, 0x01020304, int(real.itemsize == 8), 0, 0,
+            options,
             len(RADII), rungs_done, grid_cells,
             BOX, float(np.float32(THRESHOLD)) if real.itemsize == 4
             else THRESHOLD, 0.0,
             N, float(N), 0, 0.0, 0.0, 0.0, 0.0, 0, 0, crc,
-            cat.n_voids, 0, b"")
+            cat.n_voids, 0, assignment, b"")
 
     assert len(header(0)) == 192
     crc = zlib.crc32(header(0) + ladder + voids)
@@ -122,6 +136,61 @@ def test_another_runs_checkpoint_is_refused(grid, mesh, tmp_path):
         pysif.finders.read_checkpoint(path)
     with pytest.raises(FileNotFoundError):
         pysif.finders.read_checkpoint(tmp_path / "missing.ckpt")
+
+
+def test_checkpoint_records_the_assignment(grid, mesh, tmp_path):
+    # An interlaced TSC grid, deconvolved allowing for aliasing.
+    aliasing, tsc_interlaced = 1 << 8, 3 | 1 << 8
+    def g():
+        return grid("tsc", interlace=True)
+    ref = run(g, mesh, checkpoint=False, deconvolution="aliasing")
+    head = run(g, mesh, RADII[:2], checkpoint=False, deconvolution="aliasing")
+    path = tmp_path / "run.ckpt"
+    write_checkpoint(path, head, rungs_done=2, options=aliasing,
+                     assignment=tsc_interlaced)
+
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["deconvolution"] == "aliasing"
+    assert info["assignment"] == "tsc" and info["interlaced"] is True
+    assert info["centres"] == "legacy"
+
+    with pytest.raises(ValueError, match=r"not this run: window deconvolved"):
+        run(g, mesh, checkpoint=path)
+    with pytest.raises(ValueError, match=r"grid assigned with TSC, interlaced"):
+        run(grid, mesh, checkpoint=path, deconvolution="aliasing")
+    assert path.exists()
+
+    resumed = run(g, mesh, checkpoint=path, deconvolution="aliasing")
+    np.testing.assert_array_equal(columns(resumed), columns(ref))
+
+
+def test_version_1_checkpoint(grid, mesh, tmp_path):
+    # Written before off-grid centres and assignment schemes: every cell on
+    # its node, on a CIC grid -- centres='legacy' -- which it resumes.
+    ref = run(grid, mesh, checkpoint=False)
+    head = run(grid, mesh, RADII[:2], checkpoint=False)
+    path = tmp_path / "run.ckpt"
+    write_checkpoint(path, head, rungs_done=2, version=1, assignment=0)
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["assignment"] == "cic" and info["interlaced"] is False
+    assert info["centres"] == "legacy"
+    assert info["deconvolution"] == "full"
+    with pytest.raises(ValueError, match="not this run: centres legacy"):
+        run(grid, mesh, checkpoint=path, centres="minima")
+    resumed = run(grid, mesh, checkpoint=path)
+    np.testing.assert_array_equal(columns(resumed), columns(ref))
+
+
+def test_retired_centres_checkpoint(grid, mesh, tmp_path):
+    # Version 3 with neither old centre bit was refined centres on every
+    # cell, a finder this build no longer has: read, and refused.
+    head = run(grid, mesh, RADII[:2], checkpoint=False)
+    path = tmp_path / "run.ckpt"
+    write_checkpoint(path, head, rungs_done=2, version=3)
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["centres"] == "retired"
+    with pytest.raises(ValueError, match="no longer has"):
+        run(grid, mesh, checkpoint=path)
 
 
 def test_prior(grid, mesh):

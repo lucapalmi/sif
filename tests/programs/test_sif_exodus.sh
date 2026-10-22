@@ -129,27 +129,61 @@ tail -n +2 resolved.lua >a.txt
 tail -n +2 out.txt >b.txt
 cmp -s a.txt b.txt || fail "resolving the resolved configuration changed it"
 
-# The centre options: left out of the resolved configuration at their
-# defaults, carried through it otherwise -- which still resolves to itself --
-# and refused as anything but a boolean.
-grep -q 'centre_' resolved.lua && fail "centre options written at their defaults"
-sed -e 's/centre_refinement_hessian = true/centre_refinement_hessian = false/' \
-  -e 's/centre_is_minimum = false/centre_is_minimum = true/' template.lua >centres.lua
+# The centres: left out of the resolved configuration at their default,
+# carried through it otherwise -- which still resolves to itself -- and
+# refused as anything but one of the three. The two keys they replaced are
+# refused with a word on what took their place.
+grep -q 'centres' resolved.lua && fail "centres written at their default"
+sed 's/centres = "legacy"/centres = "optimised"/' template.lua >centres.lua
 run --check centres.lua
-expect_status 0 "centre options --check"
-grep -q '^  centre_refinement_hessian = false,' out.txt ||
-  fail "centre_refinement_hessian: not in the resolved configuration"
-grep -q '^  centre_is_minimum = true,' out.txt ||
-  fail "centre_is_minimum: not in the resolved configuration"
+expect_status 0 "centres --check"
+grep -q '^  centres = "optimised",' out.txt ||
+  fail "centres: not in the resolved configuration"
 cp out.txt centres_resolved.lua
 run --check centres_resolved.lua
 tail -n +2 centres_resolved.lua >a.txt
 tail -n +2 out.txt >b.txt
-cmp -s a.txt b.txt || fail "centre options: resolving them again changed them"
-sed 's/centre_is_minimum = false/centre_is_minimum = 1/' template.lua >centres_bad.lua
+cmp -s a.txt b.txt || fail "centres: resolving them again changed them"
+sed 's/centres = "legacy"/centres = "refined"/' template.lua >centres_bad.lua
 run --check centres_bad.lua
-expect_status 2 "centre_is_minimum = 1"
-expect_error "finder.centre_is_minimum" "centre_is_minimum = 1"
+expect_status 2 "centres = refined"
+expect_error "finder.centres: must be one of" "centres = refined"
+"$EXE" --template survey >survey_template.lua 2>/dev/null
+sed 's/centres = "legacy"/centres = "minima"/' survey_template.lua >centres_survey.lua
+run --check centres_survey.lua
+expect_status 2 "centres = minima in a survey"
+expect_error 'finder.centres: "minima" is for a periodic box' \
+  "centres = minima in a survey"
+sed 's/centres = "legacy"/centre_is_minimum = true/' template.lua >centres_old.lua
+run --check centres_old.lua
+expect_status 2 "centre_is_minimum"
+expect_error "finder.centre_is_minimum: removed: centres =" "centre_is_minimum"
+
+# The assignment and its deconvolution, the same way.
+grep -q 'assignment\|interlace\|deconvolution' resolved.lua &&
+  fail "grid options written at their defaults"
+sed -e 's/assignment = "cic"/assignment = "pcs"/' \
+  -e 's/interlace = false/interlace = true/' \
+  -e 's/deconvolution = "full"/deconvolution = "aliasing"/' template.lua >grid.lua
+run --check grid.lua
+expect_status 0 "grid options --check"
+grep -q 'assignment = "pcs", interlace = true }$' out.txt ||
+  fail "grid options: not in the resolved configuration"
+grep -q '^  deconvolution = "aliasing",' out.txt ||
+  fail "deconvolution: not in the resolved configuration"
+cp out.txt grid_resolved.lua
+run --check grid_resolved.lua
+tail -n +2 grid_resolved.lua >a.txt
+tail -n +2 out.txt >b.txt
+cmp -s a.txt b.txt || fail "grid options: resolving them again changed them"
+sed 's/assignment = "cic"/assignment = "sph"/' template.lua >grid_bad.lua
+run --check grid_bad.lua
+expect_status 2 "assignment = sph"
+expect_error "grid.assignment: must be one of" "assignment = sph"
+sed 's/deconvolution = "full"/deconvolution = "partial"/' template.lua >grid_bad.lua
+run --check grid_bad.lua
+expect_status 2 "deconvolution = partial"
+expect_error "finder.deconvolution: must be one of" "deconvolution = partial"
 
 # --- mistakes -------------------------------------------------------------
 
@@ -771,6 +805,17 @@ run -D out=blocked.txt holes6.lua
 expect_status 2 "another run's checkpoint"
 expect_error "is not this run's: threshold -0.7 (this run's: -0.6)" \
   "another run's checkpoint"
+sed 's/n_cells = 32 }/n_cells = 32, assignment = "tsc" }/' holes.lua >holes_tsc.lua
+run -D out=blocked.txt holes_tsc.lua
+expect_status 2 "a checkpoint of another assignment"
+expect_error "is not this run's: grid assigned with cic (this run's: tsc)" \
+  "a checkpoint of another assignment"
+sed 's/threshold = -0.7,/threshold = -0.7, deconvolution = "aliasing",/' \
+  holes.lua >holes_alias.lua
+run -D out=blocked.txt holes_alias.lua
+expect_status 2 "a checkpoint of another deconvolution"
+expect_error "is not this run's: window deconvolution full (this run's: aliasing)" \
+  "a checkpoint of another deconvolution"
 
 run -D out=holes_resumed.txt --checkpoint blocked.txt.ckpt holes.lua
 expect_status 0 "resumed from the checkpoint"
@@ -778,6 +823,27 @@ voids holes_resumed.txt >b.txt
 cmp -s a.txt b.txt || fail "the resumed run differs from the reference"
 [ ! -e blocked.txt.ckpt ] || fail "a resumed run left its checkpoint"
 rmdir blocked.txt
+
+# Another assignment, end to end, recorded with the voids.
+run -D out=holes_tsc.txt holes_tsc.lua
+expect_status 0 "a TSC grid"
+grep -q '^#grid_assignment="tsc"$' holes_tsc.txt &&
+  grep -q '^#grid_interlace=0$' holes_tsc.txt &&
+  grep -q '^#deconvolution="full"$' holes_tsc.txt ||
+  fail "a TSC grid: the assignment is not recorded"
+[ "$(voids holes_tsc.txt | wc -l)" -ge 3 ] || fail "a TSC grid: too few voids"
+
+# The other two centre settings, end to end, recorded with the voids.
+for centres in minima optimised; do
+  sed "s/threshold = -0.7,/threshold = -0.7, centres = \"$centres\",/" \
+    holes.lua >holes_$centres.lua
+  run -D out=holes_$centres.txt holes_$centres.lua
+  expect_status 0 "centres = $centres"
+  grep -q "^#centres=\"$centres\"$" holes_$centres.txt ||
+    fail "centres = $centres: not recorded with the voids"
+  [ "$(voids holes_$centres.txt | wc -l)" -ge 3 ] ||
+    fail "centres = $centres: too few voids"
+done
 
 run -D out=nock.txt --no-checkpoint --check holes.lua
 expect_status 0 "--no-checkpoint"
