@@ -59,7 +59,7 @@ wheel.packages = ["python/pysif", "python/_pysif_cli"]
 
 # What the source distribution leaves out: none of it is needed to build.
 sdist.exclude = [
-    "docs/", "tools/", ".github/", "STYLE.md", ".clangd", ".clang-format",
+    "docs/", ".github/", "STYLE.md", ".clangd", ".clang-format",
 ]
 
 # The version is the C library's, read from CMakeLists.txt, so the two cannot

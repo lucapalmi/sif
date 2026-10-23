@@ -100,7 +100,6 @@ option(SIF_BUILD_PROGRAMS "Build the command-line programs in bin/" ON)
 
 # Offline data-generation programs. Not part of the library and not built by
 # default: they exist to produce emulator training sets on a cluster.
-option(SIF_BUILD_TOOLS "Build the offline tools in tools/" OFF)
 
 # OpenMP
 #
@@ -429,15 +428,6 @@ endif()
 if(SIF_BUILD_TESTS)
   enable_testing()
   add_subdirectory(tests)
-endif()
-
-if(SIF_BUILD_TOOLS)
-  foreach(_tool ep_gen_case ep_validate)
-    add_executable(${_tool} tools/${_tool}.c)
-    target_link_libraries(${_tool} PRIVATE sif m)
-    set_target_properties(${_tool} PROPERTIES
-      RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tools)
-  endforeach()
 endif()
 
 # Where the libraries pysif and the programs link are found at run time.

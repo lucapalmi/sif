@@ -7,18 +7,11 @@ data/
 # ...except the test fixtures, which are small and committed
 !tests/data/
 __pycache__/
+# run outputs and the emulator training pipeline stay out of the repository
 runs/
-runs_v2/
-runs_v3/
-runs_v4/
-val_v2/
-runs_vic/
-val_vic/
-tools/plots/
-tools/ep_spectra.npz
-tools/ep_spectra_v2.npz
-tools/ep_validation_spectra.npz
-tools/ep_validation_mc.npz
+runs_*/
+val_*/
+tools/
 public/
 docs/_build/
 _err.txt
