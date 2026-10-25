@@ -7,8 +7,9 @@
 /*
  * sif_survey_volume() against footprints of known volume: a sphere, a shell
  * and a wedge whose randoms follow a steep n(z), and the wedge again with
- * star-mask holes. Then the observer argument, independence from the thread
- * count, and the refusals.
+ * star-mask holes, and with randoms whose density varies across the sky.
+ * Then the observer argument, independence from the thread count, and the
+ * refusals.
  */
 #include "sif/measure/survey_volume.h"
 
@@ -52,6 +53,10 @@ typedef struct {
   int n_holes;
   double hole_cos; /* each hole: a cap of this cos(half-angle) */
   double holes[8][3];
+  /* The randoms' density on the sky, relative: `step` times lower where
+   * x < 0, and, if `patchy`, times a completeness drawn for each 1-degree
+   * pixel between 1 - patchy and 1. 0 and 0: uniform. */
+  double step, patchy;
 } shape_t;
 
 static double profile(const shape_t* s, double r) {
@@ -59,6 +64,24 @@ static double profile(const shape_t* s, double r) {
     return 1.0;
   const double t = (r - s->peak) / s->width;
   return exp(-t * t);
+}
+
+/* The chance a direction keeps a random drawn there, from 0 to 1. */
+static double completeness(const shape_t* s, const double u[3]) {
+  double c = 1.0;
+  if (s->step > 0.0 && u[0] < 0.0)
+    c /= s->step;
+  if (s->patchy > 0.0) {
+    const double pixel = PI / 180.0;
+    const uint32_t a = (uint32_t)(acos(u[2]) / pixel);
+    const uint32_t b = (uint32_t)((atan2(u[1], u[0]) + PI) / pixel);
+    uint32_t h = a * 2654435761u ^ b * 40503u;
+    h ^= h >> 13;
+    h *= 0x5bd1e995u;
+    h ^= h >> 15;
+    c *= 1.0 - s->patchy * (h % 1000) / 999.0;
+  }
+  return c;
 }
 
 static int in_hole(const shape_t* s, const double u[3]) {
@@ -102,6 +125,9 @@ static sif_field_t* shape_randoms(
     const double u[3] = {st * cos(phi), st * sin(phi), mu};
     if (in_hole(s, u))
       continue;
+    const double keep = completeness(s, u);
+    if (keep < 1.0 && sif_prng_next_double(&rng) > keep)
+      continue;
 
     double r;
     do {
@@ -131,7 +157,7 @@ static shape_t wedge_with_holes(void) {
   /* Six 1.5-degree holes around a 20-degree cap, 10 degrees off its axis
    * and 60 degrees apart: disjoint, and clear of the cap's edge. */
   shape_t s = {200.0, 600.0, cos(20.0 * PI / 180.0), 350.0, 150.0, 6,
-    cos(1.5 * PI / 180.0), {{0}}};
+    cos(1.5 * PI / 180.0), {{0}}, 0.0, 0.0};
   const double t = 10.0 * PI / 180.0;
   for (int h = 0; h < 6; h++) {
     const double phi = h * PI / 3.0;
@@ -145,16 +171,21 @@ static shape_t wedge_with_holes(void) {
 static void run_shapes(void) {
   printf("known volumes\n");
 
-  const struct {
+  struct {
     const char* name;
     shape_t s;
   } cases[] = {
-    {"sphere", {0.0, 100.0, -1.0, 0.0, 0.0, 0, 0.0, {{0}}}},
-    {"shell, steep n(z)", {50.0, 150.0, -1.0, 90.0, 40.0, 0, 0.0, {{0}}}},
-    {"wedge, n(z)",
-      {200.0, 600.0, cos(20.0 * PI / 180.0), 350.0, 150.0, 0, 0.0, {{0}}}},
+    {"sphere", {0.0, 100.0, -1.0, 0.0, 0.0, 0, 0.0, {{0}}, 0.0, 0.0}},
+    {"shell, steep n(z)",
+      {50.0, 150.0, -1.0, 90.0, 40.0, 0, 0.0, {{0}}, 0.0, 0.0}},
+    {"wedge, n(z)", {200.0, 600.0, cos(20.0 * PI / 180.0), 350.0, 150.0, 0,
+                      0.0, {{0}}, 0.0, 0.0}},
     {"wedge with holes", wedge_with_holes()},
+    {"wedge, 4x step", {200.0, 600.0, cos(20.0 * PI / 180.0), 350.0, 150.0,
+                         0, 0.0, {{0}}, 4.0, 0.0}},
+    {"holes, patchy", wedge_with_holes()},
   };
+  cases[5].s.patchy = 0.5;
 
   for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
     sif_field_t* f = shape_randoms(&cases[c].s, N_RANDOMS, 11 + c, no_shift);
@@ -264,7 +295,8 @@ static int volume_logged(
 static void run_no_false_alarm(void) {
   printf("separable: no warning\n");
 
-  const shape_t shell = {50.0, 150.0, -1.0, 90.0, 40.0, 0, 0.0, {{0}}};
+  const shape_t shell = {
+    50.0, 150.0, -1.0, 90.0, 40.0, 0, 0.0, {{0}}, 0.0, 0.0};
   const shape_t holed = wedge_with_holes();
   const shape_t* shapes[2] = {&shell, &holed};
   char log[4096];
@@ -286,7 +318,7 @@ static void run_non_separable(void) {
   printf("non-separable\n");
 
   const shape_t near = {
-    100.0, 300.0, cos(15.0 * PI / 180.0), 0.0, 0.0, 0, 0.0, {{0}}};
+    100.0, 300.0, cos(15.0 * PI / 180.0), 0.0, 0.0, 0, 0.0, {{0}}, 0.0, 0.0};
   shape_t far = near;
   far.r2 = 400.0;
 
@@ -349,7 +381,7 @@ static void run_refusals(void) {
           error_has("randoms: NULL"),
     "NULL randoms: '%s'", sif_error_message());
 
-  const shape_t s = {0.0, 100.0, -1.0, 0.0, 0.0, 0, 0.0, {{0}}};
+  const shape_t s = {0.0, 100.0, -1.0, 0.0, 0.0, 0, 0.0, {{0}}, 0.0, 0.0};
   sif_field_t* f = shape_randoms(&s, 1000, 1, no_shift);
 
   f->units = SIF_COORDINATES_SKY;

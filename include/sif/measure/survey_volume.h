@@ -28,17 +28,24 @@
  * observer, and Omega the solid angle of the mask.
  *
  * Omega comes from the randoms' directions alone, so every random counts
- * towards it whatever its distance: a dense, uniform sample of the mask even
- * where n(z) is sparse. Each random stands for 1 / sigma of solid angle,
- * where sigma is the randoms' density on the sky measured only over cells
- * the mask covers entirely. An edge or a hole therefore never dilutes it, and
- * a cell the edge cuts through counts by the randoms it holds rather than as
- * a whole cell, which is what keeps the edges from biasing the result. Holes
- * are resolved down to the scale of a few randoms' separation on the sky.
+ * towards it whatever its distance: a dense sample of the mask even where
+ * n(z) is sparse. Their density on the sky need not be uniform -- randoms
+ * drawn with an angular completeness, denser where it is higher, are
+ * measured as they are. The sky is cut into cells, finer where the randoms
+ * are denser; a cell whose neighbours all hold randoms lies wholly inside
+ * the mask and counts whole, and a cell an edge or a hole cuts through
+ * counts by the randoms it holds against the density of the whole cells
+ * nearest it. The edges are therefore resolved statistically, not to the
+ * nearest cell, and holes down to the scale of a few randoms' separation.
  *
  * Against shapes of known volume -- spheres, shells and wedges with a steep
- * n(z), wedges with star-mask holes -- it is unbiased to within its scatter,
- * which is about 0.3% at 10^4 randoms, 0.1% at 10^5 and 0.02% at 10^6.
+ * n(z), wedges with star-mask holes, randoms whose density steps or varies
+ * pixel by pixel across the sky -- it is unbiased to within about its
+ * scatter, which is about 0.5% at 10^4 randoms, 0.05-0.1% at 10^5 and 0.015%
+ * at 10^6. Only where the density changes sharply right at the mask's edge,
+ * by several times over a few randoms' separation, is it biased, low by up
+ * to a few tenths of a per cent: no count tells there how much of a cell
+ * the mask covers.
  *
  * A catalogue whose radial range changes across the sky -- two regions with
  * different redshift cuts, say -- breaks the assumption. That is detected:

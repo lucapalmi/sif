@@ -25,6 +25,12 @@ Current version: v0.4 release 0
 
 ### Fixed
 
+- `sif_survey_volume()` (`pysif.measure.survey_volume()`) was biased low when
+  the randoms' density varies across the sky -- by 3% for a smooth 5x
+  gradient, 6% for patchy completeness, 12-48% for a 5-20x step; now within
+  a few tenths of a per cent at worst, and unbiased for uniform randoms as
+  before. Footprints with no single centre, such as two opposite caps, no
+  longer sit on the poles of its sky grid
 - With an overlap fraction above 0, a void could overlap one smaller than
   itself by more than the fraction allows
 - Version 1 exodus checkpoints failed their own checksum
