@@ -2,8 +2,9 @@
 --
 -- A Lua script: settings are name = value, grouped in sections, and a
 -- value can be anything Lua computes. Only mode, input, finder.radii,
--- finder.threshold and output are required; every other setting below
--- is at its default and can be left out.
+-- finder.threshold, finder.variant (or finder.exodus_params) and output
+-- are required; every other setting below is at its default and can be
+-- left out.
 --
 -- Command-line variables arrive as strings: `sif-exodus -D snap=010`
 -- makes `snap` here "010", and `snap = snap or "010"` gives it a
@@ -81,20 +82,26 @@ finder = {
   -- numbers. The smallest should span two grid cells or more.
   radii = ladder(10, 40, 0.05),
   threshold = -0.7,          -- the density contrast a void is grown to
-  overlap_fraction = 0,      -- of the smaller radius; 0: no overlap
-  search_factor = 1.5,       -- 1.25 | 1.5 | 1.75 | 2
-  -- Where voids are centred. legacy: every cell below the threshold, on
-  -- its grid node, as sif-exodus 0.4 -- the catalogue depends on the grid.
-  -- minima: the minima of each rung's field, smoothed at the rung's scale.
-  -- optimised: those minima moved to where the tracers give the largest
-  -- radius; grid-independent above about 1.5 times the smallest radius.
-  -- Periodic boxes only for minima and optimised, for now.
-  centres = "legacy",
-  -- How the grid's assignment window is undone before smoothing: full
-  -- divides it out (boosting aliasing and shot noise near the grid scale);
-  -- aliasing divides out the window with its aliases (least squares); none
-  -- keeps it.
-  deconvolution = "full",
+  -- The finder: one of two. excursion-set grows voids from every cell
+  -- below the threshold, with no overlap -- the voids of the excursion-set
+  -- models, and the finder of sif-exodus 0.4. excursion-peak centres them
+  -- on minima of the density smoothed at each rung's scale, a void refused
+  -- only by a larger one it sits inside; its void size function depends on
+  -- the grid less.
+  variant = "excursion-set",
+  -- The settings a variant fixes, to change one or to set them all
+  -- without a variant (they then start from excursion-set's). Each one
+  -- given overrides the variant's.
+  -- exodus_params = {
+  --   overlap_fraction = 0,   -- of the smaller radius; 0: no overlap
+  --   search_factor = 1.5,    -- 1.25 | 1.5 | 1.75 | 2
+  --   seeds = "cells",        -- cells | minima
+  --   -- How the grid's assignment window is undone before smoothing: full
+  --   -- divides it out (boosting aliasing and shot noise near the grid
+  --   -- scale); aliasing divides out the window with its aliases (least
+  --   -- squares); none keeps it.
+  --   deconvolution = "full",
+  -- },
 }
 
 -- Voids to start from: the run adds its own and writes both, these first.

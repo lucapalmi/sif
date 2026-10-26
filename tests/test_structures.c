@@ -237,6 +237,28 @@ static void test_cll(void) {
   uint64_t cell_last = 7ull * n_cells * n_cells + 0ull * n_cells + 0ull;
   CHECK(pbc->head[cell_last] == 2, "negative coord did not wrap to cell 7");
 
+  /* Removal, from the middle of a chain and from its head: cell 1 holds
+   * 3 -> 1 -> 0, and is found from a wrapped point as insertion is. */
+  CHECK(sif_cell_linked_list_insert(pbc, 3, 15.0f, 15.0f, 15.0f) == SIF_OK,
+    "third insert failed");
+  CHECK(
+    sif_cell_linked_list_remove(pbc, 1, 15.0f + box, 15.0f, 15.0f) == SIF_OK &&
+      pbc->head[cell_1] == 3 && pbc->next[3] == 0,
+    "middle removal left head=%d next=%d", pbc->head[cell_1], pbc->next[3]);
+  CHECK(sif_cell_linked_list_remove(pbc, 3, 15.0f, 15.0f, 15.0f) == SIF_OK &&
+          pbc->head[cell_1] == 0 && pbc->next[0] == -1,
+    "head removal left head=%d", pbc->head[cell_1]);
+  CHECK(
+    sif_cell_linked_list_remove(pbc, 3, 15.0f, 15.0f, 15.0f) == SIF_ERR_RANGE,
+    "removing an item twice was not rejected");
+  CHECK(
+    sif_cell_linked_list_remove(pbc, 2, 15.0f, 15.0f, 15.0f) == SIF_ERR_RANGE &&
+      pbc->head[cell_last] == 2,
+    "removing from the wrong cell was not rejected");
+  CHECK(
+    sif_cell_linked_list_remove(NULL, 0, 0.0f, 0.0f, 0.0f) == SIF_ERR_INVALID,
+    "removing from NULL was not rejected");
+
   /* Out-of-range item ids are rejected instead of corrupting the heap. */
   CHECK(sif_cell_linked_list_insert(pbc, 16, 5.0f, 5.0f, 5.0f) == SIF_ERR_RANGE,
     "insert past capacity was not rejected");

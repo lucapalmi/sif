@@ -75,6 +75,10 @@ separately. HDF5 is licensed under the 3-clause BSD License.
 for FITS I/O. CFITSIO is not bundled; it is located at configure time and must be installed
 separately.
 
+**Lua** — the CLI version of exodus (sif-exodus) uses the Lua interpreter to parse the
+configuration files. The source code for Lua 5.5.1 is bundled as a part of sif. Lua is distributed
+under the MIT License.
+
 ## AI policy
 
 All the functions and algorithms in **sif** have been designed by humans. 

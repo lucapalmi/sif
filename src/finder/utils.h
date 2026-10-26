@@ -247,6 +247,8 @@ typedef struct {
    * that has moved on since. Only a finder that rescales fills these. */
   uint64_t rejected_proxy_recheck;
   uint64_t rejected_exact;
+  /** Smaller voids a larger one displaced, under the minima centres. */
+  uint64_t displaced;
 
   uint64_t accepted;
 } sif_finder_radius_stats_t;
@@ -296,6 +298,15 @@ uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx, sif_real cy,
  * underdensity.
  */
 void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx, sif_real cy,
+  sif_real cz, sif_real r_true, uint32_t n_cells, uint32_t p2_mask,
+  sif_real cell_length);
+
+/**
+ * @brief Clear every grid cell whose centre lies inside a sphere: the inverse
+ * of sif__mark_sphere(), for a void taken back out of the catalogue. Cells the
+ * remaining voids cover have to be marked again by the caller.
+ */
+void sif__clear_sphere(sif_bitmask_t* mask, sif_real cx, sif_real cy,
   sif_real cz, sif_real r_true, uint32_t n_cells, uint32_t p2_mask,
   sif_real cell_length);
 

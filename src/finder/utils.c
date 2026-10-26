@@ -568,6 +568,9 @@ void sif__finder_log_radius(const char* tag, sif_real radius,
     tag, "proxy re-check exclusions: %7" PRIu64, stats->rejected_proxy_recheck);
   SIF_LOG_TRACE(
     tag, "exact re-check exclusions: %7" PRIu64, stats->rejected_exact);
+  if (stats->displaced)
+    SIF_LOG_TRACE(
+      tag, "smaller voids displaced:   %7" PRIu64, stats->displaced);
 
   SIF_LOG_INFO(tag,
     "r = %6.2f | candidates: %7" PRIu64 " | accepted: %7" PRIu64
@@ -729,9 +732,10 @@ SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx,
 
 /* --- 5. Marking --- */
 
-SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
+/* Sets, or clears, every cell whose centre lies inside the sphere. */
+static SIF_ALWAYS_INLINE void paint_sphere(sif_bitmask_t* mask, sif_real cx,
   sif_real cy, sif_real cz, sif_real r_true, uint32_t n_cells, uint32_t p2_mask,
-  sif_real cell_length) {
+  sif_real cell_length, const int set) {
 
   const sif_real r2 = r_true * r_true;
   const sif_real inv_cell_length = 1.0f / cell_length;
@@ -781,10 +785,26 @@ SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
 
         if (dxy2 + dist_z * dist_z <= r2) {
           const uint32_t wrap_z = sif__wrap_pbc(global_z, n_cells, p2_mask);
-          sif_bitmask_set_atomic(
-            mask, sif__flat_index(n_cells, wrap_x, wrap_y, wrap_z));
+          const uint64_t cell =
+            sif__flat_index(n_cells, wrap_x, wrap_y, wrap_z);
+          if (set)
+            sif_bitmask_set_atomic(mask, cell);
+          else
+            sif_bitmask_unset_atomic(mask, cell);
         }
       }
     }
   }
+}
+
+SIF_HOT_LOOP void sif__mark_sphere(sif_bitmask_t* mask, sif_real cx,
+  sif_real cy, sif_real cz, sif_real r_true, uint32_t n_cells, uint32_t p2_mask,
+  sif_real cell_length) {
+  paint_sphere(mask, cx, cy, cz, r_true, n_cells, p2_mask, cell_length, 1);
+}
+
+SIF_HOT_LOOP void sif__clear_sphere(sif_bitmask_t* mask, sif_real cx,
+  sif_real cy, sif_real cz, sif_real r_true, uint32_t n_cells, uint32_t p2_mask,
+  sif_real cell_length) {
+  paint_sphere(mask, cx, cy, cz, r_true, n_cells, p2_mask, cell_length, 0);
 }

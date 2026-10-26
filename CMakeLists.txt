@@ -4,7 +4,7 @@
 # This file is part of sif. See COPYING for the full license text.
 
 cmake_minimum_required(VERSION 3.15)
-project(sif VERSION 0.4.0 LANGUAGES C)
+project(sif VERSION 0.4.1 LANGUAGES C)
 
 # Configuration
 set(CMAKE_C_STANDARD 99)
@@ -294,6 +294,8 @@ set(SOURCES
   # finder
     src/finder/spherical_finder.c
     src/finder/exodus_finder.c
+    src/finder/exodus_rescale.c
+    src/finder/exodus_survey.c
     src/finder/exodus_checkpoint.c
     src/finder/utils.c
 

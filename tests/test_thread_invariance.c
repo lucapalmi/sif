@@ -169,37 +169,8 @@ static points_t make_ball(uint64_t n) {
   return p;
 }
 
-static points_t box_pts, tiny_pts, survey_pts, random_pts, sky_pts, dense_pts;
+static points_t box_pts, tiny_pts, survey_pts, random_pts, sky_pts;
 
-/* A lattice moved by a few long waves: shallow, wide voids sampled by many
- * tracers, so a climb's band holds more of them than its buffer starts with.
- * That growth once kept a count left over from whatever the thread measured
- * before, which no Poisson field of N_P tracers is dense enough to reach. */
-#define DENSE_SIDE 128
-#define DENSE_BOX  64.0f
-#define DENSE_GRID 64
-static const sif_real dense_radii[] = {20.0f, 17.0f, 14.0f, 12.0f, 10.0f, 8.5f, 7.5f};
-#define DENSE_THRESHOLD -0.02f
-
-static points_t make_dense(void) {
-  const uint64_t n = (uint64_t)DENSE_SIDE * DENSE_SIDE * DENSE_SIDE;
-  points_t p = {malloc(n * sizeof(sif_real)), malloc(n * sizeof(sif_real)),
-    malloc(n * sizeof(sif_real)), n};
-  const double l = (double)DENSE_BOX / DENSE_SIDE, k = 2.0 * M_PI / 32.0;
-  uint64_t i = 0;
-  for (int a = 0; a < DENSE_SIDE; a++)
-    for (int b = 0; b < DENSE_SIDE; b++)
-      for (int c = 0; c < DENSE_SIDE; c++, i++) {
-        const double x = (a + 0.5) * l, y = (b + 0.5) * l, z = (c + 0.5) * l;
-        double px = x + 1.2 * sin(k * x + 0.7 * sin(0.5 * k * y + 0.3));
-        double py = y + 1.0 * sin(k * y + 0.6 * sin(0.5 * k * z + 1.1));
-        double pz = z + 1.1 * sin(k * z + 0.8 * sin(0.5 * k * x + 2.0));
-        p.x[i] = (sif_real)fmod(px + DENSE_BOX, DENSE_BOX);
-        p.y[i] = (sif_real)fmod(py + DENSE_BOX, DENSE_BOX);
-        p.z[i] = (sif_real)fmod(pz + DENSE_BOX, DENSE_BOX);
-      }
-  return p;
-}
 static sif_real *weights, *vx, *vy, *vz, *values;
 #define N_VALUES SIF_TEST_SCALE(1000000)
 
@@ -218,7 +189,6 @@ static void make_inputs(void) {
   rng_state = 0x243F6A8885A308D3ULL;
 
   box_pts = make_points(N_P, 0.0, (double)BOX);
-  dense_pts = make_dense();
   tiny_pts = make_points(N_TINY, 0.0, (double)BOX);
   survey_pts = make_ball(N_SURVEY);
   random_pts = make_ball(N_SURVEY_RND);
@@ -265,7 +235,6 @@ static void make_inputs(void) {
 
 static void free_inputs(void) {
   free_points(&box_pts);
-  free_points(&dense_pts);
   free_points(&tiny_pts);
   free_points(&survey_pts);
   free_points(&random_pts);
@@ -624,29 +593,23 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
       sif_catalogue_free(sph);
     }
 
-    sif_catalogue_t* cat = m ? sif_finder_exodus(g, m, radii, n_radii,
-                                 THRESHOLD, 0.0f, no_ckpt)
+    sif_catalogue_t* cat = m ? sif_finder_exodus_raw(g, m, radii, n_radii,
+                                 THRESHOLD, 0.0f, no_ckpt, NULL)
                              : NULL;
     char what[32];
     snprintf(what, sizeof(what), "%sexodus", w);
     put_catalogue(p, what, cat);
 
-    /* The other two centre settings take their own paths: minima on a
-     * re-smoothed field, and the climb inside the parallel phase -- this is
-     * what proves it depends on nothing a thread decides. */
+    /* The minima take their own path: a re-smoothed field, the reach
+     * extended, and voids displaced in the sequential commit, at the full
+     * overlap of excursion-peak -- this is what proves they depend on nothing
+     * a thread decides. */
     if (m && !weighted) {
-      sif_catalogue_t* minima = sif_finder_exodus(g, m, radii, n_radii,
-        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_CENTRES_MINIMA);
+      sif_catalogue_t* minima = sif_finder_exodus_raw(g, m, radii, n_radii,
+        THRESHOLD, 1.0f, no_ckpt | SIF_FINDER_SEEDS_MINIMA, NULL);
       CHECK(minima && minima->n_voids > 0, "exodus found no minima");
       put_catalogue(p, "exodus, minima centres", minima);
       sif_catalogue_free(minima);
-
-      sif_catalogue_t* optimised = sif_finder_exodus(g, m, radii, n_radii,
-        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_CENTRES_OPTIMISED);
-      CHECK(optimised && optimised->n_voids > 0,
-        "exodus found nothing with optimised centres");
-      put_catalogue(p, "exodus, optimised centres", optimised);
-      sif_catalogue_free(optimised);
     }
 
     if (cat && !weighted) {
@@ -689,29 +652,6 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
     sif_chain_mesh_free(m);
   }
 
-  /* The climb on a field dense enough for its band to outgrow the buffer. */
-  {
-    sif_field_t* f = field_of(&dense_pts, 0, 0);
-    sif_chain_mesh_t* m = sif_chain_mesh_alloc(
-      sif_finder_suggest_mesh_cells(dense_pts.n, DENSE_BOX, dense_radii[0], 0),
-      DENSE_BOX, f, SIF_MESH_DROP_INDICES);
-    sif_grid_t* g = sif_grid_alloc(DENSE_GRID, DENSE_BOX);
-    CHECK(m && g && sif_grid_assign_cic(g, f) == SIF_OK &&
-            sif_grid_to_density_contrast(g) == SIF_OK,
-      "dense finder inputs failed");
-    sif_field_free(f);
-    sif_catalogue_t* dense =
-      m && g ? sif_finder_exodus(g, m, dense_radii,
-                 (uint32_t)(sizeof(dense_radii) / sizeof(dense_radii[0])),
-                 DENSE_THRESHOLD, 1.0f, no_ckpt | SIF_FINDER_CENTRES_OPTIMISED)
-             : NULL;
-    CHECK(dense && dense->n_voids > 0, "the dense field gave no voids");
-    put_catalogue(p, "exodus, optimised centres, dense", dense);
-    sif_catalogue_free(dense);
-    sif_grid_free(g);
-    sif_chain_mesh_free(m);
-  }
-
   /* An interlaced TSC grid under the aliasing-aware correction, whose
    * interlaced form is the one correction that does not factorise. */
   sif_field_t* f = field_of(&box_pts, 0, 1);
@@ -721,9 +661,10 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
     "TSC assignment failed");
   sif_field_free(f);
   CHECK(m && sif_grid_to_density_contrast(g) == SIF_OK, "finder inputs failed");
-  sif_catalogue_t* cat = m ? sif_finder_exodus(g, m, radii, n_radii, THRESHOLD,
-                               0.0f, no_ckpt | SIF_FINDER_ALIASING_WINDOW)
-                           : NULL;
+  sif_catalogue_t* cat =
+    m ? sif_finder_exodus_raw(g, m, radii, n_radii, THRESHOLD, 0.0f,
+          no_ckpt | SIF_FINDER_ALIASING_WINDOW, NULL)
+      : NULL;
   CHECK(cat && cat->n_voids > 0, "exodus found nothing on an interlaced TSC grid");
   put_catalogue(p, "exodus, interlaced TSC, aliasing-aware", cat);
   sif_catalogue_free(cat);
@@ -757,10 +698,10 @@ static void stage_survey(products_t* p, uint64_t* n_found) {
   sif_field_free(fr);
   CHECK(md && mr, "survey meshes failed");
 
-  sif_catalogue_t* cat = md && mr ? sif_finder_exodus_survey(gd, gr, md, mr,
-                                      NULL, sr, n_sr, THRESHOLD, 0.0f,
-                                      SIF_FINDER_NO_CHECKPOINT)
-                                  : NULL;
+  sif_catalogue_t* cat =
+    md && mr ? sif_finder_exodus_survey_raw(gd, gr, md, mr, NULL, sr, n_sr,
+                 THRESHOLD, 0.0f, SIF_FINDER_NO_CHECKPOINT, NULL)
+             : NULL;
   CHECK(cat != NULL, "survey finder failed");
   put_catalogue(p, "survey exodus", cat);
   n_found[2] = cat ? cat->n_voids : 0;

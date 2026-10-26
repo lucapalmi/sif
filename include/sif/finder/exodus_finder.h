@@ -33,164 +33,8 @@
 #include "sif/structures/grid.h"
 
 /**
- * @brief Run the exodus void finder on a density grid.
- *
- * The mesh is borrowed, never freed: build it once and it can be reused across
- * several runs at different thresholds or radius sets. Building it also means
- * the particle field is no longer needed here, so it can be released before
- * this call -- which matters, because the finder's own peak sits right on top
- * of whatever the caller is still holding.
- *
- * The finder reads the mesh positions and, when the mesh carries them, its
- * weights: a void's radius is then where the enclosed *weight* first reaches
- * (1 + threshold) times the mean weight density, the same criterion the grid
- * applies when it is built by sif_grid_assign_cic() from the same weighted
- * field. A mesh without weights is the unweighted finder, unchanged. A mesh
- * of a tessellation's samples has all of its density in the weights, so it
- * has to be run weighted to mean anything.
- *
- * Weights must be finite and non-negative; the call fails otherwise. The
- * enclosed weight has to grow with the radius for the search to be able to
- * rule whole shells out, and a negative weight would break that silently.
- *
- * Velocities are never read, and at these particle counts they are a
- * substantial allocation for nothing -- so hand this a field stripped of them
- * (and of weights, if the run is meant to be unweighted) when the mesh is
- * being built for the finder alone.
- *
- * The candidates and where a void is centred are one of three finders, the
- * SIF_FINDER_CENTRES_* options. By default (SIF_FINDER_CENTRES_LEGACY) every
- * cell at or below the threshold is a candidate, deepest first, on its node:
- * the finder of 0.4. SIF_FINDER_CENTRES_MINIMA takes the minima of the
- * rung's field smoothed at the rung's scale, refined off their nodes;
- * SIF_FINDER_CENTRES_OPTIMISED moves each of those to where the tracers give
- * the largest radius, which no longer depends on the grid. The threshold is
- * always tested on the top-hat alone.
- *
- * A catalogue does not depend on the thread count, bit for bit. It does
- * depend on the grid's last bits: a grid this hands back is restored to float
- * precision, not to the bit, so a run meant to repeat another bit for bit
- * starts from a grid built afresh.
- *
- * @param grid Density contrast field, as produced by
- * sif_grid_to_density_contrast(). Smoothed in place and restored at the end,
- * as in sif_finder_spherical(); see the warning there about `grid->values`
- * being reassigned.
- * @param mesh The particle chain mesh. Must span the same box as the grid.
- * @param radii Array of smoothing radii, each positive. Each must be small
- * enough that the search sphere it implies (roughly twice the radius) fits
- * inside the box.
- * @param n_radii Number of radii
- * @param threshold Density contrast a cell must be at or below to seed a
- * void, in (-1, 0).
- * @param overlap_fraction How much two voids may overlap, as a fraction of
- * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
- * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
- * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
- * SIF_FINDER_CENTRES_* and SIF_FINDER_SEARCH_*. The box is always
- * periodic; a survey, with edges, is sif_finder_exodus_survey().
- *
- * @note The grid is assumed to have been built by sif_grid_assign_cic(), whose
- * window is divided back out before the first smoothing so that the top-hat is
- * the only window applied. Pass SIF_FINDER_KEEP_CIC_WINDOW for a grid that was
- * filled some other way.
- *
- * @return Newly allocated catalogue, released with sif_catalogue_free(), or
- * NULL on invalid input -- a negative or non-finite weight included -- or
- * failure. A run that fails partway returns NULL rather than the voids found
- * so far, with the grid restored as on success; sif_error_message() says
- * why.
- *
- * @note Requires sif_system_init(). Called without it, returns NULL with
- * sif_error_status() at SIF_ERR_UNINITIALISED.
- */
-SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
-  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
-  sif_real threshold, sif_real overlap_fraction, sif_option opt);
-
-/**
- * @brief Run the exodus finder on a survey: any geometry, described by a
- * random catalogue.
- *
- * The same finder as sif_finder_exodus() -- same ladder, same speculation,
- * same overlap rules -- with the box mean replaced by the randoms. A sphere's
- * expected content is the random weight inside it times
- * alpha = W_data / W_random, so its density contrast is
- * D(<r) / (alpha R(<r)) - 1, and the footprint, its holes and the radial
- * selection all come in through the randoms at once. A void's radius is then
- * the largest data distance at which that contrast is still at or below the
- * threshold, exactly as in the box.
- *
- * **Inputs.** Data and randoms each come as a CIC density grid and a chain
- * mesh, in the same Cartesian frame and the same box. The randoms may follow
- * the survey's n(z) -- they normally do -- and both sets may carry weights;
- * the meshes' total weights set alpha. Where the randoms are is taken as the
- * footprint: the grid cells holding at least one random, with the holes a
- * sparse catalogue leaves by chance closed. The closing runs over a box of
- * 3^3 cells, or wider where the randoms are too few to expect about a hundred
- * in it (up to 9^3), so it also fills real gaps up to two cells wide -- four
- * at the widest -- and a warning says when even the widest leaves chance
- * holes behind.
- *
- * **Geometry.** Nothing wraps around. The survey has to sit inside the box
- * with about the largest search sphere of empty space on every side -- the
- * largest radius times the SIF_FINDER_SEARCH_* factor, plus a grid cell --
- * and the call fails otherwise, saying how much it needs; that padding is what
- * keeps the FFT smoothing and the sphere searches from seeing the far side of
- * the box. Coordinates are the caller's: convert sky positions and redshifts to
- * comoving Cartesian ones beforehand, and shift both sets into the box by the
- * same offset.
- *
- * **Candidates** are only ever centred on an observed cell, and are scanned
- * on the ratio of the smoothed data and random fields rather than on a
- * contrast against the box mean, so a sphere that straddles an edge is
- * measured against the part of it that was observed.
- *
- * **Every void found is kept**, with its sif_catalogue_t::footprint and
- * sif_catalogue_t::footprint_shell: the fraction of its sphere, and of the
- * shell out to twice its radius, that lies in observed cells. A void cut by
- * the edge is still a void of the observed volume; the fractions say how far
- * to trust it.
- *
- * @param data_grid CIC density of the data, from sif_grid_assign_cic(). NOT
- * a density contrast. Smoothed in place and restored, as in
- * sif_finder_exodus().
- * @param random_grid CIC density of the randoms, on the same cells and box.
- * Restored the same way.
- * @param data_mesh The data, in a chain mesh over the same box.
- * @param random_mesh The randoms, in a chain mesh over the same box. Its
- * cells need not match the data mesh's; size it for the randoms.
- * @param offset What the survey was moved into the box by, as
- * sif_finder_exodus_survey_box() gave it, or NULL for a survey that was not
- * moved. The voids are moved back by it, so they come out in the caller's
- * own frame -- where sif_catalogue_to_sky() needs them, with the observer at
- * the origin.
- * @param radii Array of smoothing radii.
- * @param n_radii Number of radii.
- * @param threshold Density contrast a void is grown to, against the randoms,
- * in (-1, 0).
- * @param overlap_fraction As in sif_finder_exodus().
- * @param opt Finder options: SIF_FINDER_CONSUME_GRID (both grids),
- * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW and
- * SIF_FINDER_SEARCH_*. The centres are SIF_FINDER_CENTRES_LEGACY's, for now.
- *
- * @return Newly allocated catalogue, with its footprint columns, in the
- * caller's frame, released with sif_catalogue_free(); NULL on invalid input
- * (an offset that is not finite included), a survey too close to the box
- * faces, or failure, as for sif_finder_exodus().
- *
- * @note Requires sif_system_init(). Called without it, returns NULL with
- * sif_error_status() at SIF_ERR_UNINITIALISED.
- */
-SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
-  sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
-  const sif_chain_mesh_t* random_mesh, const sif_real offset[3],
-  const sif_real* radii, uint32_t n_radii, sif_real threshold,
-  sif_real overlap_fraction, sif_option opt);
-
-/**
- * @brief What sif_finder_exodus_ex() and sif_finder_exodus_survey_ex() take
- * beyond the plain finders' arguments. Zero it and set what is wanted: an
+ * @brief How an exodus run is carried out, apart from what it finds: where it
+ * checkpoints and what it starts from. Zero it and set what is wanted: an
  * all-zero struct, or a NULL pointer to one, is the plain run.
  */
 typedef struct {
@@ -240,8 +84,130 @@ typedef struct {
 } sif_finder_exodus_extras_t;
 
 /**
- * @brief sif_finder_exodus(), with a checkpoint and, optionally, voids to
- * start from.
+ * @brief The exodus finders, by what they take a void to be.
+ *
+ * Excursion-set voids are spheres grown from every cell below the threshold,
+ * with no overlap allowed: the voids the excursion-set models of the void
+ * size function describe. Excursion-peak voids are spheres centred on minima
+ * of the density smoothed at their rung's scale (SIF_FINDER_SEEDS_MINIMA),
+ * with full overlap allowed, so that a void is refused only when its centre
+ * falls inside a larger one.
+ *
+ * Both variants use the default search factor and window deconvolution, and
+ * checkpoint. sif_finder_exodus_preset() gives what each one sets, and
+ * sif_finder_exodus_raw() runs any other combination.
+ */
+typedef enum {
+  /** Every cell below the threshold, on its node, no overlap: the finder of
+   * 0.4 and before. The default, for now. */
+  SIF_EXODUS_EXCURSION_SET = 0,
+  /** The minima of each rung's field, full overlap. */
+  SIF_EXODUS_EXCURSION_PEAK,
+  SIF__EXODUS_N_VARIANTS
+} sif_exodus_variant_t;
+
+/**
+ * @brief The settings a variant runs sif_finder_exodus_raw() with.
+ *
+ * @param variant One of sif_exodus_variant_t.
+ * @param overlap_fraction Receives the overlap fraction.
+ * @param opt Receives the options: the SIF_FINDER_SEEDS_*, and nothing else,
+ * so the search factor and the window deconvolution are at their defaults.
+ * @return SIF_OK, or SIF_ERR_INVALID for a variant out of range, leaving the
+ * outputs untouched.
+ */
+SIF_NODISCARD int sif_finder_exodus_preset(
+  sif_exodus_variant_t variant, sif_real* overlap_fraction, sif_option* opt);
+
+/**
+ * @brief A variant's name, as the bindings and sif-exodus take it:
+ * "excursion-set" or "excursion-peak". NULL for a variant out of range.
+ */
+const char* sif_finder_exodus_variant_name(sif_exodus_variant_t variant);
+
+/**
+ * @brief The variant a name stands for; see sif_finder_exodus_variant_name().
+ *
+ * @return SIF_OK, or SIF_ERR_INVALID for a name that is none of them,
+ * leaving `variant` untouched.
+ */
+SIF_NODISCARD int sif_finder_exodus_variant_from_name(
+  const char* name, sif_exodus_variant_t* variant);
+
+/**
+ * @brief Run one of the exodus finders on a density grid.
+ *
+ * sif_finder_exodus_raw() with the settings of sif_finder_exodus_preset():
+ * see there for the inputs, the checkpoints and what comes back. The grid is
+ * restored at the end.
+ *
+ * @param variant Which finder; see sif_exodus_variant_t.
+ * @param extras Where to checkpoint and what to start from, or NULL for
+ * neither; see sif_finder_exodus_extras_t.
+ */
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
+  sif_real threshold, sif_exodus_variant_t variant,
+  const sif_finder_exodus_extras_t* extras);
+
+/**
+ * @brief Run the exodus void finder on a density grid, with every setting
+ * explicit; sif_finder_exodus() runs one of the variants.
+ *
+ * The mesh is borrowed, never freed: build it once and it can be reused across
+ * several runs at different thresholds or radius sets. Building it also means
+ * the particle field is no longer needed here, so it can be released before
+ * this call -- which matters, because the finder's own peak sits right on top
+ * of whatever the caller is still holding.
+ *
+ * The finder reads the mesh positions and, when the mesh carries them, its
+ * weights: a void's radius is then where the enclosed *weight* first reaches
+ * (1 + threshold) times the mean weight density, the same criterion the grid
+ * applies when it is built by sif_grid_assign_cic() from the same weighted
+ * field. A mesh without weights is the unweighted finder, unchanged. A mesh
+ * of a tessellation's samples has all of its density in the weights, so it
+ * has to be run weighted to mean anything.
+ *
+ * Weights must be finite and non-negative; the call fails otherwise. The
+ * enclosed weight has to grow with the radius for the search to be able to
+ * rule whole shells out, and a negative weight would break that silently.
+ *
+ * Velocities are never read, and at these particle counts they are a
+ * substantial allocation for nothing -- so hand this a field stripped of them
+ * (and of weights, if the run is meant to be unweighted) when the mesh is
+ * being built for the finder alone.
+ *
+ * The candidates are one of two kinds, the SIF_FINDER_SEEDS_* options. By
+ * default (SIF_FINDER_SEEDS_CELLS) every cell at or below the threshold is a
+ * candidate, deepest first, on its node: the finder of 0.4.
+ * SIF_FINDER_SEEDS_MINIMA takes the minima of the rung's field smoothed at
+ * the rung's scale, refined off their nodes. The threshold is always tested
+ * on the top-hat alone.
+ *
+ * A catalogue does not depend on the thread count, bit for bit. It does
+ * depend on the grid's last bits: a grid this hands back is restored to float
+ * precision, not to the bit, so a run meant to repeat another bit for bit
+ * starts from a grid built afresh.
+ *
+ * @param grid Density contrast field, as produced by
+ * sif_grid_to_density_contrast(). Smoothed in place and restored at the end,
+ * as in sif_finder_spherical(); see the warning there about `grid->values`
+ * being reassigned.
+ * @param mesh The particle chain mesh. Must span the same box as the grid.
+ * @param radii Array of smoothing radii, each positive. Each must be small
+ * enough that the search sphere it implies (roughly twice the radius) fits
+ * inside the box.
+ * @param n_radii Number of radii
+ * @param threshold Density contrast a cell must be at or below to seed a
+ * void, in (-1, 0).
+ * @param overlap_fraction How much two voids may overlap, as a fraction of
+ * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
+ * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
+ * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
+ * SIF_FINDER_SEEDS_*, SIF_FINDER_NO_CHECKPOINT and SIF_FINDER_SEARCH_*. The box
+ * is always periodic; a survey, with edges, is sif_finder_exodus_survey_raw().
+ * @param extras Where to checkpoint and what to start from, or NULL for
+ * neither: see sif_finder_exodus_extras_t.
  *
  * **Checkpoints.** The catalogue after each rung is all a run carries to the
  * next one, so it is all a run needs to be picked up again: the voids so far
@@ -263,10 +229,17 @@ typedef struct {
  *
  * **Starting from a catalogue.** See sif_finder_exodus_extras_t::prior.
  *
- * @param extras What the plain finder lacks, or NULL for none.
+ * @note The grid is assumed to have been built by sif_grid_assign_cic(), whose
+ * window is divided back out before the first smoothing so that the top-hat is
+ * the only window applied. Pass SIF_FINDER_KEEP_CIC_WINDOW for a grid that was
+ * filled some other way.
  *
- * Every other parameter, and the return value, as for sif_finder_exodus().
- * The returned catalogue holds the prior voids first.
+ * @return Newly allocated catalogue, the prior voids first, released with
+ * sif_catalogue_free(), or
+ * NULL on invalid input -- a negative or non-finite weight included -- or
+ * failure. A run that fails partway returns NULL rather than the voids found
+ * so far, with the grid restored as on success; sif_error_message() says
+ * why.
  *
  * @note To extend a catalogue to smaller radii, run the rungs below the last
  * one it was found with. The result matches a single run over the whole
@@ -274,16 +247,78 @@ typedef struct {
  * factor, which the default 1.5 is for any ordinary ladder: the first rung
  * here does not know the one above it, and a gap wider than that would
  * otherwise be closed by reaching up to it.
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
-SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_ex(sif_grid_t* grid,
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_raw(sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
   sif_real threshold, sif_real overlap_fraction, sif_option opt,
   const sif_finder_exodus_extras_t* extras);
 
 /**
- * @brief sif_finder_exodus_survey(), with a checkpoint and, optionally, voids
- * to start from; see sif_finder_exodus_ex().
+ * @brief Run one of the exodus finders on a survey.
  *
+ * sif_finder_exodus_survey_raw() with the settings of
+ * sif_finder_exodus_preset(): see there for the inputs and what comes back.
+ * Only SIF_EXODUS_EXCURSION_SET runs on a survey, for now; the other variant
+ * fails.
+ *
+ * @param variant Which finder; see sif_exodus_variant_t.
+ * @param extras As in sif_finder_exodus().
+ */
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
+  sif_grid_t* random_grid, const sif_chain_mesh_t* data_mesh,
+  const sif_chain_mesh_t* random_mesh, const sif_real offset[3],
+  const sif_real* radii, uint32_t n_radii, sif_real threshold,
+  sif_exodus_variant_t variant, const sif_finder_exodus_extras_t* extras);
+
+/**
+ * @brief Run the exodus finder on a survey: any geometry, described by a
+ * random catalogue, with every setting explicit; sif_finder_exodus_survey()
+ * runs one of the variants.
+ *
+ * The same finder as sif_finder_exodus_raw() -- same ladder, same speculation,
+ * same overlap rules -- with the box mean replaced by the randoms. A sphere's
+ * expected content is the random weight inside it times
+ * alpha = W_data / W_random, so its density contrast is
+ * D(<r) / (alpha R(<r)) - 1, and the footprint, its holes and the radial
+ * selection all come in through the randoms at once. A void's radius is then
+ * the largest data distance at which that contrast is still at or below the
+ * threshold, exactly as in the box.
+ *
+ * **Inputs.** Data and randoms each come as a CIC density grid and a chain
+ * mesh, in the same Cartesian frame and the same box. The randoms may follow
+ * the survey's n(z) -- they normally do -- and both sets may carry weights;
+ * the meshes' total weights set alpha. Where the randoms are is taken as the
+ * footprint: the grid cells holding at least one random, with the holes a
+ * sparse catalogue leaves by chance closed. The closing runs over a box of
+ * 3^3 cells, or wider where the randoms are too few to expect about a hundred
+ * in it (up to 9^3), so it also fills real gaps up to two cells wide -- four
+ * at the widest -- and a warning says when even the widest leaves chance
+ * holes behind.
+ *
+ * **Geometry.** Nothing wraps around. The survey has to sit inside the box
+ * with about the largest search sphere of empty space on every side -- the
+ * largest radius times the SIF_FINDER_SEARCH_* factor, plus a grid cell --
+ * and the call fails otherwise, saying how much it needs; that padding is what
+ * keeps the FFT smoothing and the sphere searches from seeing the far side of
+ * the box. Coordinates are the caller's: convert sky positions and redshifts to
+ * comoving Cartesian ones beforehand, and shift both sets into the box by the
+ * same offset.
+ *
+ * **Candidates** are only ever centred on an observed cell, and are scanned
+ * on the ratio of the smoothed data and random fields rather than on a
+ * contrast against the box mean, so a sphere that straddles an edge is
+ * measured against the part of it that was observed.
+ *
+ * **Every void found is kept**, with its sif_catalogue_t::footprint and
+ * sif_catalogue_t::footprint_shell: the fraction of its sphere, and of the
+ * shell out to twice its radius, that lies in observed cells. A void cut by
+ * the edge is still a void of the observed volume; the fractions say how far
+ * to trust it.
+ *
+ * **Checkpoints and prior voids**, as in sif_finder_exodus_raw().
  * The checkpoint holds the voids in the survey box, along with the offset
  * that puts them there, and sif_finder_exodus_checkpoint_read() takes them
  * back to the caller's frame. A prior catalogue is in the caller's frame,
@@ -294,8 +329,42 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_ex(sif_grid_t* grid,
  * sif_finder_exodus_survey_box() sizes the box from the ladder's two ends,
  * so a run over the larger radii alone gets a different one: size it from
  * the whole ladder in both.
+ *
+ * @param data_grid CIC density of the data, from sif_grid_assign_cic(). NOT
+ * a density contrast. Smoothed in place and restored, as in
+ * sif_finder_exodus().
+ * @param random_grid CIC density of the randoms, on the same cells and box.
+ * Restored the same way.
+ * @param data_mesh The data, in a chain mesh over the same box.
+ * @param random_mesh The randoms, in a chain mesh over the same box. Its
+ * cells need not match the data mesh's; size it for the randoms.
+ * @param offset What the survey was moved into the box by, as
+ * sif_finder_exodus_survey_box() gave it, or NULL for a survey that was not
+ * moved. The voids are moved back by it, so they come out in the caller's
+ * own frame -- where sif_catalogue_to_sky() needs them, with the observer at
+ * the origin.
+ * @param radii Array of smoothing radii.
+ * @param n_radii Number of radii.
+ * @param threshold Density contrast a void is grown to, against the randoms,
+ * in (-1, 0).
+ * @param overlap_fraction As in sif_finder_exodus_raw().
+ * @param opt Finder options: SIF_FINDER_CONSUME_GRID (both grids),
+ * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
+ * SIF_FINDER_NO_CHECKPOINT and SIF_FINDER_SEARCH_*. The seeds are
+ * SIF_FINDER_SEEDS_CELLS's, for now.
+ * @param extras As in sif_finder_exodus_raw().
+ *
+ * @return Newly allocated catalogue, with its footprint columns, in the
+ * caller's frame, released with sif_catalogue_free(); NULL on invalid input
+ * (an offset that is not finite included), a survey too close to the box
+ * faces, or failure, as for sif_finder_exodus().
+ *
+ * The prior voids come first.
+ *
+ * @note Requires sif_system_init(). Called without it, returns NULL with
+ * sif_error_status() at SIF_ERR_UNINITIALISED.
  */
-SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_ex(
+SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_raw(
   sif_grid_t* data_grid, sif_grid_t* random_grid,
   const sif_chain_mesh_t* data_mesh, const sif_chain_mesh_t* random_mesh,
   const sif_real offset[3], const sif_real* radii, uint32_t n_radii,
@@ -305,7 +374,7 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_ex(
 /** @brief Magic number at the start of every exodus checkpoint. */
 #define SIF_FINDER_CHECKPOINT_MAGIC "XCKP"
 /** @brief Version of the checkpoint layout this build reads and writes. */
-#define SIF_FINDER_CHECKPOINT_VERSION 4
+#define SIF_FINDER_CHECKPOINT_VERSION 2
 
 /**
  * @brief The fixed 192-byte header of an exodus checkpoint.
@@ -332,17 +401,15 @@ typedef struct {
   uint32_t byte_order;
   /** 1 if written with a 64-bit sif_real. */
   uint32_t is_double;
-  /** 1 for sif_finder_exodus_survey_ex(), 0 for a periodic box. */
+  /** 1 for sif_finder_exodus_survey_raw(), 0 for a periodic box. */
   uint32_t is_survey;
   /** 1 if the (data) mesh carries weights. */
   uint32_t is_weighted;
   /**
    * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor,
    * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW and the
-   * SIF_FINDER_CENTRES_*. Version 3 and before kept the centres as two other
-   * bits; a file of theirs reads as SIF_FINDER_CENTRES_LEGACY if it was
-   * written with every cell on its node, and otherwise as the reserved value
-   * SIF__FINDER_CENTRES_MASK, a finder this build no longer has.
+   * SIF_FINDER_SEEDS_*. Version 1 had no seeds, and reads as
+   * SIF_FINDER_SEEDS_CELLS.
    */
   uint32_t options;
   /** Rungs on the ladder. */
@@ -393,8 +460,8 @@ typedef struct {
   uint64_t n_mismatched;
   /**
    * How the (data) grid was deposited: the #sif_assignment_t in the low byte,
-   * 1 in the next if interlaced. Written since version 3; an older checkpoint
-   * reads as CIC, which is what every grid was then.
+   * 1 in the next if interlaced. Written since version 2; a version 1
+   * checkpoint reads as CIC, which is what every grid was then.
    */
   uint32_t assignment;
   /** Reserved, zero, to hold the header at 192 bytes. */
@@ -406,7 +473,7 @@ typedef struct {
  * voids found so far.
  *
  * For a look at a run in progress, or one that stopped -- not needed to
- * resume one, which is sif_finder_exodus_ex() given the same path.
+ * resume one, which is sif_finder_exodus_raw() given the same path.
  *
  * @param filepath The checkpoint.
  * @param[out] header Its header, or NULL if only the voids are wanted.

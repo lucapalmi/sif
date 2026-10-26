@@ -131,4 +131,20 @@ int sif_cell_linked_list_ensure_capacity(
 int sif_cell_linked_list_insert(sif_cell_linked_list_t* cll, uint64_t item_idx,
   sif_real cx, sif_real cy, sif_real cz);
 
+/**
+ * @brief Remove an item from the cell containing a point.
+ *
+ * @param cll The list.
+ * @param item_idx The item, as it was inserted.
+ * @param cx Point it was inserted at, x axis.
+ * @param cy Point it was inserted at, y axis.
+ * @param cz Point it was inserted at, z axis.
+ * @return SIF_OK, SIF_ERR_INVALID on a NULL list, or SIF_ERR_RANGE if the item
+ * is not in that cell's chain.
+ *
+ * @warning Not thread-safe, as sif_cell_linked_list_insert().
+ */
+int sif_cell_linked_list_remove(sif_cell_linked_list_t* cll, uint64_t item_idx,
+  sif_real cx, sif_real cy, sif_real cz);
+
 #endif /* SIF_STRUCTURES_CELL_LINKED_LIST_H */

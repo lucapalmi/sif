@@ -182,31 +182,11 @@ int sif__exodus_checkpoint_write(const char* path,
 
 /* --- reading --- */
 
-/* What a header's centres mean, for messages; SIF__FINDER_CENTRES_MASK is a
- * finder an old checkpoint was written by and this build no longer has. */
+/* What a header's seeds mean, for messages. */
 static const char* centres_label(uint32_t options) {
-  switch (options & SIF__FINDER_CENTRES_MASK) {
-  case SIF_FINDER_CENTRES_LEGACY:
-    return "legacy (every cell, on its node)";
-  case SIF_FINDER_CENTRES_MINIMA:
-    return "minima (smoothed at the rung's scale)";
-  case SIF_FINDER_CENTRES_OPTIMISED:
-    return "optimised (minima climbed to the largest radius)";
-  default:
-    return "refined or one-cell minima, which this build no longer has";
-  }
-}
-
-/* Version 3 and before kept two bits where the centres now are: 1 << 9 for
- * minima only, 1 << 10 for centres left on their nodes, the latter implied by
- * version 1. Every cell on its node is SIF_FINDER_CENTRES_LEGACY; every other
- * combination is a finder this build does not have, and reads as one. */
-static uint32_t upgrade_centres(uint32_t version, uint32_t options) {
-  const int minima = (options & (1u << 9)) != 0;
-  const int nodes = version < 2 || (options & (1u << 10)) != 0;
-  options &= ~SIF__FINDER_CENTRES_MASK;
-  return options | ((nodes && !minima) ? SIF_FINDER_CENTRES_LEGACY
-                                       : SIF__FINDER_CENTRES_MASK);
+  return (options & SIF_FINDER_SEEDS_MINIMA)
+           ? "minima (smoothed at the rung's scale)"
+           : "every cell, on its node";
 }
 
 /* The assignment scheme a header records, for messages. */
@@ -268,8 +248,8 @@ int sif__exodus_checkpoint_load(const char* path,
     read_failed(path, "written on a machine of the other byte order");
     goto done;
   }
-  if (h.version > SIF_FINDER_CHECKPOINT_VERSION) {
-    read_failed(path, "version %u (expected at most %u)", h.version,
+  if (h.version == 0 || h.version > SIF_FINDER_CHECKPOINT_VERSION) {
+    read_failed(path, "version %u (expected 1 to %u)", h.version,
       (unsigned)SIF_FINDER_CHECKPOINT_VERSION);
     goto done;
   }
@@ -327,11 +307,9 @@ int sif__exodus_checkpoint_load(const char* path,
   }
 
   /* Brought up to date only now, the checksum being over the header as it
-   * was written. Version 3 and before recorded the centres differently. */
-  if (h.version < 4)
-    h.options = upgrade_centres(h.version, h.options);
-  /* And version 2 predates the assignment schemes: CIC, not interlaced. */
-  if (h.version < 3)
+   * was written. Version 1 predates the assignment schemes: CIC, not
+   * interlaced. */
+  if (h.version < 2)
     h.assignment = SIF_ASSIGNMENT_CIC;
 
   *header = h;
@@ -404,7 +382,7 @@ int sif__exodus_checkpoint_match(const char* path,
     MISMATCH("CIC window %s (this run %s it)",
       (got->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved",
       (want->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "keeps" : "deconvolves");
-  if ((got->options ^ want->options) & SIF__FINDER_CENTRES_MASK)
+  if ((got->options ^ want->options) & SIF__FINDER_SEEDS_MASK)
     MISMATCH("centres %s (this run's: %s)", centres_label(got->options),
       centres_label(want->options));
 
@@ -420,7 +398,8 @@ int sif__exodus_checkpoint_match(const char* path,
                                                    : "in full");
   if (got->assignment != want->assignment)
     MISMATCH("grid assigned with %s%s (this run's: %s%s)",
-      scheme_label(got->assignment), (got->assignment >> 8) ? ", interlaced" : "",
+      scheme_label(got->assignment),
+      (got->assignment >> 8) ? ", interlaced" : "",
       scheme_label(want->assignment),
       (want->assignment >> 8) ? ", interlaced" : "");
 

@@ -87,13 +87,9 @@ typedef enum {
   EXODUS_MODE_SURVEY
 } exodus_mode_t;
 
-/* finder.centres: which of the three exodus finders, in the order of the
- * SIF_FINDER_CENTRES_* values. */
-typedef enum {
-  EXODUS_CENTRES_LEGACY,
-  EXODUS_CENTRES_MINIMA,
-  EXODUS_CENTRES_OPTIMISED
-} exodus_centres_t;
+/* finder.exodus_params.seeds: where candidates come from, in the order of
+ * the SIF_FINDER_SEEDS_* values. */
+typedef enum { EXODUS_SEEDS_CELLS, EXODUS_SEEDS_MINIMA } exodus_seeds_t;
 
 /* finder.deconvolution: how the grid's assignment window is undone before
  * smoothing. */
@@ -241,14 +237,19 @@ typedef struct {
     uint32_t n_radii;
     /* Density contrast a void is grown to; negative. */
     double threshold;
+    /* The sif_exodus_variant_t finder.variant names, or the default one
+     * when it names none. The settings below start from its own and are what
+     * the run uses, finder.exodus_params applied. */
+    int variant;
+    /* Whether finder.exodus_params changed any of the variant's settings. */
+    bool customised;
     /* Allowed overlap, as a fraction of the smaller void's radius. */
     double overlap_fraction;
     /* How far past a rung the rescaling looks, as a multiple of it: 1.25,
      * 1.5, 1.75 or 2.0 (the SIF_FINDER_SEARCH_* family). */
     double search_factor;
-    /* Where voids are centred: exodus_centres_t, the SIF_FINDER_CENTRES_*
-     * in that order. */
-    exodus_centres_t centres;
+    /* Where candidates come from. */
+    exodus_seeds_t seeds;
     /* How the assignment window is undone. */
     exodus_deconvolution_t deconvolution;
   } finder;

@@ -76,8 +76,8 @@ def test_assign_refusals(field):
 @pytest.mark.parametrize("deconvolution", ["full", "aliasing", "none"])
 def test_finders_take_deconvolution(field, mesh, deconvolution):
     g = contrast(field, scheme="tsc", interlace=True)
-    cat = pysif.finders.exodus(g, mesh, RADII, -0.7, checkpoint=False,
-                               deconvolution=deconvolution)
+    cat = pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
+                                   deconvolution=deconvolution)
     assert cat.n_voids > 0
     cat = pysif.finders.spherical(g, RADII, -0.7, deconvolution=deconvolution)
     assert cat.n_voids > 0
@@ -107,19 +107,35 @@ def test_deconvolution_refusals(field, mesh):
 
 
 
-@pytest.mark.parametrize("centres", [None, "legacy", "minima", "optimised"])
-def test_exodus_takes_centres(field, mesh, centres):
-    g = contrast(field)
-    kw = {} if centres is None else {"centres": centres}
-    cat = pysif.finders.exodus(g, mesh, RADII, -0.7, checkpoint=False, **kw)
+VARIANTS = {
+    "excursion-set": {},
+    "excursion-peak": {"overlap_fraction": 1, "seeds": "minima"},
+}
+
+
+@pytest.mark.parametrize("variant", [None, *VARIANTS])
+def test_exodus_takes_variants(field, mesh, tmp_path, variant):
+    # Each variant is exodus_raw() at its settings, bit for bit.
+    kw = {} if variant is None else {"variant": variant}
+    cat = pysif.finders.exodus(contrast(field), mesh, RADII, -0.7,
+                               checkpoint=tmp_path / "run.ckpt", **kw)
+    raw = pysif.finders.exodus_raw(contrast(field), mesh, RADII, -0.7,
+                                   checkpoint=False,
+                                   **VARIANTS[variant or "excursion-set"])
     assert cat.n_voids > 0
+    np.testing.assert_array_equal(cat.radii, raw.radii)
+    np.testing.assert_array_equal(cat.centres, raw.centres)
 
 
-def test_centres_refusals(field, mesh):
+def test_variant_refusals(field, mesh):
     g = contrast(field)
-    with pytest.raises(ValueError, match="'legacy', 'minima' or 'optimised'"):
-        pysif.finders.exodus(g, mesh, RADII, -0.7, checkpoint=False,
-                             centres="refined")
-    with pytest.raises(TypeError):
-        pysif.finders.exodus(g, mesh, RADII, -0.7, checkpoint=False,
-                             centre_is_minimum=True)
+    with pytest.raises(ValueError, match="variant must be 'excursion-set'"):
+        pysif.finders.exodus(g, mesh, RADII, -0.7, variant="excursion-peek")
+    with pytest.raises(ValueError, match="seeds must be 'cells' or 'minima'"):
+        pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
+                                 seeds="nodes")
+    # What a variant fixes is not taken alongside it.
+    for kw in ({"seeds": "minima"}, {"overlap_fraction": 0.5},
+               {"deconvolution": "aliasing"}, {"search_factor": 2.0}):
+        with pytest.raises(TypeError):
+            pysif.finders.exodus(g, mesh, RADII, -0.7, **kw)

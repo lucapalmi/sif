@@ -82,11 +82,6 @@ SIF_NODISCARD int sif__exodus_checkpoint_match(const char* path,
  */
 void sif__exodus_halt_after_set(uint32_t n_rungs);
 
-/* DIAGNOSTIC: log the candidates rejected as underdense out to r_search to
- * `f` (NULL to stop). */
-#include <stdio.h>
-void sif__exodus_beyond_log_set(FILE* f);
-
 /** @brief CRC32 of a catalogue's four columns, chained in order. */
 SIF_NODISCARD uint32_t sif__exodus_checkpoint_crc(const sif_catalogue_t* cat);
 

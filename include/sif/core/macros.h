@@ -66,9 +66,8 @@ typedef uint32_t sif_option;
  * A finder smooths the grid in place at every radius, so the input is gone by
  * the time it finishes. By default it is transformed back at the end; this flag
  * skips that, saving one inverse FFT for a caller that is going to discard the
- * grid anyway. Under SIF_FINDER_CENTRES_MINIMA and SIF_FINDER_CENTRES_OPTIMISED
- * the exodus finder leaves that field smoothed by the Gaussian its minima are
- * found on as well.
+ * grid anyway. Under SIF_FINDER_SEEDS_MINIMA the exodus finder leaves that
+ * field smoothed by the Gaussian its minima are found on as well.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
 
@@ -154,60 +153,43 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * Write no checkpoint.
  *
  * The exodus finder saves its progress after every rung, so that a run cut
- * short can be resumed (see sif_finder_exodus_ex()). This turns that off,
+ * short can be resumed (see sif_finder_exodus_raw()). This turns that off,
  * for a caller that runs many small searches and has no use for it.
  */
 #define SIF_FINDER_NO_CHECKPOINT (1u << 11)
 
 /**
- * @name Where exodus voids are centred
- * Bits 9-10, one of three. Each is a different finder, not a refinement of
- * another; the overlap fraction, the search factor and the window options
- * apply to all three alike.
+ * @name Where exodus voids are seeded
+ * Bit 9, one of two; with their overlap fraction they are the two
+ * sif_exodus_variant_t. The overlap fraction, the search factor and the
+ * window options apply to both alike.
  *
- * The void definition they approximate: a void is a point q and a radius R
- * such that q is a minimum of the density field smoothed at R, R is the
- * largest scale at which the contrast about q crosses the threshold, and q is
- * not inside a larger void. Write R(x) for that crossing radius at any point
- * x; then R is stationary exactly where x is stationary in the field smoothed
- * at R(x), and a maximum of R(x) is a minimum of that field -- so a void
- * centre is a local maximum of R(x), a property of the tracers alone.
+ * Cells are exactly the finder of 0.4 and before: a crossing past a rung's
+ * reach is refused, and a void is refused by any accepted one it overlaps.
+ * Minima measure such a crossing with the reach extended, and let a void
+ * displace the smaller ones it overlaps, since a void that grew past its
+ * rung can be larger than voids accepted before it.
  * @{
  */
 /**
- * Every cell below the threshold at a rung is a candidate, centred on its
- * grid node. Exactly the finder of 0.4 and before, kept to reproduce its
- * catalogues. Where a minimum is refused, the cell next to it on the slope can
- * be accepted instead: a void centred on no minimum, tangent to a larger one.
- * The catalogue depends on the grid: on a 600^3 grid of a 1876 Mpc/h box it
- * holds 15-25% fewer voids than on a 1500^3 one. The default, for now.
+ * Every cell below the threshold at a rung is a candidate, deepest first,
+ * centred on its grid node. Where a minimum is refused, the cell next to it
+ * on the slope can be accepted instead: a void centred on no minimum, tangent
+ * to a larger one. The VSF depends on the grid below about 10-15 cells in
+ * radius. The default.
  */
-#define SIF_FINDER_CENTRES_LEGACY (0u << 9)
+#define SIF_FINDER_SEEDS_CELLS (0u << 9)
 /**
  * The local minima of the rung's field are the candidates, centred where the
  * minimum lies between the nodes by a Newton step on the 3x3x3 Hessian.
  * Minima are found on the field smoothed by a Gaussian of 0.15 of the rung on
  * top of the top-hat -- one more transform per rung -- a smoothing tied to
  * the void, so a grid that resolves the rung finds the same minima as any
- * finer one. A void is centred on a minimum of its rung's field or there is
- * none. Fast; within 1-3% of a finer grid's VSF from a cell of about a mean
- * tracer separation, but the centre is the grid's, and so, through it, is the
- * radius. Periodic boxes only, for now.
+ * finer one: the VSF is within about 1.5% of a finer grid's from about 6
+ * cells in radius. Periodic boxes only, for now.
  */
-#define SIF_FINDER_CENTRES_MINIMA (1u << 9)
-/**
- * The minima of SIF_FINDER_CENTRES_MINIMA, each moved before any overlap test
- * to the nearby point at which the tracers give the largest crossing radius:
- * the definition above, measured on the tracers, which the grid only seeds.
- * The catalogue no longer depends on the grid above the bottom of the ladder:
- * within 1-2% of a 1500^3 VSF from 600^3 up in a 1876 Mpc/h box. Start the
- * ladder about 1.5 times below the smallest radius to be reported: a void
- * near the bottom rung can only be seeded by the last rung or two. Costs
- * 1.3-6 times SIF_FINDER_CENTRES_MINIMA, more for large voids in units of
- * the tracer separation. Periodic boxes and unweighted tracers only, for now.
- */
-#define SIF_FINDER_CENTRES_OPTIMISED (2u << 9)
-#define SIF__FINDER_CENTRES_MASK     (3u << 9)
+#define SIF_FINDER_SEEDS_MINIMA (1u << 9)
+#define SIF__FINDER_SEEDS_MASK  (1u << 9)
 /** @} */
 /** @} */
 

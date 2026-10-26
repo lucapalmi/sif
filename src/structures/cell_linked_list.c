@@ -206,3 +206,25 @@ int sif_cell_linked_list_insert(sif_cell_linked_list_t* cll, uint64_t item_idx,
 
   return SIF_OK;
 }
+
+int sif_cell_linked_list_remove(sif_cell_linked_list_t* cll, uint64_t item_idx,
+  sif_real cx, sif_real cy, sif_real cz) {
+
+  if (!cll)
+    return SIF_ERR_INVALID;
+
+  const uint32_t ix = cll_axis_index(cll, cx);
+  const uint32_t iy = cll_axis_index(cll, cy);
+  const uint32_t iz = cll_axis_index(cll, cz);
+  const uint64_t flat_idx = (uint64_t)ix * cll->n_cells * cll->n_cells +
+                            (uint64_t)iy * cll->n_cells + (uint64_t)iz;
+
+  /* A chain is singly linked, so the item is found by walking to it. */
+  int32_t* link = &cll->head[flat_idx];
+  while (*link != -1 && *link != (int32_t)item_idx)
+    link = &cll->next[*link];
+  if (*link == -1)
+    return SIF_ERR_RANGE;
+  *link = cll->next[item_idx];
+  return SIF_OK;
+}

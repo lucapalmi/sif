@@ -45,7 +45,7 @@ def mesh(tracers):
 ])
 def test_bad_arguments(grid, mesh, args, kwargs, message):
     with pytest.raises(ValueError, match=message):
-        pysif.finders.exodus(grid, mesh, *args, **kwargs)
+        pysif.finders.exodus_raw(grid, mesh, *args, **kwargs)
     with pytest.raises(ValueError, match=message):
         pysif.finders.spherical(grid, *args, **kwargs)
 

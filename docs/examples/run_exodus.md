@@ -83,19 +83,18 @@ mesh = pysif.ChainMesh(
 )
 
 # now we can finally run exodus
-# we make it consume the grid because we don't need it anymore.
-# centres="optimised" moves every void to where the tracers give the
-# largest radius, which makes the catalogue independent of the grid; start
-# the ladder about 1.5x below the smallest radius you report (see the
-# exodus guide). The default, "legacy", is the finder of 0.4
+# variant="excursion-peak" centres every void on a minimum of the density
+# smoothed at its own radius, which makes the catalogue nearly independent
+# of the grid, as long as the voids you report span at least ~6 cells and
+# the ladder starts about 1.5x below the smallest radius you report (see
+# the exodus guide). The default, "excursion-set", is the finder of 0.4
 threshold = -0.7
 catalogue = pysif.finders.exodus(
     grid=grid,
     mesh=mesh,
     radii=search_radii,
     threshold=threshold,
-    consume_grid=True,
-    centres="optimised"
+    variant="excursion-peak"
 )
 
 # we finally save the catalogue and release the system state
@@ -211,12 +210,10 @@ int main(void) {
   if (!mesh)
     goto done;
 
-  // now we can finally run exodus
-  // we make it consume the grid because we don't need it anymore
+  // now we can finally run exodus; see the exodus guide for the variants
   const sif_real threshold = -0.7f;
-  const sif_real overlap_fraction = 0.0f;
   catalogue = sif_finder_exodus(grid, mesh, search_radii, n_radii, threshold,
-    overlap_fraction, SIF_FINDER_CONSUME_GRID);
+    SIF_EXODUS_EXCURSION_PEAK, NULL);
   if (!catalogue)
     goto done;
 
@@ -268,6 +265,7 @@ input = {
 finder = {
   radii = ladder(10, 60, 0.03),
   threshold = -0.7,
+  variant = "excursion-peak",  -- see the exodus guide
 }
 
 output = "path/to/voids.txt"
@@ -400,8 +398,7 @@ catalogue = pysif.finders.exodus_survey(
     random_mesh=random_mesh,
     offset=offset,          # the voids come back in the catalogues' frame
     radii=search_radii,
-    threshold=threshold,
-    consume_grid=True
+    threshold=threshold     # variant="excursion-set", the only one on a survey
 )
 
 # optionally, we can translate the voids positions in sky coordinates
@@ -556,13 +553,12 @@ int main(void) {
   if (!data_mesh || !random_mesh)
     goto done;
 
-  // now we can run exodus
-  const sif_real threshold = -0.7f;
-  const sif_real overlap_fraction = 0.0f;
+  // now we can run exodus; on a survey, excursion-set only, for now.
   // given the offset, the voids come back in the catalogues' frame
+  const sif_real threshold = -0.7f;
   catalogue = sif_finder_exodus_survey(data_grid, random_grid, data_mesh,
-    random_mesh, offset, search_radii, n_radii, threshold, overlap_fraction,
-    SIF_FINDER_CONSUME_GRID);
+    random_mesh, offset, search_radii, n_radii, threshold,
+    SIF_EXODUS_EXCURSION_SET, NULL);
   if (!catalogue)
     goto done;
 
@@ -636,6 +632,7 @@ grid = { n_cells = 512 }
 finder = {
   radii = geomspace(10, 60, 60),
   threshold = -0.7,
+  variant = "excursion-set",  -- the only one on a survey, for now
 }
 
 -- the run's settings, the cosmology among them, go in the metadata
@@ -662,7 +659,8 @@ exodus saves its progress after every rung of the ladder: the voids found so
 far, and how many rungs they cover. A run that stops -- a job hitting its
 time limit, a node going down -- resumes from there, and returns exactly the
 catalogue it would have returned uninterrupted. The checkpoint is removed
-when the run completes.
+when the run completes. A checkpoint written by sif 0.4 still resumes, as
+`"excursion-set"` on a CIC grid.
 
 A run can also start from a catalogue of voids, and add to it. Running the
 large radii first and the small ones later from that catalogue gives the
@@ -681,7 +679,8 @@ different run is refused before anything is read.
 
 ```lua
 -- the small radii, starting from the voids of a run over the large ones
-finder = { radii = ladder(10, 20, 0.05), threshold = -0.7 }
+finder = { radii = ladder(10, 20, 0.05), threshold = -0.7,
+  variant = "excursion-peak" }
 prior = "voids_large.h5"
 output = "voids.h5"
 ```
@@ -705,7 +704,8 @@ print(info["rungs_done"], "of", len(info["radii"]), "rungs,", done.n_voids, "voi
 voids = pysif.finders.exodus(grid, mesh, small_radii, -0.7, prior=large_voids)
 ```
 `checkpoint=None` (the default) writes to `exodus-<hex>.ckpt` in the working
-directory, and `checkpoint=False` writes nothing.
+directory. A variant always checkpoints; `exodus_raw(..., checkpoint=False)`
+writes nothing.
 ::::
 
 ::::{tab-item} C
@@ -714,11 +714,11 @@ const sif_finder_exodus_extras_t extras = {
   .checkpoint = "run.ckpt", /* NULL: exodus-<hex>.ckpt */
   .prior = large_voids,     /* NULL: start from nothing */
 };
-sif_catalogue_t* voids = sif_finder_exodus_ex(grid, mesh, radii, n_radii,
-  -0.7f, 0.0f, SIF_DEFAULT, &extras);
+sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii,
+  -0.7f, SIF_EXODUS_EXCURSION_PEAK, &extras);
 ```
-`sif_finder_exodus()` checkpoints the same way, under a name of its own;
-`SIF_FINDER_NO_CHECKPOINT` turns it off.
+With `extras` NULL the run checkpoints under a name of its own;
+`sif_finder_exodus_raw()` with `SIF_FINDER_NO_CHECKPOINT` writes nothing.
 ::::
 
 :::::

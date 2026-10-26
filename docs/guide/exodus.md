@@ -3,62 +3,122 @@
 An efficient, spherical void-finding algorithm that works on both surveys and
 simulations.
 
-## What a void is
+## Adopted definition of void
 
-A void is a centre q and a radius R such that
+A sphere with centre $\mathbf{q}$ and radius $R$ is a void if:
 
-1. q is not inside a larger void (the overlap fraction sets how much two voids
+1. $\mathbf{q}$ is not inside a larger void (the overlap fraction sets how much two voids
    may share);
-2. q is a minimum of the density field smoothed at R;
-3. R is the largest scale at which the contrast inside the sphere of radius R
-   about q crosses the threshold.
+2. $\mathbf{q}$ is a minimum of the density field smoothed at $R$;
+3. $R$ is the largest scale at which the contrast inside the sphere of radius $R$
+   about $\mathbf{q}$ crosses the threshold.
 
-Write R(x) for the radius point 3 gives at any point x. Then R(x) is largest
-exactly where x is a minimum of the field smoothed at R(x): a void centre is a
-local maximum of R(x), a property of the tracers alone.
-
-## How it searches
+## Algorithm description
 
 exodus walks a ladder of radii, largest first. At each rung it smooths the
-grid with a top-hat of that radius, takes the cells below the threshold as
-candidates, grows each candidate's radius on the tracers until the enclosed
-contrast crosses the threshold (point 3), and accepts it if it does not
-overlap a void already found (point 1). Where a candidate is centred is the
-`centres` option, and decides how closely point 2 is followed:
+grid with a top-hat of that radius, takes candidates below the threshold,
+grows each candidate's radius on the tracers until the enclosed contrast
+crosses the threshold (point 3), and accepts it if it does not overlap a void
+already found (point 1).
 
-| `centres` | Candidates | Centre | Depends on the grid |
+## The variants
+
+exodus comes in two variants, which are simply two configurations of the 
+algorithm that follow two different definitions of void:
+
+| Variant | Candidates | Centre | Overlap |
 |---|---|---|---|
-| `"legacy"` (default) | every cell below the threshold | its grid node | yes |
-| `"minima"` | local minima of the rung's field, smoothed by 0.15 R | refined between the nodes | slightly |
-| `"optimised"` | the same minima | moved to the largest R(x) nearby | no |
+| `"excursion-set"` (default) | every cell below the threshold | its grid node | 0 | 
+| `"excursion-peak"` | local minima of the rung's field, smoothed by 0.15 R | refined between the nodes | 1 |
 
-`"legacy"` is the finder of 0.4, kept to reproduce its catalogues: where a
-minimum is refused, the cell next to it can be accepted instead, a void on the
-slope of a larger one. `"minima"` centres every void on a minimum of its rung's
-field. `"optimised"` then moves it to where the tracers give the largest radius,
-so the grid only seeds the search; it costs about 1.3 to 6 times `"minima"`,
-more for voids that are large in units of the tracer separation. The overlap
-fraction, the search factor and the window options apply to all three alike.
-`"minima"` and `"optimised"` are for periodic boxes only for now, and
-`"optimised"` for unweighted tracers.
+With `"excursion-set"`, each cell below threshold is a candidate, and voids 
+follow a strict, non-overlapping rule. This configuration follows the same
+definition adopted by the finder of [Pylians3](https://pylians3.readthedocs.io/en/master/index.html)
+
+`"excursion-peak"` follows a slightly different definition of void, where
+a cell below threshold is a candidate only if it's a strict minimum of the 
+field. Also, voids can overlap up to their centres.
+
+:::::{tab-set}
+
+::::{tab-item} sif-exodus
+```lua
+finder = {
+  radii = ladder(10, 40, 0.05),
+  threshold = -0.7,
+  variant = "excursion-peak",
+}
+```
+::::
+
+::::{tab-item} Python
+```python
+voids = pysif.finders.exodus(grid, mesh, radii, -0.7, variant="excursion-peak")
+```
+::::
+
+::::{tab-item} C
+```c
+sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii, -0.7f,
+  SIF_EXODUS_EXCURSION_PEAK, NULL);
+```
+::::
+
+:::::
+
+### Beyond the variants
+
+A variant is just a preset of the finder's settings: the candidates (`seeds`,
+`"cells"` or `"minima"`), the overlap fraction, the search factor (1.5) and the
+window deconvolution (`"full"`). Any other combination can be run with the raw
+finder, which takes each setting separately. In **sif-exodus**,
+`finder.exodus_params` overrides the settings of the variant, or sets all of
+them on its own, starting from the default variant. One of the two is required.
+
+:::::{tab-set}
+
+::::{tab-item} sif-exodus
+```lua
+finder = {
+  radii = ladder(10, 40, 0.05),
+  threshold = -0.7,
+  variant = "excursion-peak",
+  exodus_params = { overlap_fraction = 0.5 },
+}
+```
+::::
+
+::::{tab-item} Python
+```python
+voids = pysif.finders.exodus_raw(grid, mesh, radii, -0.7, overlap_fraction=0.5,
+                                 seeds="minima")
+```
+::::
+
+::::{tab-item} C
+```c
+sif_catalogue_t* voids = sif_finder_exodus_raw(grid, mesh, radii, n_radii,
+  -0.7f, 0.5f, SIF_FINDER_SEEDS_MINIMA, NULL);
+```
+::::
+
+:::::
 
 ## Choosing the ladder and the grid
 
-With `centres="optimised"` the void size function does not depend on the grid,
-with two conditions, both from the bottom of the ladder:
+exodus walks the ladder from the largest radius down, and a void is accepted
+only if its centre is not inside a larger one. This can only be checked
+against voids already found, so the first rung of the ladder should find no
+void at all: start the ladder above the largest void you expect, and make sure
+that the first rung (at least) comes out empty. Otherwise, the voids found
+there were never compared with the larger ones the ladder does not reach.
 
-- **Start the ladder below the smallest radius you report**, by about 1.5. A
-  void just above the bottom rung can only be found from the last rung or two,
-  and a grid resolves those least well.
-- **Make the grid fine enough for the bottom rung**: a cell of at most about a
-  third to a half of the smallest radius on the ladder.
+The void size function slightly depends on the grid resolution. Given a grid with 
+cell size $\Delta x$:
 
-In a 1876 Mpc/h box with 1500^3 tracers, on grids from 600^3 to 2000^3, the
-VSF above 1.5 times the bottom rung then agrees within 1-2% at every grid,
-where `"legacy"` differs by 15-30%.
+- `"excursion-peak"` is stable for scales $R > 6\,\Delta x$
+- `"excursion-set"` is stable for scales $R > 10\,\Delta x$
 
-:::{note}
-The overlap fraction is independent of `centres`: an overlap fraction of 0
-keeps voids disjoint, and 1 allows any void whose centre lies outside every
-larger one.
-:::
+Finally, the algorithm causes a "loss of voids" at the scales close to the smallest 
+radius. Run the finder slightly below the minimum scale you want to consider, 
+indicatively by a factor 1.5x.

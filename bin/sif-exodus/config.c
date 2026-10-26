@@ -82,8 +82,9 @@ static const char* const MESH_KEYS[] = {"n_cells", NULL};
 static const char* const SURVEY_MESH_KEYS[] = {
   "n_cells_data", "n_cells_random", NULL};
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
-  "overlap_fraction", "search_factor", "centres", "centre_refinement_hessian",
-  "centre_is_minimum", "deconvolution", NULL};
+  "variant", "exodus_params", "overlap_fraction", "search_factor", NULL};
+static const char* const EXODUS_PARAMS_KEYS[] = {
+  "overlap_fraction", "search_factor", "seeds", "deconvolution", NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
 static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
 static const char* const RUN_KEYS[] = {
@@ -112,7 +113,9 @@ static const char* const LENGTHS[] = {"kpc", "mpc", "auto", NULL};
 /* From SIF_ASSIGNMENT_NGP on. */
 static const char* const ASSIGNMENTS[] = {"ngp", "cic", "tsc", "pcs", NULL};
 static const char* const DECONVOLUTIONS[] = {"full", "aliasing", "none", NULL};
-static const char* const CENTRES[] = {"legacy", "minima", "optimised", NULL};
+/* In the order of sif_exodus_variant_t. */
+static const char* const VARIANTS[] = {"excursion-set", "excursion-peak", NULL};
+static const char* const SEEDS[] = {"cells", "minima", NULL};
 static const char* const LOG_LEVELS[] = {
   "trace", "debug", "info", "warning", "error", "none", NULL};
 
@@ -538,7 +541,7 @@ static void set_defaults(exodus_config_t* c) {
   p->randoms = p->input;
   p->survey.sky = true;
 
-  p->finder.overlap_fraction = 0.0;
+  p->finder.variant = SIF_EXODUS_EXCURSION_SET;
   p->finder.search_factor = 1.5;
   p->grid.assignment = SIF_ASSIGNMENT_CIC;
   p->output.kind = EXODUS_OUTPUT_HDF5;
@@ -1383,7 +1386,6 @@ static void read_radii(reader_t* r, int t, exodus_config_t* c) {
 static void read_finder(reader_t* r, int root, exodus_config_t* c) {
   lua_State* L = r->L;
   exodus_params_t* p = &c->params;
-  int i;
   double x;
 
   const int type = field(L, root, "finder");
@@ -1410,15 +1412,6 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
       "drop the key, and give a ladder of mean separations multiplied by the "
       "mean separation --check reports");
   lua_pop(r->L, 1);
-  if (field(r->L, t, "centre_refinement_hessian") != LUA_TNIL)
-    report(r, "finder.centre_refinement_hessian",
-      "removed: centres = \"minima\" or \"optimised\" refines them, "
-      "\"legacy\" leaves them on the nodes");
-  lua_pop(r->L, 1);
-  if (field(r->L, t, "centre_is_minimum") != LUA_TNIL)
-    report(r, "finder.centre_is_minimum",
-      "removed: centres = \"minima\" or \"optimised\" takes only minima");
-  lua_pop(r->L, 1);
 
   if (get_number(r, t, "finder", "threshold", &x)) {
     if (x > -1.0 && x < 0.0)
@@ -1432,31 +1425,80 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
   }
   lua_settop(L, t);
 
-  if (get_number(r, t, "finder", "overlap_fraction", &x)) {
-    if (x >= 0.0 && x <= 1.0)
-      p->finder.overlap_fraction = x;
-    else
-      report(r, "finder.overlap_fraction", "must be in [0, 1], got %g", x);
+  /* Keys that moved into exodus_params, still known so that an older
+   * configuration is told where they went. */
+  static const char* const moved[] = {"overlap_fraction", "search_factor"};
+  for (size_t k = 0; k < sizeof moved / sizeof moved[0]; k++) {
+    char w[160];
+    if (field(L, t, moved[k]) != LUA_TNIL)
+      report(r, at(w, sizeof w, "finder", moved[k]),
+        "moved: set finder.variant, or finder.exodus_params.%s", moved[k]);
+    lua_pop(L, 1);
   }
-  if (get_number(r, t, "finder", "search_factor", &x)) {
-    if (x == 1.25 || x == 1.5 || x == 1.75 || x == 2.0)
-      p->finder.search_factor = x;
-    else
-      report(
-        r, "finder.search_factor", "must be 1.25, 1.5, 1.75 or 2, got %g", x);
+
+  /* The variant, or the default one, sets everything; exodus_params then
+   * overrides what it names. One of the two has to be there. */
+  int variant = p->finder.variant;
+  if (get_enum(r, t, "finder", "variant", VARIANTS, &variant))
+    p->finder.variant = variant;
+  const bool variant_given = field(L, t, "variant") != LUA_TNIL;
+  lua_pop(L, 1);
+
+  sif_real overlap;
+  sif_option options;
+  if (sif_finder_exodus_preset(
+        (sif_exodus_variant_t)variant, &overlap, &options) == SIF_OK) {
+    p->finder.overlap_fraction = (double)overlap;
+    p->finder.seeds = (options & SIF_FINDER_SEEDS_MINIMA) ? EXODUS_SEEDS_MINIMA
+                                                          : EXODUS_SEEDS_CELLS;
   }
-  int which;
-  if (get_enum(r, t, "finder", "centres", CENTRES, &which)) {
-    p->finder.centres = (exodus_centres_t)which;
-    if (p->mode == EXODUS_MODE_SURVEY && which != EXODUS_CENTRES_LEGACY)
-      report(r, "finder.centres",
-        "\"%s\" is for a periodic box, for now (expected \"legacy\" in a "
-        "survey)",
-        CENTRES[which]);
+
+  const int ptype = field(L, t, "exodus_params");
+  const int e = lua_gettop(L);
+  if (ptype == LUA_TNIL && !variant_given) {
+    report(r, "finder.variant",
+      "missing: \"excursion-set\" or \"excursion-peak\", or the settings "
+      "themselves in finder.exodus_params");
+  } else if (ptype != LUA_TNIL && ptype != LUA_TTABLE) {
+    report(r, "finder.exodus_params", "must be a table, got a %s",
+      lua_typename(L, ptype));
+  } else if (ptype == LUA_TTABLE) {
+    const char* path = "finder.exodus_params";
+    check_keys(r, e, path, EXODUS_PARAMS_KEYS);
+    const exodus_params_t before = *p;
+    if (get_number(r, e, path, "overlap_fraction", &x)) {
+      if (x >= 0.0 && x <= 1.0)
+        p->finder.overlap_fraction = x;
+      else
+        report(r, "finder.exodus_params.overlap_fraction",
+          "must be in [0, 1], got %g", x);
+    }
+    if (get_number(r, e, path, "search_factor", &x)) {
+      if (x == 1.25 || x == 1.5 || x == 1.75 || x == 2.0)
+        p->finder.search_factor = x;
+      else
+        report(r, "finder.exodus_params.search_factor",
+          "must be 1.25, 1.5, 1.75 or 2, got %g", x);
+    }
+    int which;
+    if (get_enum(r, e, path, "seeds", SEEDS, &which))
+      p->finder.seeds = (exodus_seeds_t)which;
+    int kind;
+    if (get_enum(r, e, path, "deconvolution", DECONVOLUTIONS, &kind))
+      p->finder.deconvolution = (exodus_deconvolution_t)kind;
+    p->finder.customised =
+      before.finder.overlap_fraction != p->finder.overlap_fraction ||
+      before.finder.search_factor != p->finder.search_factor ||
+      before.finder.seeds != p->finder.seeds ||
+      before.finder.deconvolution != p->finder.deconvolution;
   }
-  int kind;
-  if (get_enum(r, t, "finder", "deconvolution", DECONVOLUTIONS, &kind))
-    p->finder.deconvolution = (exodus_deconvolution_t)kind;
+  lua_settop(L, e - 1);
+
+  if (p->mode == EXODUS_MODE_SURVEY && p->finder.seeds != EXODUS_SEEDS_CELLS)
+    report(r, variant_given ? "finder.variant" : "finder.exodus_params",
+      "%s is for a periodic box, for now (expected \"excursion-set\" in a "
+      "survey: seeds = \"cells\")",
+      variant_given ? VARIANTS[variant] : "seeds = \"minima\"");
   lua_settop(L, t - 1);
 }
 
@@ -1985,15 +2027,33 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
   fputs("},\n", out);
   format_double(num, sizeof num, p->finder.threshold);
   fprintf(out, "  threshold = %s,\n", num);
-  format_double(num, sizeof num, p->finder.overlap_fraction);
-  fprintf(out, "  overlap_fraction = %s,\n", num);
-  format_double(num, sizeof num, p->finder.search_factor);
-  fprintf(out, "  search_factor = %s,\n", num);
-  if (p->finder.centres != EXODUS_CENTRES_LEGACY)
-    fprintf(out, "  centres = \"%s\",\n", CENTRES[p->finder.centres]);
-  if (p->finder.deconvolution != EXODUS_DECONVOLVE_FULL)
-    fprintf(out, "  deconvolution = \"%s\",\n",
-      DECONVOLUTIONS[p->finder.deconvolution]);
+  /* The variant, and in exodus_params only what differs from it, as the
+   * other sections leave out what is at its default. */
+  fprintf(out, "  variant = \"%s\",\n", VARIANTS[p->finder.variant]);
+  sif_real overlap = 0.0f;
+  sif_option options = 0;
+  (void)sif_finder_exodus_preset(
+    (sif_exodus_variant_t)p->finder.variant, &overlap, &options);
+  const exodus_seeds_t seeds = (options & SIF_FINDER_SEEDS_MINIMA)
+                                 ? EXODUS_SEEDS_MINIMA
+                                 : EXODUS_SEEDS_CELLS;
+  if (p->finder.customised) {
+    fputs("  exodus_params = {\n", out);
+    if (p->finder.overlap_fraction != (double)overlap) {
+      format_double(num, sizeof num, p->finder.overlap_fraction);
+      fprintf(out, "    overlap_fraction = %s,\n", num);
+    }
+    if (p->finder.search_factor != 1.5) {
+      format_double(num, sizeof num, p->finder.search_factor);
+      fprintf(out, "    search_factor = %s,\n", num);
+    }
+    if (p->finder.seeds != seeds)
+      fprintf(out, "    seeds = \"%s\",\n", SEEDS[p->finder.seeds]);
+    if (p->finder.deconvolution != EXODUS_DECONVOLVE_FULL)
+      fprintf(out, "    deconvolution = \"%s\",\n",
+        DECONVOLUTIONS[p->finder.deconvolution]);
+    fputs("  },\n", out);
+  }
   fputs("}\n\n", out);
 
   if (p->prior.path) {
@@ -2701,10 +2761,9 @@ static exodus_deconvolution_t saved_deconvolution(uint32_t options) {
   return EXODUS_DECONVOLVE_FULL;
 }
 
-/* A checkpoint's centres, as finder.centres names them. */
-static const char* saved_centres(uint32_t options) {
-  const uint32_t c = (options & SIF__FINDER_CENTRES_MASK) >> 9;
-  return c < 3 ? CENTRES[c] : "a finder this sif-exodus no longer has";
+/* Seeds, as exodus_params names them. */
+static const char* centres_name(uint32_t c) {
+  return c == SIF_FINDER_SEEDS_MINIMA ? "seeds \"minima\"" : "seeds \"cells\"";
 }
 
 /* A checkpoint's assignment scheme, as grid.assignment names it. */
@@ -2733,6 +2792,7 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
   FILE* f = fopen(p->checkpoint, "rb");
   bool read = f && fread(&h, sizeof h, 1, f) == 1 &&
               memcmp(h.magic, SIF_FINDER_CHECKPOINT_MAGIC, 4) == 0 &&
+              h.version >= 1 && h.version <= SIF_FINDER_CHECKPOINT_VERSION &&
               h.n_radii > 0 && h.n_radii <= MAX_RADII;
   if (read) {
     saved = malloc(h.n_radii * sizeof(sif_real));
@@ -2740,6 +2800,9 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
   }
   if (f)
     fclose(f);
+  /* Version 1 predates the assignment schemes: every grid was CIC. */
+  if (read && h.version < 2)
+    h.assignment = SIF_ASSIGNMENT_CIC;
 
   if (!read) {
     check_say(ch, SIF_LOG_LEVEL_ERROR, "run.checkpoint",
@@ -2762,6 +2825,9 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
     qsort(ladder, n, sizeof(sif_real), descending);
   }
   const double factor = (double)sif__finder_search_factor(h.options);
+  const uint32_t want_centres = p->finder.seeds == EXODUS_SEEDS_MINIMA
+                                  ? SIF_FINDER_SEEDS_MINIMA
+                                  : SIF_FINDER_SEEDS_CELLS;
 
   if ((h.is_survey != 0) != (p->mode == EXODUS_MODE_SURVEY))
     snprintf(
@@ -2778,10 +2844,10 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
   else if (factor != p->finder.search_factor)
     snprintf(why, sizeof why, "search factor %g (this run's: %g)", factor,
       p->finder.search_factor);
-  else if ((h.options & SIF__FINDER_CENTRES_MASK) !=
-           ((uint32_t)p->finder.centres << 9))
-    snprintf(why, sizeof why, "centres %s (this run's: %s)",
-      saved_centres(h.options), CENTRES[p->finder.centres]);
+  else if ((h.options & SIF__FINDER_SEEDS_MASK) != want_centres)
+    snprintf(why, sizeof why, "%s (this run's: %s)",
+      centres_name(h.options & SIF__FINDER_SEEDS_MASK),
+      centres_name(want_centres));
   else if (saved_deconvolution(h.options) != p->finder.deconvolution)
     snprintf(why, sizeof why, "window deconvolution %s (this run's: %s)",
       DECONVOLUTIONS[saved_deconvolution(h.options)],

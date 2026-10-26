@@ -232,15 +232,15 @@ static void run_case(const char* label, int selection, uint64_t n_randoms) {
   /* Only legacy centres in a survey, for now: refused before anything is
    * touched. */
   sif_error_clear();
-  sif_catalogue_t* refused = sif_finder_exodus_survey(data.grid, rand.grid,
-    data.mesh, rand.mesh, NULL, radii, n_radii, -0.7f, 0.0f,
-    SIF_FINDER_CENTRES_MINIMA);
+  sif_catalogue_t* refused =
+    sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+      NULL, radii, n_radii, -0.7f, 0.0f, SIF_FINDER_SEEDS_MINIMA, NULL);
   CHECK(!refused && sif_error_status() == SIF_ERR_INVALID,
     "%s: minima centres in a survey were not refused", label);
   sif_catalogue_free(refused);
 
-  sif_catalogue_t* cat = sif_finder_exodus_survey(data.grid, rand.grid,
-    data.mesh, rand.mesh, NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
+  sif_catalogue_t* cat = sif_finder_exodus_survey_raw(data.grid, rand.grid,
+    data.mesh, rand.mesh, NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL);
 
   CHECK(cat != NULL, "%s: the survey finder returned NULL", label);
   if (cat) {
@@ -357,8 +357,9 @@ static void run_weights(void) {
     tracers_t data = build_weighted(dx, dy, dz, N_DATA, weighted ? 2.0f : 0.0f);
     tracers_t rand =
       build_weighted(rx, ry, rz, N_RANDOMS, weighted ? 0.5f : 0.0f);
-    cat[weighted] = sif_finder_exodus_survey(data.grid, rand.grid, data.mesh,
-      rand.mesh, NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
+    cat[weighted] =
+      sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+        NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL);
     release(&data);
     release(&rand);
   }
@@ -533,8 +534,8 @@ static void run_workflow(void) {
 
   /* Given the offset, the finder hands the voids back in the caller's
    * frame. */
-  sif_catalogue_t* cat = sif_finder_exodus_survey(
-    gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT);
+  sif_catalogue_t* cat = sif_finder_exodus_survey_raw(
+    gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL);
   CHECK(cat != NULL, "the finder refused the box the helper chose");
 
   if (cat) {
@@ -563,13 +564,13 @@ static void run_workflow(void) {
   const sif_option none = SIF_FINDER_NO_CHECKPOINT;
   const uint32_t split = 2;
   REGRID();
-  sif_catalogue_t* head = sif_finder_exodus_survey_ex(
+  sif_catalogue_t* head = sif_finder_exodus_survey_raw(
     gd, gr, md, mr, offset, radii, split, -0.7f, 0.0f, none, NULL);
 
   sif__exodus_halt_after_set(split);
   const sif_finder_exodus_extras_t named = {.checkpoint = path};
   REGRID();
-  sif_catalogue_t* halted = sif_finder_exodus_survey_ex(
+  sif_catalogue_t* halted = sif_finder_exodus_survey_raw(
     gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, &named);
   sif__exodus_halt_after_set(0);
   CHECK(!halted, "the halted survey run returned a catalogue");
@@ -585,7 +586,7 @@ static void run_workflow(void) {
   sif_catalogue_free(saved);
 
   REGRID();
-  sif_catalogue_t* resumed = sif_finder_exodus_survey_ex(
+  sif_catalogue_t* resumed = sif_finder_exodus_survey_raw(
     gd, gr, md, mr, offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, &named);
   same_voids("survey, resumed", resumed, cat);
   sif_catalogue_free(resumed);
@@ -593,11 +594,25 @@ static void run_workflow(void) {
 
   const sif_finder_exodus_extras_t extend = {.prior = head};
   REGRID();
-  sif_catalogue_t* extended = sif_finder_exodus_survey_ex(gd, gr, md, mr,
+  sif_catalogue_t* extended = sif_finder_exodus_survey_raw(gd, gr, md, mr,
     offset, radii + split, n_radii - split, -0.7f, 0.0f, none, &extend);
   same_voids("survey, extended", extended, cat);
   sif_catalogue_free(extended);
   sif_catalogue_free(head);
+
+  /* The variant entry point: excursion-set is the run above, and
+   * excursion-peak, being for a periodic box, is refused. */
+  REGRID();
+  sif_catalogue_t* preset = sif_finder_exodus_survey(gd, gr, md, mr, offset,
+    radii, n_radii, -0.7f, SIF_EXODUS_EXCURSION_SET, NULL);
+  same_voids("survey, excursion-set", preset, cat);
+  sif_catalogue_free(preset);
+  sif_error_clear();
+  preset = sif_finder_exodus_survey(gd, gr, md, mr, offset, radii, n_radii,
+    -0.7f, SIF_EXODUS_EXCURSION_PEAK, NULL);
+  CHECK(!preset && sif_error_status() == SIF_ERR_INVALID,
+    "excursion-peak in a survey was not refused");
+  sif_catalogue_free(preset);
 
 #undef REGRID
   sif_catalogue_free(cat);
@@ -702,9 +717,10 @@ static void run_survey_box(void) {
     sif_chain_mesh_alloc(sif_finder_suggest_mesh_cells(4 * n, box, r_max, 0),
       box, fr, SIF_MESH_DROP_INDICES);
   sif_error_clear();
-  sif_catalogue_t* cat = md && mr ? sif_finder_exodus_survey(gd, gr, md, mr,
-                                      offset, radii, n_radii, -0.7f, 0.0f, 0)
-                                  : NULL;
+  sif_catalogue_t* cat = md && mr
+                           ? sif_finder_exodus_survey_raw(gd, gr, md, mr,
+                               offset, radii, n_radii, -0.7f, 0.0f, 0, NULL)
+                           : NULL;
   CHECK(!cat && error_has("survey_box allows for grid cells up to the "
                           "smallest radius"),
     "a grid of %g cells should be refused as too coarse: '%s'",
@@ -747,8 +763,8 @@ static void run_refusals(void) {
   tracers_t rand = build(rx, ry, rz, 4 * n);
 
   sif_error_clear();
-  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
-          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
+  CHECK(sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL) == NULL,
     "a survey without padding should be refused");
   CHECK(error_has("randoms: span [") && error_has("of padding on every side") &&
           sif_error_status() == SIF_ERR_INVALID,
@@ -758,22 +774,22 @@ static void run_refusals(void) {
   CHECK(sif_grid_to_density_contrast(data.grid) == SIF_OK,
     "density contrast failed");
   sif_error_clear();
-  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
-          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
+  CHECK(sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL) == NULL,
     "a density contrast should be refused as the data grid");
   CHECK(error_has("data grid: holds a density contrast"), "contrast: '%s'",
     sif_error_message());
 
   sif_error_clear();
-  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, NULL, NULL,
-          radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL,
+  CHECK(sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, NULL,
+          NULL, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL) == NULL,
     "a missing random mesh should be refused");
   CHECK(error_has("random mesh: NULL"), "no mesh: '%s'", sif_error_message());
 
   const sif_real bad_offset[3] = {0.0f, (sif_real)NAN, 0.0f};
   sif_error_clear();
-  CHECK(sif_finder_exodus_survey(data.grid, rand.grid, data.mesh, rand.mesh,
-          bad_offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT) == NULL &&
+  CHECK(sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+          bad_offset, radii, n_radii, -0.7f, 0.0f, SIF_DEFAULT, NULL) == NULL &&
           error_has("offset[1]: nan, expected finite"),
     "an offset that is not finite should be refused: '%s'",
     sif_error_message());

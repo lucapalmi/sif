@@ -11,11 +11,15 @@
 
 /* Module-level functional entry points */
 PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* py_sif_finder_exodus_raw(
+  PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_spherical(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_suggest_mesh_cells(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_exodus_survey(
+  PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* py_sif_finder_exodus_survey_raw(
   PyObject* self, PyObject* args, PyObject* kwds);
 PyObject* py_sif_finder_survey_box(
   PyObject* self, PyObject* args, PyObject* kwds);

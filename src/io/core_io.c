@@ -17,7 +17,6 @@
 #include <errno.h>
 #include <inttypes.h>
 #include <stdarg.h>
-#include <stdbool.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -108,16 +107,6 @@ int sif__io_problems_end(const sif__io_problems_t* p, FILE* report) {
     fflush(report);
   }
   return p->n ? SIF_ERR_IO : SIF_OK;
-}
-
-void sif__io_stats_merge(sif__io_stats_t* a, const sif__io_stats_t* b) {
-  const bool a_has = a->n > a->n_nonfinite, b_has = b->n > b->n_nonfinite;
-  if (b_has && (!a_has || b->min < a->min))
-    a->min = b->min;
-  if (b_has && (!a_has || b->max > a->max))
-    a->max = b->max;
-  a->n += b->n;
-  a->n_nonfinite += b->n_nonfinite;
 }
 
 void sif__io_stats_header(FILE* report, int name_width) {

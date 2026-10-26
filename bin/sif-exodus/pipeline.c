@@ -295,16 +295,10 @@ static sif_option grid_option(const exodus_params_t* p) {
   return p->grid.interlace ? SIF_GRID_INTERLACE : 0;
 }
 
-/* The SIF_FINDER_CENTRES_* for finder.centres. */
+/* The SIF_FINDER_SEEDS_* the finder settings ask for. */
 static sif_option centres_option(const exodus_params_t* p) {
-  switch (p->finder.centres) {
-  case EXODUS_CENTRES_MINIMA:
-    return SIF_FINDER_CENTRES_MINIMA;
-  case EXODUS_CENTRES_OPTIMISED:
-    return SIF_FINDER_CENTRES_OPTIMISED;
-  default:
-    return SIF_FINDER_CENTRES_LEGACY;
-  }
+  return p->finder.seeds == EXODUS_SEEDS_MINIMA ? SIF_FINDER_SEEDS_MINIMA
+                                                : SIF_FINDER_SEEDS_CELLS;
 }
 
 /* The finder options for finder.deconvolution. */
@@ -327,13 +321,19 @@ static sif_option window_option(const exodus_params_t* p) {
 static void describe_catalogue(
   sif_catalogue_t* cat, const exodus_params_t* p, const run_facts_t* r) {
   int s = sif_catalogue_meta_string_set(cat, "finder", "exodus");
+  /* The variant as named, marked when finder.exodus_params changed it; the
+   * settings themselves follow, whatever they came from. */
+  char variant[64];
+  snprintf(variant, sizeof variant, "%s%s",
+    sif_finder_exodus_variant_name((sif_exodus_variant_t)p->finder.variant),
+    p->finder.customised ? " (customised)" : "");
+  s |= sif_catalogue_meta_string_set(cat, "variant", variant);
   s |= sif_catalogue_meta_real_set(cat, "threshold", p->finder.threshold);
   s |= sif_catalogue_meta_real_set(
     cat, "overlap_fraction", p->finder.overlap_fraction);
   s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
-  static const char* const centres[] = {"legacy", "minima", "optimised"};
   s |= sif_catalogue_meta_string_set(
-    cat, "centres", centres[p->finder.centres]);
+    cat, "seeds", p->finder.seeds == EXODUS_SEEDS_MINIMA ? "minima" : "cells");
   static const char* const deconvolutions[] = {"full", "aliasing", "none"};
   s |= sif_catalogue_meta_string_set(
     cat, "deconvolution", deconvolutions[p->finder.deconvolution]);
@@ -642,11 +642,10 @@ int pipeline_box(const exodus_params_t* p) {
   sif_timer_start(&t);
   const sif_finder_exodus_extras_t extras = {
     .checkpoint = p->checkpoint, .prior = prior, .keep_checkpoint = 1};
-  cat = sif_finder_exodus_ex(grid, mesh, radii, p->finder.n_radii,
+  cat = sif_finder_exodus_raw(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
-    SIF_FINDER_CONSUME_GRID | search |
-      centres_option(p) |
-      window_option(p) | (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+    SIF_FINDER_CONSUME_GRID | search | centres_option(p) | window_option(p) |
+      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(mesh);
   mesh = NULL;
@@ -1085,12 +1084,11 @@ int pipeline_survey(const exodus_params_t* p) {
   sif_timer_start(&t);
   const sif_finder_exodus_extras_t extras = {
     .checkpoint = p->checkpoint, .prior = prior, .keep_checkpoint = 1};
-  cat = sif_finder_exodus_survey_ex(data_grid, random_grid, data_mesh,
+  cat = sif_finder_exodus_survey_raw(data_grid, random_grid, data_mesh,
     random_mesh, offset, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
-    SIF_FINDER_CONSUME_GRID | search |
-      centres_option(p) |
-      window_option(p) | (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+    SIF_FINDER_CONSUME_GRID | search | centres_option(p) | window_option(p) |
+      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);

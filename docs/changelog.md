@@ -3,40 +3,42 @@
 Current version: v0.4 release 0
 
 
-## Unreleased
+## v0.4.1 -- 26/10/2026
 
 ### Added
 
-- Exodus `centres` (`SIF_FINDER_CENTRES_*`, `centres=`, `finder.centres`):
-  `"legacy"` (default, as 0.4), `"minima"` (rung-scale minima, refined off the
-  nodes) or `"optimised"` (minima climbed to where the tracers give the largest
-  radius: the VSF no longer depends on the grid); boxes only for the last two
-- `sif_grid_assign()`: NGP, CIC, TSC and PCS assignment, optionally interlaced
-  (`Grid.assign(field, scheme, interlace=)`; `grid.assignment`, `grid.interlace`
-  in Lua); the finders and `measure` undo the scheme the grid records
-- Aliasing-aware window deconvolution, `SIF_FINDER_ALIASING_WINDOW` and
-  `SIF_DELTA_ALIASING_WINDOW` (`deconvolution="aliasing"`, same in Lua)
+- Exodus variants, `"excursion-set"` (default) and `"excursion-peak"`:
+  `sif_finder_exodus(..., variant, extras)`, `exodus(..., variant=)`,
+  `finder.variant`
+- `sif_finder_exodus_raw()`, `exodus_raw()`, `finder.exodus_params`: every
+  setting explicit; `sif_finder_exodus_preset()` gives a variant's
+- `sif_grid_assign()`: NGP, CIC, TSC and PCS, optionally interlaced
+  (`Grid.assign()`, `grid.assignment` and `grid.interlace` in Lua)
+- Aliasing-aware window deconvolution (`deconvolution="aliasing"`)
 
 ### Changed
 
 - FFTs are bit-identical across thread counts, and 10-35% faster
-- Exodus checkpoints are version 4 and record the grid's assignment and the
-  centres; older ones resume only as `"legacy"` on CIC grids
+- `sif_finder_exodus()` and `sif_finder_exodus_survey()` take a variant; the
+  old signatures and the `_ex` functions are now the `_raw` ones
+- Python `exodus()` takes a variant and run controls only; the finder settings
+  and `checkpoint=False` moved to `exodus_raw()`. `keep_checkpoint=` added
+- `sif-exodus`: `finder.variant` or `finder.exodus_params` is required;
+  `overlap_fraction`, `search_factor` and `deconvolution` moved into the latter
+- Exodus checkpoints are version 2; version 1 (0.4) ones still resume
 
 ### Fixed
 
 - `sif_survey_volume()` (`pysif.measure.survey_volume()`) was biased low when
-  the randoms' density varies across the sky -- by 3% for a smooth 5x
-  gradient, 6% for patchy completeness, 12-48% for a 5-20x step; now within
-  a few tenths of a per cent at worst, and unbiased for uniform randoms as
-  before. Footprints with no single centre, such as two opposite caps, no
-  longer sit on the poles of its sky grid
-- With an overlap fraction above 0, a void could overlap one smaller than
-  itself by more than the fraction allows
+  the randoms' density varies across the sky (3-48%); now within a few
+  tenths of a per cent
+- With an overlap fraction above 0, a void could overlap a smaller one by
+  more than the fraction allows
 - Version 1 exodus checkpoints failed their own checksum
+- `sif-exodus --check` reported a 0.4 checkpoint's grid assignment as unknown
 - `sif_ep_multiplicity_function_emu()` with `collapse`: a grid started at a
-  large nu was reported out of domain and its void-in-cloud factor was off by
-  up to 2.7%; start the grid where delta_c / sigma is large too
+  large nu was reported out of domain, and its void-in-cloud factor was off
+  by up to 2.7%
 
 
 ## v0.4.0 -- 18/10/2026

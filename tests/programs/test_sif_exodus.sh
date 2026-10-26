@@ -129,61 +129,90 @@ tail -n +2 resolved.lua >a.txt
 tail -n +2 out.txt >b.txt
 cmp -s a.txt b.txt || fail "resolving the resolved configuration changed it"
 
-# The centres: left out of the resolved configuration at their default,
-# carried through it otherwise -- which still resolves to itself -- and
-# refused as anything but one of the three. The two keys they replaced are
-# refused with a word on what took their place.
-grep -q 'centres' resolved.lua && fail "centres written at their default"
-sed 's/centres = "legacy"/centres = "optimised"/' template.lua >centres.lua
-run --check centres.lua
-expect_status 0 "centres --check"
-grep -q '^  centres = "optimised",' out.txt ||
-  fail "centres: not in the resolved configuration"
-cp out.txt centres_resolved.lua
-run --check centres_resolved.lua
-tail -n +2 centres_resolved.lua >a.txt
-tail -n +2 out.txt >b.txt
-cmp -s a.txt b.txt || fail "centres: resolving them again changed them"
-sed 's/centres = "legacy"/centres = "refined"/' template.lua >centres_bad.lua
-run --check centres_bad.lua
-expect_status 2 "centres = refined"
-expect_error "finder.centres: must be one of" "centres = refined"
+# The variant: always in the resolved configuration, with exodus_params only
+# where it differs from the variant -- which still resolves to itself -- and
+# refused as anything but one of the four. The keys it replaced are refused
+# with a word on what took their place.
+grep -q '^  variant = "excursion-set",$' resolved.lua ||
+  fail "the variant: not in the resolved configuration"
+grep -q 'exodus_params' resolved.lua && fail "exodus_params written at the variant's settings"
+resolves_to_itself() {
+  cp out.txt "$1"
+  run --check "$1"
+  tail -n +2 "$1" >a.txt
+  tail -n +2 out.txt >b.txt
+  cmp -s a.txt b.txt || fail "$2: resolving it again changed it"
+}
+sed 's/variant = "excursion-set"/variant = "excursion-peak"/' template.lua >variant.lua
+run --check variant.lua
+expect_status 0 "variant --check"
+grep -q '^  variant = "excursion-peak",$' out.txt ||
+  fail "variant: not in the resolved configuration"
+resolves_to_itself variant_resolved.lua "variant"
+sed 's/variant = "excursion-set",/variant = "excursion-peak", exodus_params = { overlap_fraction = 0.5, search_factor = 2 },/' \
+  template.lua >params.lua
+run --check params.lua
+expect_status 0 "exodus_params --check"
+grep -q '^    overlap_fraction = 0.5,$' out.txt && grep -q '^    search_factor = 2,$' out.txt ||
+  fail "exodus_params: overrides not in the resolved configuration"
+grep -q 'seeds' out.txt &&
+  fail "exodus_params: settings the variant fixes written as overrides"
+resolves_to_itself params_resolved.lua "exodus_params"
+sed 's/  variant = "excursion-set",/  exodus_params = { seeds = "minima" },/' template.lua >params_only.lua
+run --check params_only.lua
+expect_status 0 "exodus_params without a variant"
+grep -q '^  variant = "excursion-set",$' out.txt &&
+  grep -q '^    seeds = "minima",$' out.txt ||
+  fail "exodus_params without a variant: not resolved from the default one"
+sed 's/  variant = "excursion-set",//' template.lua >no_variant.lua
+run --check no_variant.lua
+expect_status 2 "neither variant nor exodus_params"
+expect_error "finder.variant: missing" "neither variant nor exodus_params"
+sed 's/variant = "excursion-set"/variant = "excursion-sets"/' template.lua >variant_bad.lua
+run --check variant_bad.lua
+expect_status 2 "variant = excursion-sets"
+expect_error "finder.variant: must be one of" "variant = excursion-sets"
+sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { seeds = "nodes" },/' \
+  template.lua >params_bad.lua
+run --check params_bad.lua
+expect_status 2 "seeds = nodes"
+expect_error "finder.exodus_params.seeds: must be one of" "seeds = nodes"
 "$EXE" --template survey >survey_template.lua 2>/dev/null
-sed 's/centres = "legacy"/centres = "minima"/' survey_template.lua >centres_survey.lua
-run --check centres_survey.lua
-expect_status 2 "centres = minima in a survey"
-expect_error 'finder.centres: "minima" is for a periodic box' \
-  "centres = minima in a survey"
-sed 's/centres = "legacy"/centre_is_minimum = true/' template.lua >centres_old.lua
-run --check centres_old.lua
-expect_status 2 "centre_is_minimum"
-expect_error "finder.centre_is_minimum: removed: centres =" "centre_is_minimum"
+sed 's/variant = "excursion-set"/variant = "excursion-peak"/' survey_template.lua >variant_survey.lua
+run --check variant_survey.lua
+expect_status 2 "variant = excursion-peak in a survey"
+expect_error 'finder.variant: excursion-peak is for a periodic box' \
+  "variant = excursion-peak in a survey"
+sed 's/variant = "excursion-set",/variant = "excursion-set", overlap_fraction = 0,/' \
+  template.lua >overlap_old.lua
+run --check overlap_old.lua
+expect_status 2 "finder.overlap_fraction"
+expect_error "finder.overlap_fraction: moved: set finder.variant, or finder.exodus_params.overlap_fraction" \
+  "finder.overlap_fraction"
 
 # The assignment and its deconvolution, the same way.
 grep -q 'assignment\|interlace\|deconvolution' resolved.lua &&
   fail "grid options written at their defaults"
 sed -e 's/assignment = "cic"/assignment = "pcs"/' \
   -e 's/interlace = false/interlace = true/' \
-  -e 's/deconvolution = "full"/deconvolution = "aliasing"/' template.lua >grid.lua
+  -e 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { deconvolution = "aliasing" },/' \
+  template.lua >grid.lua
 run --check grid.lua
 expect_status 0 "grid options --check"
 grep -q 'assignment = "pcs", interlace = true }$' out.txt ||
   fail "grid options: not in the resolved configuration"
-grep -q '^  deconvolution = "aliasing",' out.txt ||
+grep -q '^    deconvolution = "aliasing",' out.txt ||
   fail "deconvolution: not in the resolved configuration"
-cp out.txt grid_resolved.lua
-run --check grid_resolved.lua
-tail -n +2 grid_resolved.lua >a.txt
-tail -n +2 out.txt >b.txt
-cmp -s a.txt b.txt || fail "grid options: resolving them again changed them"
+resolves_to_itself grid_resolved.lua "grid options"
 sed 's/assignment = "cic"/assignment = "sph"/' template.lua >grid_bad.lua
 run --check grid_bad.lua
 expect_status 2 "assignment = sph"
 expect_error "grid.assignment: must be one of" "assignment = sph"
-sed 's/deconvolution = "full"/deconvolution = "partial"/' template.lua >grid_bad.lua
+sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { deconvolution = "partial" },/' \
+  template.lua >grid_bad.lua
 run --check grid_bad.lua
 expect_status 2 "deconvolution = partial"
-expect_error "finder.deconvolution: must be one of" "deconvolution = partial"
+expect_error "finder.exodus_params.deconvolution: must be one of" "deconvolution = partial"
 
 # --- mistakes -------------------------------------------------------------
 
@@ -204,7 +233,7 @@ expect_error "finder.threshold: missing" "typos"
 cat >units.lua <<'EOF'
 mode = "box"
 input = "tracers.xfield"
-finder = { radii = { 1, 2 }, radii_units = "mps", threshold = -0.7 }
+finder = { radii = { 1, 2 }, radii_units = "mps", threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check units.lua
@@ -247,7 +276,7 @@ input = {
   length = "kpc",
 }
 grid = { n_cells = 16 }
-finder = { radii = { 2, 1.5 }, threshold = -0.7 }
+finder = { radii = { 2, 1.5 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 run = { log_level = "warning" }
 EOF
@@ -295,7 +324,7 @@ input = {
   length_scale = 1e-3,
 }
 grid = { n_cells = 16 }
-finder = { radii = { 2, 1.5 }, threshold = -0.7 }
+finder = { radii = { 2, 1.5 }, threshold = -0.7, variant = "excursion-set" }
 output = "h5_voids.txt"
 run = { log_level = "warning" }
 EOF
@@ -322,7 +351,7 @@ cat >h5_bad.lua <<EOF
 mode = "box"
 input = { path = "$DATA/gadget/hdf5_legacy/snap_005.hdf5", format = "hdf5",
   box_length = 10 }
-finder = { radii = { 1 }, threshold = -0.7 }
+finder = { radii = { 1 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check h5_bad.lua
@@ -343,7 +372,7 @@ input = {
   where = "Z < 0.5",
 }
 grid = { n_cells = 16 }
-finder = { radii = { 80, 60 }, threshold = -0.7 }
+finder = { radii = { 80, 60 }, threshold = -0.7, variant = "excursion-set" }
 output = "fits_voids.txt"
 run = { log_level = "warning" }
 EOF
@@ -401,7 +430,7 @@ input = {
   columns = { x = "RA", y = "DEC", vx = "RA" },
   delimiter = ",",
 }
-finder = { radii = { 1 }, threshold = -0.7 }
+finder = { radii = { 1 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check fits_bad.lua
@@ -418,7 +447,7 @@ input = {
   path = { "a", "b" },
   format = "gadget",
 }
-finder = { radii = { 1 }, threshold = -0.7 }
+finder = { radii = { 1 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check list_bad.lua
@@ -430,7 +459,7 @@ expect_error "input.path: a list of files, which only the fits and hdf5 formats"
 
 cat >nomode.lua <<'EOF'
 input = "tracers.xfield"
-finder = { radii = { 1 }, threshold = -0.7 }
+finder = { radii = { 1 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check nomode.lua
@@ -442,7 +471,7 @@ cat >crossed.lua <<'EOF'
 mode = "box"
 input = { path = "tracers.xfield", random = "r.xfield" }
 mesh = { n_cells_data = 16 }
-finder = { radii = { 1 }, threshold = -0.7 }
+finder = { radii = { 1 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check crossed.lua
@@ -475,7 +504,7 @@ input = {
   data = { path = "sky_data.txt", format = "ascii" },
   random = { path = "sky_randoms.txt", format = "ascii" },
 }
-finder = { radii = { 45, 35 }, threshold = -0.7 }
+finder = { radii = { 45, 35 }, threshold = -0.7, variant = "excursion-set" }
 output = "survey_voids.txt"
 run = { log_level = "warning" }
 EOF
@@ -509,7 +538,7 @@ input = {
   random = { path = "xyz_randoms.txt", format = "ascii", columns = "x y z" },
 }
 mesh = { n_cells_data = 16, n_cells_random = 20 }
-finder = { radii = { 25, 20 }, threshold = -0.7 }
+finder = { radii = { 25, 20 }, threshold = -0.7, variant = "excursion-set" }
 output = "cartesian_voids.txt"
 run = { log_level = "warning" }
 EOF
@@ -591,7 +620,7 @@ input = {
   random = { path = "r.xfield" },
 }
 mesh = { n_cells = 16 }
-finder = { radii = { 40 }, threshold = -0.7 }
+finder = { radii = { 40 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check survey_bad.lua
@@ -607,7 +636,7 @@ cat >box_sky.lua <<'EOF'
 mode = "box"
 input = { path = "d.txt", format = "ascii", box_length = 10,
   columns = "ra dec z" }
-finder = { radii = { 4 }, threshold = -0.7 }
+finder = { radii = { 4 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check box_sky.lua
@@ -721,7 +750,7 @@ cat >deep.lua <<'EOF'
 mode = "box"
 input = { path = "bad.txt", format = "ascii", columns = "x y z",
   skip_header = 1, box_length = 10 }
-finder = { radii = { 2 }, threshold = -0.7 }
+finder = { radii = { 2 }, threshold = -0.7, variant = "excursion-set" }
 output = "voids.txt"
 EOF
 run --check deep.lua
@@ -753,6 +782,7 @@ finder = {
   radii = radii == "large" and { 15, 12 } or radii == "small" and { 10, 8 }
     or { 15, 12, 10, 8 },
   threshold = -0.7,
+  variant = variant or "excursion-set",
 }
 output = out or "holes_full.txt"
 prior = from
@@ -810,7 +840,7 @@ run -D out=blocked.txt holes_tsc.lua
 expect_status 2 "a checkpoint of another assignment"
 expect_error "is not this run's: grid assigned with cic (this run's: tsc)" \
   "a checkpoint of another assignment"
-sed 's/threshold = -0.7,/threshold = -0.7, deconvolution = "aliasing",/' \
+sed 's/threshold = -0.7,/threshold = -0.7, exodus_params = { deconvolution = "aliasing" },/' \
   holes.lua >holes_alias.lua
 run -D out=blocked.txt holes_alias.lua
 expect_status 2 "a checkpoint of another deconvolution"
@@ -833,17 +863,15 @@ grep -q '^#grid_assignment="tsc"$' holes_tsc.txt &&
   fail "a TSC grid: the assignment is not recorded"
 [ "$(voids holes_tsc.txt | wc -l)" -ge 3 ] || fail "a TSC grid: too few voids"
 
-# The other two centre settings, end to end, recorded with the voids.
-for centres in minima optimised; do
-  sed "s/threshold = -0.7,/threshold = -0.7, centres = \"$centres\",/" \
-    holes.lua >holes_$centres.lua
-  run -D out=holes_$centres.txt holes_$centres.lua
-  expect_status 0 "centres = $centres"
-  grep -q "^#centres=\"$centres\"$" holes_$centres.txt ||
-    fail "centres = $centres: not recorded with the voids"
-  [ "$(voids holes_$centres.txt | wc -l)" -ge 3 ] ||
-    fail "centres = $centres: too few voids"
-done
+# The other variant, end to end, recorded with the voids.
+run -D out=holes_peak.txt -D variant=excursion-peak holes.lua
+expect_status 0 "variant = excursion-peak"
+grep -q '^#variant="excursion-peak"$' holes_peak.txt &&
+  grep -q '^#seeds="minima"$' holes_peak.txt &&
+  grep -q '^#overlap_fraction=1$' holes_peak.txt ||
+  fail "variant = excursion-peak: its settings are not recorded"
+[ "$(voids holes_peak.txt | wc -l)" -ge 3 ] ||
+  fail "variant = excursion-peak: too few voids"
 
 run -D out=nock.txt --no-checkpoint --check holes.lua
 expect_status 0 "--no-checkpoint"

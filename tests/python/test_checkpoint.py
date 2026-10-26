@@ -59,19 +59,18 @@ def columns(cat):
 
 
 def run(grid, mesh, radii=RADII, **kw):
-    return pysif.finders.exodus(grid(), mesh, radii, THRESHOLD, **kw)
+    return pysif.finders.exodus_raw(grid(), mesh, radii, THRESHOLD, **kw)
 
 
 CIC = 2  # sif_assignment_t
 
 
-def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID, version=4,
-                     options=0, assignment=CIC):
+def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID, version=2,
+                     options=0, assignment=CIC, overlap=0.0):
     """A checkpoint of a box run over RADII, from the layout in
     exodus_finder.h: the 192-byte header, the ladder largest first, then x,
     y, z and r as four columns. Options 0 are the defaults: search factor
-    1.5, centres='legacy', the window divided out in
-    full."""
+    1.5, seeds='cells', the window divided out in full."""
     real = np.dtype(pysif.real)
     ladder = np.sort(RADII)[::-1].astype(real).tobytes()
     voids = b"".join(np.ascontiguousarray(c, dtype=real).tobytes()
@@ -84,7 +83,7 @@ def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID, version=4,
             options,
             len(RADII), rungs_done, grid_cells,
             BOX, float(np.float32(THRESHOLD)) if real.itemsize == 4
-            else THRESHOLD, 0.0,
+            else THRESHOLD, overlap,
             N, float(N), 0, 0.0, 0.0, 0.0, 0.0, 0, 0, crc,
             cat.n_voids, 0, assignment, b"")
 
@@ -152,7 +151,7 @@ def test_checkpoint_records_the_assignment(grid, mesh, tmp_path):
     _, info = pysif.finders.read_checkpoint(path)
     assert info["deconvolution"] == "aliasing"
     assert info["assignment"] == "tsc" and info["interlaced"] is True
-    assert info["centres"] == "legacy"
+    assert info["seeds"] == "cells"
 
     with pytest.raises(ValueError, match=r"not this run: window deconvolved"):
         run(g, mesh, checkpoint=path)
@@ -166,31 +165,44 @@ def test_checkpoint_records_the_assignment(grid, mesh, tmp_path):
 
 def test_version_1_checkpoint(grid, mesh, tmp_path):
     # Written before off-grid centres and assignment schemes: every cell on
-    # its node, on a CIC grid -- centres='legacy' -- which it resumes.
+    # its node, on a CIC grid -- seeds='cells' -- which it resumes.
     ref = run(grid, mesh, checkpoint=False)
     head = run(grid, mesh, RADII[:2], checkpoint=False)
     path = tmp_path / "run.ckpt"
     write_checkpoint(path, head, rungs_done=2, version=1, assignment=0)
     _, info = pysif.finders.read_checkpoint(path)
     assert info["assignment"] == "cic" and info["interlaced"] is False
-    assert info["centres"] == "legacy"
+    assert info["seeds"] == "cells"
     assert info["deconvolution"] == "full"
-    with pytest.raises(ValueError, match="not this run: centres legacy"):
-        run(grid, mesh, checkpoint=path, centres="minima")
+    with pytest.raises(ValueError,
+                       match="not this run: centres every cell, on its node"):
+        run(grid, mesh, checkpoint=path, seeds="minima")
     resumed = run(grid, mesh, checkpoint=path)
     np.testing.assert_array_equal(columns(resumed), columns(ref))
 
 
-def test_retired_centres_checkpoint(grid, mesh, tmp_path):
-    # Version 3 with neither old centre bit was refined centres on every
-    # cell, a finder this build no longer has: read, and refused.
+def test_unknown_version_is_refused(grid, mesh, tmp_path):
     head = run(grid, mesh, RADII[:2], checkpoint=False)
     path = tmp_path / "run.ckpt"
     write_checkpoint(path, head, rungs_done=2, version=3)
+    with pytest.raises(OSError, match=r"version 3 \(expected 1 to 2\)"):
+        pysif.finders.read_checkpoint(path)
+
+
+def test_variant_checkpoints(grid, mesh, tmp_path):
+    # A variant always checkpoints; where to, and whether to keep it, are
+    # still the caller's.
+    path = tmp_path / "run.ckpt"
+    ref = run(grid, mesh, checkpoint=False, seeds="minima", overlap_fraction=1)
+    cat = pysif.finders.exodus(grid(), mesh, RADII, THRESHOLD,
+                               variant="excursion-peak", checkpoint=path,
+                               keep_checkpoint=True)
+    np.testing.assert_array_equal(columns(cat), columns(ref))
+    assert path.exists()
     _, info = pysif.finders.read_checkpoint(path)
-    assert info["centres"] == "retired"
-    with pytest.raises(ValueError, match="no longer has"):
-        run(grid, mesh, checkpoint=path)
+    assert info["rungs_done"] == len(RADII) and info["overlap_fraction"] == 1
+    with pytest.raises(ValueError, match="a variant always checkpoints"):
+        pysif.finders.exodus(grid(), mesh, RADII, THRESHOLD, checkpoint=False)
 
 
 def test_prior(grid, mesh):

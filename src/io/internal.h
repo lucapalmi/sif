@@ -169,9 +169,6 @@ static inline void sif__io_stats_add(sif__io_stats_t* s, double v) {
     s->max = v;
 }
 
-/** @brief Folds @p b into @p a. */
-void sif__io_stats_merge(sif__io_stats_t* a, const sif__io_stats_t* b);
-
 /** @brief The header line for a table of sif__io_stats_print() rows. */
 void sif__io_stats_header(FILE* report, int name_width);
 

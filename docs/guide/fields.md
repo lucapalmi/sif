@@ -835,7 +835,7 @@ about 2 for CIC, and accounts for interlacing.
 grid = pysif.Grid(n_cells=n_cells, box_length=box_length)
 grid.assign(field, "tsc", interlace=True)  # assign(field) is assign_cic(field)
 grid.to_density_contrast()
-voids = pysif.finders.exodus(grid, mesh, radii, -0.7, deconvolution="aliasing")
+voids = pysif.finders.exodus_raw(grid, mesh, radii, -0.7, deconvolution="aliasing")
 ```
 ::::
 
@@ -847,14 +847,14 @@ if (sif_grid_assign(grid, field, SIF_ASSIGNMENT_TSC, SIF_GRID_INTERLACE) !=
       SIF_OK ||
     sif_grid_to_density_contrast(grid) != SIF_OK)
   goto done;
-// ... sif_finder_exodus(..., SIF_FINDER_ALIASING_WINDOW)
+// ... sif_finder_exodus_raw(..., SIF_FINDER_ALIASING_WINDOW, ...)
 ```
 ::::
 
 ::::{tab-item} sif-exodus
 ```lua
 grid = { n_cells = 512, assignment = "tsc", interlace = true }
-finder = { ..., deconvolution = "aliasing" }
+finder = { ..., exodus_params = { deconvolution = "aliasing" } }
 ```
 ::::
 
