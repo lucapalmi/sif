@@ -44,9 +44,13 @@ HDF5_VERSION=2.2.0
 HDF5_URL=https://github.com/HDFGroup/hdf5/releases/download/${HDF5_VERSION}/hdf5-${HDF5_VERSION}.tar.gz
 HDF5_SHA256=1a1ab8209b35586fbc1aa279ba76d102130b95badcb20ca329587219112d8c16
 
+# HEASARC's own tag on GitHub, not the tarball on heasarc.gsfc.nasa.gov:
+# that host served a certificate for another domain (October 2026) and failed
+# every wheel build of v0.4.1. The tag's archive unpacks under its own name.
 CFITSIO_VERSION=4.7.0
-CFITSIO_URL=https://heasarc.gsfc.nasa.gov/FTP/software/fitsio/c/cfitsio-${CFITSIO_VERSION}.tar.gz
-CFITSIO_SHA256=ce573bbea8e75b429f8c3d3e86498741ba3dc9628a1530d2f65268397ad059e8
+CFITSIO_URL=https://github.com/HEASARC/cfitsio/archive/refs/tags/cfitsio-${CFITSIO_VERSION}.tar.gz
+CFITSIO_SHA256=f281ca292407d8682e83a37ea68fce6e1383d2449d923647ea62fa0570c59aee
+CFITSIO_SRC=cfitsio-cfitsio-${CFITSIO_VERSION}
 
 LLVM_VERSION=23.1.2
 LLVM_URL=https://github.com/llvm/llvm-project/releases/download/llvmorg-${LLVM_VERSION}/llvm-project-${LLVM_VERSION}.src.tar.xz
@@ -149,7 +153,7 @@ absolute_ids
 # a current CMake configure cfitsio's older CMakeLists.txt, as Homebrew does.
 
 fetch "$CFITSIO_URL" "$CFITSIO_SHA256"
-cmake -S "$WORK/cfitsio-$CFITSIO_VERSION" -B "$WORK/cfitsio-build" \
+cmake -S "$WORK/$CFITSIO_SRC" -B "$WORK/cfitsio-build" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_INSTALL_PREFIX="$PREFIX" \
   -DCMAKE_INSTALL_LIBDIR=lib \
@@ -161,8 +165,8 @@ cmake --build "$WORK/cfitsio-build" -j "$JOBS" >/dev/null
 cmake --install "$WORK/cfitsio-build" >/dev/null
 # Where the license text sits has moved between releases.
 for license in licenses/License.txt License.txt LICENSE; do
-  if [ -f "$WORK/cfitsio-$CFITSIO_VERSION/$license" ]; then
-    cp "$WORK/cfitsio-$CFITSIO_VERSION/$license" "$PREFIX/licenses/cfitsio.txt"
+  if [ -f "$WORK/$CFITSIO_SRC/$license" ]; then
+    cp "$WORK/$CFITSIO_SRC/$license" "$PREFIX/licenses/cfitsio.txt"
     break
   fi
 done
