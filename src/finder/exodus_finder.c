@@ -1623,8 +1623,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
        * phase could not have seen (voids accepted earlier in this same
        * batch). */
       const uint64_t accepted_before = stats.accepted;
+      int displaced = 0;
 
-      for (uint64_t b = 0; b < batch_count; b++) {
+      for (uint64_t b = 0; b < batch_count && !displaced; b++) {
         const batch_result_t* res = &ctx.batch_results[b];
 
         switch (res->status) {
@@ -1688,6 +1689,21 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           if (status != SIF_OK)
             break;
           stats.displaced += ctx.n_conflicts;
+
+          /* Accepts only add to the catalogue, so a rejection against the
+           * batch's frozen one still holds once they are in; a displacement
+           * takes voids out, and the rest of the batch was refused by voids
+           * that may now be gone. It ends the batch: the next one scans
+           * again from the candidate after this, against the catalogue as
+           * it now stands, so where the batches fell -- which follows the
+           * thread count -- cannot decide what is found. */
+          if (ctx.n_conflicts > 0) {
+            const uint64_t next = ctx.batch_indices[b] + 1;
+            /* Phase 0's refusals past this one are counted again there. */
+            stats.rejected_masked -= (k - next) - (batch_count - b - 1);
+            k = next;
+            displaced = 1;
+          }
           goto accept;
         }
 

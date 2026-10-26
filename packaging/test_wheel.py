@@ -51,7 +51,7 @@ grid.to_density_contrast()
 
 radii = [30.0, 25.0, 20.0, 16.0]
 mesh = pysif.ChainMesh(pysif.finders.suggest_mesh_cells(N, L, radii[0]), L, field)
-cat = pysif.finders.exodus(grid, mesh, radii, -0.7, 0.0)
+cat = pysif.finders.exodus(grid, mesh, radii, -0.7)
 assert cat.n_voids >= 3, f"expected the three planted voids, found {cat.n_voids}"
 
 path = os.path.join(tempfile.mkdtemp(), "wheel.h5")
