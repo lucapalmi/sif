@@ -228,26 +228,27 @@ sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
   }
 
   /*
-   * The handover. Both lay their blocks out through sif_field_padded_n(), so
-   * the mesh's views land on the field's sub-arrays exactly; that shared rule
-   * is the reason this can be a pointer assignment rather than a copy.
+   * The handover: a pointer assignment rather than a copy. The views are the
+   * field's own, not recomputed from sif_field_padded_n(n_particles) -- a
+   * block need not be laid out for the field's current count. The ASCII
+   * reader lays it out for its line count, comments included, then lowers
+   * n_particles to the rows it loaded; recomputed views landed y and z 16 and
+   * 32 rows early whenever the two counts padded to different strides.
    *
    * The two alias for the duration of the build, deliberately: the binning
    * passes read the particles through the field, and they read them before
    * anything is moved. Only once that is done does the field let go.
    */
-  const uint64_t padded_n = sif_field_padded_n(mesh->n_particles);
-
   mesh->_position_block = field->_position_block;
-  mesh->x = mesh->_position_block;
-  mesh->y = mesh->_position_block + padded_n;
-  mesh->z = mesh->_position_block + (2 * padded_n);
+  mesh->x = field->x;
+  mesh->y = field->y;
+  mesh->z = field->z;
 
   if (field->vx) {
     mesh->_velocity_block = field->_velocity_block;
-    mesh->vx = mesh->_velocity_block;
-    mesh->vy = mesh->_velocity_block + padded_n;
-    mesh->vz = mesh->_velocity_block + (2 * padded_n);
+    mesh->vx = field->vx;
+    mesh->vy = field->vy;
+    mesh->vz = field->vz;
   }
 
   mesh->weights = field->weights;
@@ -287,7 +288,8 @@ sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
 
   SIF_LOG_TRACE("chain_mesh",
     "took over the field's payload columns (%.2f GiB); the field is now empty",
-    (double)(3 * padded_n * sizeof(sif_real)) / (1024.0 * 1024.0 * 1024.0));
+    (double)(3 * mesh->n_particles * sizeof(sif_real)) /
+      (1024.0 * 1024.0 * 1024.0));
 
   chain_mesh_apply_options(mesh, opt);
 

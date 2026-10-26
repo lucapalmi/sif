@@ -1,6 +1,6 @@
 # Changelog
 
-Current version: v0.4 release 0
+Current version: v0.4 release 1
 
 
 ## v0.4.1 -- 26/10/2026
@@ -29,6 +29,9 @@ Current version: v0.4 release 0
 
 ### Fixed
 
+- `sif_chain_mesh_alloc_consume()` (`ChainMesh(consume_field=True)`) could
+  give tracers the y and z (and vy, vz) of other rows when the field was read
+  from an ASCII file with comment or blank lines
 - `sif_survey_volume()` (`pysif.measure.survey_volume()`) was biased low when
   the randoms' density varies across the sky (3-48%); now within a few
   tenths of a per cent

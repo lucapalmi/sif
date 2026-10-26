@@ -847,6 +847,68 @@ static void test_ascii_field(void) {
   sif_field_free(f);
 }
 
+/*
+ * A mesh that consumes a field read from a file with comment lines. The reader
+ * lays the blocks out for its line count, comments included, and then lowers
+ * n_particles to the rows it loaded; with 16k rows and 2 comments the two
+ * counts pad to different strides. A mesh that recomputed the y and z offsets
+ * from the lowered count took every particle's y and z from 16 and 32 rows
+ * earlier -- each value still present, the clustering gone.
+ */
+static void test_ascii_consume(void) {
+  printf("ASCII field consumed by a chain mesh\n");
+
+  const uint64_t n = 1024; /* a multiple of 16, so the strides differ */
+  FILE* out = fopen(ASCII_PATH, "w");
+  if (!out) {
+    CHECK(0, "could not write %s", ASCII_PATH);
+    return;
+  }
+  fputs("# halo catalogue\n# x y z vx vy vz\n", out);
+  for (uint64_t i = 0; i < n; i++) {
+    /* Rows 16 and 32 apart differ in every column, so a shift shows. */
+    fprintf(out, "%g %g %g %g %g %g\n", (double)(i % 100) + 0.75,
+      (double)((i * 7) % 100) + 0.5, (double)((i * 13) % 100) + 0.25,
+      (double)i, -(double)i, 2.0 * (double)i);
+  }
+  fclose(out);
+
+  sif_field_t* ref = read_ascii("x y z vx vy vz", ' ', 0);
+  sif_field_t* victim = read_ascii("x y z vx vy vz", ' ', 0);
+  CHECK(ref && victim, "read of the commented file failed");
+  if (!ref || !victim) {
+    sif_field_free(ref);
+    sif_field_free(victim);
+    return;
+  }
+  CHECK(ref->n_particles == n, "got %llu rows, not %llu",
+    (unsigned long long)ref->n_particles, (unsigned long long)n);
+
+  sif_chain_mesh_t* mesh =
+    sif_chain_mesh_alloc_consume(N_CELLS, BOX, victim, SIF_DEFAULT);
+  CHECK(mesh != NULL, "consuming mesh allocation failed");
+  if (mesh) {
+    uint64_t bad[6] = {0};
+    for (uint64_t k = 0; k < mesh->n_particles; k++) {
+      const uint64_t i = mesh->original_indices[k];
+      bad[0] += mesh->x[k] != ref->x[i];
+      bad[1] += mesh->y[k] != ref->y[i];
+      bad[2] += mesh->z[k] != ref->z[i];
+      bad[3] += mesh->vx[k] != ref->vx[i];
+      bad[4] += mesh->vy[k] != ref->vy[i];
+      bad[5] += mesh->vz[k] != ref->vz[i];
+    }
+    const char* names[6] = {"x", "y", "z", "vx", "vy", "vz"};
+    for (int c = 0; c < 6; c++)
+      CHECK(bad[c] == 0, "%llu of %llu mesh rows hold the wrong %s",
+        (unsigned long long)bad[c], (unsigned long long)n, names[c]);
+  }
+
+  sif_chain_mesh_free(mesh);
+  sif_field_free(victim);
+  sif_field_free(ref);
+}
+
 static void test_ascii_field_rejections(void) {
   printf("ASCII field input rejects bad input\n");
 
@@ -1518,6 +1580,7 @@ int main(void) {
   test_catalogue_metadata();
   test_profiles_roundtrip();
   test_ascii_field();
+  test_ascii_consume();
   test_ascii_field_rejections();
   test_ascii_field_reasons();
   test_ascii_check();
