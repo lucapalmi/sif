@@ -19,6 +19,8 @@
 
 #include <stdint.h>
 
+#include "sif/core/macros.h"
+
 /**
  * @brief Define a quicksort over @p type at file scope.
  *
@@ -52,10 +54,8 @@
  * adversarial ordering is not defended against.
  */
 #define SIF_DEFINE_QUICKSORT(function_name, type, less_than_expr)              \
-  static void function_name##_recursive(                                       \
-    type* arr, int64_t low, int64_t high) {                                    \
-    if (low >= high)                                                           \
-      return;                                                                  \
+  static inline void function_name##_partition(                                \
+    type* arr, int64_t low, int64_t high, int64_t* lt_out, int64_t* gt_out) {  \
     int64_t lt = low, gt = high;                                               \
     type pivot = arr[low + (high - low) / 2];                                  \
     int64_t i = low;                                                           \
@@ -80,6 +80,15 @@
         i++;                                                                   \
       }                                                                        \
     }                                                                          \
+    *lt_out = lt;                                                              \
+    *gt_out = gt;                                                              \
+  }                                                                            \
+  static void function_name##_recursive(                                       \
+    type* arr, int64_t low, int64_t high) {                                    \
+    if (low >= high)                                                           \
+      return;                                                                  \
+    int64_t lt, gt;                                                            \
+    function_name##_partition(arr, low, high, &lt, &gt);                       \
     function_name##_recursive(arr, low, lt - 1);                               \
     function_name##_recursive(arr, gt + 1, high);                              \
   }                                                                            \
@@ -87,6 +96,52 @@
     if (count > 1) {                                                           \
       function_name##_recursive(arr, 0, (int64_t)count - 1);                   \
     }                                                                          \
+  }
+
+/*
+ * Below this many elements a range is sorted on the thread that partitioned
+ * it: a task costs more than sorting it.
+ */
+#define SIF_QUICKSORT_TASK_CUTOFF 65536
+
+/**
+ * @brief The same quicksort, with the two sides of every large partition
+ * sorted as OpenMP tasks.
+ *
+ * Each range is partitioned exactly as the serial sort partitions it -- same
+ * pivot, same swaps -- and the two sides it leaves are disjoint, so sorting
+ * them at the same time changes nothing about where any element ends up. The
+ * result is the serial sort's permutation, ties included, whatever the thread
+ * count. That matters wherever the order of equal keys decides something
+ * downstream, which is why this is not just any parallel sort.
+ *
+ * The top partitions run on one thread each, so the speed-up is bounded by
+ * them: about count element visits on the critical path, against count * log2
+ * count for the whole sort.
+ *
+ * Call it outside any parallel region; it opens its own.
+ */
+#define SIF_DEFINE_QUICKSORT_PARALLEL(function_name, type, less_than_expr)     \
+  SIF_DEFINE_QUICKSORT(function_name##_serial, type, less_than_expr)           \
+  static void function_name##_tasks(type* arr, int64_t low, int64_t high) {    \
+    if (high - low < SIF_QUICKSORT_TASK_CUTOFF) {                              \
+      function_name##_serial_recursive(arr, low, high);                        \
+      return;                                                                  \
+    }                                                                          \
+    int64_t lt, gt;                                                            \
+    function_name##_serial_partition(arr, low, high, &lt, &gt);                \
+    SIF_PRAGMA_HELPER(omp task untied)                                         \
+    function_name##_tasks(arr, low, lt - 1);                                   \
+    function_name##_tasks(arr, gt + 1, high);                                  \
+  }                                                                            \
+  static inline void function_name(type* arr, uint64_t count) {                \
+    if (count <= SIF_QUICKSORT_TASK_CUTOFF) {                                  \
+      function_name##_serial(arr, count);                                      \
+      return;                                                                  \
+    }                                                                          \
+    SIF_PRAGMA_HELPER(omp parallel)                                            \
+    SIF_PRAGMA_HELPER(omp single nowait)                                       \
+    function_name##_tasks(arr, 0, (int64_t)count - 1);                         \
   }
 
 #endif /* SIF_UTILS_SORT_H */

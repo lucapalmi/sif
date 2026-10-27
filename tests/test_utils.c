@@ -58,6 +58,15 @@ static int failures = 0;
 SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
 SIF_DEFINE_QUICKSORT(sort_real_desc, sif_real, a > b)
 
+/* A key with a payload that tells equal keys apart, so the tests can see where
+ * each tie landed and not only that the keys are in order. */
+typedef struct {
+  sif_real key;
+  uint32_t id;
+} keyed_t;
+SIF_DEFINE_QUICKSORT(sort_keyed, keyed_t, a.key < b.key)
+SIF_DEFINE_QUICKSORT_PARALLEL(sort_keyed_par, keyed_t, a.key < b.key)
+
 static void test_align(void) {
   printf("aligned allocation\n");
 
@@ -421,6 +430,59 @@ static void test_sort(void) {
   CHECK(one == (sif_real)42.0, "sorting one element changed it");
 }
 
+/* The parallel sort has to leave every element where the serial one does,
+ * equal keys included: the finders take candidates in this order, and which
+ * of two equally deep cells comes first can decide a void. */
+static void test_sort_parallel(void) {
+  printf("parallel quicksort: the serial permutation\n");
+
+  const uint64_t n = SIF_TEST_SCALE(2000000);
+  keyed_t* serial = malloc(n * sizeof(*serial));
+  keyed_t* parallel = malloc(n * sizeof(*parallel));
+  if (!serial || !parallel) {
+    CHECK(0, "out of memory for %llu keys", (unsigned long long)n);
+    free(serial);
+    free(parallel);
+    return;
+  }
+
+  /* A thousand distinct keys over two million entries: ties everywhere. */
+  uint64_t state = 12345;
+  for (uint64_t i = 0; i < n; i++) {
+    state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+    serial[i].key = (sif_real)((state >> 33) % 1000);
+    serial[i].id = (uint32_t)i;
+  }
+  memcpy(parallel, serial, n * sizeof(*serial));
+
+  sort_keyed(serial, n);
+  sort_keyed_par(parallel, n);
+
+  uint64_t first_diff = n;
+  for (uint64_t i = 0; i < n && first_diff == n; i++)
+    if (serial[i].id != parallel[i].id || serial[i].key != parallel[i].key)
+      first_diff = i;
+  CHECK(first_diff == n,
+    "parallel sort differs from the serial one at %llu of %llu",
+    (unsigned long long)first_diff, (unsigned long long)n);
+
+  int ordered = 1;
+  for (uint64_t i = 1; i < n; i++)
+    if (parallel[i].key < parallel[i - 1].key)
+      ordered = 0;
+  CHECK(ordered, "parallel sort left the array out of order");
+
+  /* Short enough to stay on one thread, and degenerate lengths. */
+  keyed_t few[3] = {{2, 0}, {1, 1}, {2, 2}};
+  sort_keyed_par(few, 3);
+  CHECK(few[0].key == 1 && few[1].key == 2 && few[2].key == 2,
+    "parallel sort of three keys is out of order");
+  sort_keyed_par(few, 0);
+
+  free(serial);
+  free(parallel);
+}
+
 static void test_timer(void) {
   printf("timer\n");
 
@@ -717,6 +779,7 @@ int main(void) {
   test_crc32();
   test_random();
   test_sort();
+  test_sort_parallel();
   test_timer();
   test_settings();
   test_settings_at_init();

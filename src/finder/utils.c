@@ -19,7 +19,9 @@
  * so the two passes agree on chunk boundaries regardless of the team size. */
 #define FINDER_SCAN_CHUNKS 256
 
-SIF_DEFINE_QUICKSORT(sort_candidates, sif_candidate_t, a.delta < b.delta)
+/* Parallel, and still the serial sort's order: equal depths are common in
+ * float32 and their order decides which of two touching voids is taken. */
+SIF_DEFINE_QUICKSORT_PARALLEL(sort_candidates, sif_candidate_t, a.delta < b.delta)
 
 /* --- 1. Base Utilities --- */
 

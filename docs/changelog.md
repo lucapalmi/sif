@@ -28,8 +28,8 @@ Current version: v0.4 release 1
 - Python: every `pysif.io` function takes a path as str, bytes or
   `os.PathLike` (`pathlib.Path`)
 - Exodus refuses a candidate whose collision with the catalogue is certain
-  before rescaling it, and screens excursion-set candidates once per rung:
-  up to 2.5x faster candidate evaluation, bit-identical catalogues
+  before rescaling it, screens excursion-set candidates once per rung, and
+  sorts them in parallel: up to 2.4x faster, bit-identical catalogues
 
 ### Fixed
 
