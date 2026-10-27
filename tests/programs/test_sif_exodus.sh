@@ -807,6 +807,18 @@ grep -q '^#prior="holes_large.txt"$' holes_ext.txt &&
   grep -q '^#n_prior=' holes_ext.txt ||
   fail "an extended catalogue does not record its prior"
 
+# run.save_memory: the same voids, and nothing left in the scratch directory.
+sed 's/^run = { log_level = "warning" }$/run = { log_level = "warning", save_memory = true }/' \
+  holes.lua >holes_lean.lua
+SIF_SCRATCH_DIRECTORY="$PWD/lean_scratch"
+export SIF_SCRATCH_DIRECTORY
+run -D out=holes_lean.txt holes_lean.lua
+unset SIF_SCRATCH_DIRECTORY
+expect_status 0 "save_memory"
+voids holes_lean.txt >b.txt
+cmp -s a.txt b.txt || fail "save_memory changed the catalogue"
+rmdir lean_scratch || fail "save_memory left its scratch file behind"
+
 run -D from=missing.txt --check holes.lua
 expect_status 2 "a prior that is not there"
 expect_error "prior.path: cannot open missing.txt" "a prior that is not there"

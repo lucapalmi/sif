@@ -123,4 +123,9 @@ run = {
   -- so a job resubmitted as it was picks up where it stopped. Removed when
   -- the run completes. Default: the output's path + ".ckpt". false: none.
   -- checkpoint = "voids.fits.ckpt",
+  -- Keep the grid on disk rather than its transform in memory: about half
+  -- the memory, one more FFT and one read of the grid per smoothing, the
+  -- same catalogue. The file goes in the sif setting scratch_directory,
+  -- or $SIF_SCRATCH_DIRECTORY for one job; put it on a fast filesystem.
+  save_memory = false,
 }

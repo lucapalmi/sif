@@ -27,6 +27,7 @@
 #include "sif/utils/sort.h"
 #include "sif/utils/timer.h"
 
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -487,10 +488,14 @@ static void test_settings(void) {
     "a malformed cic_tile_particles should read as the default");
   CHECK(sif__setting_flag("grid_cache_enabled"),
     "SIF_GRID_CACHE_ENABLED=yes should turn the cache on");
-  char wisdom[128];
-  snprintf(wisdom, sizeof(wisdom), "%s/wisdoms", home);
+  /* $SIF_HOME is the settings directory made absolute, so a later chdir
+   * does not move it. */
+  char abs_home[PATH_MAX];
+  CHECK(realpath(home, abs_home) != NULL, "realpath(%s) failed", home);
+  char wisdom[PATH_MAX + 16];
+  snprintf(wisdom, sizeof(wisdom), "%s/wisdoms", abs_home);
   CHECK(strcmp(sif_setting_get("fft_wisdom_dir", NULL), wisdom) == 0,
-    "$SIF_HOME should expand to the settings directory, got '%s'",
+    "$SIF_HOME should expand to the absolute settings directory, got '%s'",
     sif_setting_get("fft_wisdom_dir", NULL));
 
   /* A path naming an unset variable is refused, not read as "/cache". */
@@ -516,6 +521,16 @@ static void test_settings(void) {
     "a value with a newline should be SIF_ERR_INVALID");
   CHECK(sif_setting_set("fft_tuning_max_gib", "-1") == SIF_ERR_INVALID,
     "a number below the minimum should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("cic_tile_particles", "inf") == SIF_ERR_INVALID &&
+          sif_setting_set("cic_tile_particles", "1e30") == SIF_ERR_INVALID &&
+          sif_setting_set("cic_tile_particles", "nan") == SIF_ERR_INVALID,
+    "a number no count can hold should be SIF_ERR_INVALID");
+  char long_value[300];
+  memset(long_value, 'a', sizeof(long_value) - 1);
+  long_value[sizeof(long_value) - 1] = '\0';
+  CHECK(
+    sif_setting_override("scratch_directory", long_value) == SIF_ERR_INVALID,
+    "a value longer than the table holds should be SIF_ERR_INVALID");
   CHECK(sif_setting_override("grid_cache_enabled", "maybe") ==
           SIF_ERR_INVALID,
     "a flag that is not one should be SIF_ERR_INVALID");
@@ -546,8 +561,17 @@ static void test_settings(void) {
     "with no override, the set value should read");
 
   /* A directory is created where it is read. */
-  char made[128];
-  snprintf(made, sizeof(made), "%s/made/here", home);
+  /* A value that only outgrows the table once expanded is refused where it
+   * is read, not cut short into another directory. */
+  setenv("SIF_TEST_LONG", long_value, 1);
+  CHECK(sif_setting_override("cache_directory", "$SIF_TEST_LONG/x") == SIF_OK,
+    "override failed");
+  CHECK(sif__setting_directory("cache_directory", &dir) == SIF_ERR_INVALID,
+    "a path truncated by its expansion should be SIF_ERR_INVALID");
+  unsetenv("SIF_TEST_LONG");
+
+  char made[PATH_MAX + 16];
+  snprintf(made, sizeof(made), "%s/made/here", abs_home);
   CHECK(sif_setting_override("cache_directory", "$SIF_HOME/made/here") ==
           SIF_OK,
     "override failed");
@@ -583,6 +607,30 @@ static void test_settings(void) {
     "a setting at its default should be saved commented out");
   CHECK(file_has_line(text, "from_the_future = 1"),
     "a key sif does not know should be kept");
+
+  /* A file there but unreadable is left alone, not replaced by the defaults
+   * on the way out. */
+  chmod(cfg, 0);
+  if (access(cfg, R_OK) != 0) { /* root reads it regardless */
+    setenv("SIF_HOME", home, 1);
+    CHECK(sif_system_init(SIF_CONFIG_QUIET) == SIF_OK, "init failed");
+    CHECK(sif__setting_number("fft_tuning_max_gib") ==
+            strtod(SIF__FFT_TUNING_MAX_GIB_DEFAULT, NULL),
+      "an unreadable file should leave the defaults");
+    CHECK(sif_setting_set("fft_tuning_max_gib", "9") == SIF_OK, "set failed");
+    sif_system_finalise();
+    unsetenv("SIF_HOME");
+    chmod(cfg, 0644);
+    f = fopen(cfg, "r");
+    char again[4096] = {0};
+    if (f) {
+      size_t n = fread(again, 1, sizeof(again) - 1, f);
+      again[n] = '\0';
+      fclose(f);
+    }
+    CHECK(strcmp(again, text) == 0, "an unreadable settings file was replaced");
+  }
+  chmod(cfg, 0644);
 
   remove(cfg);
   rmdir(made);

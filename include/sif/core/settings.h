@@ -24,6 +24,7 @@
  * | `fft_wisdom_dir`     | `$SIF_HOME/wisdoms`    | where FFTW plans are kept|
  * | `fft_tuning_max_gib` | `16`                   | see #SIF__FFT_TUNING_MAX_GIB_DEFAULT |
  * | `cic_tile_particles` | `67108864`             | see #SIF__CIC_TILE_PARTICLES_DEFAULT |
+ * | `scratch_directory`  | `$SIF_HOME/scratch`    | where `save_memory` runs put the grid |
  *
  * The file and the environment are read by sif_system_init(), and the file is
  * written back by sif_system_finalise() if sif_setting_set() changed it --
@@ -94,7 +95,8 @@
  * about. Environment references in @p value are expanded now for this process,
  * and stored as written for the next.
  *
- * Values are truncated at 255 characters, with a warning.
+ * Values longer than 255 characters are refused. One that only grows past that
+ * when its variables are expanded is refused where it is read.
  *
  * @param key One of the keys listed in settings.h.
  * @param value Raw value, possibly containing environment references.

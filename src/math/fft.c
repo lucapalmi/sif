@@ -15,6 +15,7 @@
 
 #include "core/settings_internal.h"
 #include "core/system_internal.h"
+#include "io/internal.h"
 #include "sif/core/settings.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
@@ -196,8 +197,10 @@ static void fft_save_wisdom(const sif_fft_manager_t* mgr) {
   SIF_LOG_TRACE("fft_manager", "wisdom saved to %s", final_path);
 }
 
-sif_fft_workspace_t* sif__fft_workspace_alloc(
-  sif_fft_manager_t* mgr, uint32_t n_cells) {
+/* A workspace with or without its spectrum buffer; see
+ * sif__fft_workspace_stream() for one without. */
+static sif_fft_workspace_t* fft_workspace_new(
+  sif_fft_manager_t* mgr, uint32_t n_cells, int with_spectrum) {
   if (!mgr || n_cells == 0) {
     SIF_LOG_ERROR("fft_context", "invalid manager or grid size");
     return NULL;
@@ -217,12 +220,15 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
   ws->pencil_forward = NULL;
   ws->plane_c2r = NULL;
   ws->pencil_backward = NULL;
+  ws->stream = NULL;
 
   const uint64_t complex_cells = fft_complex_count(n_cells);
   const uint64_t spectrum_bytes = complex_cells * sizeof(sif_real_complex);
 
   /* Fixed here, for both transforms, so that the workspace has one planner
-   * quality rather than one per plan site. */
+   * quality rather than one per plan site. From the spectrum's size whether
+   * or not it is held: a streamed workspace has to plan exactly as a held one
+   * does to give the same bits. */
   ws->plan_flags = fft_resolve_plan_flags(mgr, n_cells, spectrum_bytes);
 
   /* After the cap, not before: an untuned workspace has no use for wisdom it
@@ -230,6 +236,9 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
    * run that then estimates everything. */
   if (fft_is_tuned(ws))
     fft_load_wisdom(mgr);
+
+  if (!with_spectrum)
+    return ws;
 
   ws->delta_k = real_fftw_malloc(spectrum_bytes);
   if (!ws->delta_k) {
@@ -242,6 +251,11 @@ sif_fft_workspace_t* sif__fft_workspace_alloc(
 
   /* The forward plans are created on first use, see fft_plan_stage(). */
   return ws;
+}
+
+sif_fft_workspace_t* sif__fft_workspace_alloc(
+  sif_fft_manager_t* mgr, uint32_t n_cells) {
+  return fft_workspace_new(mgr, n_cells, 1);
 }
 
 /*
@@ -481,6 +495,10 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
     sif_free_aligned(ws->delta_k_cpy);
   free(ws->window_axis);
   free(ws->window_wsa);
+  if (ws->stream) {
+    sif__scratch_close(ws->stream);
+    free(ws->stream);
+  }
 
   free(ws);
 }
@@ -548,6 +566,131 @@ static sif_real* fft_build_filter_lut(sif_filter_type_t filter, sif_real r,
 static inline double fft_window_mode_factor(
   const double* wsa, uint32_t N, uint32_t ix, uint32_t iy, uint32_t iz);
 
+/*
+ * A streamed workspace's forward transform: the grid read back from its
+ * scratch file a plane at a time, each plane through the plane plan into
+ * delta_k_cpy, then the pencils there. sif__fft_grid_forward() with the file
+ * in place of the grid and delta_k_cpy in place of delta_k -- the same plans
+ * on the same values, so the same spectrum.
+ */
+static int fft_forward_streamed(sif_fft_workspace_t* ws) {
+  if (!ws->plane_r2c && fft_plan_stage(ws, 1) != SIF_OK)
+    return SIF_ERR_ALLOC;
+
+  const uint32_t n = ws->n_cells;
+  const uint64_t plane_reals = fft_plane_reals(n);
+  const uint64_t plane_modes = fft_plane_modes(n);
+  const uint64_t plane_bytes = plane_reals * sizeof(sif_real);
+  sif_real_complex* out = ws->delta_k_cpy;
+  int failed = SIF_OK;
+
+#pragma omp parallel
+  {
+    sif_real* plane = real_fftw_malloc(plane_bytes);
+    if (!plane) {
+#pragma omp atomic write
+      failed = SIF_ERR_ALLOC;
+    }
+
+#pragma omp for schedule(static)
+    for (uint32_t x = 0; x < n; x++) {
+      int stop;
+#pragma omp atomic read
+      stop = failed;
+      if (stop != SIF_OK)
+        continue;
+
+      if (sif__scratch_read(ws->stream, plane, plane_bytes,
+            (uint64_t)x * plane_bytes) != SIF_OK) {
+#pragma omp atomic write
+        failed = SIF_ERR_IO;
+        continue;
+      }
+      real_fftw_execute_dft_r2c(ws->plane_r2c, plane, out + x * plane_modes);
+    }
+
+    real_fftw_free(plane);
+  }
+
+  if (failed == SIF_ERR_ALLOC)
+    SIF_LOG_ERROR("fft_context",
+      "failed to allocate the plane buffers for a %u^3 transform", n);
+  if (failed != SIF_OK)
+    return failed;
+
+  return fft_pencils(ws, out, ws->pencil_forward);
+}
+
+int sif__fft_workspace_stream(
+  sif_fft_manager_t* mgr, const sif_grid_t* grid, sif_fft_workspace_t** out) {
+  *out = NULL;
+  if (!grid || !grid->values) {
+    SIF_LOG_ERROR("fft_context", "invalid grid");
+    return SIF_ERR_INVALID;
+  }
+
+  sif_fft_workspace_t* ws = fft_workspace_new(mgr, grid->n_cells, 0);
+  if (!ws)
+    return SIF_ERR_ALLOC;
+
+  ws->stream = malloc(sizeof(*ws->stream));
+  if (!ws->stream) {
+    sif__fft_workspace_free(ws);
+    return SIF_ERR_ALLOC;
+  }
+  ws->stream->fd = -1;
+  ws->stream->unlinked = 0;
+
+  /* Planned now, before the backward plans, as sif__fft_grid_forward() plans
+   * a held workspace: a tuned planner works from the wisdom it has, and
+   * planning in another order could settle on other plans, and other bits. */
+  if (fft_plan_stage(ws, 1) != SIF_OK) {
+    sif__fft_workspace_free(ws);
+    return SIF_ERR_ALLOC;
+  }
+
+  const uint32_t n = grid->n_cells;
+  const uint64_t plane_bytes = fft_plane_reals(n) * sizeof(sif_real);
+  const uint64_t bytes = plane_bytes * n;
+
+  char what[64];
+  snprintf(what, sizeof(what), "a %u^3 grid", n);
+  int status = sif__scratch_create(what, bytes, ws->stream);
+
+  /* A plane per write, in parallel: on a parallel filesystem one stream is
+   * far from what it can take. */
+  int failed = 0;
+  if (status == SIF_OK) {
+    const char* values = (const char*)grid->values;
+#pragma omp parallel for schedule(static)
+    for (uint32_t x = 0; x < n; x++) {
+      int stop;
+#pragma omp atomic read
+      stop = failed;
+      if (stop)
+        continue;
+      if (sif__scratch_write(ws->stream, values + (uint64_t)x * plane_bytes,
+            plane_bytes, (uint64_t)x * plane_bytes) != SIF_OK) {
+#pragma omp atomic write
+        failed = 1;
+      }
+    }
+    if (failed)
+      status = SIF_ERR_IO;
+  }
+
+  if (status == SIF_OK)
+    status = sif__scratch_settle(ws->stream);
+
+  if (status != SIF_OK) {
+    sif__fft_workspace_free(ws);
+    return status;
+  }
+
+  *out = ws;
+  return SIF_OK;
+}
+
 int sif__fft_apply_filter(sif_fft_workspace_t* ws, sif_filter_type_t filter,
   sif_real r, sif_real box_length) {
   return sif__fft_apply_filter_smoothed(ws, filter, r, 0.0f, box_length);
@@ -562,20 +705,32 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
     return SIF_ERR_INVALID;
   }
 
-  const uint64_t complex_cells = fft_complex_count(ws->n_cells);
-
-  if (filter == SIF__FILTER_NONE) {
-    memcpy(
-      ws->delta_k_cpy, ws->delta_k, complex_cells * sizeof(sif_real_complex));
-    SIF_LOG_TRACE("fft_context", "no filter applied");
-    return SIF_OK;
-  }
-
-  if (filter != SIF__FILTER_TOP_HAT && filter != SIF__FILTER_GAUSSIAN) {
+  if (filter != SIF__FILTER_NONE && filter != SIF__FILTER_TOP_HAT &&
+      filter != SIF__FILTER_GAUSSIAN) {
     /* Returning without writing delta_k_cpy would leave the backward transform
      * operating on whatever was there before, so this has to be an error. */
     SIF_LOG_ERROR("fft_context", "filter type %d is not supported", filter);
     return SIF_ERR_INVALID;
+  }
+
+  const uint64_t complex_cells = fft_complex_count(ws->n_cells);
+
+  /* The spectrum the filter reads: the one the workspace holds, or, streamed,
+   * the one it transforms into the output buffer now and filters in place.
+   * Mode by mode the multiply is the same either way. */
+  const sif_real_complex* src = ws->delta_k;
+  if (ws->stream) {
+    const int status = fft_forward_streamed(ws);
+    if (status != SIF_OK)
+      return status;
+    src = ws->delta_k_cpy;
+  }
+
+  if (filter == SIF__FILTER_NONE) {
+    if (src != ws->delta_k_cpy)
+      memcpy(ws->delta_k_cpy, src, complex_cells * sizeof(sif_real_complex));
+    SIF_LOG_TRACE("fft_context", "no filter applied");
+    return SIF_OK;
   }
 
   const uint32_t N = ws->n_cells;
@@ -614,8 +769,8 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
           smoothing = (sif_real)((double)smoothing *
                                  fft_window_mode_factor(wsa, N, ix, iy, iz));
 
-        ws->delta_k_cpy[idx][0] = ws->delta_k[idx][0] * smoothing;
-        ws->delta_k_cpy[idx][1] = ws->delta_k[idx][1] * smoothing;
+        ws->delta_k_cpy[idx][0] = src[idx][0] * smoothing;
+        ws->delta_k_cpy[idx][1] = src[idx][1] * smoothing;
       }
     }
   }

@@ -84,7 +84,13 @@ foreach(test_name IN LISTS SIF_TESTS)
   target_compile_definitions(${test_name} PRIVATE
     SIF_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 
-  add_test(NAME ${test_name} COMMAND ${test_name})
+  # A working directory each: the finders write auto-named checkpoints into
+  # theirs, and test_finders counts what it finds in its own, which a
+  # concurrent test_survey would otherwise change under it.
+  set(test_workdir "${CMAKE_CURRENT_BINARY_DIR}/work/${test_name}")
+  file(MAKE_DIRECTORY "${test_workdir}")
+  add_test(NAME ${test_name} COMMAND ${test_name}
+    WORKING_DIRECTORY "${test_workdir}")
 
   set_tests_properties(${test_name} PROPERTIES
     ENVIRONMENT "HOME=${SIF_TEST_HOME};OMP_NUM_THREADS=4"

@@ -640,8 +640,10 @@ int pipeline_box(const exodus_params_t* p) {
 
   /* 4. Finder. The grid is not needed afterwards, so it is not restored. */
   sif_timer_start(&t);
-  const sif_finder_exodus_extras_t extras = {
-    .checkpoint = p->checkpoint, .prior = prior, .keep_checkpoint = 1};
+  const sif_finder_exodus_extras_t extras = {.checkpoint = p->checkpoint,
+    .prior = prior,
+    .keep_checkpoint = 1,
+    .save_memory = p->save_memory};
   cat = sif_finder_exodus_raw(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
     SIF_FINDER_CONSUME_GRID | search | centres_option(p) | window_option(p) |
@@ -1082,8 +1084,10 @@ int pipeline_survey(const exodus_params_t* p) {
 
   /* 5. Finder. */
   sif_timer_start(&t);
-  const sif_finder_exodus_extras_t extras = {
-    .checkpoint = p->checkpoint, .prior = prior, .keep_checkpoint = 1};
+  const sif_finder_exodus_extras_t extras = {.checkpoint = p->checkpoint,
+    .prior = prior,
+    .keep_checkpoint = 1,
+    .save_memory = p->save_memory};
   cat = sif_finder_exodus_survey_raw(data_grid, random_grid, data_mesh,
     random_mesh, offset, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,

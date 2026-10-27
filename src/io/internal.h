@@ -199,4 +199,55 @@ static inline int sif__io_host_is_little(void) {
   return first == 1;
 }
 
+/**
+ * @defgroup scratch Scratch files
+ * @brief Data a run moves out of memory and reads back, in the
+ * scratch_directory setting. See scratch.c.
+ * @{
+ */
+
+/** @brief An open scratch file. `fd` is -1 when there is none. */
+typedef struct sif__scratch_s {
+  int fd;
+  int unlinked; /* already gone from the directory */
+  char path[1024];
+} sif__scratch_t;
+
+/**
+ * @brief A 64-bit id no other process is likely to draw: the clock, the pid
+ * and the kernel's entropy. For names in shared directories.
+ */
+uint64_t sif__unique_id(void);
+
+/**
+ * @brief Create a scratch file for @p bytes of data, under a name no other
+ * process holds, and unlink it at once: the space is returned when it is
+ * closed or the process ends, however it ends.
+ *
+ * @param what What it holds, for the log: "the density grid".
+ * @return SIF_OK; SIF_ERR_IO, having logged, if the directory has less than
+ * @p bytes free or the file cannot be created; the scratch_directory
+ * setting's own failures (sif__setting_directory()). `out->fd` is -1 on
+ * failure.
+ */
+SIF_NODISCARD int sif__scratch_create(
+  const char* what, uint64_t bytes, sif__scratch_t* out);
+
+/** @brief pwrite() all of @p bytes, or SIF_ERR_IO having logged. Thread-safe
+ * for disjoint ranges. */
+SIF_NODISCARD int sif__scratch_write(
+  const sif__scratch_t* s, const void* src, uint64_t bytes, uint64_t offset);
+
+/** @brief pread() all of @p bytes, or SIF_ERR_IO having logged. Thread-safe. */
+SIF_NODISCARD int sif__scratch_read(
+  const sif__scratch_t* s, void* dst, uint64_t bytes, uint64_t offset);
+
+/** @brief Flush what was written to disk and drop it from the page cache. */
+SIF_NODISCARD int sif__scratch_settle(const sif__scratch_t* s);
+
+/** @brief Close, removing the file if the unlink at creation failed. */
+void sif__scratch_close(sif__scratch_t* s);
+
+/** @} */
+
 #endif /* SIF__IO_INTERNAL_H */

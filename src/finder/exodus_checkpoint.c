@@ -53,25 +53,7 @@ typedef char
   header_is_192_bytes[(sizeof(sif_finder_exodus_checkpoint_t) == 192) ? 1 : -1];
 
 void sif__exodus_checkpoint_name(char* out, size_t size) {
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-
-  uint64_t seed = ((uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec) ^
-                  ((uint64_t)getpid() << 32);
-
-  /* The clock alone is enough on one machine; two nodes started by the same
-   * scheduler tick, writing to one shared directory, are what the kernel's
-   * entropy is for. Its absence only weakens that case. */
-  FILE* urandom = fopen("/dev/urandom", "rb");
-  if (urandom) {
-    uint64_t noise = 0;
-    if (fread(&noise, sizeof(noise), 1, urandom) == 1)
-      seed ^= noise;
-    fclose(urandom);
-  }
-
-  const uint64_t id = sif__splitmix64(&seed);
-  snprintf(out, size, "exodus-%016" PRIx64 ".ckpt", id);
+  snprintf(out, size, "exodus-%016" PRIx64 ".ckpt", sif__unique_id());
 }
 
 uint32_t sif__exodus_checkpoint_crc(const sif_catalogue_t* cat) {

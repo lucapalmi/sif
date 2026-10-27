@@ -10,6 +10,8 @@ Current version: v0.4 release 1
 - Settings can be given per process: `SIF_<KEY>` environment variables and
   `sif_setting_override()` (`set_setting(..., persist=False)`)
 - `SIF_HOME` moves the settings, wisdom and cache root off `$HOME/.sif`
+- Exodus `save_memory`: the grid goes to a scratch file (`scratch_directory`
+  setting), halving the FFT memory; bit-identical catalogues
 
 ### Changed
 

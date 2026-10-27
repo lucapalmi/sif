@@ -408,43 +408,54 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
 }
 
 /* The grid half of ctx_init() for one grid: transform, correct the window,
- * release the real-space values, and get ready to smooth. */
+ * release the real-space values, and get ready to smooth. With save_memory
+ * the grid goes to disk instead of being transformed, and each smoothing
+ * transforms it afresh (sif__fft_workspace_stream()). */
 static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
-  sif_real min_radius, sif_option opt) {
+  sif_real min_radius, sif_option opt, int save_memory) {
 
   sif_system_state_t* state = sif__system_state();
   if (!state) {
     *ws_out = NULL;
     return SIF_ERR_UNINITIALISED;
   }
-  sif_fft_workspace_t* ws =
-    sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
-  *ws_out = ws;
-  if (!ws)
-    return SIF_ERR_ALLOC;
 
   /* Must succeed before the field is released: on failure the caller's grid
    * has to come back untouched. */
-  const int status = sif__fft_grid_forward(ws, grid);
-  if (status != SIF_OK)
-    return status;
+  int status;
+  if (save_memory) {
+    status = sif__fft_workspace_stream(state->fft_mgr, grid, ws_out);
+    if (status != SIF_OK)
+      return status;
+  } else {
+    sif_fft_workspace_t* ws =
+      sif__fft_workspace_alloc(state->fft_mgr, grid->n_cells);
+    *ws_out = ws;
+    if (!ws)
+      return SIF_ERR_ALLOC;
+
+    status = sif__fft_grid_forward(ws, grid);
+    if (status != SIF_OK)
+      return status;
+  }
 
   /* Before the first filter and after the transform, which is the only window
    * in which the assignment window is separable from the smoothing one. */
-  if (sif__finder_deconvolve_window(TAG, ws, grid, min_radius, opt) != SIF_OK)
+  if (sif__finder_deconvolve_window(TAG, *ws_out, grid, min_radius, opt) !=
+      SIF_OK)
     return SIF_ERR_INVALID;
 
   sif_free_aligned(grid->values);
   grid->values = NULL;
 
-  return sif__fft_workspace_init_backward(ws, state->fft_mgr);
+  return sif__fft_workspace_init_backward(*ws_out, state->fft_mgr);
 }
 
 /* random_grid and random_mesh are NULL for a box run. */
 static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
-  sif_option opt, sif_grid_t* random_grid,
-  const sif_chain_mesh_t* random_mesh) {
+  sif_option opt, sif_grid_t* random_grid, const sif_chain_mesh_t* random_mesh,
+  int save_memory) {
 
   memset(ctx, 0, sizeof(*ctx));
 
@@ -515,11 +526,12 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   /* The radii are sorted descending, so the last is the smallest. */
   const sif_real min_radius = ctx->sorted_radii[n_radii - 1];
 
-  int status = ctx_init_grid(&ctx->fft_ws, grid, min_radius, opt);
+  int status = ctx_init_grid(&ctx->fft_ws, grid, min_radius, opt, save_memory);
   if (status != SIF_OK || !survey)
     return status;
 
-  status = ctx_init_grid(&ctx->random_ws, random_grid, min_radius, opt);
+  status =
+    ctx_init_grid(&ctx->random_ws, random_grid, min_radius, opt, save_memory);
 
   /* The data grid is already inside its workspace by now. Transform it back,
    * so that ctx_release() hands the caller the grid they gave rather than an
@@ -1264,8 +1276,8 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   }
 
   exodus_ctx_t ctx;
-  const int init = ctx_init(
-    &ctx, grid, mesh, radii, n_radii, options, random_grid, random_mesh);
+  const int init = ctx_init(&ctx, grid, mesh, radii, n_radii, options,
+    random_grid, random_mesh, extras && extras->save_memory);
   if (init != SIF_OK) {
     sif_catalogue_free(start.voids);
     checkpoint_finish(&ck, init);
@@ -1844,14 +1856,25 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   /* Restored after a failure too: the caller gets back the grid they gave,
    * not the last rung's smoothing of it. */
   if (!(options & SIF_FINDER_CONSUME_GRID)) {
-    if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
+    /* Under save_memory this reads the grid back from its scratch file, and
+     * can fail. The grid would then hold a half-written transform, so the run
+     * fails rather than hand it back as restored; its checkpoint is kept, and
+     * resuming from it returns the catalogue at once. */
+    int restored = sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0);
+    if (restored == SIF_OK) {
       grid->values = sif__fft_grid_backward(ctx.fft_ws);
       SIF_LOG_INFO(TAG, "recovered original density grid");
     }
-    if (survey && sif__fft_apply_filter(
-                    ctx.random_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
-      random_grid->values = sif__fft_grid_backward(ctx.random_ws);
-      SIF_LOG_INFO(TAG, "recovered original random grid");
+    if (survey && restored == SIF_OK) {
+      restored = sif__fft_apply_filter(ctx.random_ws, SIF__FILTER_NONE, 0, 0);
+      if (restored == SIF_OK) {
+        random_grid->values = sif__fft_grid_backward(ctx.random_ws);
+        SIF_LOG_INFO(TAG, "recovered original random grid");
+      }
+    }
+    if (restored != SIF_OK && status == SIF_OK) {
+      SIF_LOG_ERROR(TAG, "the grid could not be restored; failing the run");
+      status = restored;
     }
   }
 

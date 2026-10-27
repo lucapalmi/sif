@@ -274,6 +274,11 @@ typedef struct {
    * resubmitted as it was picks up where it stopped. */
   const char* checkpoint;
 
+  /* Keep the grid in a scratch file rather than its transform in memory:
+   * half the memory, one more transform and one read of the grid per
+   * smoothing, the same catalogue. See sif_finder_exodus_extras_t. */
+  bool save_memory;
+
   /* --- output --------------------------------------------------------- */
   /* Written beside the path and moved into place when complete, replacing
    * whatever was there. */

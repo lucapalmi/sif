@@ -223,9 +223,9 @@ static PyObject* wrap_catalogue(sif_catalogue_t* cat) {
  * What the exodus entry points take beyond the finder's own arguments:
  * checkpoint= -- None for a name of the finder's own, False for none (the
  * raw entry points only: a variant always checkpoints), or a path (str or
- * os.PathLike) -- prior=, None or a Catalogue, and keep_checkpoint=. The
- * path's bytes are held here, since the run reads them with the GIL
- * released.
+ * os.PathLike) -- prior=, None or a Catalogue, keep_checkpoint= and
+ * save_memory=. The path's bytes are held here, since the run reads them with
+ * the GIL released.
  */
 typedef struct {
   PyObject* path_bytes;
@@ -234,10 +234,11 @@ typedef struct {
 } exodus_extras_t;
 
 static int exodus_extras(PyObject* checkpoint, PyObject* prior,
-  int keep_checkpoint, int raw, exodus_extras_t* out) {
+  int keep_checkpoint, int save_memory, int raw, exodus_extras_t* out) {
 
   memset(out, 0, sizeof(*out));
   out->extras.keep_checkpoint = keep_checkpoint;
+  out->extras.save_memory = save_memory;
 
   if (checkpoint == Py_False && raw) {
     out->options = SIF_FINDER_NO_CHECKPOINT;
@@ -346,13 +347,15 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
   int keep_checkpoint = 0;
+  int save_memory = 0;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold", "variant",
-    "checkpoint", "prior", "keep_checkpoint", NULL};
+    "checkpoint", "prior", "keep_checkpoint", "save_memory", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|s$OOp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|s$OOpp", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
-        &threshold, &variant_name, &checkpoint, &prior, &keep_checkpoint))
+        &threshold, &variant_name, &checkpoint, &prior, &keep_checkpoint,
+        &save_memory))
     return NULL;
 
   sif_exodus_variant_t variant;
@@ -364,7 +367,7 @@ PyObject* py_sif_finder_exodus(PyObject* self, PyObject* args, PyObject* kwds) {
     return py_sif_raise(sif_error_status(), "exodus");
 
   exodus_extras_t x;
-  if (exodus_extras(checkpoint, prior, keep_checkpoint, 0, &x) < 0)
+  if (exodus_extras(checkpoint, prior, keep_checkpoint, save_memory, 0, &x) < 0)
     return NULL;
   return run_exodus(
     grid_obj, mesh_obj, radii_obj, threshold, (double)overlap, options, &x);
@@ -382,15 +385,17 @@ PyObject* py_sif_finder_exodus_raw(
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
   int keep_checkpoint = 0;
+  int save_memory = 0;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
     "overlap_fraction", "seeds", "search_factor", "deconvolution",
-    "consume_grid", "checkpoint", "prior", "keep_checkpoint", NULL};
+    "consume_grid", "checkpoint", "prior", "keep_checkpoint", "save_memory",
+    NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|d$zdzpOOp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|d$zdzpOOpp", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
         &threshold, &overlap_fraction, &seeds, &search_factor, &deconvolution,
-        &consume_grid, &checkpoint, &prior, &keep_checkpoint))
+        &consume_grid, &checkpoint, &prior, &keep_checkpoint, &save_memory))
     return NULL;
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : 0;
@@ -403,7 +408,7 @@ PyObject* py_sif_finder_exodus_raw(
   options |= window | reach;
 
   exodus_extras_t x;
-  if (exodus_extras(checkpoint, prior, keep_checkpoint, 1, &x) < 0)
+  if (exodus_extras(checkpoint, prior, keep_checkpoint, save_memory, 1, &x) < 0)
     return NULL;
   return run_exodus(
     grid_obj, mesh_obj, radii_obj, threshold, overlap_fraction, options, &x);
@@ -522,16 +527,17 @@ PyObject* py_sif_finder_exodus_survey(
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
   int keep_checkpoint = 0;
+  int save_memory = 0;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
     "random_mesh", "offset", "radii", "threshold", "variant", "checkpoint",
-    "prior", "keep_checkpoint", NULL};
+    "prior", "keep_checkpoint", "save_memory", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|s$OOp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|s$OOpp", kwlist,
         &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
         &o[0], &o[1], &o[2], &radii_obj, &threshold, &variant_name, &checkpoint,
-        &prior, &keep_checkpoint))
+        &prior, &keep_checkpoint, &save_memory))
     return NULL;
 
   sif_exodus_variant_t variant;
@@ -543,7 +549,7 @@ PyObject* py_sif_finder_exodus_survey(
     return py_sif_raise(sif_error_status(), "exodus_survey");
 
   exodus_extras_t x;
-  if (exodus_extras(checkpoint, prior, keep_checkpoint, 0, &x) < 0)
+  if (exodus_extras(checkpoint, prior, keep_checkpoint, save_memory, 0, &x) < 0)
     return NULL;
   return run_exodus_survey(data_grid_obj, random_grid_obj, data_mesh_obj,
     random_mesh_obj, o, radii_obj, threshold, (double)overlap, options, &x);
@@ -564,18 +570,19 @@ PyObject* py_sif_finder_exodus_survey_raw(
   PyObject* checkpoint = Py_None;
   PyObject* prior = Py_None;
   int keep_checkpoint = 0;
+  int save_memory = 0;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
     "random_mesh", "offset", "radii", "threshold", "overlap_fraction", "seeds",
     "search_factor", "deconvolution", "consume_grid", "checkpoint", "prior",
-    "keep_checkpoint", NULL};
+    "keep_checkpoint", "save_memory", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|d$zdzpOOp",
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|d$zdzpOOpp",
         kwlist, &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
         &o[0], &o[1], &o[2], &radii_obj, &threshold, &overlap_fraction, &seeds,
         &search_factor, &deconvolution, &consume_grid, &checkpoint, &prior,
-        &keep_checkpoint))
+        &keep_checkpoint, &save_memory))
     return NULL;
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : 0;
@@ -588,7 +595,7 @@ PyObject* py_sif_finder_exodus_survey_raw(
   options |= window | reach;
 
   exodus_extras_t x;
-  if (exodus_extras(checkpoint, prior, keep_checkpoint, 1, &x) < 0)
+  if (exodus_extras(checkpoint, prior, keep_checkpoint, save_memory, 1, &x) < 0)
     return NULL;
   return run_exodus_survey(data_grid_obj, random_grid_obj, data_mesh_obj,
     random_mesh_obj, o, radii_obj, threshold, overlap_fraction, options, &x);

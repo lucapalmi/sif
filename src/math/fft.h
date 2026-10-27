@@ -162,6 +162,18 @@ typedef struct {
    */
   double* window_axis;
   double* window_wsa;
+
+  /**
+   * The grid, on disk, for a workspace made by sif__fft_workspace_stream();
+   * NULL otherwise.
+   *
+   * Such a workspace never holds the spectrum. Each filter transforms the
+   * grid afresh, a plane at a time from the file into delta_k_cpy, and
+   * multiplies in place there: the same plans on the same input, so the same
+   * bits as the spectrum a held workspace keeps, at the price of one forward
+   * transform and one read of the grid per filter. delta_k stays NULL.
+   */
+  struct sif__scratch_s* stream;
 } sif_fft_workspace_t;
 
 /**
@@ -230,6 +242,27 @@ SIF_NODISCARD sif_fft_workspace_t* sif__fft_workspace_alloc(
   sif_fft_manager_t* mgr, uint32_t n_cells);
 
 /**
+ * @brief A workspace that keeps @p grid on disk instead of its spectrum in
+ * memory, for transforms too large to hold twice.
+ *
+ * Writes the grid to a scratch file (sif__scratch_create()) and allocates no
+ * spectrum: with the grid's own values released afterwards, the run holds one
+ * grid-sized buffer where a held workspace holds two. Every
+ * sif__fft_apply_filter() then reads the grid back and transforms it, and
+ * gives the same bits as a held workspace's would. Planned to the same
+ * quality as sif__fft_workspace_alloc(), which is what that rests on.
+ *
+ * Only filtering and the backward transform work on it; whatever reads
+ * delta_k does not.
+ *
+ * @param[out] out The workspace, or NULL on failure.
+ * @return SIF_OK; SIF_ERR_ALLOC; the scratch file's failures. @p grid is
+ * left untouched either way.
+ */
+SIF_NODISCARD int sif__fft_workspace_stream(
+  sif_fft_manager_t* mgr, const sif_grid_t* grid, sif_fft_workspace_t** out);
+
+/**
  * @brief Allocates the real-space buffer and plans the backward transform
  *
  * @return SIF_OK on success, SIF_ERR_ALLOC on failure. Must succeed before
@@ -262,7 +295,9 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws);
  * @brief Apply a filter to the fourier-space density field
  *
  * Reads delta_k and writes the filtered result into the real-space buffer,
- * which sif__fft_grid_backward then transforms in place.
+ * which sif__fft_grid_backward then transforms in place. A streamed workspace
+ * (sif__fft_workspace_stream()) transforms its grid into that buffer first
+ * and filters it there.
  *
  * @param ws The fft workspace
  * @param filter The filter to apply
@@ -270,7 +305,8 @@ void sif__fft_workspace_free(sif_fft_workspace_t* ws);
  * @param box_length The physical length of the simulation box
  *
  * @return SIF_OK on success, SIF_ERR_INVALID if the backward stage was never
- * initialised or the filter is unsupported, SIF_ERR_ALLOC on failure
+ * initialised or the filter is unsupported, SIF_ERR_ALLOC on failure,
+ * SIF_ERR_IO if a streamed workspace cannot read its grid back
  */
 /**
  * @brief sif__fft_apply_filter() with a Gaussian of width `sigma` on top of

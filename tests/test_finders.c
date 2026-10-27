@@ -12,6 +12,7 @@
  * recovers exactly those four voids, at the right places and with sensible
  * radii. Exercises the options that take different code paths.
  */
+#include "sif/core/settings.h"
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/finder/spherical_finder.h"
@@ -1424,6 +1425,111 @@ static void run_variants(void) {
   sif_field_free(f);
 }
 
+/* Files left in @p path, other than . and .. */
+static int dir_entries(const char* path) {
+  int n = 0;
+  DIR* dir = opendir(path);
+  if (!dir)
+    return -1;
+  struct dirent* e;
+  while ((e = readdir(dir)) != NULL)
+    if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0)
+      n++;
+  closedir(dir);
+  return n;
+}
+
+/*
+ * save_memory changes the memory and nothing else: the catalogue and the
+ * grid handed back are those of a run without it, bit for bit, for both kinds
+ * of candidate -- the minima smooth twice a rung. Its scratch file is gone
+ * when the run is, and a scratch directory it cannot use fails the run before
+ * it starts, with the grid as it was.
+ */
+static void run_save_memory(void) {
+  printf("save_memory\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  make_field(x, y, z);
+  sif_field_t* f = sif_field_alloc(N_P);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  setup_t s = {sif_grid_alloc(N_GRID, BOX), NULL, f};
+  s.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+  free(x);
+  free(y);
+  free(z);
+
+  const char* scratch = "test_finders_scratch";
+  CHECK(sif_setting_override("scratch_directory", scratch) == SIF_OK,
+    "pointing scratch_directory at the test failed");
+
+  const uint64_t cells = s.grid->total_cells;
+  sif_real* back = malloc(cells * sizeof(sif_real));
+  const sif_finder_exodus_extras_t lean = {.save_memory = 1};
+
+  static const struct {
+    const char* label;
+    sif_option opt;
+    sif_real overlap;
+  } cases[] = {
+    {"cells", SIF_FINDER_SEEDS_CELLS, 0.0f},
+    {"minima", SIF_FINDER_SEEDS_MINIMA, 1.0f},
+  };
+  for (int k = 0; k < 2; k++) {
+    const sif_option opt = cases[k].opt | SIF_FINDER_NO_CHECKPOINT;
+
+    regrid(&s);
+    sif_catalogue_t* ref = sif_finder_exodus_raw(
+      s.grid, s.mesh, radii, n_radii, -0.7f, cases[k].overlap, opt, NULL);
+    memcpy(back, s.grid->values, cells * sizeof(sif_real));
+
+    regrid(&s);
+    sif_catalogue_t* cat = sif_finder_exodus_raw(
+      s.grid, s.mesh, radii, n_radii, -0.7f, cases[k].overlap, opt, &lean);
+    CHECK(
+      ref && ref->n_voids > 0, "%s: reference found nothing", cases[k].label);
+    check_same_catalogue(cases[k].label, cat, ref);
+    CHECK(memcmp(back, s.grid->values, cells * sizeof(sif_real)) == 0,
+      "%s: the grid handed back differs from a run without save_memory",
+      cases[k].label);
+    CHECK(dir_entries(scratch) == 0, "%s: the scratch file outlived the run",
+      cases[k].label);
+
+    sif_catalogue_free(ref);
+    sif_catalogue_free(cat);
+  }
+
+  /* A directory naming an unset variable: refused before the grid is
+   * touched. */
+  unsetenv("SIF_TEST_NO_SUCH_VAR");
+  CHECK(sif_setting_override("scratch_directory", "$SIF_TEST_NO_SUCH_VAR/x") ==
+          SIF_OK,
+    "overriding scratch_directory failed");
+  regrid(&s);
+  memcpy(back, s.grid->values, cells * sizeof(sif_real));
+  sif_error_clear();
+  sif_catalogue_t* none = sif_finder_exodus_raw(s.grid, s.mesh, radii, n_radii,
+    -0.7f, 0.0f, SIF_FINDER_NO_CHECKPOINT, &lean);
+  CHECK(!none && sif_error_status() == SIF_ERR_INVALID,
+    "an unusable scratch directory should fail the run with SIF_ERR_INVALID");
+  CHECK(s.grid->values &&
+          memcmp(back, s.grid->values, cells * sizeof(sif_real)) == 0,
+    "a run refused for its scratch directory changed the grid");
+  sif_catalogue_free(none);
+
+  CHECK(sif_setting_override("scratch_directory", NULL) == SIF_OK,
+    "clearing the scratch_directory override failed");
+  rmdir(scratch);
+  free(back);
+  sif_chain_mesh_free(s.mesh);
+  sif_grid_free(s.grid);
+  sif_field_free(f);
+  printf("  ok\n");
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -1460,6 +1566,7 @@ int main(void) {
 #if !SIF_TEST_INSTRUMENTED
   run_variants();
 #endif
+  run_save_memory();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

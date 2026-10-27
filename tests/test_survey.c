@@ -17,6 +17,7 @@
  * they only rescale, and the refusals: a survey too close to the box, and a
  * grid that is already a contrast.
  */
+#include "sif/core/settings.h"
 #include "sif/core/system.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/structures/catalogue.h"
@@ -805,6 +806,88 @@ static void run_refusals(void) {
   printf("  ok\n");
 }
 
+/*
+ * save_memory in a survey, where both grids go to disk: the catalogue, its
+ * footprint and the two grids handed back are those of a run without it, bit
+ * for bit.
+ */
+static void run_save_memory(void) {
+  printf("save_memory\n");
+
+  sif_real* dx = malloc(N_DATA * sizeof(sif_real));
+  sif_real* dy = malloc(N_DATA * sizeof(sif_real));
+  sif_real* dz = malloc(N_DATA * sizeof(sif_real));
+  sif_real* rx = malloc(N_RANDOMS * sizeof(sif_real));
+  sif_real* ry = malloc(N_RANDOMS * sizeof(sif_real));
+  sif_real* rz = malloc(N_RANDOMS * sizeof(sif_real));
+  rng_state = 0x243F6A8885A308D3ULL;
+  draw(dx, dy, dz, N_DATA, 1, 1, 0.0f);
+  draw(rx, ry, rz, N_RANDOMS, 1, 0, 0.0f);
+  tracers_t data = build(dx, dy, dz, N_DATA);
+  tracers_t rand = build(rx, ry, rz, N_RANDOMS);
+
+  const char* scratch = "test_survey_scratch";
+  CHECK(sif_setting_override("scratch_directory", scratch) == SIF_OK,
+    "pointing scratch_directory at the test failed");
+
+  /* Both runs start from the grids as built: one handed back has been
+   * through a transform and back. */
+  const size_t bytes = data.grid->total_cells * sizeof(sif_real);
+  sif_real* data_in = malloc(bytes);
+  sif_real* rand_in = malloc(bytes);
+  sif_real* data_ref = malloc(bytes);
+  sif_real* rand_ref = malloc(bytes);
+  memcpy(data_in, data.grid->values, bytes);
+  memcpy(rand_in, rand.grid->values, bytes);
+
+  sif_catalogue_t* ref =
+    sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+      NULL, radii, n_radii, -0.7f, 0.0f, SIF_FINDER_NO_CHECKPOINT, NULL);
+  memcpy(data_ref, data.grid->values, bytes);
+  memcpy(rand_ref, rand.grid->values, bytes);
+
+  memcpy(data.grid->values, data_in, bytes);
+  memcpy(rand.grid->values, rand_in, bytes);
+  const sif_finder_exodus_extras_t lean = {.save_memory = 1};
+  sif_catalogue_t* cat =
+    sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
+      NULL, radii, n_radii, -0.7f, 0.0f, SIF_FINDER_NO_CHECKPOINT, &lean);
+
+  CHECK(ref && cat && ref->n_voids > 0, "a survey run found nothing");
+  if (ref && cat) {
+    int same = ref->n_voids == cat->n_voids;
+    for (uint64_t i = 0; same && i < ref->n_voids; i++)
+      same = ref->cx[i] == cat->cx[i] && ref->cy[i] == cat->cy[i] &&
+             ref->cz[i] == cat->cz[i] && ref->radii[i] == cat->radii[i] &&
+             ref->footprint[i] == cat->footprint[i] &&
+             ref->footprint_shell[i] == cat->footprint_shell[i];
+    CHECK(same, "the catalogue differs from a run without save_memory");
+  }
+  CHECK(memcmp(data_ref, data.grid->values, bytes) == 0,
+    "the data grid handed back differs from a run without save_memory");
+  CHECK(memcmp(rand_ref, rand.grid->values, bytes) == 0,
+    "the random grid handed back differs from a run without save_memory");
+  CHECK(rmdir(scratch) == 0, "the scratch directory was left non-empty");
+
+  CHECK(sif_setting_override("scratch_directory", NULL) == SIF_OK,
+    "clearing the scratch_directory override failed");
+  sif_catalogue_free(ref);
+  sif_catalogue_free(cat);
+  free(data_in);
+  free(rand_in);
+  free(data_ref);
+  free(rand_ref);
+  release(&data);
+  release(&rand);
+  free(dx);
+  free(dy);
+  free(dz);
+  free(rx);
+  free(ry);
+  free(rz);
+  printf("  ok\n");
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -824,6 +907,7 @@ int main(void) {
   run_workflow();
   run_survey_box();
   run_refusals();
+  run_save_memory();
 
   printf("\n%s (%d failure%s)\n", failures ? "FAILED" : "PASSED", failures,
     failures == 1 ? "" : "s");

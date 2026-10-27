@@ -88,7 +88,7 @@ static const char* const EXODUS_PARAMS_KEYS[] = {
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
 static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
 static const char* const RUN_KEYS[] = {
-  "threads", "log_level", "tune_fft", "checkpoint", NULL};
+  "threads", "log_level", "tune_fft", "checkpoint", "save_memory", NULL};
 
 /* Each section's keys, to tell a setting written at the top level where it
  * belongs. */
@@ -1647,6 +1647,8 @@ static void read_run(
       c->run.log_level = (uint8_t)(SIF_LOG_LEVEL_TRACE + i);
     if (get_bool(r, t, "run", "tune_fft", &b))
       c->run.tune_fft = b;
+    if (get_bool(r, t, "run", "save_memory", &b))
+      c->params.save_memory = b;
 
     const int ck = field(L, t, "checkpoint");
     if (ck == LUA_TSTRING) {
@@ -2084,7 +2086,8 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     write_lua_string(out, p->checkpoint);
   else
     fputs("false", out);
-  fputs(",\n}\n", out);
+  fprintf(
+    out, ",\n  save_memory = %s,\n}\n", p->save_memory ? "true" : "false");
 }
 
 /* --- the entry points -------------------------------------------------- */

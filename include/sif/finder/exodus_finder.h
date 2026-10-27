@@ -81,6 +81,28 @@ typedef struct {
    * catalogue after that would lose the whole run.
    */
   int keep_checkpoint;
+
+  /**
+   * Nonzero to hold about half the memory, at the cost of time.
+   *
+   * The finder smooths the grid at every rung from its Fourier transform,
+   * which it keeps alongside the smoothed field: two grid-sized buffers, which
+   * for a large grid is most of the run's memory -- 2 x 108 GB at 3000^3 in
+   * single precision, twice that for a survey, which smooths the randoms too.
+   * With this set the grid goes to a scratch file instead, in the
+   * `scratch_directory` setting (see settings.h), and each smoothing reads it
+   * back and transforms it again: one buffer per grid, one more forward
+   * transform and one read of the grid per smoothing.
+   *
+   * Nothing else changes. The catalogue, the grid handed back and the
+   * checkpoint are bit for bit those of a run without it, and a checkpoint
+   * resumes with it set or not.
+   *
+   * The file is as large as the grid, unlinked as soon as it is created so
+   * that it goes when the run does, however that ends; its path is logged.
+   * The run fails before the first rung if the directory has not the room.
+   */
+  int save_memory;
 } sif_finder_exodus_extras_t;
 
 /**

@@ -723,6 +723,58 @@ With `extras` NULL the run checkpoints under a name of its own;
 
 :::::
 
+## Large grids: saving memory
+
+At every rung exodus smooths the grid from its Fourier transform, which it
+keeps in memory next to the smoothed field. That is two grid-sized buffers,
+and for a large grid they are most of the run's memory: about 2 x 108 GB at
+3000^3 in single precision, and twice that for a survey, whose randoms are
+smoothed too. `save_memory` writes the grid to a scratch file instead and
+transforms it again at every smoothing. That leaves one buffer per grid, at
+the cost of one more FFT and one read of the grid per smoothing. The
+catalogue is bit for bit the same, and a checkpoint resumes with or without
+it.
+
+The file is as large as the grid and goes in the `scratch_directory`
+setting, `$SIF_HOME/scratch` by default. On a cluster, point it at a fast
+filesystem with room, either for every run in the settings file or for one
+job with an environment variable:
+
+```bash
+export SIF_SCRATCH_DIRECTORY=/ptmp/$USER/sif-scratch
+```
+
+A run that finds less room there than the grid needs fails before the first
+rung. The file is deleted as soon as it is created, so it goes when the run
+does, however the run ends; its path and size are logged.
+
+:::::{tab-set}
+
+::::{tab-item} sif-exodus
+```lua
+run = { save_memory = true }
+```
+::::
+
+::::{tab-item} Python
+```python
+voids = pysif.finders.exodus(grid, mesh, radii, -0.7, save_memory=True)
+
+# or set the scratch directory for this process only
+pysif.set_setting("scratch_directory", "/ptmp/me/sif-scratch", persist=False)
+```
+::::
+
+::::{tab-item} C
+```c
+const sif_finder_exodus_extras_t extras = {.save_memory = 1};
+sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii,
+  -0.7f, SIF_EXODUS_EXCURSION_PEAK, &extras);
+```
+::::
+
+:::::
+
 ## Checking files before a run
 
 `sif-exodus --check` takes a data file as well as a configuration. It tells

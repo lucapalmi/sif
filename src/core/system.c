@@ -21,6 +21,7 @@
 #endif
 
 #include <errno.h>
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -123,14 +124,19 @@ int sif_system_init(sif_config_t* config) {
       "to %s, which may not outlive the job", base_dir);
   }
   if (written < 0 || (size_t)written >= sizeof(base_dir)) {
-    SIF_LOG_ERROR("system", "SIF_HOME: longer than %d characters",
-      PATH_CAP - 1);
+    SIF_LOG_ERROR("system", "%s: settings directory longer than %d characters",
+      base_dir, PATH_CAP - 1);
     free(system_state);
     system_state = NULL;
     return SIF_ERR_INVALID;
   }
 
+  /* Absolute, so that what $SIF_HOME expands to does not move when the
+   * process changes directory: a relative SIF_HOME is resolved once, here. */
   (void)sif__ensure_dir(base_dir);
+  char resolved[PATH_MAX];
+  if (realpath(base_dir, resolved) && strlen(resolved) < sizeof(base_dir))
+    snprintf(base_dir, sizeof(base_dir), "%s", resolved);
   sif__settings_init(base_dir);
 
   /* --- FFTW --- */

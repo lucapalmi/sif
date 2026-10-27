@@ -213,6 +213,40 @@ def test_prior(grid, mesh):
     np.testing.assert_array_equal(columns(extended), columns(ref))
 
 
+@pytest.fixture
+def scratch(tmp_path):
+    """scratch_directory for this test only."""
+    path = tmp_path / "scratch"
+    pysif.set_setting("scratch_directory", str(path), persist=False)
+    yield path
+    pysif.set_setting("scratch_directory", None, persist=False)
+
+
+def test_save_memory(grid, mesh, tmp_path, scratch):
+    # The same voids, a checkpoint that resumes either way, and nothing left
+    # in the scratch directory.
+    ref = run(grid, mesh, checkpoint=False)
+    lean = run(grid, mesh, checkpoint=False, save_memory=True)
+    np.testing.assert_array_equal(columns(lean), columns(ref))
+
+    path = tmp_path / "half.ckpt"
+    write_checkpoint(path, run(grid, mesh, RADII[:2], checkpoint=False), 2)
+    resumed = run(grid, mesh, checkpoint=path, save_memory=True)
+    np.testing.assert_array_equal(columns(resumed), columns(ref))
+    assert list(scratch.iterdir()) == []
+
+
+def test_save_memory_unusable_scratch(grid, mesh, tmp_path):
+    (tmp_path / "file").write_text("")
+    pysif.set_setting("scratch_directory", str(tmp_path / "file" / "x"),
+                      persist=False)
+    try:
+        with pytest.raises(OSError, match="file"):
+            run(grid, mesh, checkpoint=False, save_memory=True)
+    finally:
+        pysif.set_setting("scratch_directory", None, persist=False)
+
+
 @pytest.mark.parametrize("kw, error, message", [
     ({"checkpoint": True}, ValueError, "checkpoint: True"),
     ({"checkpoint": 3}, TypeError, None),

@@ -33,6 +33,11 @@
 
 #define INITIAL_CAPACITY 16
 
+/* The largest number a numeric setting takes. Exact as a double and as a
+ * uint64_t, so a value read as a count converts without overflow -- which
+ * "1e30" or "inf" would not. */
+#define NUMBER_MAX 1e15
+
 /* --- the settings sif knows --- */
 
 typedef enum {
@@ -71,6 +76,9 @@ static const setting_def_t registry[] = {
     "Largest spectrum, in GiB, whose transforms are tuned; 0 never tunes."},
   {"cic_tile_particles", SETTING_NUMBER, SIF__CIC_TILE_PARTICLES_DEFAULT, 1.0,
     "Particles per tile of the CIC deposit's sort; bounds its scratch."},
+  {"scratch_directory", SETTING_PATH, "$SIF_HOME/scratch", 0.0,
+    "Where save_memory runs keep the grid they move out of memory: as large "
+    "as the grid, read once per smoothing, so a fast filesystem with room."},
 };
 
 #define N_REGISTRY (sizeof(registry) / sizeof(registry[0]))
@@ -108,6 +116,10 @@ typedef struct {
    * empty. It expands to nothing, as in a shell, and the typed readers refuse
    * the value: "$TMPDIR/sif" on a node without TMPDIR is "/sif". */
   char unset_var[KEY_CAP];
+  /* `raw` or its expansion did not fit, and `value` holds a prefix of it. The
+   * typed readers refuse it like an unset variable: a truncated path names
+   * another directory. */
+  bool truncated;
 } layer_t;
 
 typedef struct {
@@ -175,11 +187,10 @@ static void copy_bounded(char* dst, size_t cap, const char* src) {
  * mean different things at different points in one run.
  *
  * An unset variable expands to nothing, as in a shell, and the first one is
- * named in @p unset_var for the readers to refuse. Output is truncated to fit
- * rather than dropping the offending piece, so the result is at least a prefix
- * of the intended path.
+ * named in @p unset_var for the readers to refuse. Output is truncated to fit,
+ * and the return says so: the readers refuse that too.
  */
-static void expand_env_vars(
+static bool expand_env_vars(
   const char* src, char* out, size_t cap, char* unset_var) {
   size_t len = 0;
   unset_var[0] = '\0';
@@ -215,9 +226,11 @@ static void expand_env_vars(
       continue;
     }
 
-    const char* value = getenv(name);
-    if (!value && strcmp(name, "SIF_HOME") == 0)
-      value = settings_root;
+    /* $SIF_HOME is always the directory sif_system_init() settled on, which
+     * is SIF_HOME itself when that is set and not empty -- and something
+     * usable when it is empty, where getenv() would give "/scratch". */
+    const char* value =
+      strcmp(name, "SIF_HOME") == 0 ? settings_root : getenv(name);
     if (!value) {
       if (unset_var[0] == '\0')
         copy_bounded(unset_var, KEY_CAP, name);
@@ -226,16 +239,23 @@ static void expand_env_vars(
 
     while (*value && len + 1 < cap)
       out[len++] = *value++;
+    if (*value) {
+      out[len] = '\0';
+      return true;
+    }
   }
 
   out[len] = '\0';
+  return *src != '\0';
 }
 
 static void layer_store(layer_t* l, const char* raw, uint32_t line) {
   l->set = true;
   l->line = line;
   copy_bounded(l->raw, VALUE_CAP, raw);
-  expand_env_vars(raw, l->value, VALUE_CAP, l->unset_var);
+  l->truncated = strlen(raw) >= VALUE_CAP;
+  if (expand_env_vars(raw, l->value, VALUE_CAP, l->unset_var))
+    l->truncated = true;
 }
 
 /* --- lookup --- */
@@ -325,7 +345,8 @@ static bool parse_number(const char* s, double min, double* out) {
   char* end = NULL;
   errno = 0;
   const double v = strtod(s, &end);
-  if (end == s || errno != 0 || !(v >= min))
+  /* The range test also turns away NaN, and with NUMBER_MAX infinity. */
+  if (end == s || errno != 0 || !(v >= min && v <= NUMBER_MAX))
     return false;
   while (isspace((unsigned char)*end))
     end++;
@@ -343,7 +364,7 @@ static void describe_expected(
     snprintf(out, cap, "1/0, true/false, yes/no or on/off");
     break;
   case SETTING_NUMBER:
-    snprintf(out, cap, "a number >= %g", def->min);
+    snprintf(out, cap, "a number from %g to %g", def->min, NUMBER_MAX);
     break;
   default:
     snprintf(out, cap, "a directory");
@@ -470,9 +491,19 @@ static void settings_load_line(const char* key, const char* raw, uint32_t line) 
   layer_store(&e->layers[LAYER_FILE], raw, line);
 }
 
-/* Returns whether the file exists. */
+/* Returns whether the file exists -- or exists and must not be written. */
 static bool settings_load(void) {
   FILE* f = settings_filepath[0] ? fopen(settings_filepath, "r") : NULL;
+  if (!f && settings_filepath[0] && errno != ENOENT) {
+    /* There, but not ours to read: saving would replace it with the defaults
+     * and lose whatever it holds. */
+    SIF_LOG_WARNING("settings",
+      "%s: cannot read (%s); running on defaults, and nothing will be saved "
+      "to it",
+      settings_filepath, strerror(errno));
+    settings_filepath[0] = '\0';
+    return true;
+  }
   if (!f)
     return false;
 
@@ -620,6 +651,12 @@ static int setting_write_check(
       return SIF_ERR_INVALID;
     }
 
+    if (strlen(value) >= VALUE_CAP) {
+      SIF_LOG_ERROR("settings", "%s: not stored: %zu characters (at most %d)",
+        key, strlen(value), VALUE_CAP - 1);
+      return SIF_ERR_INVALID;
+    }
+
     /* Expanded first: a number may well be given as "$SLURM_CPUS". A path
      * with an unset variable is let through, for the process that sets it. */
     char expanded[VALUE_CAP];
@@ -648,6 +685,11 @@ int sif_setting_set(const char* key, const char* value) {
   const int status = setting_write_check("sif_setting_set", key, value, &e);
   if (status != SIF_OK)
     return status;
+
+  if (settings_filepath[0] == '\0')
+    SIF_LOG_WARNING("settings",
+      "%s: set for this process only: there is no settings file to save it to",
+      key);
 
   layer_t* file = &e->layers[LAYER_FILE];
   if (!file->set || strcmp(file->raw, value) != 0) {
@@ -719,7 +761,7 @@ static entry_t* setting_typed(const char* key, setting_kind_t kind) {
 static const char* setting_value_or_default(entry_t* e) {
   int which;
   const layer_t* l = entry_effective(e, &which);
-  if (l->unset_var[0] == '\0' && value_valid(e->def, l->value))
+  if (l->unset_var[0] == '\0' && !l->truncated && value_valid(e->def, l->value))
     return l->value;
 
   if (!e->warned) {
@@ -730,6 +772,10 @@ static const char* setting_value_or_default(entry_t* e) {
     if (l->unset_var[0])
       SIF_LOG_WARNING("settings", "%s: $%s is not set ('%s'); using %s",
         origin, l->unset_var, l->raw, e->layers[LAYER_DEFAULT].value);
+    else if (l->truncated)
+      SIF_LOG_WARNING("settings",
+        "%s: longer than %d characters once expanded; using %s", origin,
+        VALUE_CAP - 1, e->layers[LAYER_DEFAULT].value);
     else
       SIF_LOG_WARNING("settings", "%s: '%s' (expected %s); using %s", origin,
         l->raw, expected, e->layers[LAYER_DEFAULT].value);
@@ -828,6 +874,11 @@ int sif__setting_directory(const char* key, const char** path) {
       l->unset_var, l->raw);
     return SIF_ERR_INVALID;
   }
+  if (l->truncated) {
+    SIF_LOG_ERROR("settings", "%s: longer than %d characters once expanded",
+      origin, VALUE_CAP - 1);
+    return SIF_ERR_INVALID;
+  }
   if (l->value[0] == '\0') {
     SIF_LOG_ERROR("settings", "%s: empty path", origin);
     return SIF_ERR_INVALID;
@@ -846,4 +897,5 @@ int sif__setting_directory(const char* key, const char** path) {
 #undef PATH_CAP
 #undef LINE_CAP
 #undef INITIAL_CAPACITY
+#undef NUMBER_MAX
 #undef N_REGISTRY
