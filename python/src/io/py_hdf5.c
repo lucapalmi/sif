@@ -69,28 +69,35 @@ static PyObject* write_status(int status, const char* filepath) {
 
 /* --- catalogue --- */
 
-PyObject* pysif_write_catalogue_hdf5(
+static PyObject* write_catalogue_hdf5_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* cat_obj;
   static char* kwlist[] = {"filepath", "catalogue", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifCatalogueType, &cat_obj))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist, py_sif_path_arg,
+        &filepath, &sifCatalogueType, &cat_obj))
     return NULL;
 
   sif_error_clear();
-  return write_status(
-    sif_catalogue_write_hdf5(filepath, ((sifCatalogueObject*)cat_obj)->catalogue),
+  return write_status(sif_catalogue_write_hdf5(
+                        filepath, ((sifCatalogueObject*)cat_obj)->catalogue),
     filepath);
 }
 
-PyObject* pysif_read_catalogue_hdf5(
+PyObject* pysif_write_catalogue_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    write_catalogue_hdf5_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_catalogue_hdf5_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, py_sif_path_arg, &filepath))
     return NULL;
 
   sif_error_clear();
@@ -108,16 +115,22 @@ PyObject* pysif_read_catalogue_hdf5(
   return (PyObject*)obj;
 }
 
+PyObject* pysif_read_catalogue_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_catalogue_hdf5_impl, self, args, kwds, "filepath");
+}
+
 /* --- profiles --- */
 
-PyObject* pysif_write_profiles_hdf5(
+static PyObject* write_profiles_hdf5_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* prof_obj;
   static char* kwlist[] = {"filepath", "profiles", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifProfilesType, &prof_obj))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist, py_sif_path_arg,
+        &filepath, &sifProfilesType, &prof_obj))
     return NULL;
 
   const sifProfilesObject* prof = (const sifProfilesObject*)prof_obj;
@@ -126,12 +139,19 @@ PyObject* pysif_write_profiles_hdf5(
     sif_profiles_write_hdf5(filepath, prof->dens, prof->vel), filepath);
 }
 
-PyObject* pysif_read_profiles_hdf5(
+PyObject* pysif_write_profiles_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    write_profiles_hdf5_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_profiles_hdf5_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, py_sif_path_arg, &filepath))
     return NULL;
 
   /* Whatever sets the file holds, which the C reader will not guess. */
@@ -164,16 +184,22 @@ PyObject* pysif_read_profiles_hdf5(
   return (PyObject*)prof;
 }
 
+PyObject* pysif_read_profiles_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_profiles_hdf5_impl, self, args, kwds, "filepath");
+}
+
 /* --- size function --- */
 
-PyObject* pysif_write_size_function_hdf5(
+static PyObject* write_size_function_hdf5_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* vsf_obj;
   static char* kwlist[] = {"filepath", "size_function", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifSizeFunctionType, &vsf_obj))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist, py_sif_path_arg,
+        &filepath, &sifSizeFunctionType, &vsf_obj))
     return NULL;
 
   sif_error_clear();
@@ -182,12 +208,19 @@ PyObject* pysif_write_size_function_hdf5(
     filepath);
 }
 
-PyObject* pysif_read_size_function_hdf5(
+PyObject* pysif_write_size_function_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    write_size_function_hdf5_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_size_function_hdf5_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, py_sif_path_arg, &filepath))
     return NULL;
 
   sif_error_clear();
@@ -204,6 +237,12 @@ PyObject* pysif_read_size_function_hdf5(
   }
   obj->vsf = vsf;
   return (PyObject*)obj;
+}
+
+PyObject* pysif_read_size_function_hdf5(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_size_function_hdf5_impl, self, args, kwds, "filepath");
 }
 
 /* --- free-form metadata --- */
@@ -263,15 +302,16 @@ static PyObject* meta_value(
   }
 }
 
-PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* set_hdf5_attr_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* key;
   PyObject* value;
   const char* group = NULL;
   static char* kwlist[] = {"filepath", "key", "value", "group", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "ssO|z", kwlist, &filepath, &key, &value, &group))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&sO|z", kwlist,
+        py_sif_path_arg, &filepath, &key, &value, &group))
     return NULL;
 
   int status;
@@ -306,26 +346,38 @@ PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
   return write_status(status, filepath);
 }
 
-PyObject* pysif_get_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* pysif_set_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    set_hdf5_attr_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* get_hdf5_attr_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* key;
   const char* group = NULL;
   static char* kwlist[] = {"filepath", "key", "group", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "ss|z", kwlist, &filepath, &key, &group))
+        args, kwds, "O&s|z", kwlist, py_sif_path_arg, &filepath, &key, &group))
     return NULL;
 
   return meta_value(filepath, group, key, 0);
 }
 
-PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* pysif_get_hdf5_attr(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    get_hdf5_attr_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* get_hdf5_attrs_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* group = NULL;
   static char* kwlist[] = {"filepath", "group", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|z", kwlist, &filepath, &group))
+        args, kwds, "O&|z", kwlist, py_sif_path_arg, &filepath, &group))
     return NULL;
 
   uint32_t n = 0;
@@ -356,6 +408,11 @@ PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
   }
 
   return out;
+}
+
+PyObject* pysif_get_hdf5_attrs(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    get_hdf5_attrs_impl, self, args, kwds, "filepath");
 }
 
 /* --- particles from any HDF5 file --- */

@@ -201,7 +201,7 @@ static PyObject* sifGrid_to_density_contrast(
 
 static PyMethodDef sifGrid_methods[] = {
   {"assign_cic", (PyCFunction)sifGrid_assign_cic, METH_VARARGS | METH_KEYWORDS,
-    "assign_cic(field)\n"
+    "assign_cic($self, field)\n"
     "--\n\n"
     "Deposit a particle field onto the grid by Cloud-In-Cell assignment.\n\n"
     "Each particle contributes to the eight cells around it. Weights are\n"
@@ -217,7 +217,7 @@ static PyMethodDef sifGrid_methods[] = {
     "        none. The grid is left as it was.\n"
     "    MemoryError: If the deposit could not allocate its scratch."},
   {"assign", (PyCFunction)sifGrid_assign, METH_VARARGS | METH_KEYWORDS,
-    "assign(field, scheme='cic', *, interlace=False)\n"
+    "assign($self, field, scheme='cic', *, interlace=False)\n"
     "--\n\n"
     "Deposit a particle field onto the grid with a mass-assignment scheme.\n\n"
     "The schemes spread each particle over 1, 2, 3 or 4 cells per axis:\n"
@@ -242,7 +242,7 @@ static PyMethodDef sifGrid_methods[] = {
     "    MemoryError: If the deposit could not allocate its scratch."},
   {"assign_cic_tessellation", (PyCFunction)sifGrid_assign_cic_tessellation,
     METH_VARARGS | METH_KEYWORDS,
-    "assign_cic_tessellation(tessellation)\n"
+    "assign_cic_tessellation($self, tessellation)\n"
     "--\n\n"
     "Deposit a Tessellation onto the grid by Cloud-In-Cell assignment.\n\n"
     "The tessellation's density rather than the tracers': every sample\n"
@@ -260,7 +260,7 @@ static PyMethodDef sifGrid_methods[] = {
     "    tessellation: The Tessellation to deposit. Its samples must still\n"
     "        be present -- not one whose mesh(consume=True) has taken them."},
   {"to_density_contrast", (PyCFunction)sifGrid_to_density_contrast, METH_NOARGS,
-    "to_density_contrast()\n"
+    "to_density_contrast($self)\n"
     "--\n\n"
     "Convert the cells in place from a density to a density contrast.\n\n"
     "Replaces each cell with delta = rho / rho_mean - 1, so the field\n"

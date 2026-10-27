@@ -20,7 +20,8 @@ machine that has none of them. So it touches each one:
 
 And it runs the command-line programs through the commands pip installed for
 them, which checks the launchers and that the executables, repaired like the
-extension, load the same bundled libraries.
+extension, load the same bundled libraries. Last, that the type stubs editors
+read are in the wheel.
 """
 
 import os
@@ -87,5 +88,11 @@ assert out.returncode == 0, f"sif-exodus --version failed:\n{out.stderr}"
 assert out.stdout.startswith("sif-exodus "), out.stdout
 assert "with FITS" in out.stdout, out.stdout
 
+# The stubs, and the marker without which type checkers ignore them.
+package = os.path.dirname(pysif.__file__)
+for name in ("py.typed", "__init__.pyi", "io.pyi", "finders.pyi",
+             "measure.pyi", "model.pyi"):
+    assert os.path.isfile(os.path.join(package, name)), f"{name} not in wheel"
+
 print(f"pysif wheel OK: {cat.n_voids} voids, HDF5 round trip, h5py interop, "
-      f"FITS read, {out.stdout.strip()}")
+      f"FITS read, stubs, {out.stdout.strip()}")

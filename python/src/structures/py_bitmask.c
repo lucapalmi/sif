@@ -127,14 +127,24 @@ static PyObject* sifBitmask_get(PyObject* self_obj, PyObject* args) {
 
 static PyMethodDef sifBitmask_methods[] = {
   {"clear_all", (PyCFunction)sifBitmask_clear_all, METH_NOARGS,
+    "clear_all($self)\n"
+    "--\n\n"
     "Clear all bits."},
   {"count_set", (PyCFunction)sifBitmask_count_set, METH_NOARGS,
+    "count_set($self)\n"
+    "--\n\n"
     "Count the number of set bits."},
   {"set", (PyCFunction)sifBitmask_set, METH_VARARGS,
+    "set($self, index, /)\n"
+    "--\n\n"
     "Set a bit at given index."},
   {"unset", (PyCFunction)sifBitmask_unset, METH_VARARGS,
+    "unset($self, index, /)\n"
+    "--\n\n"
     "Unset a bit at given index."},
   {"get", (PyCFunction)sifBitmask_get, METH_VARARGS,
+    "get($self, index, /)\n"
+    "--\n\n"
     "Get value of bit at given index."},
   {NULL, NULL, 0, NULL}};
 

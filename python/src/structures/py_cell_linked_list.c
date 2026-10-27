@@ -186,9 +186,15 @@ static PyObject* sifCellLinkedList_insert(
 
 static PyMethodDef sifCellLinkedList_methods[] = {
   {"ensure_capacity", (PyCFunction)sifCellLinkedList_ensure_capacity,
-    METH_VARARGS | METH_KEYWORDS, "Ensure capacity of the item array."},
+    METH_VARARGS | METH_KEYWORDS,
+    "ensure_capacity($self, required_capacity)\n"
+    "--\n\n"
+    "Ensure capacity of the item array."},
   {"insert", (PyCFunction)sifCellLinkedList_insert,
-    METH_VARARGS | METH_KEYWORDS, "Insert an item into the list."},
+    METH_VARARGS | METH_KEYWORDS,
+    "insert($self, item_idx, cx, cy, cz)\n"
+    "--\n\n"
+    "Insert an item into the list."},
   {NULL, NULL, 0, NULL}};
 
 /* --- Type Object --- */

@@ -25,7 +25,8 @@
 
 /* --- Field I/O --- */
 
-PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* write_field_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   double box_length;
   PyObject *x_obj, *y_obj, *z_obj;
@@ -35,9 +36,9 @@ PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
   static char* kwlist[] = {
     "filepath", "box_length", "x", "y", "z", "vx", "vy", "vz", "weights", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "sdOOO|OOOO", kwlist, &filepath,
-        &box_length, &x_obj, &y_obj, &z_obj, &vx_obj, &vy_obj, &vz_obj,
-        &weights_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&dOOO|OOOO", kwlist,
+        py_sif_path_arg, &filepath, &box_length, &x_obj, &y_obj, &z_obj,
+        &vx_obj, &vy_obj, &vz_obj, &weights_obj)) {
     return NULL;
   }
 
@@ -114,13 +115,18 @@ PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
   Py_RETURN_NONE;
 }
 
-PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* pysif_write_field(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(write_field_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_field_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   int wrap = 0;
   static char* kwlist[] = {"filepath", "wrap", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|p", kwlist, &filepath, &wrap)) {
+        args, kwds, "O&|p", kwlist, py_sif_path_arg, &filepath, &wrap)) {
     return NULL;
   }
 
@@ -178,12 +184,17 @@ PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
   return (PyObject*)obj;
 }
 
-PyObject* pysif_read_field_header(
+PyObject* pysif_read_field(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(read_field_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_field_header_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, py_sif_path_arg, &filepath)) {
     return NULL;
   }
 
@@ -215,15 +226,22 @@ PyObject* pysif_read_field_header(
     (unsigned int)header.version);
 }
 
+PyObject* pysif_read_field_header(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_field_header_impl, self, args, kwds, "filepath");
+}
+
 /* --- Grid I/O --- */
 
-PyObject* pysif_write_grid(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* write_grid_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* grid_obj;
 
   static char* kwlist[] = {"filepath", "grid", NULL};
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifGridType, &grid_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist, py_sif_path_arg,
+        &filepath, &sifGridType, &grid_obj)) {
     return NULL;
   }
 
@@ -241,11 +259,17 @@ PyObject* pysif_write_grid(PyObject* self, PyObject* args, PyObject* kwds) {
   Py_RETURN_NONE;
 }
 
-PyObject* pysif_read_grid(PyObject* self, PyObject* args, PyObject* kwds) {
+PyObject* pysif_write_grid(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(write_grid_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_grid_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, py_sif_path_arg, &filepath)) {
     return NULL;
   }
 
@@ -269,9 +293,13 @@ PyObject* pysif_read_grid(PyObject* self, PyObject* args, PyObject* kwds) {
   return (PyObject*)obj;
 }
 
+PyObject* pysif_read_grid(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(read_grid_impl, self, args, kwds, "filepath");
+}
+
 /* --- ASCII I/O --- */
 
-PyObject* pysif_read_field_ascii(
+static PyObject* read_field_ascii_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* format = "x y z";
@@ -282,8 +310,8 @@ PyObject* pysif_read_field_ascii(
   static char* kwlist[] = {
     "filepath", "format", "delimiter", "skip_lines", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|ssi", kwlist, &filepath,
-        &format, &delim_str, &skip_lines)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&|ssi", kwlist,
+        py_sif_path_arg, &filepath, &format, &delim_str, &skip_lines)) {
     return NULL;
   }
 
@@ -317,6 +345,12 @@ PyObject* pysif_read_field_ascii(
   return (PyObject*)obj;
 }
 
+PyObject* pysif_read_field_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_field_ascii_impl, self, args, kwds, "filepath");
+}
+
 /* --- raw binary input --- */
 
 /* One of a fixed set of strings, to its enumerator; a ValueError naming the
@@ -340,7 +374,7 @@ static int binary_choice(const char* arg, const char* s,
   return -1;
 }
 
-PyObject* pysif_read_field_binary(
+static PyObject* read_field_binary_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* format = "x y z";
@@ -354,9 +388,9 @@ PyObject* pysif_read_field_binary(
   static char* kwlist[] = {"filepath", "format", "layout", "precision",
     "byteorder", "header_bytes", "n_particles", "field", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|s$sssKKO", kwlist, &filepath,
-        &format, &layout_s, &precision_s, &byteorder_s, &header_bytes,
-        &n_particles, &into))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&|s$sssKKO", kwlist,
+        py_sif_path_arg, &filepath, &format, &layout_s, &precision_s,
+        &byteorder_s, &header_bytes, &n_particles, &into))
     return NULL;
 
   static const char* const layouts[] = {"rows", "blocks"};
@@ -426,14 +460,20 @@ PyObject* pysif_read_field_binary(
   return (PyObject*)obj;
 }
 
-PyObject* pysif_write_catalogue_ascii(
+PyObject* pysif_read_field_binary(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_field_binary_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* write_catalogue_ascii_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* cat_obj;
 
   static char* kwlist[] = {"filepath", "catalogue", NULL};
-  if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "sO!", kwlist, &filepath, &sifCatalogueType, &cat_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!", kwlist, py_sif_path_arg,
+        &filepath, &sifCatalogueType, &cat_obj)) {
     return NULL;
   }
 
@@ -452,14 +492,20 @@ PyObject* pysif_write_catalogue_ascii(
   Py_RETURN_NONE;
 }
 
-PyObject* pysif_read_catalogue_ascii(
+PyObject* pysif_write_catalogue_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    write_catalogue_ascii_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_catalogue_ascii_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   const char* format = NULL;
   static char* kwlist[] = {"filepath", "format", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|z", kwlist, &filepath, &format)) {
+        args, kwds, "O&|z", kwlist, py_sif_path_arg, &filepath, &format)) {
     return NULL;
   }
 
@@ -483,15 +529,22 @@ PyObject* pysif_read_catalogue_ascii(
   obj->catalogue = cat;
   return (PyObject*)obj;
 }
-PyObject* pysif_write_profiles_ascii(
+
+PyObject* pysif_read_catalogue_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_catalogue_ascii_impl, self, args, kwds, "filepath");
+}
+static PyObject* write_profiles_ascii_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   PyObject* prof_obj;
   PyObject* cat_obj;
 
   static char* kwlist[] = {"filepath", "profiles", "catalogue", NULL};
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "sO!O!", kwlist, &filepath,
-        &sifProfilesType, &prof_obj, &sifCatalogueType, &cat_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&O!O!", kwlist,
+        py_sif_path_arg, &filepath, &sifProfilesType, &prof_obj,
+        &sifCatalogueType, &cat_obj)) {
     return NULL;
   }
 
@@ -517,12 +570,19 @@ PyObject* pysif_write_profiles_ascii(
   Py_RETURN_NONE;
 }
 
-PyObject* pysif_read_profiles_ascii(
+PyObject* pysif_write_profiles_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    write_profiles_ascii_impl, self, args, kwds, "filepath");
+}
+
+static PyObject* read_profiles_ascii_impl(
   PyObject* self, PyObject* args, PyObject* kwds) {
   const char* filepath;
   static char* kwlist[] = {"filepath", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s", kwlist, &filepath))
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "O&", kwlist, py_sif_path_arg, &filepath))
     return NULL;
 
   /* Asking for a block the file does not carry is an error, so the header
@@ -566,6 +626,12 @@ PyObject* pysif_read_profiles_ascii(
   cat_obj->catalogue = cat;
 
   return Py_BuildValue("NN", (PyObject*)prof, (PyObject*)cat_obj);
+}
+
+PyObject* pysif_read_profiles_ascii(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(
+    read_profiles_ascii_impl, self, args, kwds, "filepath");
 }
 
 /* --- paths, shared by the readers of several files --- */
@@ -619,4 +685,56 @@ int py_sif_require_file(const char* path) {
     return 0;
   PyErr_SetFromErrnoWithFilename(PyExc_OSError, path);
   return -1;
+}
+
+PyObject* py_sif_call_with_path(PyCFunctionWithKeywords impl, PyObject* self,
+  PyObject* args, PyObject* kwds, const char* name) {
+  /* Where the path is: the first positional argument, or the keyword. With
+   * neither, impl runs as called and reports the missing argument itself. */
+  PyObject* path = PyTuple_GET_SIZE(args) > 0 ? PyTuple_GET_ITEM(args, 0)
+                   : kwds                     ? PyDict_GetItemString(kwds, name)
+                                              : NULL;
+  if (!path)
+    return impl(self, args, kwds);
+
+  PyObject* bytes = NULL;
+  if (!PyUnicode_FSConverter(path, &bytes))
+    return NULL;
+
+  PyObject* new_args = NULL;
+  PyObject* new_kwds = NULL;
+  PyObject* result = NULL;
+  if (PyTuple_GET_SIZE(args) > 0) {
+    /* A new tuple, not PyTuple_GetSlice, which hands back args itself for
+     * the whole range. */
+    const Py_ssize_t n = PyTuple_GET_SIZE(args);
+    new_args = PyTuple_New(n);
+    if (!new_args)
+      goto done;
+    PyTuple_SET_ITEM(new_args, 0, Py_NewRef(bytes));
+    for (Py_ssize_t i = 1; i < n; i++)
+      PyTuple_SET_ITEM(new_args, i, Py_NewRef(PyTuple_GET_ITEM(args, i)));
+  } else {
+    new_kwds = PyDict_Copy(kwds);
+    if (!new_kwds || PyDict_SetItemString(new_kwds, name, bytes) < 0)
+      goto done;
+  }
+  result = impl(self, new_args ? new_args : args, new_kwds ? new_kwds : kwds);
+
+done:
+  Py_XDECREF(new_kwds);
+  Py_XDECREF(new_args);
+  Py_DECREF(bytes);
+  return result;
+}
+
+int py_sif_path_arg(PyObject* obj, void* out) {
+  if (!PyBytes_Check(obj)) {
+    PyErr_SetString(PyExc_SystemError,
+      "py_sif_path_arg: path not converted (call through "
+      "py_sif_call_with_path)");
+    return 0;
+  }
+  *(const char**)out = PyBytes_AS_STRING(obj);
+  return 1;
 }

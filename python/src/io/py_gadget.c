@@ -226,13 +226,14 @@ static PyObject* header_dict(const sif_gadget_header_t* h) {
   return NULL;
 }
 
-PyObject* pysif_gadget_header(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* gadget_header_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* path;
   PyObject* format_obj = NULL;
   static char* kwlist[] = {"path", "format", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|O", kwlist, &path, &format_obj))
+        args, kwds, "O&|O", kwlist, py_sif_path_arg, &path, &format_obj))
     return NULL;
 
   sif_gadget_format_t format;
@@ -248,18 +249,23 @@ PyObject* pysif_gadget_header(PyObject* self, PyObject* args, PyObject* kwds) {
   return header_dict(&h);
 }
 
+PyObject* pysif_gadget_header(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(gadget_header_impl, self, args, kwds, "path");
+}
+
 /*
  * Printed through sys.stdout rather than the C stdout, which a notebook does
  * not show: the C printer writes into a temporary file, and its text is
  * handed to Python.
  */
-PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* inspect_gadget_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* path;
   PyObject* format_obj = NULL;
   static char* kwlist[] = {"path", "format", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|O", kwlist, &path, &format_obj))
+        args, kwds, "O&|O", kwlist, py_sif_path_arg, &path, &format_obj))
     return NULL;
 
   sif_gadget_format_t format;
@@ -305,9 +311,14 @@ PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
   Py_RETURN_NONE;
 }
 
+PyObject* pysif_inspect_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(inspect_gadget_impl, self, args, kwds, "path");
+}
+
 /* --- reader --- */
 
-PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
+static PyObject* read_gadget_impl(
+  PyObject* self, PyObject* args, PyObject* kwds) {
   const char* path;
   int ptype = 1;
   PyObject* velocities_obj = Py_None;
@@ -320,9 +331,9 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
   static char* kwlist[] = {"path", "ptype", "velocities", "masses", "length",
     "fraction", "seed", "format", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "s|$iOpsdKO", kwlist, &path,
-        &ptype, &velocities_obj, &masses, &length_s, &fraction, &seed,
-        &format_obj))
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O&|$iOpsdKO", kwlist,
+        py_sif_path_arg, &path, &ptype, &velocities_obj, &masses, &length_s,
+        &fraction, &seed, &format_obj))
     return NULL;
 
   sif_gadget_format_t format;
@@ -405,4 +416,8 @@ PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
   obj->field = field;
 
   return Py_BuildValue("(Nd)", (PyObject*)obj, box_length);
+}
+
+PyObject* pysif_read_gadget(PyObject* self, PyObject* args, PyObject* kwds) {
+  return py_sif_call_with_path(read_gadget_impl, self, args, kwds, "path");
 }

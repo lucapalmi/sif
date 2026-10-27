@@ -177,7 +177,7 @@ static PyObject* sifTessellation_mesh(
 
 static PyMethodDef sifTessellation_methods[] = {
   {"mesh", (PyCFunction)sifTessellation_mesh, METH_VARARGS | METH_KEYWORDS,
-    "mesh(n_cells, drop_indices=True, consume=False)\n"
+    "mesh($self, n_cells, drop_indices=True, consume=False)\n"
     "--\n\n"
     "Bin the samples into a ChainMesh, ready to measure.\n\n"
     "What turns a tessellation into a profile: hand the result to\n"

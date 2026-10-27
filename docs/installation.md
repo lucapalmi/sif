@@ -98,6 +98,8 @@ pip install . -C cmake.define.OpenMP_ROOT=$(brew --prefix libomp)
 A build from source records where it found FFTW, HDF5 and the OpenMP runtime, so `import pysif` and the command-line programs work without having to load the modules. They only have to be loaded while `pip install .` runs. If the modules are later upgraded or removed, rebuild.
 :::
 
+The package carries type stubs, so editors (VS Code, PyCharm, or any editor with a Python language server) complete pysif's functions, their parameters and docstrings, and type checkers such as mypy and pyright check calls into it. Nothing needs installing or configuring for this.
+
 ::::
 
 :::::

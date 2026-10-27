@@ -456,7 +456,7 @@ static PyObject* sifCatalogue_set_metadata(
 static PyMethodDef sifCatalogue_methods[] = {
   {"set_metadata", (PyCFunction)sifCatalogue_set_metadata,
     METH_VARARGS | METH_KEYWORDS,
-    "set_metadata(key, value)\n"
+    "set_metadata($self, key, value)\n"
     "--\n\n"
     "Set one of the catalogue's named values, which every writer records:\n"
     "an int, a float or a str; None removes the key.\n\n"
@@ -466,7 +466,7 @@ static PyMethodDef sifCatalogue_methods[] = {
     "Raises:\n"
     "    ValueError: For a key or a value no format can keep."},
   {"to_numpy", (PyCFunction)sifCatalogue_to_numpy, METH_NOARGS,
-    "to_numpy()\n"
+    "to_numpy($self)\n"
     "--\n\n"
     "The catalogue as one NumPy structured array, a copy: a record per\n"
     "void, with fields named as the file headers name them -- cx, cy, cz, r\n"
@@ -475,7 +475,7 @@ static PyMethodDef sifCatalogue_methods[] = {
     "astropy.table.Table(cat.to_numpy()) take it as it is."},
   {"translate", (PyCFunction)sifCatalogue_translate,
     METH_VARARGS | METH_KEYWORDS,
-    "translate(offset)\n"
+    "translate($self, offset)\n"
     "--\n\n"
     "Shift every void centre by offset, in place.\n\n"
     "Radii and footprints are unchanged. finders.exodus_survey() already\n"
@@ -486,7 +486,7 @@ static PyMethodDef sifCatalogue_methods[] = {
     "Raises:\n"
     "    ValueError: For a catalogue on the sky."},
   {"to_sky", (PyCFunction)sifCatalogue_to_sky, METH_VARARGS | METH_KEYWORDS,
-    "to_sky(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, wa=0.0)\n"
+    "to_sky($self, omega_m, omega_de=None, omega_r=0.0, w0=-1.0, wa=0.0)\n"
     "--\n\n"
     "Turn the void centres into sky coordinates, in place.\n\n"
     "The inverse of Field.convert_sky_coordinates(), for the voids a survey\n"
@@ -507,7 +507,8 @@ static PyMethodDef sifCatalogue_methods[] = {
     "        not finite, or one past what the cosmology reaches."},
   {"to_cartesian", (PyCFunction)sifCatalogue_to_cartesian,
     METH_VARARGS | METH_KEYWORDS,
-    "to_cartesian(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, wa=0.0)\n"
+    "to_cartesian($self, omega_m, omega_de=None, omega_r=0.0, w0=-1.0, "
+    "wa=0.0)\n"
     "--\n\n"
     "Turn void centres on the sky back into Cartesian ones, in place.\n\n"
     "The inverse of to_sky(), and the conversion\n"

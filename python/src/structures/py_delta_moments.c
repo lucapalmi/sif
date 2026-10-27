@@ -183,6 +183,8 @@ static PyObject* sifDeltaMoments_moment(PyObject* self_obj, PyObject* args) {
 
 static PyMethodDef sifDeltaMoments_methods[] = {
   {"moment", sifDeltaMoments_moment, METH_VARARGS,
+    "moment($self, order, /)\n"
+    "--\n\n"
     "sigma_order across radii, as a read-only view into the moment set.\n"
     "Equivalent to sigma[order], but rejects an order that was not computed "
     "rather than indexing past the end."},

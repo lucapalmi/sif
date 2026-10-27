@@ -80,4 +80,19 @@ PyObject* py_sif_paths_list(PyObject* obj);
  * FileNotFoundError, as open() raises) if not. */
 int py_sif_require_file(const char* path);
 
+/* How a binding takes one path as any of str, bytes or os.PathLike without
+ * holding a reference it must release on every return. The binding's public
+ * function is
+ *
+ *     return py_sif_call_with_path(impl, self, args, kwds, "filepath");
+ *
+ * which converts the path argument -- the first positional one, or the
+ * keyword `name` -- to file-system bytes (os.fsencode) and calls impl with
+ * them in its place. impl parses it with "O&", py_sif_path_arg, &filepath,
+ * which borrows the bytes' const char*: alive until impl returns, since the
+ * arguments impl was called with hold them. */
+PyObject* py_sif_call_with_path(PyCFunctionWithKeywords impl, PyObject* self,
+  PyObject* args, PyObject* kwds, const char* name);
+int py_sif_path_arg(PyObject* obj, void* out);
+
 #endif /* SIF_PY_IO_PY_IO_H */

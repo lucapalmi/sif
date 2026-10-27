@@ -520,7 +520,7 @@ static PyObject* sifField_to_numpy(PyObject* self_obj, PyObject* unused) {
 /* --- Method Definition Array --- */
 static PyMethodDef sifField_methods[] = {
   {"to_numpy", (PyCFunction)sifField_to_numpy, METH_NOARGS,
-    "to_numpy()\n"
+    "to_numpy($self)\n"
     "--\n\n"
     "The field as one (N, k) NumPy array, a copy: a row per particle, with\n"
     "columns x, y, z (ra, dec, z on the sky), then vx, vy, vz if the field\n"
@@ -531,8 +531,8 @@ static PyMethodDef sifField_methods[] = {
     "    ValueError: For a field with particles but no positions."},
   {"convert_sky_coordinates", (PyCFunction)sifField_convert_sky_coordinates,
     METH_VARARGS | METH_KEYWORDS,
-    "convert_sky_coordinates(omega_m, omega_de=None, omega_r=0.0, w0=-1.0, "
-    "wa=0.0)\n"
+    "convert_sky_coordinates($self, omega_m, omega_de=None, omega_r=0.0, "
+    "w0=-1.0, wa=0.0)\n"
     "--\n\n"
     "Turn sky coordinates into comoving Cartesian positions, in place.\n\n"
     "The field has to hold right ascension, declination (both in degrees)\n"
@@ -555,7 +555,8 @@ static PyMethodDef sifField_methods[] = {
     "        one out of range, a bad cosmology, or one with no expansion\n"
     "        history out to the largest redshift."},
   {"wrap", (PyCFunction)sifField_wrap, METH_VARARGS | METH_KEYWORDS,
-    "wrap(box_length) -> dict\n\n"
+    "wrap($self, box_length)\n"
+    "--\n\n"
     "Fold every coordinate into [0, box_length) periodically, in place.\n\n"
     "Not needed for rounding: Grid.assign_cic() and ChainMesh() accept\n"
     "coordinates within a few ULPs of the box faces -- a coordinate stored\n"
@@ -570,7 +571,7 @@ static PyMethodDef sifField_methods[] = {
     "RuntimeWarning, and the field will be refused by anything that bins\n"
     "it. Only correct for a field that is periodic in this box."},
   {"translate", (PyCFunction)sifField_translate, METH_VARARGS | METH_KEYWORDS,
-    "translate(offset)\n"
+    "translate($self, offset)\n"
     "--\n\n"
     "Shift every position by offset, in place.\n\n"
     "What moves a survey into the box pysif.finders.survey_box() chose for\n"
@@ -579,7 +580,7 @@ static PyMethodDef sifField_methods[] = {
     "Args:\n"
     "    offset: Three numbers, added to x, y and z."},
   {"sort_morton", (PyCFunction)sifField_sort_morton, METH_NOARGS,
-    "sort_morton()\n"
+    "sort_morton($self)\n"
     "--\n\n"
     "Reorder the particles along a 3D Morton curve, in place.\n\n"
     "Puts particles that are close in space close in memory, which is what\n"
@@ -587,7 +588,7 @@ static PyMethodDef sifField_methods[] = {
     "permutation is kept, so velocities and weights assigned afterwards are\n"
     "matched to their own particles automatically."},
   {"refresh_bounds", (PyCFunction)sifField_refresh_bounds, METH_NOARGS,
-    "refresh_bounds()\n"
+    "refresh_bounds($self)\n"
     "--\n\n"
     "Recompute the cached bounding box and centre.\n\n"
     "Only needed after writing into the position arrays directly; every\n"

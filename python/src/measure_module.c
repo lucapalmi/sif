@@ -9,6 +9,8 @@
 #include "measure/py_profiles.h"
 #include "measure/py_size_function.h"
 #include "measure/py_survey_volume.h"
+#include "structures/py_delta_distribution.h"
+#include "structures/py_delta_moments.h"
 
 static PyMethodDef measure_methods[] = {
   {"size_function_catalogue", (PyCFunction)py_sif_size_function_catalogue,
@@ -33,7 +35,8 @@ static PyMethodDef measure_methods[] = {
 
   {"size_function_combine", (PyCFunction)py_sif_size_function_combine,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_combine(vsfs, master_bins, domains=None, method='mean')\n"
+    "size_function_combine(vsfs, master_bins, domains=None, method='mean', "
+    "bin='ln')\n"
     "--\n\n"
     "Merge several size functions onto one radius grid.\n\n"
     "How measurements from boxes of different resolution are joined: each\n"
@@ -46,7 +49,9 @@ static PyMethodDef measure_methods[] = {
     "    master_bins: Radial bins in the result.\n"
     "    domains: Optional (r_min, r_max) per input; None uses each input's\n"
     "        full range.\n"
-    "    method: 'mean', 'median' or 'stitch'.\n\n"
+    "    method: 'mean', 'median' or 'stitch'.\n"
+    "    bin: 'ln' or 'linear', the result's binning convention: the inputs'\n"
+    "        own, as size_function_catalogue() made them.\n\n"
     "Returns:\n"
     "    SizeFunction: The merged size function."},
 
@@ -211,17 +216,34 @@ static struct PyModuleDef measure_module = {PyModuleDef_HEAD_INIT,
            "return the same containers so the two can be compared.",
   .m_size = -1, .m_methods = measure_methods};
 
+/* The containers measure's functions return; pysif.model's
+ * delta_moments_pk() returns a DeltaMoments too. */
+static const struct {
+  const char* name;
+  PyTypeObject* type;
+} MEASURE_TYPES[] = {
+  {"DeltaDistribution", &sifDeltaDistributionType},
+  {"DeltaMoments", &sifDeltaMomentsType},
+  {"Profiles", &sifProfilesType},
+};
+
 /* Submodule exporter called from the parent module initialisation routing */
 PyObject* py_sif_init_measure(void) {
-  if (PyType_Ready(&sifProfilesType) < 0)
-    return NULL;
+  const size_t n = sizeof(MEASURE_TYPES) / sizeof(MEASURE_TYPES[0]);
+  for (size_t i = 0; i < n; i++)
+    if (PyType_Ready(MEASURE_TYPES[i].type) < 0)
+      return NULL;
 
   PyObject* m = PyModule_Create(&measure_module);
   if (!m)
     return NULL;
 
-  Py_INCREF(&sifProfilesType);
-  PyModule_AddObject(m, "Profiles", (PyObject*)&sifProfilesType);
-
+  for (size_t i = 0; i < n; i++) {
+    if (PyModule_AddObjectRef(
+          m, MEASURE_TYPES[i].name, (PyObject*)MEASURE_TYPES[i].type) < 0) {
+      Py_DECREF(m);
+      return NULL;
+    }
+  }
   return m;
 }

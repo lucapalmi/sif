@@ -15,16 +15,24 @@ Current version: v0.4 release 1
   bit-identical catalogues
 - sif-exodus `settings = { key = value }`: the library's settings for one run
 - `sif_config_t.settings`, settings applied at init; `sif_setting_check()`
+- Type stubs for pysif: editors complete functions, parameters and
+  docstrings, and mypy/pyright check calls
 
 ### Changed
 
 - Unknown setting keys and malformed values are refused; `sif_setting_get()`
   no longer stores its fallback
 - The settings file lists every setting with a comment, defaults commented out
+- Python: `DeltaMoments` and `DeltaDistribution` moved to `pysif.measure`
+  (breaking: `pysif.DeltaMoments` is now `pysif.measure.DeltaMoments`)
+- Python: every `pysif.io` function takes a path as str, bytes or
+  `os.PathLike` (`pathlib.Path`)
 
 ### Fixed
 
 - Python `get_setting()` without a fallback wrote an empty entry to the file
+- Python: `inspect.signature()` works on every function and method;
+  `size_function_combine()` documents its `bin` argument
 
 
 ## v0.4.1 -- 26/10/2026

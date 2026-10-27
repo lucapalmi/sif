@@ -113,12 +113,17 @@ endif()
 #
 # A plain CMake build assembles the same package in the build tree, so that
 # PYTHONPATH=<build>/python finds a working pysif without pip. The files are
-# copied, not linked: edit them in python/pysif/, and rebuild.
+# copied, not linked: edit them in python/pysif/, and rebuild. The type stubs
+# (*.pyi, and py.typed, which says the package has them) go with them, for
+# editors pointed at the build tree.
 set_target_properties(pysif PROPERTIES
   OUTPUT_NAME _pysif
   LIBRARY_OUTPUT_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}/pysif)
 
-file(GLOB _pysif_py CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/pysif/*.py)
+file(GLOB _pysif_py CONFIGURE_DEPENDS
+  ${CMAKE_CURRENT_SOURCE_DIR}/pysif/*.py
+  ${CMAKE_CURRENT_SOURCE_DIR}/pysif/*.pyi
+  ${CMAKE_CURRENT_SOURCE_DIR}/pysif/py.typed)
 foreach(_py IN LISTS _pysif_py)
   get_filename_component(_name "${_py}" NAME)
   configure_file("${_py}" "${CMAKE_CURRENT_BINARY_DIR}/pysif/${_name}" COPYONLY)

@@ -10,7 +10,9 @@
  * These used to live in a pysif.structures submodule. They are the types every
  * other submodule takes and returns, and a type is a noun rather than an
  * operation, so they belong beside the package rather than one level down:
- * pysif.Field, not pysif.structures.Field.
+ * pysif.Field, not pysif.structures.Field. The containers of one submodule's
+ * results only -- Profiles, DeltaMoments, DeltaDistribution -- are that
+ * submodule's (measure_module.c).
  */
 
 #define Py_MODULE_HEAD_UNIFIED
@@ -18,8 +20,6 @@
 #include "structures/py_catalogue.h"
 #include "structures/py_cell_linked_list.h"
 #include "structures/py_chain_mesh.h"
-#include "structures/py_delta_distribution.h"
-#include "structures/py_delta_moments.h"
 #include "structures/py_field.h"
 #include "structures/py_grid.h"
 #include "structures/py_size_function.h"
@@ -36,8 +36,6 @@ static const struct {
   {"Catalogue", &sifCatalogueType},
   {"CellLinkedList", &sifCellLinkedListType},
   {"ChainMesh", &sifChainMeshType},
-  {"DeltaDistribution", &sifDeltaDistributionType},
-  {"DeltaMoments", &sifDeltaMomentsType},
   {"Field", &sifFieldType},
   {"Grid", &sifGridType},
   {"SizeFunction", &sifSizeFunctionType},
