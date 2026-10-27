@@ -222,6 +222,7 @@ typedef struct {
 #define BATCH_REJECTED_MESH    2
 #define BATCH_REJECTED_RESCALE 3
 #define BATCH_ACCEPTED         4
+#define BATCH_REJECTED_WITNESS 5
 
 /* --- Run context --- */
 
@@ -641,6 +642,191 @@ static int find_conflicts(exodus_ctx_t* ctx, sif_real cx, sif_real cy,
       }
     }
   }
+  return SIF_OK;
+}
+
+/*
+ * The smallest radius past which a sphere at c certainly collides with an
+ * accepted void of radius at least min_rj, or INFINITY if none is within
+ * reach of r_hi.
+ *
+ * Most candidates that are rescaled are then refused by the overlap re-check:
+ * they clear the catalogue at the rung but not at the radius the rescaling
+ * returns. A collision only grows with the radius -- r + r_j - f * min(r, r_j)
+ * never falls as r grows, for any f up to 1 -- so each void j it could be with
+ * gives a radius r*_j past which the collision is certain, and the smallest of
+ * them is where the candidate's fate is sealed. sif__exodus_witness() then
+ * says whether the rescaling would certainly return more than that, and if it
+ * would, the candidate is refused without it.
+ *
+ * Each r*_j is solved in double with the separation padded by
+ * COLLISION_SLACK of the lengths involved, many times anything the float
+ * test in sif__overlap_exact() can be off by, so past r*_j that test cannot
+ * fail to see the collision. The padding only gives up a few candidates the
+ * witness could have refused, which are then rescaled as before.
+ */
+#define COLLISION_SLACK 1e-5
+
+static double collision_radius(const exodus_ctx_t* ctx, sif_real cx,
+  sif_real cy, sif_real cz, sif_real r_hi, sif_real min_rj, sif_real f,
+  sif_real box) {
+
+  const sif_catalogue_t* cat = ctx->cat;
+  const sif_cell_linked_list_t* cll = ctx->void_cll;
+  const double L = (double)box;
+  const double half = 0.5 * L;
+  const double ff = (double)f;
+  const sif_real reach = r_hi + ctx->max_accepted_r;
+  const int32_t n = (int32_t)cll->n_cells;
+  const sif_real x[3] = {cx, cy, cz};
+
+  int32_t lo[3], hi[3];
+  for (int a = 0; a < 3; a++) {
+    lo[a] = (int32_t)SIF_REAL_FLOOR((x[a] - reach) * cll->inv_cell_length);
+    hi[a] = (int32_t)SIF_REAL_FLOOR((x[a] + reach) * cll->inv_cell_length);
+    if (hi[a] - lo[a] >= n) {
+      lo[a] = 0;
+      hi[a] = n - 1;
+    }
+  }
+
+  double best = INFINITY;
+  for (int32_t a = lo[0]; a <= hi[0]; a++) {
+    const int32_t wa = ((a % n) + n) % n;
+    for (int32_t b = lo[1]; b <= hi[1]; b++) {
+      const int32_t wb = ((b % n) + n) % n;
+      for (int32_t c = lo[2]; c <= hi[2]; c++) {
+        const int32_t wc = ((c % n) + n) % n;
+        const uint64_t cell = ((uint64_t)wa * n + wb) * n + wc;
+        for (int32_t i = cll->head[cell]; i != -1; i = cll->next[i]) {
+          const double rj = (double)cat->radii[i];
+          if (cat->radii[i] < min_rj)
+            continue;
+
+          double dx = fabs((double)cx - (double)cat->cx[i]);
+          double dy = fabs((double)cy - (double)cat->cy[i]);
+          double dz = fabs((double)cz - (double)cat->cz[i]);
+          dx = dx > half ? L - dx : dx;
+          dy = dy > half ? L - dy : dy;
+          dz = dz > half ? L - dz : dz;
+          const double D = sqrt(dx * dx + dy * dy + dz * dz) +
+                           COLLISION_SLACK * (L + (double)r_hi + rj);
+
+          /* tot(r) = r + rj - f min(r, rj): rj at r = 0, (2 - f) rj at
+           * r = rj, slope 1 - f below that and 1 above. */
+          double r_star;
+          if (D <= rj)
+            r_star = 0.0;
+          else if (D <= (2.0 - ff) * rj)
+            r_star = (D - rj) / (1.0 - ff);
+          else
+            r_star = D - (1.0 - ff) * rj;
+
+          if (r_star < best)
+            best = r_star;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+/*
+ * The rung's overlap tests at the rung radius, run once over every candidate
+ * before the batches start, and the candidates they refuse dropped from the
+ * list in place, order kept.
+ *
+ * At the small rungs nearly every candidate falls to these tests -- a
+ * million at a time, against the ten thousand that reach a rescaling -- and
+ * inside the batches they ran in a parallel region per batch, a thousand and
+ * more regions a rung, each sized for the rescalings and not for them. Here
+ * they are one loop.
+ *
+ * Only under the cell seeds. There the catalogue only gains voids during a
+ * rung, and each test only finds more collisions as voids are added, so a
+ * candidate refused against the catalogue as the rung begins would be refused
+ * at its turn as well. The batches still run every test again on the ones
+ * kept, against the catalogue as it then stands, so what is accepted is
+ * exactly what it was. Under the minima a displacement takes voids out, and a
+ * refusal does not hold.
+ *
+ * The list is cut into chunks, each compacted by one thread, and the chunks
+ * then closed up in order.
+ */
+#define PREFILTER_CHUNKS_PER_THREAD 16
+
+static int prefilter_cells(exodus_ctx_t* ctx, const sif_grid_t* grid,
+  sif_real radius, sif_real overlap_fraction, int32_t proxy_pole,
+  sif_finder_radius_stats_t* stats) {
+
+  const uint64_t n = ctx->candidates.count;
+  if (n == 0)
+    return SIF_OK;
+
+  uint64_t n_chunks =
+    (uint64_t)PREFILTER_CHUNKS_PER_THREAD * (uint64_t)ctx->n_threads;
+  if (n_chunks > n)
+    n_chunks = n;
+
+  uint64_t* kept = malloc(n_chunks * sizeof(*kept));
+  if (!kept) {
+    SIF_LOG_ERROR(TAG, "out of memory: candidate pre-filter of %" PRIu64
+                       " chunks", n_chunks);
+    return SIF_ERR_ALLOC;
+  }
+
+  sif_candidate_t* items = ctx->candidates.items;
+  uint64_t n_masked = 0, n_proxy = 0, n_overlap = 0;
+
+#pragma omp parallel for schedule(dynamic, 1) num_threads(ctx->n_threads) \
+  reduction(+ : n_masked, n_proxy, n_overlap)
+  for (uint64_t c = 0; c < n_chunks; c++) {
+    const uint64_t lo = n * c / n_chunks;
+    const uint64_t hi = n * (c + 1) / n_chunks;
+    uint64_t w = lo;
+
+    for (uint64_t k = lo; k < hi; k++) {
+      if (masked_overlap(ctx, k, radius, overlap_fraction, grid->cell_length)) {
+        n_masked++;
+        continue;
+      }
+
+      uint32_t ix, iy, iz;
+      sif__unflatten_index(grid, items[k].flat_idx, &ix, &iy, &iz);
+      if (proxy_pole > 0 &&
+          sif__overlap_quick(ctx->mask, grid->n_cells, grid->p2_mask, ix, iy,
+            iz, (uint32_t)proxy_pole)) {
+        n_proxy++;
+        continue;
+      }
+
+      sif_real cc[3];
+      candidate_centre(ctx, k, grid, ix, iy, iz, cc);
+      if (sif__overlap_exact(ctx->cat, cc[0], cc[1], cc[2], radius,
+            ctx->max_accepted_r, grid->box_length, ctx->void_cll,
+            grid->p2_mask, overlap_fraction)) {
+        n_overlap++;
+        continue;
+      }
+
+      items[w++] = items[k];
+    }
+    kept[c] = w - lo;
+  }
+
+  uint64_t total = 0;
+  for (uint64_t c = 0; c < n_chunks; c++) {
+    const uint64_t lo = n * c / n_chunks;
+    if (lo != total && kept[c] > 0)
+      memmove(&items[total], &items[lo], kept[c] * sizeof(*items));
+    total += kept[c];
+  }
+  free(kept);
+
+  ctx->candidates.count = total;
+  stats->rejected_masked += n_masked;
+  stats->rejected_proxy += n_proxy;
+  stats->rejected_overlap += n_overlap;
   return SIF_OK;
 }
 
@@ -1420,7 +1606,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     if (status != SIF_OK)
       break;
 
-    const uint64_t n_candidates = ctx.candidates.count;
+    uint64_t n_candidates = ctx.candidates.count;
     const double t_scanned = wall_s();
     double t_evaluate = 0.0, t_commit = 0.0;
     uint64_t n_batches = 0;
@@ -1501,6 +1687,26 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
     const int32_t proxy_pole =
       (int32_t)(radius * (1.0f - overlap_fraction) / grid->cell_length) - 1;
+
+    /* The collision witness, see collision_radius(): for the box's unweighted
+     * kernel, the one it mirrors. The core is the rescaling's own. */
+    const int witness = !survey && !weighted;
+    const sif_real r_core2 = rmin * rmin;
+    const sif_real witness_min_rj =
+      ctx.seed_minima ? r_search * (1.0f + (sif_real)COLLISION_SLACK) : 0.0f;
+
+    if (!ctx.seed_minima) {
+      const double t_filter = wall_s();
+      status = prefilter_cells(
+        &ctx, grid, radius, overlap_fraction, proxy_pole, &stats);
+      t_evaluate += wall_s() - t_filter;
+      if (status != SIF_OK) {
+        sif__exodus_template_free(&tpl);
+        sif__exodus_template_free(&rtpl);
+        break;
+      }
+      n_candidates = ctx.candidates.count;
+    }
 
     /* The window is re-learned per radius: the accept rate at the largest
      * radius says little about the smallest. */
@@ -1586,6 +1792,27 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           continue;
         }
 
+        /* A collision certain at any radius past rho, and a rescaling
+         * certain to return more: the re-check would refuse it. The
+         * catalogue only gains voids before this candidate's commit (a
+         * displacement ends the batch), so a collision here is one there.
+         * Under the minima the void has to be one that refuses rather than
+         * yields, larger than anything the closed sphere can return. */
+        if (witness) {
+          const double rho = collision_radius(&ctx, cx, cy, cz, r_search,
+            witness_min_rj, overlap_fraction, grid->box_length);
+          if (rho < (double)r_search) {
+            sif_real rho2 = (sif_real)(rho * rho * (1.0 + COLLISION_SLACK));
+            if (rho2 < r_core2)
+              rho2 = r_core2;
+            if (sif__exodus_witness(ctx.mesh, cx, cy, cz, rho2, r_search,
+                  threshold, vol_factor, &tpl, ctx.seed_minima)) {
+              res->status = BATCH_REJECTED_WITNESS;
+              continue;
+            }
+          }
+        }
+
         uint8_t reason = RESCALE_OK;
         sif_real r_scaled;
 
@@ -1650,6 +1877,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         case BATCH_REJECTED_RESCALE:
           stats.rejected_rescale++;
           rescale.fail[res->rescale_reason]++;
+          continue;
+        case BATCH_REJECTED_WITNESS:
+          stats.rejected_witness++;
           continue;
         default:
           break;

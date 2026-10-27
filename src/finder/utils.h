@@ -247,6 +247,9 @@ typedef struct {
    * that has moved on since. Only a finder that rescales fills these. */
   uint64_t rejected_proxy_recheck;
   uint64_t rejected_exact;
+  /** Refused before rescaling: a collision past a radius the rescaling was
+   * certain to exceed. */
+  uint64_t rejected_witness;
   /** Smaller voids a larger one displaced, under the minima centres. */
   uint64_t displaced;
 

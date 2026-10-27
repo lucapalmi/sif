@@ -1030,6 +1030,136 @@ SIF_HOT_LOOP sif_real sif__exodus_find_radius_weighted(
     vol_factor, mass_factor, scratch, rmin, tpl, window, reason, 1);
 }
 
+/* --- Crossing witness --- */
+
+/*
+ * Whether sif__exodus_find_radius() would certainly return a radius above
+ * sqrt(rho2), answered without running it. The driver asks this of a
+ * candidate that would collide with the catalogue at any radius past rho2:
+ * a yes refuses it before the rescaling is paid for, with the decision the
+ * rescaling would have led to (see collision_radius() in exodus_finder.c).
+ *
+ * The rescaling returns the outermost particle distance d2 in the annulus at
+ * which the n_in particles inside satisfy n_in^2 <= K2 * d2^3. Take n, the
+ * particles at or inside rho2, and the nearest particle beyond it. When that
+ * particle is walked, n_in is n; its d2 is larger than rho2, so if n already
+ * passes at rho2 it passes there too, and the walk, coming from outside,
+ * stops there or further out. Two counts settle it -- n, and whether any
+ * particle lies in (rho2, r_search2] -- and only the cells the sphere through
+ * rho2 crosses need a distance: the count is O(surface), like the rescaling's
+ * own early refusal, where the histogram it replaces is O(volume).
+ *
+ * The counts follow the kernel cell by cell, so they are the counts the walk
+ * would see: a core cell is inside whatever its distances say, a shell cell
+ * is in the annulus whatever they say, and every other particle goes by
+ * dist2() against the same periodic image. A whole cell is taken without
+ * distances only with WITNESS_SLACK to spare on its bound. The test itself
+ * keeps the same slack below the kernel's, so no rounding in either can turn
+ * a yes here into a no there.
+ *
+ * `closed` asks in addition that the search sphere is not underdense out to
+ * r_search, which the minima need: there a sphere that is gets measured again
+ * with the reach extended, and the radius that comes back has no upper bound.
+ * Under the cell seeds the sphere is simply refused, which is a refusal
+ * either way.
+ */
+#define WITNESS_SLACK 1e-5f
+
+int sif__exodus_witness(const sif_chain_mesh_t* mesh, sif_real cx, sif_real cy,
+  sif_real cz, sif_real rho2, sif_real r_search, sif_real threshold,
+  sif_real vol_factor, const mesh_template_t* tpl, int closed) {
+
+  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
+
+  const sif_real inv_l = 1.0f / mesh->cell_length;
+  const mesh_query_t q = {
+    .mesh = mesh,
+    .tpl = tpl,
+    .cx = cx,
+    .cy = cy,
+    .cz = cz,
+    .centre_ix = (int32_t)(cx * inv_l),
+    .centre_iy = (int32_t)(cy * inv_l),
+    .centre_iz = (int32_t)(cz * inv_l),
+    .n_cells = (int32_t)mesh->n_cells,
+    .box_length = mesh->box_length,
+  };
+
+  const sif_real r_search2 = r_search * r_search;
+  if (!(rho2 < r_search2))
+    return 0;
+
+  const sif_real K = (threshold + 1.0f) * vol_factor;
+  const sif_real K2 = K * K;
+  const sif_real bound = K2 * (rho2 * rho2 * rho2) * (1.0f - WITNESS_SLACK);
+
+  /* Past this many inside, the test is already lost. */
+  const double n_cap = sqrt((double)bound) + 2.0;
+
+  const sif_real whole_in = rho2 * (1.0f - WITNESS_SLACK);
+  const sif_real whole_out = rho2 * (1.0f + WITNESS_SLACK);
+
+  uint64_t n = 0;      /* at or inside rho2 */
+  uint64_t within = 0; /* inside r_search, counted as the kernel counts it */
+  int beyond = 0;      /* a particle in (rho2, r_search2] */
+
+  for (uint32_t i = 0; i < tpl->count; i++) {
+    const uint8_t type = tpl->type[i];
+
+    /* A cell wholly beyond rho2 only has to say it is not empty, and once one
+     * has, the rest add nothing unless the sphere has to be closed. */
+    if (!closed && beyond && tpl->min_d2[i] > whole_out)
+      continue;
+
+    uint64_t p_start, p_end, flat;
+    sif_real ex, ey, ez;
+    if (!query_cell(&q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
+      continue;
+
+    const uint64_t p_count = p_end - p_start;
+
+    if (type == CELL_FULLY_CORE || tpl->max_d2[i] <= whole_in) {
+      n += p_count;
+      within += p_count;
+    } else if (type == CELL_FULLY_SHELL && tpl->min_d2[i] > whole_out) {
+      within += p_count;
+      beyond = 1;
+    } else {
+      for (uint64_t p = p_start; p < p_end; p++) {
+        const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
+        if (d2 <= rho2) {
+          n++;
+          within++;
+        } else if (type == CELL_FULLY_SHELL || d2 <= r_search2) {
+          within++;
+          beyond = 1;
+        }
+      }
+    }
+
+    if ((double)n > n_cap)
+      return 0;
+  }
+
+  const sif_real rn = (sif_real)n;
+  if (!beyond || !(rn * rn <= bound))
+    return 0;
+
+  if (closed) {
+    /* The kernel's refusal is (within / expected) - 1 <= threshold. */
+    const double expected =
+      (double)vol_factor * (double)r_search * (double)r_search *
+      (double)r_search;
+    if (!((double)within >
+          (1.0 + (double)threshold) * expected * (1.0 + WITNESS_SLACK)))
+      return 0;
+  }
+
+  return 1;
+}
+
 /* --- Survey rescaling --- */
 
 /*

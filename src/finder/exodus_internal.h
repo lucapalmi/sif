@@ -209,6 +209,16 @@ sif_real sif__exodus_find_radius_weighted(const sif_chain_mesh_t* mesh,
   sif_real cx, sif_real cy, sif_real cz, sif_real r_search, sif_real threshold,
   sif_real vol_factor, sif_real mass_factor, radial_scratch_t* scratch,
   sif_real rmin, const mesh_template_t* tpl, uint32_t window, uint8_t* reason);
+/**
+ * @brief Whether sif__exodus_find_radius(), unweighted, would certainly return
+ * a radius above sqrt(rho2), from counts alone; `closed` also asks that the
+ * search sphere is not underdense out to r_search. `tpl` is the rescaling's,
+ * and rho2 must be at least its core's rmin^2. 1 for proved, 0 for not
+ * proved.
+ */
+int sif__exodus_witness(const sif_chain_mesh_t* mesh, sif_real cx, sif_real cy,
+  sif_real cz, sif_real rho2, sif_real r_search, sif_real threshold,
+  sif_real vol_factor, const mesh_template_t* tpl, int closed);
 sif_real sif__exodus_find_radius_survey(const mesh_query_t* dq,
   const mesh_query_t* rq, sif_real r_search, sif_real K,
   radial_scratch_t* scratch, sif_real rmin, uint32_t window, uint8_t* reason);

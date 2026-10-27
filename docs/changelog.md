@@ -27,6 +27,9 @@ Current version: v0.4 release 1
   (breaking: `pysif.DeltaMoments` is now `pysif.measure.DeltaMoments`)
 - Python: every `pysif.io` function takes a path as str, bytes or
   `os.PathLike` (`pathlib.Path`)
+- Exodus refuses a candidate whose collision with the catalogue is certain
+  before rescaling it, and screens excursion-set candidates once per rung:
+  up to 2.5x faster candidate evaluation, bit-identical catalogues
 
 ### Fixed
 

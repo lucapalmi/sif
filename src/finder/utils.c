@@ -568,6 +568,9 @@ void sif__finder_log_radius(const char* tag, sif_real radius,
     tag, "proxy re-check exclusions: %7" PRIu64, stats->rejected_proxy_recheck);
   SIF_LOG_TRACE(
     tag, "exact re-check exclusions: %7" PRIu64, stats->rejected_exact);
+  if (stats->rejected_witness)
+    SIF_LOG_TRACE(
+      tag, "collision before rescaling:%7" PRIu64, stats->rejected_witness);
   if (stats->displaced)
     SIF_LOG_TRACE(
       tag, "smaller voids displaced:   %7" PRIu64, stats->displaced);
