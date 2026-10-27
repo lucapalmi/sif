@@ -19,3 +19,5 @@ ideas.txt
 .cache/
 __cmake_systeminformation/
 .claude/settings.local.json
+# rattler-build's packages and work tree (packaging/conda)
+output/

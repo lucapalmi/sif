@@ -51,6 +51,11 @@ jobs:
             echo "::error::tag $GITHUB_REF_NAME, but CMakeLists.txt says $version"
             exit 1
           fi
+          conda=$(sed -n 's/^  version: "\([0-9.]*\)"$/\1/p' packaging/conda/recipe.yaml)
+          if [ "$conda" != "$version" ]; then
+            echo "::error::packaging/conda/recipe.yaml says $conda, CMakeLists.txt $version"
+            exit 1
+          fi
 
   # One job per platform, each building every Python version natively: no
   # emulation, so the aarch64 wheels are built and tested on aarch64. What is

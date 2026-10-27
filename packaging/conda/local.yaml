@@ -1,0 +1,11 @@
+# Copyright (C) 2026 Luca Palmieri
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of sif. See COPYING for the full license text.
+
+# A local build of the conda recipe, for one Python rather than conda-forge's
+# every one; given after conda-forge's own variants, which it overrides.
+python:
+  - 3.12.* *_cpython
+is_python_min:
+  - false

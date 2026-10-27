@@ -99,8 +99,10 @@ endif()
 # SIF_RECORD_RPATH in the top-level CMakeLists.txt.
 sif_record_rpath(pysif)
 
-# 7. Handle the macOS + Conda dynamic linking problem
-if (APPLE AND DEFINED ENV{CONDA_PREFIX})
+# 7. Handle the macOS + Conda dynamic linking problem: a build from source
+# into a conda environment. Recording, so off where SIF_RECORD_RPATH is -- the
+# conda package among them, whose compilers record $PREFIX/lib themselves.
+if (APPLE AND SIF_RECORD_RPATH AND DEFINED ENV{CONDA_PREFIX})
   # Appended, so the directories recorded under SIF_RECORD_RPATH survive.
   set_property(TARGET pysif APPEND PROPERTY INSTALL_RPATH "$ENV{CONDA_PREFIX}/lib")
   set_target_properties(pysif PROPERTIES BUILD_WITH_INSTALL_RPATH TRUE)
