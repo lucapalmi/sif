@@ -9,22 +9,32 @@
  * @brief Runtime settings: a fixed set of keys, each read from the first of
  * these that gives it a value:
  *
- * 1. a value set for this process with sif_setting_override()
+ * 1. a value set for this process: with sif_setting_override(), or in
+ *    sif_config_t::settings at sif_system_init()
  * 2. the environment variable `SIF_<KEY>`, e.g. `SIF_FFT_TUNING_MAX_GIB`
  * 3. the settings file, `$SIF_HOME/config`, or `$HOME/.sif/config` when
  *    SIF_HOME is unset; sif_setting_set() writes to it
  * 4. the library's default
  *
- * The keys are:
+ * The keys, with their defaults:
  *
- * | key                  | default                | what it is               |
- * |----------------------|------------------------|--------------------------|
- * | `cache_directory`    | `$SIF_HOME/grid_cache` | where cached grids go    |
- * | `grid_cache_enabled` | `0`                    | cache CIC grids on disk  |
- * | `fft_wisdom_dir`     | `$SIF_HOME/wisdoms`    | where FFTW plans are kept|
- * | `fft_tuning_max_gib` | `16`                   | see #SIF__FFT_TUNING_MAX_GIB_DEFAULT |
- * | `cic_tile_particles` | `67108864`             | see #SIF__CIC_TILE_PARTICLES_DEFAULT |
- * | `scratch_directory`  | `$SIF_HOME/scratch`    | where `save_memory` runs put the grid |
+ * `cache_directory`, `$SIF_HOME/grid_cache`
+ *   Where cached grids go.
+ *
+ * `grid_cache_enabled`, `0`
+ *   Cache CIC grids on disk.
+ *
+ * `fft_wisdom_dir`, `$SIF_HOME/wisdoms`
+ *   Where FFTW's tuned plans are kept.
+ *
+ * `fft_tuning_max_gib`, `16`
+ *   See #SIF__FFT_TUNING_MAX_GIB_DEFAULT.
+ *
+ * `cic_tile_particles`, `67108864`
+ *   See #SIF__CIC_TILE_PARTICLES_DEFAULT.
+ *
+ * `scratch_directory`, `$SIF_HOME/scratch`
+ *   Where `save_memory` runs put the grid; see sif_finder_exodus_extras_t.
  *
  * The file and the environment are read by sif_system_init(), and the file is
  * written back by sif_system_finalise() if sif_setting_set() changed it --
@@ -49,6 +59,8 @@
 
 #ifndef SIF_CORE_SETTINGS_H
 #define SIF_CORE_SETTINGS_H
+
+#include <stddef.h>
 
 #include "sif/core/macros.h"
 
@@ -121,6 +133,22 @@ SIF_NODISCARD int sif_setting_set(const char* key, const char* value);
  * @note Requires sif_system_init().
  */
 SIF_NODISCARD int sif_setting_override(const char* key, const char* value);
+
+/**
+ * @brief Whether @p value is one @p key can be set to, without setting it.
+ *
+ * The checks sif_setting_set() and sif_setting_override() make, for a caller
+ * that wants to report a bad value its own way -- a configuration file that
+ * names the line, say. A path is only checked for being there, since what its
+ * variables expand to is known when it is read.
+ *
+ * @param reason Receives why the value is refused, when it is; may be NULL.
+ * @return SIF_OK, or SIF_ERR_INVALID. Logs nothing.
+ *
+ * @note Does not require sif_system_init().
+ */
+SIF_NODISCARD int sif_setting_check(
+  const char* key, const char* value, char* reason, size_t reason_size);
 
 /**
  * @brief Look up a setting.

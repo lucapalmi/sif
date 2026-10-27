@@ -5,10 +5,11 @@
  */
 
 /* The configuration file: a Lua script, run in a sandbox, whose sections --
- * mode, then input, grid, mesh, finder, prior, output, run -- become an
- * exodus_params_t. mode, "box" or "survey", is required, and decides what
- * the sections may hold: a survey's input names randoms and a cosmology
- * where a box's names its box, and its mesh sizes two meshes.
+ * mode, then input, grid, mesh, finder, prior, output, run, settings --
+ * become an exodus_params_t, and the library's settings for the run. mode,
+ * "box" or "survey", is required, and decides what the sections may hold: a
+ * survey's input names randoms and a cosmology where a box's names its box, and
+ * its mesh sizes two meshes.
  *
  * The script can compute anything Lua can (math, string, table, utf8, and
  * os.getenv/date/time/clock), but it cannot read or write files, run
@@ -30,6 +31,8 @@
 #define SIF_EXODUS_CONFIG_H
 
 #include "pipeline.h"
+
+#include "sif/core/system.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -53,6 +56,12 @@ typedef struct {
     uint8_t log_level;
     bool tune_fft;
   } run;
+
+  /* settings = { key = value }: the library's settings for this run, for
+   * sif_config_t::settings. Checked against the library's own keys when the
+   * script is read, sorted by key. */
+  sif_setting_t* settings;
+  size_t n_settings;
 
   /* The configuration as it resolved: every setting, defaults included, as
    * a Lua script that runs as a configuration of its own. */

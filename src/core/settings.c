@@ -606,6 +606,70 @@ void sif__settings_finalise(void) {
 /* --- public accessors --- */
 
 /*
+ * Why @p value is no value for @p def, into @p reason; 0 if it is one. The
+ * one place a write is judged, for sif_setting_check() and the writers.
+ */
+static int value_problem(
+  const setting_def_t* def, const char* value, char* reason, size_t cap) {
+  /* The file format is one `key = value` per line with no escaping. */
+  if (strchr(value, '\n')) {
+    snprintf(reason, cap,
+      "value contains a newline, which the config file cannot hold");
+    return 1;
+  }
+  if (strlen(value) >= VALUE_CAP) {
+    snprintf(
+      reason, cap, "%zu characters (at most %d)", strlen(value), VALUE_CAP - 1);
+    return 1;
+  }
+
+  /* Expanded first: a number may well be given as "$SLURM_CPUS". A path with
+   * an unset variable is let through, for the process that sets it. */
+  char expanded[VALUE_CAP];
+  char unset[KEY_CAP];
+  expand_env_vars(value, expanded, sizeof(expanded), unset);
+  const char* checked = def->kind == SETTING_PATH ? value : expanded;
+  if (!value_valid(def, checked)) {
+    char expected[64];
+    describe_expected(def, expected, sizeof(expected));
+    snprintf(reason, cap, "'%s' (expected %s)", value, expected);
+    return 1;
+  }
+  return 0;
+}
+
+/* "not a setting (known: ...)", for a key the registry does not hold. */
+static void describe_unknown(char* reason, size_t cap) {
+  size_t len = (size_t)snprintf(reason, cap, "not a setting (known: ");
+  for (size_t i = 0; i < N_REGISTRY && len < cap; i++)
+    len += (size_t)snprintf(
+      reason + len, cap - len, "%s%s", i ? ", " : "", registry[i].key);
+  if (len < cap)
+    snprintf(reason + len, cap - len, ")");
+}
+
+int sif_setting_check(
+  const char* key, const char* value, char* reason, size_t reason_size) {
+  char local[512];
+  char* why = reason && reason_size ? reason : local;
+  const size_t cap = reason && reason_size ? reason_size : sizeof(local);
+
+  if (!key || !value) {
+    snprintf(why, cap, "%s: NULL", !key ? "key" : "value");
+    return SIF_ERR_INVALID;
+  }
+  const setting_def_t* def = registry_find(key);
+  if (!def) {
+    describe_unknown(why, cap);
+    return SIF_ERR_INVALID;
+  }
+  if (value_problem(def, value, why, cap))
+    return SIF_ERR_INVALID;
+  why[0] = '\0';
+  return SIF_OK;
+}
+
+/*
  * What sif_setting_set() and sif_setting_override() share: the checks, which
  * refuse a write the table could not use, and the entry to write into.
  * @p value is NULL only when an override is being cleared.
@@ -630,46 +694,16 @@ static int setting_write_check(
   }
 
   entry_t* e = settings_find(key);
+  char reason[512];
   if (!e || !e->def) {
-    char known[N_REGISTRY * KEY_CAP];
-    size_t len = 0;
-    known[0] = '\0';
-    for (size_t i = 0; i < N_REGISTRY; i++)
-      len += (size_t)snprintf(known + len, sizeof(known) - len, "%s%s",
-        i ? ", " : "", registry[i].key);
-    SIF_LOG_ERROR("settings", "%s: not a setting (known: %s)", key, known);
+    describe_unknown(reason, sizeof(reason));
+    SIF_LOG_ERROR("settings", "%s: %s", key, reason);
     return SIF_ERR_INVALID;
   }
 
-  if (value) {
-    /* The file format is one `key = value` per line with no escaping. */
-    if (strchr(value, '\n')) {
-      SIF_LOG_ERROR("settings",
-        "%s: not stored: value contains a newline, which the config file "
-        "cannot hold",
-        key);
-      return SIF_ERR_INVALID;
-    }
-
-    if (strlen(value) >= VALUE_CAP) {
-      SIF_LOG_ERROR("settings", "%s: not stored: %zu characters (at most %d)",
-        key, strlen(value), VALUE_CAP - 1);
-      return SIF_ERR_INVALID;
-    }
-
-    /* Expanded first: a number may well be given as "$SLURM_CPUS". A path
-     * with an unset variable is let through, for the process that sets it. */
-    char expanded[VALUE_CAP];
-    char unset[KEY_CAP];
-    expand_env_vars(value, expanded, sizeof(expanded), unset);
-    const char* checked = e->def->kind == SETTING_PATH ? value : expanded;
-    if (!value_valid(e->def, checked)) {
-      char expected[64];
-      describe_expected(e->def, expected, sizeof(expected));
-      SIF_LOG_ERROR("settings", "%s: not stored: '%s' (expected %s)", key,
-        value, expected);
-      return SIF_ERR_INVALID;
-    }
+  if (value && value_problem(e->def, value, reason, sizeof(reason))) {
+    SIF_LOG_ERROR("settings", "%s: not stored: %s", key, reason);
+    return SIF_ERR_INVALID;
   }
 
   *out = e;

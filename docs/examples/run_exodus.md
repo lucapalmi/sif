@@ -753,7 +753,13 @@ does, however the run ends; its path and size are logged.
 ::::{tab-item} sif-exodus
 ```lua
 run = { save_memory = true }
+
+-- the library's settings for this run: over $SIF_<KEY> and the settings
+-- file, and never saved
+settings = { scratch_directory = os.getenv("TMPDIR") .. "/sif" }
 ```
+`--check` repeats the settings in the configuration it prints, and refuses a
+key that is not a setting.
 ::::
 
 ::::{tab-item} Python

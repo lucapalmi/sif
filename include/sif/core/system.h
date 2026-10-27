@@ -63,6 +63,12 @@ typedef struct {
   uint32_t n_threads;
 } sif_omp_config_t;
 
+/** @brief A setting and its value, as sif_config_t::settings lists them. */
+typedef struct {
+  const char* key;
+  const char* value;
+} sif_setting_t;
+
 /**
  * @brief General library configuration.
  */
@@ -79,6 +85,16 @@ typedef struct {
    * default. Set it explicitly, or use one of the presets below.
    */
   uint8_t log_level;
+
+  /**
+   * Settings for this process, as sif_setting_override() sets them -- over
+   * the environment and the settings file, and never saved -- but in place
+   * before anything reads them, which an override after sif_system_init()
+   * is too late for in the case of `fft_wisdom_dir`. `n_settings` entries,
+   * or NULL for none. See settings.h for the keys.
+   */
+  const sif_setting_t* settings;
+  size_t n_settings;
 } sif_config_t;
 
 /**
@@ -91,8 +107,9 @@ typedef struct {
  * @param config Configuration to apply, or NULL for the defaults. It is read
  * once and copied, so neither the struct nor the sub-structs it points at need
  * to outlive the call, and the library never frees them.
- * @return SIF_OK, or SIF_ERR_ALLOC if the state or FFTW could not be brought
- * up -- in which case nothing is left initialised, and the call may be
+ * @return SIF_OK; SIF_ERR_INVALID for a setting in `config->settings` that
+ * sif_setting_check() refuses; SIF_ERR_ALLOC if the state or FFTW could not
+ * be brought up. On failure nothing is left initialised, and the call may be
  * retried.
  *
  * @note Failing to create the cache or wisdom directories is only a warning:

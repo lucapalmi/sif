@@ -7,6 +7,7 @@
 #include "config.h"
 
 #include "sif/core/macros.h"
+#include "sif/core/settings.h"
 #include "sif/finder/exodus_finder.h"
 #include "sif/io/field_io.h"
 #include "sif/io/fits_io.h"
@@ -33,8 +34,8 @@
 
 /* The top level: mode, which is a setting rather than a section, and the
  * sections. */
-static const char* const SECTIONS[] = {
-  "mode", "input", "grid", "mesh", "finder", "prior", "output", "run", NULL};
+static const char* const SECTIONS[] = {"mode", "input", "grid", "mesh",
+  "finder", "prior", "output", "run", "settings", NULL};
 
 /* Some sections take other keys in a survey than in a box. */
 
@@ -1685,6 +1686,78 @@ static void read_run(
   }
 }
 
+static int by_key(const void* a, const void* b) {
+  return strcmp(((const sif_setting_t*)a)->key, ((const sif_setting_t*)b)->key);
+}
+
+/*
+ * settings = { key = value }: the library's settings (settings.h), for this
+ * run only -- over the environment and the settings file, and never saved.
+ * Judged here by sif_setting_check(), so that a misspelt key is an error of
+ * the configuration, with its path, rather than of the run.
+ */
+static void read_settings(reader_t* r, int root, exodus_config_t* c) {
+  lua_State* L = r->L;
+  const int type = field(L, root, "settings");
+  const int t = lua_gettop(L);
+
+  if (type == LUA_TTABLE) {
+    lua_pushnil(L);
+    while (lua_next(L, t)) {
+      if (lua_type(L, -2) != LUA_TSTRING) {
+        report(r, "settings", "keys are setting names, found a %s",
+          luaL_typename(L, -2));
+        lua_pop(L, 1);
+        continue;
+      }
+
+      const char* key = lua_tostring(L, -2);
+      char w[160], buf[64], why[512];
+      at(w, sizeof w, "settings", key);
+
+      const char* value = NULL;
+      switch (lua_type(L, -1)) {
+      case LUA_TSTRING:
+        value = lua_tostring(L, -1);
+        break;
+      case LUA_TNUMBER:
+        format_double(buf, sizeof buf, lua_tonumber(L, -1));
+        value = buf;
+        break;
+      case LUA_TBOOLEAN:
+        value = lua_toboolean(L, -1) ? "1" : "0";
+        break;
+      default:
+        type_error(r, "settings", key, "a string, a number or a boolean",
+          lua_type(L, -1));
+      }
+
+      if (value && sif_setting_check(key, value, why, sizeof why) != SIF_OK) {
+        report(r, w, "%s", why);
+      } else if (value) {
+        sif_setting_t* grown =
+          realloc(c->settings, (c->n_settings + 1) * sizeof(*c->settings));
+        if (grown) {
+          c->settings = grown;
+          c->settings[c->n_settings].key = keep(c, key);
+          c->settings[c->n_settings].value = keep(c, value);
+          if (c->settings[c->n_settings].key &&
+              c->settings[c->n_settings].value)
+            c->n_settings++;
+        }
+      }
+      lua_pop(L, 1);
+    }
+  } else if (type != LUA_TNIL) {
+    report(r, "settings", "must be a table, got a %s", lua_typename(L, type));
+  }
+  lua_settop(L, t - 1);
+
+  /* Lua's order is its own; the resolved configuration's is not. */
+  if (c->n_settings > 1)
+    qsort(c->settings, c->n_settings, sizeof(*c->settings), by_key);
+}
+
 /* A name the script left at the top level that is not a section. Its own
  * variables are its business -- `h = 0.6774` is fine -- but a setting
  * written outside its section, or a misspelt section, would otherwise be
@@ -2088,6 +2161,17 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     fputs("false", out);
   fprintf(
     out, ",\n  save_memory = %s,\n}\n", p->save_memory ? "true" : "false");
+
+  /* As strings, which is how the library takes them whatever they were. */
+  if (c->n_settings > 0) {
+    fputs("\nsettings = {\n", out);
+    for (size_t i = 0; i < c->n_settings; i++) {
+      fprintf(out, "  %s = ", c->settings[i].key);
+      write_lua_string(out, c->settings[i].value);
+      fputs(",\n", out);
+    }
+    fputs("}\n", out);
+  }
 }
 
 /* --- the entry points -------------------------------------------------- */
@@ -2183,6 +2267,7 @@ int config_load(const char* path, const config_define_t* defines,
   read_prior(&r, root, c);
   read_output(&r, root, c);
   read_run(&r, root, c, overrides);
+  read_settings(&r, root, c);
 
   lua_close(L);
 
@@ -2914,5 +2999,6 @@ void config_free(exodus_config_t* c) {
   free((void*)c->_paths[0]);
   free((void*)c->_paths[1]);
   free(c->resolved);
+  free(c->settings);
   memset(c, 0, sizeof *c);
 }

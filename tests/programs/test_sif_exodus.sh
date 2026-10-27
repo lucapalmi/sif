@@ -819,6 +819,25 @@ voids holes_lean.txt >b.txt
 cmp -s a.txt b.txt || fail "save_memory changed the catalogue"
 rmdir lean_scratch || fail "save_memory left its scratch file behind"
 
+# The same through the script's own settings table, which the resolved
+# configuration repeats; a key that is not a setting is the script's error.
+cp holes_lean.lua holes_set.lua
+echo 'settings = { scratch_directory = "set_scratch", fft_tuning_max_gib = 4 }' \
+  >>holes_set.lua
+run -D out=holes_set.txt holes_set.lua
+expect_status 0 "save_memory, scratch directory from settings"
+voids holes_set.txt >b.txt
+cmp -s a.txt b.txt || fail "settings: save_memory changed the catalogue"
+rmdir set_scratch || fail "settings.scratch_directory was not the one used"
+run --check holes_set.lua
+grep -q '^  scratch_directory = "set_scratch",$' out.txt ||
+  fail "--check does not repeat the settings"
+
+echo 'settings = { scrach_directory = "x" }' >>holes_set.lua
+run --check holes_set.lua
+expect_status 2 "a misspelt setting"
+expect_error "settings.scrach_directory: not a setting" "a misspelt setting"
+
 run -D from=missing.txt --check holes.lua
 expect_status 2 "a prior that is not there"
 expect_error "prior.path: cannot open missing.txt" "a prior that is not there"

@@ -125,7 +125,15 @@ run = {
   -- checkpoint = "voids.h5.ckpt",
   -- Keep the grid on disk rather than its transform in memory: about half
   -- the memory, one more FFT and one read of the grid per smoothing, the
-  -- same catalogue. The file goes in the sif setting scratch_directory,
-  -- or $SIF_SCRATCH_DIRECTORY for one job; put it on a fast filesystem.
+  -- same catalogue. The file goes in the setting scratch_directory (below),
+  -- so put that on a fast filesystem with room for the grid.
   save_memory = false,
+}
+
+-- The library's settings, for this run only: over $SIF_<KEY> and the sif
+-- settings file ($SIF_HOME/config, or ~/.sif/config), and never saved.
+-- Keys: scratch_directory, fft_wisdom_dir, fft_tuning_max_gib,
+-- cache_directory, grid_cache_enabled, cic_tile_particles.
+settings = {
+  -- scratch_directory = os.getenv("TMPDIR") .. "/sif",
 }

@@ -139,6 +139,19 @@ int sif_system_init(sif_config_t* config) {
     snprintf(base_dir, sizeof(base_dir), "%s", resolved);
   sif__settings_init(base_dir);
 
+  /* The caller's settings go in before anything reads one: the wisdom
+   * directory just below, among others. */
+  for (size_t i = 0; config && i < config->n_settings; i++) {
+    const sif_setting_t* kv = &config->settings[i];
+    const int status = sif_setting_override(kv->key, kv->value);
+    if (status != SIF_OK) {
+      sif__settings_finalise();
+      free(system_state);
+      system_state = NULL;
+      return status;
+    }
+  }
+
   /* --- FFTW --- */
 
   const bool skip_tuning =

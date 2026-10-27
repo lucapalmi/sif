@@ -122,3 +122,52 @@ cell size $\Delta x$:
 Finally, the algorithm causes a "loss of voids" at the scales close to the smallest 
 radius. Run the finder slightly below the minimum scale you want to consider, 
 indicatively by a factor 1.5x.
+
+## Memory
+
+At every rung exodus smooths the grid from its Fourier transform, which it
+keeps in memory next to the smoothed field: two grid-sized buffers, which for
+a large grid are most of the run's memory (about 2 x 108 GB at $3000^3$ in
+single precision, and twice that for a survey, whose randoms are smoothed
+too). With `save_memory` the grid is written to a scratch file instead and
+transformed again at every smoothing, so each grid takes one buffer, at the
+cost of one more FFT and one read of the grid per smoothing. The catalogue is
+the same, bit for bit, and a checkpoint resumes with or without it.
+
+The scratch file is as large as the grid. It goes in the `scratch_directory`
+setting, `$SIF_HOME/scratch` (`~/.sif/scratch`) by default: on a cluster,
+point it at a fast filesystem with room. The file is deleted as soon as it is
+created, so it goes when the run does, however that ends, and a run that
+finds too little room fails before the first rung.
+
+:::::{tab-set}
+
+::::{tab-item} sif-exodus
+```lua
+run = { save_memory = true }
+settings = { scratch_directory = "/ptmp/me/sif-scratch" }
+```
+::::
+
+::::{tab-item} Python
+```python
+pysif.set_setting("scratch_directory", "/ptmp/me/sif-scratch", persist=False)
+voids = pysif.finders.exodus(grid, mesh, radii, -0.7, save_memory=True)
+```
+::::
+
+::::{tab-item} C
+```c
+if (sif_setting_override("scratch_directory", "/ptmp/me/sif-scratch") !=
+    SIF_OK)
+  return 1;
+const sif_finder_exodus_extras_t extras = {.save_memory = 1};
+sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii, -0.7f,
+  SIF_EXODUS_EXCURSION_PEAK, &extras);
+```
+::::
+
+:::::
+
+For a single job, `export SIF_SCRATCH_DIRECTORY=...` does the same without
+touching the configuration.

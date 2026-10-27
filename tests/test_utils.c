@@ -643,6 +643,59 @@ static void test_settings(void) {
   printf("  ok\n");
 }
 
+/* sif_setting_check() judges as a write would, without the library; and
+ * settings handed to sif_system_init() are in place before it reads any. */
+static void test_settings_at_init(void) {
+  printf("settings at init\n");
+
+  char why[512];
+  CHECK(
+    sif_setting_check("fft_tuning_max_gib", "4", why, sizeof(why)) == SIF_OK &&
+      why[0] == '\0',
+    "a good value should pass, with no reason");
+  CHECK(sif_setting_check("fft_tuning_max_gb", "4", why, sizeof(why)) ==
+            SIF_ERR_INVALID &&
+          strstr(why, "not a setting") && strstr(why, "fft_tuning_max_gib"),
+    "a misspelt key should be refused, listing the keys: '%s'", why);
+  CHECK(sif_setting_check("grid_cache_enabled", "maybe", why, sizeof(why)) ==
+            SIF_ERR_INVALID &&
+          strstr(why, "expected"),
+    "a bad flag should be refused, saying what was expected: '%s'", why);
+  CHECK(sif_setting_check("scratch_directory", "$SIF_TEST_UNSET/x", NULL, 0) ==
+          SIF_OK,
+    "a path is not judged by variables it may not need yet");
+
+  sif_system_finalise();
+
+  /* The wisdom directory is read during init: an override afterwards would
+   * miss it, one in the config does not. */
+  const char* wisdom = "sif_settings_init_wisdom";
+  const sif_setting_t good[] = {
+    {"fft_tuning_max_gib", "5"}, {"fft_wisdom_dir", wisdom}};
+  sif_config_t cfg = {
+    .log_level = SIF_LOG_LEVEL_WARNING, .settings = good, .n_settings = 2};
+  CHECK(sif_system_init(&cfg) == SIF_OK, "init with settings failed");
+  CHECK(sif__setting_number("fft_tuning_max_gib") == 5.0,
+    "a setting given at init should read back");
+  struct stat st;
+  CHECK(stat(wisdom, &st) == 0 && S_ISDIR(st.st_mode),
+    "fft_wisdom_dir given at init should be the one init creates");
+  sif_system_finalise();
+  rmdir(wisdom);
+
+  /* A bad one fails init, and leaves nothing up. */
+  const sif_setting_t bad[] = {{"fft_tuning_max_gib", "lots"}};
+  cfg.settings = bad;
+  cfg.n_settings = 1;
+  CHECK(sif_system_init(&cfg) == SIF_ERR_INVALID,
+    "a bad setting at init should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "1") == SIF_ERR_UNINITIALISED,
+    "a failed init should leave the library down");
+
+  CHECK(sif_system_init(SIF_CONFIG_QUIET) == SIF_OK, "re-init failed");
+  printf("  ok\n");
+}
+
 int main(void) {
   if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
     printf("FAIL: sif_system_init\n");
@@ -666,6 +719,7 @@ int main(void) {
   test_sort();
   test_timer();
   test_settings();
+  test_settings_at_init();
 
   sif_system_finalise();
 

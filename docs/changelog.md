@@ -10,8 +10,11 @@ Current version: v0.4 release 1
 - Settings can be given per process: `SIF_<KEY>` environment variables and
   `sif_setting_override()` (`set_setting(..., persist=False)`)
 - `SIF_HOME` moves the settings, wisdom and cache root off `$HOME/.sif`
-- Exodus `save_memory`: the grid goes to a scratch file (`scratch_directory`
-  setting), halving the FFT memory; bit-identical catalogues
+- Exodus `save_memory` (`run.save_memory` in sif-exodus): the grid goes to a
+  scratch file (`scratch_directory` setting), halving the FFT memory;
+  bit-identical catalogues
+- sif-exodus `settings = { key = value }`: the library's settings for one run
+- `sif_config_t.settings`, settings applied at init; `sif_setting_check()`
 
 ### Changed
 

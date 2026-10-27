@@ -283,7 +283,9 @@ int main(int argc, char** argv) {
     sif_config_t check_lib = {.omp_config = &check_omp,
       .log_level = config.run.log_level > SIF_LOG_LEVEL_WARNING
                      ? config.run.log_level
-                     : SIF_LOG_LEVEL_WARNING};
+                     : SIF_LOG_LEVEL_WARNING,
+      .settings = config.settings,
+      .n_settings = config.n_settings};
     if (needs_lib && sif_system_init(&check_lib) != SIF_OK) {
       fputs("sif-exodus: could not initialise the library\n", stderr);
       config_free(&config);
@@ -303,8 +305,11 @@ int main(int argc, char** argv) {
 
   sif_fft_config_t fft = {.skip_tuning = !config.run.tune_fft};
   sif_omp_config_t omp = {.n_threads = config.run.n_threads};
-  sif_config_t lib = {
-    .fft_config = &fft, .omp_config = &omp, .log_level = config.run.log_level};
+  sif_config_t lib = {.fft_config = &fft,
+    .omp_config = &omp,
+    .log_level = config.run.log_level,
+    .settings = config.settings,
+    .n_settings = config.n_settings};
   if (sif_system_init(&lib) != SIF_OK) {
     fputs("sif-exodus: could not initialise the library\n", stderr);
     config_free(&config);
