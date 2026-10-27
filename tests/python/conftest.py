@@ -10,7 +10,10 @@ Python and how -- against an installed pysif. The library itself is tested in
 C, by ctest; nothing here re-checks what those tests already do.
 """
 
+import atexit
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pysif
@@ -18,6 +21,12 @@ import pytest
 
 GADGET = Path(__file__).resolve().parent.parent / "data" / "gadget"
 FITS = Path(__file__).resolve().parent.parent / "data" / "fits"
+
+# A SIF_HOME of the session's own, so the tests never read or write the
+# developer's settings, wisdom or grid cache. Inherited by the subprocesses
+# some tests start.
+os.environ["SIF_HOME"] = tempfile.mkdtemp(prefix="pysif-test-home-")
+atexit.register(shutil.rmtree, os.environ["SIF_HOME"], ignore_errors=True)
 
 # At import rather than in a fixture: HAS_HDF5 below calls into the library
 # while the tests are still being collected.

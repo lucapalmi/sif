@@ -12,8 +12,9 @@
  * library share, and sif_system_finalise() releases them:
  *
  * - FFTW: its threading, the planner quality and the wisdom file
- * - the settings table, read from and saved to `$HOME/.sif/config`, and the
- *   cache and wisdom directories it names
+ * - the settings table, read from the environment and from
+ *   `$SIF_HOME/config` (`$HOME/.sif/config` when SIF_HOME is unset), and
+ *   saved back there; see settings.h
  * - the thread ceiling
  * - the log level
  *
@@ -25,7 +26,8 @@
  * - FFTW: sif_finder_spherical(), sif_finder_exodus(),
  *   sif_finder_exodus_survey(), sif_delta_moments_grid() and
  *   sif_delta_distribution_grid()
- * - the settings table: sif_setting_set() and sif_setting_get()
+ * - the settings table: sif_setting_set(), sif_setting_override() and
+ *   sif_setting_get()
  *
  * Called without it, they fail with SIF_ERR_UNINITIALISED -- reported through
  * sif_error_status() by the ones that return a pointer -- except

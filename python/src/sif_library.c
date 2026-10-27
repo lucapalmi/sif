@@ -88,15 +88,24 @@ static PyObject* py_sif_setting_set(
   PyObject* module, PyObject* args, PyObject* kwds) {
   const char* key;
   const char* value;
+  int persist = 1;
 
-  static char* kwlist[] = {"key", "value", NULL};
+  static char* kwlist[] = {"key", "value", "persist", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "ss", kwlist, &key, &value)) {
+  if (!PyArg_ParseTupleAndKeywords(
+        args, kwds, "sz|p", kwlist, &key, &value, &persist)) {
+    return NULL;
+  }
+
+  if (!value && persist) {
+    PyErr_SetString(PyExc_ValueError,
+      "set_setting: value None only removes a persist=False override");
     return NULL;
   }
 
   sif_error_clear();
-  const int status = sif_setting_set(key, value);
+  const int status =
+    persist ? sif_setting_set(key, value) : sif_setting_override(key, value);
   if (status != SIF_OK)
     return py_sif_raise(status, "set_setting");
 
@@ -106,12 +115,12 @@ static PyObject* py_sif_setting_set(
 static PyObject* py_sif_setting_get(
   PyObject* module, PyObject* args, PyObject* kwds) {
   const char* key;
-  const char* fallback = "";
+  const char* fallback = NULL;
 
   static char* kwlist[] = {"key", "fallback", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "s|s", kwlist, &key, &fallback)) {
+        args, kwds, "s|z", kwlist, &key, &fallback)) {
     return NULL;
   }
 
@@ -219,32 +228,40 @@ static PyMethodDef sif_module_methods[] = {
     "    ValueError: If the arrays disagree in length, a column is missing,\n"
     "        or Cartesian and sky names are mixed."},
   {"set_setting", (PyCFunction)py_sif_setting_set, METH_VARARGS | METH_KEYWORDS,
-    "set_setting(key, value)\n"
+    "set_setting(key, value, persist=True)\n"
     "--\n\n"
-    "Set a persistent runtime setting.\n\n"
-    "Settings live in a file under $HOME/.sif and survive between runs.\n"
-    "Values may reference environment variables ($HOME, ${USER}), which are\n"
-    "expanded when set rather than when read.\n\n"
+    "Set a runtime setting.\n\n"
+    "A setting reads as the first of: a persist=False value, the environment\n"
+    "variable SIF_<KEY>, the settings file ($SIF_HOME/config, or\n"
+    "$HOME/.sif/config), the default. The keys are cache_directory,\n"
+    "grid_cache_enabled, fft_wisdom_dir, fft_tuning_max_gib and\n"
+    "cic_tile_particles.\n\n"
+    "Values may reference environment variables ($HOME, ${USER}), and\n"
+    "$SIF_HOME, the directory holding the settings file.\n\n"
     "Requires pysif.system_init().\n\n"
     "Args:\n"
     "    key: Setting name.\n"
-    "    value: Value to store.\n\n"
+    "    value: Value to store. With persist=False, None removes the value\n"
+    "        set before.\n"
+    "    persist: Save to the settings file, for this and later runs. False\n"
+    "        sets it for this process only, over the environment and the\n"
+    "        file.\n\n"
     "Raises:\n"
-    "    ValueError: If the key contains '=' or a newline, or the value a\n"
-    "        newline: the settings file could not hold it.\n"
+    "    ValueError: If the key is not a setting, the value is not one the\n"
+    "        key can hold, or contains a newline, which the settings file\n"
+    "        could not hold.\n"
     "    RuntimeError: If system_init() has not been called."},
   {"get_setting", (PyCFunction)py_sif_setting_get, METH_VARARGS | METH_KEYWORDS,
     "get_setting(key, fallback=None)\n"
     "--\n\n"
-    "Read a persistent runtime setting.\n\n"
-    "If the key is absent and a fallback is given, the fallback is stored\n"
-    "under that key and returned, so the next call finds it.\n\n"
-    "Requires pysif.system_init().\n\n"
+    "Read a runtime setting, as set_setting() describes. Nothing is stored.\n\n"
     "Args:\n"
     "    key: Setting name.\n"
-    "    fallback: Value to install and return if the key is absent.\n\n"
+    "    fallback: Returned if the key is not a setting, or before\n"
+    "        system_init().\n\n"
     "Returns:\n"
-    "    str: The setting's value, or None if absent with no fallback."},
+    "    str: The setting's value, with environment variables expanded, or\n"
+    "        the fallback."},
   {NULL, NULL, 0, NULL}};
 
 /* The compiled half of the pysif package: python/pysif/__init__.py imports

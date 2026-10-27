@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "core/settings_internal.h"
 #include "core/system_internal.h"
 #include "io/internal.h"
 #include "math/fft.h"
@@ -666,20 +667,7 @@ static void grid_cic_deposit_tile(grid_slab_t* slabs, int n_slabs,
  * get small enough to matter.
  */
 static uint64_t grid_cic_tile_size(void) {
-  const char* raw =
-    sif_setting_get("cic_tile_particles", SIF__CIC_TILE_PARTICLES_DEFAULT);
-
-  char* end = NULL;
-  double v = raw ? strtod(raw, &end) : -1.0;
-
-  if (!raw || end == raw || !(v >= 1.0)) {
-    v = strtod(SIF__CIC_TILE_PARTICLES_DEFAULT, NULL);
-    SIF_LOG_WARNING("grid_cic",
-      "setting cic_tile_particles: '%s' is not a positive number; using %.0f",
-      raw ? raw : "(unset)", v);
-  }
-
-  return (uint64_t)v;
+  return (uint64_t)sif__setting_number("cic_tile_particles");
 }
 
 /*
@@ -763,11 +751,7 @@ static int grid_compute_cic(sif_grid_t* grid, const sif_real* xs,
  *   sif_setting_set("grid_cache_enabled", "1");
  */
 static int grid_cache_enabled(void) {
-  const char* v = sif_setting_get("grid_cache_enabled", "0");
-  if (!v)
-    return 0;
-  return (
-    v[0] == '1' || v[0] == 't' || v[0] == 'T' || v[0] == 'y' || v[0] == 'Y');
+  return sif__setting_flag("grid_cache_enabled");
 }
 
 /*
@@ -1104,16 +1088,11 @@ int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
      * far larger than cache -- it is a small fraction of what a hit saves. */
     key = grid_cache_key(grid, field, scheme, interlace);
 
-    /* sif_system_init() puts cache_directory in the settings table and creates
-     * it, so this is the one source of truth; re-deriving $HOME/.sif/grid_cache
-     * here would be a second copy of that default, free to drift from the
-     * first. */
-    const char* cache_dir = sif_setting_get("cache_directory", NULL);
-    if (!cache_dir) {
-      SIF_LOG_WARNING("grid_cic",
-        "grid cache: enabled, but the cache_directory setting is unset; "
-        "computing without it");
-    } else {
+    /* Created here rather than at start-up, since the cache is off by
+     * default. A directory that cannot be used has been reported, and the grid
+     * is computed without the cache. */
+    const char* cache_dir = NULL;
+    if (sif__setting_directory("cache_directory", &cache_dir) == SIF_OK) {
       snprintf(final_path, sizeof(final_path), "%s/grid_%016llx%016llx.xgrid",
         cache_dir, (unsigned long long)key.b, (unsigned long long)key.a);
 

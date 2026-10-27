@@ -13,6 +13,7 @@
 #include <string.h>
 #include <unistd.h>
 
+#include "core/settings_internal.h"
 #include "core/system_internal.h"
 #include "sif/core/settings.h"
 #include "sif/utils/align.h"
@@ -97,20 +98,9 @@ static unsigned int fft_resolve_plan_flags(
   if (mgr->flags & FFTW_ESTIMATE)
     return mgr->flags;
 
-  const char* raw =
-    sif_setting_get("fft_tuning_max_gib", SIF__FFT_TUNING_MAX_GIB_DEFAULT);
-
-  char* end = NULL;
-  double cap_gib = raw ? strtod(raw, &end) : -1.0;
-
-  /* A malformed cap must not read as "no limit": that is the failure mode the
-   * cap exists to prevent. Fall back to the documented default instead. */
-  if (!raw || end == raw || !(cap_gib >= 0.0)) {
-    cap_gib = strtod(SIF__FFT_TUNING_MAX_GIB_DEFAULT, NULL);
-    SIF_LOG_WARNING("fft_context",
-      "fft_tuning_max_gib is not a non-negative number ('%s'); using %g",
-      raw ? raw : "(unset)", cap_gib);
-  }
+  /* A malformed cap reads as the documented default, never as "no limit":
+   * that is the failure mode the cap exists to prevent. */
+  const double cap_gib = sif__setting_number("fft_tuning_max_gib");
 
   const double gib = (double)spectrum_bytes / (1024.0 * 1024.0 * 1024.0);
   if (gib <= cap_gib)

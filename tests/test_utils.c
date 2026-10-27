@@ -16,6 +16,7 @@
  * a test of its own rather than being assumed.
  */
 
+#include "core/settings_internal.h"
 #include "sif/core/macros.h"
 #include "sif/core/settings.h"
 #include "sif/core/system.h"
@@ -30,6 +31,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #ifdef _OPENMP
 #  include <omp.h>
@@ -437,33 +440,158 @@ static void test_timer(void) {
   CHECK(sif_timer_elapsed_ms(NULL) == -1.0, "a NULL timer should report -1.0");
 }
 
-/* What the config file cannot hold is refused with a status, not dropped. */
+/* Whether the file holds @p line as a line of its own. */
+static int file_has_line(const char* text, const char* line) {
+  const size_t n = strlen(line);
+  for (const char* p = strstr(text, line); p; p = strstr(p + 1, line))
+    if ((p == text || p[-1] == '\n') && (p[n] == '\n' || p[n] == '\0'))
+      return 1;
+  return 0;
+}
+
+/*
+ * The settings end to end: what a write refuses, the order the layers win in,
+ * what the typed readers do with a bad value, and the file a run leaves. In a
+ * SIF_HOME of its own, so the file read and written is this test's.
+ */
 static void test_settings(void) {
   printf("settings\n");
 
-  CHECK(sif_setting_set("test_key", "a value") == SIF_OK, "plain set failed");
-  CHECK(strcmp(sif_setting_get("test_key", NULL), "a value") == 0,
-    "a set value should read back");
+  const char* home = "sif_settings_test";
+  char cfg[128];
+  snprintf(cfg, sizeof(cfg), "%s/config", home);
 
+  sif_system_finalise();
+  mkdir(home, 0777);
+  FILE* f = fopen(cfg, "w");
+  CHECK(f != NULL, "cannot write %s", cfg);
+  if (!f)
+    return;
+  fprintf(f, "fft_tuning_max_gib = 8\n"
+             "cic_tile_particles = lots\n"
+             "from_the_future = 1\n"
+             "cache_directory = $SIF_TEST_UNSET_VAR/cache\n");
+  fclose(f);
+
+  setenv("SIF_HOME", home, 1);
+  setenv("SIF_GRID_CACHE_ENABLED", "yes", 1);
+  unsetenv("SIF_TEST_UNSET_VAR");
+  CHECK(sif_system_init(SIF_CONFIG_QUIET) == SIF_OK, "init failed");
+
+  /* Each layer, and a bad value in one. */
+  CHECK(sif__setting_number("fft_tuning_max_gib") == 8.0,
+    "the file's fft_tuning_max_gib should read as 8, not %g",
+    sif__setting_number("fft_tuning_max_gib"));
+  CHECK(sif__setting_number("cic_tile_particles") ==
+          strtod(SIF__CIC_TILE_PARTICLES_DEFAULT, NULL),
+    "a malformed cic_tile_particles should read as the default");
+  CHECK(sif__setting_flag("grid_cache_enabled"),
+    "SIF_GRID_CACHE_ENABLED=yes should turn the cache on");
+  char wisdom[128];
+  snprintf(wisdom, sizeof(wisdom), "%s/wisdoms", home);
+  CHECK(strcmp(sif_setting_get("fft_wisdom_dir", NULL), wisdom) == 0,
+    "$SIF_HOME should expand to the settings directory, got '%s'",
+    sif_setting_get("fft_wisdom_dir", NULL));
+
+  /* A path naming an unset variable is refused, not read as "/cache". */
+  const char* dir = "unchanged";
+  CHECK(sif__setting_directory("cache_directory", &dir) == SIF_ERR_INVALID,
+    "a path with an unset variable should be SIF_ERR_INVALID");
+  CHECK(dir == NULL, "a refused path should come back NULL");
+
+  /* What a write refuses. */
   CHECK(sif_setting_set(NULL, "x") == SIF_ERR_INVALID,
     "a NULL key should be SIF_ERR_INVALID");
-  CHECK(sif_setting_set("test_key", NULL) == SIF_ERR_INVALID,
+  CHECK(sif_setting_set("fft_tuning_max_gib", NULL) == SIF_ERR_INVALID,
     "a NULL value should be SIF_ERR_INVALID");
-  CHECK(sif_setting_set("a=b", "x") == SIF_ERR_INVALID,
-    "a key with '=' should be SIF_ERR_INVALID");
-  CHECK(sif_setting_set("a\nb", "x") == SIF_ERR_INVALID,
-    "a key with a newline should be SIF_ERR_INVALID");
-  CHECK(sif_setting_set("test_key", "x\ny") == SIF_ERR_INVALID,
+  CHECK(sif_setting_set("fft_tuning_max_gb", "2") == SIF_ERR_INVALID,
+    "a misspelt key should be SIF_ERR_INVALID");
+  CHECK(sif_setting_set("from_the_future", "2") == SIF_ERR_INVALID,
+    "a key the file held but sif does not know should be SIF_ERR_INVALID");
+  CHECK(sif_setting_get("from_the_future", "fallback") != NULL &&
+          strcmp(sif_setting_get("from_the_future", "fallback"), "fallback") ==
+            0,
+    "a key sif does not know should read as the fallback");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "x\ny") == SIF_ERR_INVALID,
     "a value with a newline should be SIF_ERR_INVALID");
-  CHECK(strcmp(sif_setting_get("test_key", NULL), "a value") == 0,
-    "a refused set should leave the table unchanged");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "-1") == SIF_ERR_INVALID,
+    "a number below the minimum should be SIF_ERR_INVALID");
+  CHECK(sif_setting_override("grid_cache_enabled", "maybe") ==
+          SIF_ERR_INVALID,
+    "a flag that is not one should be SIF_ERR_INVALID");
+  CHECK(sif__setting_number("fft_tuning_max_gib") == 8.0,
+    "a refused write should leave the setting unchanged");
 
-  /* A fallback the file cannot hold is still returned, just not stored. */
-  CHECK(strcmp(sif_setting_get("test_other", "x\ny"), "x\ny") == 0,
-    "an unstorable fallback should still be returned");
-  CHECK(sif_setting_get("test_other", NULL) == NULL,
-    "an unstorable fallback should not be stored");
+  /* Precedence: an override over the environment over the file. */
+  CHECK(sif_setting_set("grid_cache_enabled", "0") == SIF_OK, "set failed");
+  CHECK(sif__setting_flag("grid_cache_enabled"),
+    "the environment should still win over the file");
+  CHECK(sif_setting_override("grid_cache_enabled", "off") == SIF_OK,
+    "override failed");
+  CHECK(!sif__setting_flag("grid_cache_enabled"),
+    "an override should win over the environment");
+  CHECK(sif_setting_override("grid_cache_enabled", NULL) == SIF_OK,
+    "clearing the override failed");
+  CHECK(sif__setting_flag("grid_cache_enabled"),
+    "a cleared override should give the environment back");
 
+  CHECK(sif_setting_override("fft_tuning_max_gib", "2") == SIF_OK,
+    "override failed");
+  CHECK(sif_setting_set("fft_tuning_max_gib", "4") == SIF_OK, "set failed");
+  CHECK(sif__setting_number("fft_tuning_max_gib") == 2.0,
+    "an override should win over a later set");
+  CHECK(sif_setting_override("fft_tuning_max_gib", NULL) == SIF_OK,
+    "clearing the override failed");
+  CHECK(sif__setting_number("fft_tuning_max_gib") == 4.0,
+    "with no override, the set value should read");
+
+  /* A directory is created where it is read. */
+  char made[128];
+  snprintf(made, sizeof(made), "%s/made/here", home);
+  CHECK(sif_setting_override("cache_directory", "$SIF_HOME/made/here") ==
+          SIF_OK,
+    "override failed");
+  CHECK(sif__setting_directory("cache_directory", &dir) == SIF_OK,
+    "a usable directory setting should read");
+  CHECK(dir && strcmp(dir, made) == 0, "the directory should be '%s', got '%s'",
+    made, dir ? dir : "(NULL)");
+  struct stat st;
+  CHECK(stat(made, &st) == 0 && S_ISDIR(st.st_mode),
+    "the directory should have been created");
+
+  sif_system_finalise();
+  unsetenv("SIF_HOME");
+  unsetenv("SIF_GRID_CACHE_ENABLED");
+
+  /* The file: what was set, as written; not what was overridden; the defaults
+   * commented out; and the key sif does not know, kept. */
+  char text[4096] = {0};
+  f = fopen(cfg, "r");
+  CHECK(f != NULL, "%s: not there after finalise", cfg);
+  if (f) {
+    size_t n = fread(text, 1, sizeof(text) - 1, f);
+    text[n] = '\0';
+    fclose(f);
+  }
+  CHECK(file_has_line(text, "fft_tuning_max_gib = 4"),
+    "the set fft_tuning_max_gib should be saved");
+  CHECK(file_has_line(text, "grid_cache_enabled = 0"),
+    "the set grid_cache_enabled should be saved");
+  CHECK(file_has_line(text, "cache_directory = $SIF_TEST_UNSET_VAR/cache"),
+    "the file's own value should be saved as written, not the override");
+  CHECK(file_has_line(text, "# fft_wisdom_dir = $SIF_HOME/wisdoms"),
+    "a setting at its default should be saved commented out");
+  CHECK(file_has_line(text, "from_the_future = 1"),
+    "a key sif does not know should be kept");
+
+  remove(cfg);
+  rmdir(made);
+  snprintf(made, sizeof(made), "%s/made", home);
+  rmdir(made);
+  rmdir(wisdom);
+  rmdir(home);
+
+  CHECK(sif_system_init(SIF_CONFIG_QUIET) == SIF_OK, "re-init failed");
   printf("  ok\n");
 }
 

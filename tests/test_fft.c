@@ -387,9 +387,16 @@ static void test_tuning_cap_and_wisdom(void) {
   CHECK(real_fftw_import_wisdom_from_filename(expected) != 0,
     "the accumulated wisdom file no longer imports");
 
-  /* 3. A malformed ceiling must read as the default, never as "no limit". */
-  CHECK(sif_setting_set("fft_tuning_max_gib", "not-a-number") == SIF_OK,
-    "setting fft_tuning_max_gib to not-a-number failed");
+  /* 3. A malformed ceiling must read as the default, never as "no limit".
+   *    sif_setting_set() refuses one, so it comes in the way a set cannot
+   *    stop it: through the environment. */
+  CHECK(sif_setting_set("fft_tuning_max_gib", "not-a-number") ==
+          SIF_ERR_INVALID,
+    "setting fft_tuning_max_gib to not-a-number should be refused");
+  sif__settings_finalise();
+  setenv("SIF_FFT_TUNING_MAX_GIB", "not-a-number", 1);
+  sif__settings_init(dir);
+  unsetenv("SIF_FFT_TUNING_MAX_GIB");
   mgr = sif__fft_manager_init(false, NULL);
   ws = sif__fft_workspace_alloc(mgr, n);
   CHECK(ws != NULL, "workspace alloc failed with a malformed ceiling");

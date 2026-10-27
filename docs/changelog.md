@@ -3,6 +3,25 @@
 Current version: v0.4 release 1
 
 
+## Unreleased
+
+### Added
+
+- Settings can be given per process: `SIF_<KEY>` environment variables and
+  `sif_setting_override()` (`set_setting(..., persist=False)`)
+- `SIF_HOME` moves the settings, wisdom and cache root off `$HOME/.sif`
+
+### Changed
+
+- Unknown setting keys and malformed values are refused; `sif_setting_get()`
+  no longer stores its fallback
+- The settings file lists every setting with a comment, defaults commented out
+
+### Fixed
+
+- Python `get_setting()` without a fallback wrote an empty entry to the file
+
+
 ## v0.4.1 -- 26/10/2026
 
 ### Added

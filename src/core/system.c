@@ -10,6 +10,7 @@
 #include "sif/utils/logger.h"
 #include "sif/utils/timer.h"
 
+#include "core/settings_internal.h"
 #include "core/system_internal.h"
 #include "io/fits_internal.h"
 #include "io/hdf5_internal.h"
@@ -30,56 +31,6 @@
  * longer is refused rather than truncated: a truncated path names a real but
  * different directory, and the run would silently write somewhere else. */
 #define PATH_CAP 512
-
-/* --- filesystem --- */
-
-/*
- * Create @p path and every missing component above it, as `mkdir -p` does.
- *
- * The paths involved come from the environment or from the settings file, so
- * the whole chain may be missing on a fresh machine. Permissions are left to
- * the process umask, matching what the shell would have produced.
- *
- * Returns false, having logged, if the directory does not exist afterwards.
- */
-static bool ensure_dir(const char* path) {
-  if (!path || path[0] == '\0')
-    return false;
-
-  char tmp[PATH_CAP];
-  int written = snprintf(tmp, sizeof(tmp), "%s", path);
-  if (written < 0 || (size_t)written >= sizeof(tmp)) {
-    SIF_LOG_WARNING("system", "path too long, not created: %s", path);
-    return false;
-  }
-
-  size_t len = strlen(tmp);
-  while (len > 1 && tmp[len - 1] == '/')
-    tmp[--len] = '\0';
-
-  /* Walk the separators, creating each ancestor in turn: mkdir() creates one
-   * level only. EEXIST is the ordinary case here, not a failure -- the whole
-   * point is that we do not know how much of the chain is already there. */
-  for (char* p = tmp + 1; *p; p++) {
-    if (*p != '/')
-      continue;
-
-    *p = '\0';
-    if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
-      SIF_LOG_WARNING(
-        "system", "failed to create %s: %s", tmp, strerror(errno));
-      return false;
-    }
-    *p = '/';
-  }
-
-  if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
-    SIF_LOG_WARNING("system", "failed to create %s: %s", tmp, strerror(errno));
-    return false;
-  }
-
-  return true;
-}
 
 /* --- lifetime --- */
 
@@ -155,36 +106,44 @@ int sif_system_init(sif_config_t* config) {
   /* --- settings --- */
 
   /* Everything sif persists hangs off one root directory, and the settings
-   * file inside it names the rest. HOME is absent on some batch nodes; /tmp
-   * keeps the run working, at the price of a table that does not survive it. */
+   * file inside it names the rest: SIF_HOME, or $HOME/.sif. HOME is absent on
+   * some batch nodes; /tmp keeps the run working, at the price of a table that
+   * does not survive it. */
+  const char* sif_home = getenv("SIF_HOME");
   const char* home = getenv("HOME");
   char base_dir[PATH_CAP];
-  if (home) {
-    snprintf(base_dir, sizeof(base_dir), "%s/.sif", home);
+  int written;
+  if (sif_home && sif_home[0]) {
+    written = snprintf(base_dir, sizeof(base_dir), "%s", sif_home);
+  } else if (home) {
+    written = snprintf(base_dir, sizeof(base_dir), "%s/.sif", home);
   } else {
-    snprintf(base_dir, sizeof(base_dir), "/tmp/.sif");
-    SIF_LOG_WARNING(
-      "system", "HOME env variable not set, defaulting cache to %s", base_dir);
+    written = snprintf(base_dir, sizeof(base_dir), "/tmp/.sif");
+    SIF_LOG_WARNING("system", "HOME: not set; settings, cache and wisdom go "
+      "to %s, which may not outlive the job", base_dir);
+  }
+  if (written < 0 || (size_t)written >= sizeof(base_dir)) {
+    SIF_LOG_ERROR("system", "SIF_HOME: longer than %d characters",
+      PATH_CAP - 1);
+    free(system_state);
+    system_state = NULL;
+    return SIF_ERR_INVALID;
   }
 
-  ensure_dir(base_dir);
+  (void)sif__ensure_dir(base_dir);
   sif__settings_init(base_dir);
-
-  /* The directories the settings point at are created now rather than on
-   * first use, where a missing one would surface deep inside a run as an
-   * unhelpful IO error from the cache or the wisdom loader. */
-  const char* cache_dir = sif_setting_get("cache_directory", NULL);
-  if (cache_dir)
-    ensure_dir(cache_dir);
 
   /* --- FFTW --- */
 
   const bool skip_tuning =
     (config && config->fft_config) ? config->fft_config->skip_tuning : false;
 
-  const char* wisdom_dir = sif_setting_get("fft_wisdom_dir", NULL);
-  if (wisdom_dir)
-    ensure_dir(wisdom_dir);
+  /* Without its directory the run simply plans from scratch, so a bad path
+   * costs the saved plans, not the run. The cache directory is left until a
+   * grid is actually cached: it is off by default. */
+  const char* wisdom_dir = NULL;
+  if (sif__setting_directory("fft_wisdom_dir", &wisdom_dir) != SIF_OK)
+    wisdom_dir = NULL;
 
   /* Without FFTW there are no finders, no smoothing and no delta statistics,
    * so a library that came up anyway would only fail later, somewhere less

@@ -27,7 +27,7 @@ UNINITIALISED = textwrap.dedent("""
         "spherical": lambda: pysif.finders.spherical(grid, radii, -0.2),
         "delta_moments_grid": lambda: pysif.measure.delta_moments_grid(
             grid, radii, 2),
-        "set_setting": lambda: pysif.set_setting("key", "value"),
+        "set_setting": lambda: pysif.set_setting("grid_cache_enabled", "1"),
     }
     for name, call in calls.items():
         try:
@@ -57,14 +57,31 @@ def test_uninitialised_calls_raise_runtime_error():
     ]
 
 
-@pytest.mark.parametrize("key, value", [
-    ("a=b", "x"),
-    ("a\nb", "x"),
-    ("test_key", "x\ny"),
+@pytest.mark.parametrize("key, value, match", [
+    ("a=b", "x", "not a setting"),
+    ("fft_tuning_max_gb", "2", "not a setting"),
+    ("fft_tuning_max_gib", "x\ny", "config file cannot hold"),
+    ("fft_tuning_max_gib", "lots", "expected a number"),
+    ("grid_cache_enabled", "maybe", "expected 1/0"),
 ])
-def test_set_setting_refuses_what_the_file_cannot_hold(key, value):
-    with pytest.raises(ValueError, match="config file cannot hold"):
+def test_set_setting_refuses(key, value, match):
+    with pytest.raises(ValueError, match=match):
         pysif.set_setting(key, value)
+
+
+def test_setting_override_is_for_this_process():
+    saved = pysif.get_setting("fft_tuning_max_gib")
+    pysif.set_setting("fft_tuning_max_gib", "3", persist=False)
+    assert pysif.get_setting("fft_tuning_max_gib") == "3"
+    pysif.set_setting("fft_tuning_max_gib", None, persist=False)
+    assert pysif.get_setting("fft_tuning_max_gib") == saved
+    with pytest.raises(ValueError, match="persist=False"):
+        pysif.set_setting("fft_tuning_max_gib", None)
+
+
+def test_get_setting_stores_nothing():
+    assert pysif.get_setting("not_a_setting") is None
+    assert pysif.get_setting("not_a_setting", "x") == "x"
 
 
 def test_deprecated_names_warn():

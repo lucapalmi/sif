@@ -6,17 +6,44 @@
 
 /**
  * @file settings.h
- * @brief Persistent key/value runtime settings.
+ * @brief Runtime settings: a fixed set of keys, each read from the first of
+ * these that gives it a value:
  *
- * The table is process-global, populated by sif_system_init() from the
- * settings file and written back on sif_system_finalise() if anything changed.
- * Values may reference environment variables (`$HOME`, `${USER}`), which are
- * expanded on write and stored alongside the raw text.
+ * 1. a value set for this process with sif_setting_override()
+ * 2. the environment variable `SIF_<KEY>`, e.g. `SIF_FFT_TUNING_MAX_GIB`
+ * 3. the settings file, `$SIF_HOME/config`, or `$HOME/.sif/config` when
+ *    SIF_HOME is unset; sif_setting_set() writes to it
+ * 4. the library's default
  *
- * @warning The table is not synchronised. Reads are safe once the settings are
- * populated, but calling sif_setting_set() concurrently with any other access
- * is a data race -- and so is sif_setting_get() with a fallback, which writes
- * the fallback into the table when the key is absent.
+ * The keys are:
+ *
+ * | key                  | default                | what it is               |
+ * |----------------------|------------------------|--------------------------|
+ * | `cache_directory`    | `$SIF_HOME/grid_cache` | where cached grids go    |
+ * | `grid_cache_enabled` | `0`                    | cache CIC grids on disk  |
+ * | `fft_wisdom_dir`     | `$SIF_HOME/wisdoms`    | where FFTW plans are kept|
+ * | `fft_tuning_max_gib` | `16`                   | see #SIF__FFT_TUNING_MAX_GIB_DEFAULT |
+ * | `cic_tile_particles` | `67108864`             | see #SIF__CIC_TILE_PARTICLES_DEFAULT |
+ *
+ * The file and the environment are read by sif_system_init(), and the file is
+ * written back by sif_system_finalise() if sif_setting_set() changed it --
+ * with every key listed and documented, those at their default commented out.
+ * The first run writes one for the user to edit.
+ *
+ * Values may reference environment variables (`$HOME`, `${USER}`), expanded
+ * when the value is loaded or set; `$SIF_HOME` always expands to the directory
+ * holding the file. So a file shared by every job on a cluster can still say
+ * `cache_directory = $TMPDIR/sif`, and a job that wants something else for
+ * itself exports `SIF_CACHE_DIRECTORY` rather than editing the file. A path
+ * naming a variable the process does not set is refused where it is used, not
+ * read as if the variable were empty.
+ *
+ * A value that cannot be read as what its key holds -- a word for a number --
+ * reads as the default, with a warning naming the file and line, or the
+ * variable, it came from.
+ *
+ * @warning The table is not synchronised: sif_setting_set() and
+ * sif_setting_override() race with any other access. Reads alone are safe.
  */
 
 #ifndef SIF_CORE_SETTINGS_H
@@ -60,52 +87,55 @@
 #define SIF__CIC_TILE_PARTICLES_DEFAULT "67108864"
 
 /**
- * @brief Set a runtime setting, creating it if absent and overwriting if not.
+ * @brief Set a setting in the settings file, from now on and for later runs.
  *
- * The value takes effect immediately and the table is flagged for saving at
- * finalisation. Environment references in @p value are expanded now, not at
- * read time, so a later change to the environment is not picked up.
+ * Takes effect in this process unless the environment or
+ * sif_setting_override() gives the key a value of its own, which is warned
+ * about. Environment references in @p value are expanded now for this process,
+ * and stored as written for the next.
  *
- * Keys are truncated at 63 characters, values at 255, with a warning.
+ * Values are truncated at 255 characters, with a warning.
  *
- * @param key Setting name.
+ * @param key One of the keys listed in settings.h.
  * @param value Raw value, possibly containing environment references.
- * @return SIF_OK; SIF_ERR_INVALID for a NULL key or value, or a pair the file
- * cannot hold (see below); SIF_ERR_ALLOC if the table could not grow;
- * SIF_ERR_UNINITIALISED before sif_system_init(). The table is unchanged on
- * failure.
- *
- * @note The file format is one `key = value` per line with no escaping, so a
- * key containing `=` or a newline, or a value containing a newline, would not
- * read back as what was written and is refused.
- *
- * @warning Adding a new key may reallocate the table, which invalidates every
- * pointer previously returned by sif_setting_get().
+ * @return SIF_OK; SIF_ERR_INVALID for a NULL key or value, a key that is not a
+ * setting, a value its key cannot hold (a word for a number), or a value
+ * containing a newline, which the file cannot hold; SIF_ERR_UNINITIALISED
+ * before sif_system_init(). The table is unchanged on failure.
  *
  * @note Requires sif_system_init().
  */
 SIF_NODISCARD int sif_setting_set(const char* key, const char* value);
 
 /**
- * @brief Look up a runtime setting, with an optional default.
+ * @brief Set a setting for this process only, over the environment and the
+ * file; nothing is saved.
  *
- * If @p key is missing and @p fallback is non-NULL, the fallback is inserted
- * into the table under @p key and then returned, so the next call finds it.
+ * @param key One of the keys listed in settings.h.
+ * @param value Raw value, as for sif_setting_set(); NULL removes the
+ * override, and the key reads as it would without it.
+ * @return As sif_setting_set().
+ *
+ * @note Requires sif_system_init().
+ */
+SIF_NODISCARD int sif_setting_override(const char* key, const char* value);
+
+/**
+ * @brief Look up a setting.
+ *
+ * Nothing is stored: a key that is not a setting reads as @p fallback, and a
+ * key that is reads as its value, which is never NULL.
  *
  * @param key Setting name.
- * @param fallback Value to install and return if the key is absent. May be
- * NULL to query without creating.
+ * @param fallback Returned when @p key is not a setting, or before
+ * sif_system_init(). May be NULL.
  * @return The expanded value, owned by the settings table -- the caller must
- * neither free nor modify it. Returns @p fallback unexpanded if the table is
- * not yet populated or the entry could not be created, and NULL if the key is
- * absent and no fallback was given.
+ * neither free nor modify it -- or @p fallback.
  *
- * @warning The returned pointer is valid only until the next
- * sif_setting_set(), including the implicit one this function performs when it
- * installs a fallback. Copy the string if it has to outlive that.
+ * @warning The returned string is overwritten by the next sif_setting_set() or
+ * sif_setting_override() of the same key. Copy it if it has to outlive that.
  *
- * @note Requires sif_system_init(). Called before it, the call returns
- * @p fallback and stores nothing.
+ * @note Before sif_system_init() the call returns @p fallback.
  */
 const char* sif_setting_get(const char* key, const char* fallback);
 

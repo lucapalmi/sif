@@ -78,16 +78,16 @@ int sif__system_thread_num(void);
  */
 
 /**
- * @brief Load the settings table, and seed it with the library's defaults.
+ * @brief Load the settings table: the registry's defaults, the SIF_<KEY>
+ * environment variables, and the file.
  *
  * Missing or unreadable files are not an error: the table is simply the
- * defaults, and the first sif__settings_finalise() writes it out.
+ * defaults, and the first sif__settings_finalise() writes the file out.
  *
- * @param default_dir Existing directory holding the `config` file. Also the
- * root the default cache and wisdom paths are derived from when there is no
- * HOME to express them against.
+ * @param root_dir Directory holding the `config` file, and what `$SIF_HOME`
+ * expands to in a value when the environment does not set it.
  */
-void sif__settings_init(const char* default_dir);
+void sif__settings_init(const char* root_dir);
 
 /** @brief Write the table back if it changed, then release it. */
 void sif__settings_finalise(void);
