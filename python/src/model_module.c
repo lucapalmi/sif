@@ -6,6 +6,7 @@
 
 #define Py_MODULE_HEAD_UNIFIED
 #include "model/py_model.h"
+#include "model/py_variance_kernel.h"
 
 static PyMethodDef model_methods[] = {
   {"comoving_distance", (PyCFunction)py_sif_comoving_distance,
@@ -156,8 +157,9 @@ static PyMethodDef model_methods[] = {
     "\n"
     "--\n\n"
     "Sheth-Mo-Tormen moving barrier, alpha * (1 + (beta/sigma)**gamma).\n"
-    "Feed it the sigma returned by delta_covariance_pk, so the barrier and "
-    "the walk share one variance."},
+    "Feed it walk.sigma for the emulator, or the sigma returned by "
+    "delta_covariance_pk for the Monte Carlo, so the barrier and the walk "
+    "share one variance."},
 
   {"ep_first_crossing_counts", (PyCFunction)py_sif_ep_first_crossing_counts,
     METH_VARARGS | METH_KEYWORDS,
@@ -195,36 +197,31 @@ static PyMethodDef model_methods[] = {
   {"ep_multiplicity_function_emu",
     (PyCFunction)py_sif_ep_multiplicity_function_emu,
     METH_VARARGS | METH_KEYWORDS,
-    "ep_multiplicity_function_emu(radii, sigma, barrier, deriv_variance, "
-    "return_domain=False, binned=False, collapse=None, cov=None)"
+    "ep_multiplicity_function_emu(walk, barrier, radii, collapse=None, "
+    "binned=False, return_domain=False)"
     "\n"
     "--\n\n"
     "Emulated void multiplicity function: the same quantity as "
     "ep_multiplicity_function, without the random walks.\n"
     "The up-crossing rate of Verza et al. (2024) eq. (3.15) -- Musso-Sheth "
     "with the exact scale-dependent <(d delta / dS)^2> -- corrected by a "
-    "small trained network. "
-    "About 0.06% of the Monte Carlo it was fitted against (median, "
-    "radii below 80 Mpc/h), for walks starting anywhere from ~2 to 250 "
-    "Mpc/h, and a few million times faster.\n"
-    "Takes sigma, NOT the packed covariance the Monte Carlo needs: the "
-    "single-barrier emulator reads only the diagonal, so it wants n values "
-    "rather than n(n+1)/2 (void-in-cloud is the exception, below). "
-    "deriv_variance is required, from delta_covariance_pk.\n"
-    "Returns the answer the Monte Carlo CONVERGES to, not the answer it gives "
-    "on a coarse grid; the emulated result agrees to 0.02% on 65, 129 and "
-    "257 radii.\n"
-    "Returns the first-crossing density per unit R at each radius (n "
-    "values); binned=True returns its average over each bin instead, n - 1 "
-    "values on the bin centres, which is what the Monte Carlo "
-    "ep_multiplicity_function measures.\n"
-    "Place the largest radius where nu = barrier / sigma is ~3.5 or more "
-    "(further out costs nothing; with collapse, where delta_c / sigma is "
-    "~4 or more too) and keep nu above ~0.21 at the smallest; "
-    "collapse (delta_c, a number or one per radius) adds void-in-cloud, as "
-    "a factor K <= 1 on the single-barrier answer (about 0.09% where it "
-    "matters), and needs cov, the packed covariance from "
-    "delta_covariance_pk. "
+    "small trained network. About 0.06% of the Monte Carlo it was fitted "
+    "against (median, radii below 80 Mpc/h), for walks starting anywhere from "
+    "~2 to 250 Mpc/h.\n"
+    "walk is kernel(pk) for a VarianceKernel; barrier has one value per "
+    "lattice radius, built from walk.sigma (ep_barrier_smt(walk.sigma, "
+    "...)); radii, ascending and within the lattice, are where the answer is "
+    "wanted. The emulator chooses its own grid, the slice of the lattice from "
+    "just inside the smallest radius out to where barrier / sigma reaches "
+    "4.5, and interpolates to radii.\n"
+    "Returns the first-crossing density per unit R at each radius; "
+    "binned=True returns its average over each bin between consecutive "
+    "radii instead, len(radii) - 1 values, which is what the Monte Carlo "
+    "ep_multiplicity_function measures on the same radii.\n"
+    "collapse (delta_c, a number or one per lattice radius) adds "
+    "void-in-cloud, as a factor K <= 1 on the single-barrier answer (about "
+    "0.09% where it matters); its covariance is built from the walk's "
+    "spectrum, which costs milliseconds rather than microseconds. "
     "return_domain=True returns (mult, domain) with in_domain, "
     "n_bins_outside, nu_origin, first_step_mass and expected_error."},
 
@@ -247,12 +244,40 @@ static struct PyModuleDef model_module = {PyModuleDef_HEAD_INIT,
            "Size functions from the BBKS peak statistics, the SvdW and Vdn\n"
            "excursion-set models, and the excursion-set first-crossing\n"
            "problem in both its Monte Carlo and emulated forms. Also the\n"
-           "spectral moments and covariance of a model power spectrum, and\n"
+           "spectral moments and covariance of a model power spectrum, the\n"
+           "variance kernel the emulator takes its walk from, and\n"
            "the spherical-evolution map between linear and non-linear\n"
            "density contrast.\n\n"
            "These return the same containers pysif.measure fills, so a\n"
            "prediction and a measurement can be compared directly.",
   .m_size = -1, .m_methods = model_methods};
 
+/* The kernel and the walk it gives, which the emulator takes. */
+static const struct {
+  const char* name;
+  PyTypeObject* type;
+} MODEL_TYPES[] = {
+  {"VarianceKernel", &sifVarianceKernelType},
+  {"Walk", &sifWalkType},
+};
+
 /* Submodule exporter called from the parent module initialisation routing */
-PyObject* py_sif_init_model(void) { return PyModule_Create(&model_module); }
+PyObject* py_sif_init_model(void) {
+  const size_t n = sizeof(MODEL_TYPES) / sizeof(MODEL_TYPES[0]);
+  for (size_t i = 0; i < n; i++)
+    if (PyType_Ready(MODEL_TYPES[i].type) < 0)
+      return NULL;
+
+  PyObject* m = PyModule_Create(&model_module);
+  if (!m)
+    return NULL;
+
+  for (size_t i = 0; i < n; i++) {
+    if (PyModule_AddObjectRef(
+          m, MODEL_TYPES[i].name, (PyObject*)MODEL_TYPES[i].type) < 0) {
+      Py_DECREF(m);
+      return NULL;
+    }
+  }
+  return m;
+}

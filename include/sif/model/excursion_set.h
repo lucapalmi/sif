@@ -13,8 +13,10 @@
  * runs correlated walks by Monte Carlo, which needs the full packed covariance
  * and costs quadratic work in the radius count.
  * sif_ep_multiplicity_function_emu() evaluates a trained network over the same
- * features, needs only the diagonal, and is linear -- about a million times
- * faster, at a fitted accuracy quoted with the emulator.
+ * features from a walk -- sigma and the derivative variance on a radius
+ * lattice, from a variance kernel (variance_kernel.h) -- and is linear in the
+ * radius count: about a million times faster, at a fitted accuracy quoted
+ * with the emulator.
  *
  * The upcrossing form -- Verza et al. (2024) eq. (3.15), the Musso-Sheth rate
  * with the exact scale-dependent <(d delta / dS)^2> -- is the analytic limit
@@ -29,6 +31,7 @@
 
 #include "sif/core/macros.h"
 #include "sif/model/delta_moments.h"
+#include "sif/model/variance_kernel.h"
 
 /**
  * @brief Excursion-set void multiplicity function f_ln(sigma), for a constant
@@ -62,8 +65,9 @@ SIF_NODISCARD sif_real* sif_svdw_multiplicity_function(
  * underdensity, not its sign, and the walk is that of -delta.
  *
  * @param sigma R.m.s. density contrast per smoothing scale, strictly positive.
- * Take it from sif_delta_covariance_pk, so the barrier and the walk share one
- * variance.
+ * Take it from the walk the barrier is for (sif_walk_t.sigma), or from
+ * sif_delta_covariance_pk for the Monte Carlo, so the barrier and the walk
+ * share one variance.
  * @param n Length of sigma
  * @param alpha Barrier amplitude, strictly positive
  * @param beta Barrier scale in units of sigma, strictly positive
@@ -209,87 +213,63 @@ typedef struct {
  * trained network. The correction multiplies a hazard rather than the
  * multiplicity itself, and the result is rebuilt through the survival
  * recursion, so it is non-negative and integrates to at most one whatever the
- * network predicts.
+ * network predicts. About 0.06% of the Monte Carlo it was fitted against
+ * (median, radii below 80 Mpc/h).
  *
- * @note Takes `sigma`, not the packed covariance that
- * sif_ep_multiplicity_function needs. That is deliberate rather than an
- * oversight: the emulator reads only the diagonal, so it needs n numbers where
- * the Monte Carlo needs n(n+1)/2, and its cost is linear rather than quadratic
- * in the radius count.
+ * The walk comes from a variance kernel (sif_walk_pk), and the emulator picks
+ * its own grid from the walk's lattice: from just inside the smallest of
+ * `radii` out to where B / sigma -- and delta_c / sigma with `collapse` --
+ * reaches 4.5, so the walk starts where nothing has crossed yet. The answer
+ * is then interpolated to `radii`, as the cubic in ln R of ln(R f).
  *
  * @note Returns the answer the Monte Carlo CONVERGES to, not the answer it
- * gives on the caller's grid. Those differ: a first-crossing walk sampled at 65
- * radii sits about 0.1% below its converged value, at 129 within 0.05%. The
- * emulated result hardly depends on the sampling: the same problem on 65, 129
- * and 257 radii agrees to 0.02%.
+ * gives on a coarse grid: a first-crossing walk sampled at 65 radii sits about
+ * 0.1% below its converged value. The emulated result moves by under 2e-4
+ * between lattice spacings of 0.02 and 0.01 in ln R.
  *
  * @note Void-in-cloud is a factor on top: without `collapse` the result is
- * the single-barrier one, bit for bit, and compares with the Monte Carlo run
- * without one.
+ * the single-barrier one, and compares with the Monte Carlo run without one.
+ * With it, the covariance between the slice's radii is built from the walk's
+ * spectrum, which costs tens of milliseconds rather than microseconds.
  *
  * @note No cosmological parameter enters: the cosmology is seen only through
- * sigma and deriv_variance, i.e. through nu = B / sigma along the walk and the
- * shape of P(k). Trained over CDM-like spectra and Sheth-Mo-Tormen barriers
- * (constant barriers included), for walks starting anywhere from ~2 to
- * 250 Mpc/h -- the largest radius of the grid, placed as described under
- * `radii`. Other spectral families and barrier shapes are outside the
- * contract. The `domain` report catches the ones far off (a strong
- * warm-dark-matter cutoff, a barrier rising with sigma) but not every mild
- * one: a power-law spectrum or a weak cutoff can pass 0.25-0.3% wrong, since
- * what sets them apart is the shape of the whole trajectory rather than any
- * pointwise value.
+ * sigma and the derivative variance, i.e. through nu = B / sigma along the
+ * walk and the shape of P(k). Trained over CDM-like spectra and
+ * Sheth-Mo-Tormen barriers (constant barriers included), for walks starting
+ * anywhere from ~2 to 250 Mpc/h. Other spectral families and barrier shapes
+ * are outside the contract. The `domain` report catches the ones far off (a
+ * strong warm-dark-matter cutoff, a barrier rising with sigma) but not every
+ * mild one: a power-law spectrum or a weak cutoff can pass 0.25-0.3% wrong.
  *
- * @param radii Smoothing radii, strictly positive and strictly increasing, at
- * least 4. Place the largest where nu = B / sigma is ~3.5 or more: few walks
- * then start above the barrier, and the answer does not depend on exactly
- * where the grid starts (further out costs nothing). With `collapse`, the same
- * for delta_c / sigma, which is the lower of the two for a void: start where
- * both are ~4 or more (nu of the void barrier ~1.6 times that for
- * delta_v = 2.7). A void-in-cloud grid started at nu = 4.5 for the void barrier
- * alone misses the clouds beyond it and puts K 0.2% high. Keep nu above ~0.21
- * at the smallest. `domain` reports a start too low and an end too deep.
- * @param n_radii Number of radii
- * @param sigma R.m.s. density contrast per radius, strictly positive. Take it
- * from sif_delta_covariance_pk so the barrier and the walk share one variance.
- * @param barrier n_radii barrier heights, in the ascending order of radii,
- * **strictly positive** -- stricter than the Monte Carlo, which takes any
- * finite value. The features here are built from log(B / sigma), and the
- * correction was trained over nu from 0.21 upward, so the convention is a
- * positive barrier crossed from below. That is what sif_ep_barrier_smt()
- * produces; a void threshold enters through its magnitude, as it does in the
- * BBKS routines.
- * @param deriv_variance n_radii entries: <(d delta / dS)^2> from
- * sif_delta_covariance_pk. REQUIRED, unlike the Monte Carlo path, which has no
- * use for it: differencing it off a covariance converges only at first order,
- * which would make the answer depend on how finely `radii` was sampled -- the
- * one property this entry point exists to avoid.
- * @param collapse Optional, n_radii collapse thresholds delta_c (constant or
- * moving), strictly positive, as sif_ep_first_crossing_counts takes them:
- * with it the result is the multiplicity of voids NOT inside a cloud, the
- * single-barrier answer times an emulated void-in-cloud factor K <= 1. NULL
- * for the single void barrier.
- * @param cov The packed covariance between the radii, as
- * sif_delta_covariance_pk returns it alongside sigma. Required with
- * `collapse`, ignored without: the void-in-cloud baseline conditions on how a
- * walk ending on the void barrier was correlated with its larger scales, which
- * the diagonal alone cannot say. O(n_radii^2) work, under a millisecond at
- * 128 radii.
+ * @param walk From sif_walk_pk; not modified. Its lattice must reach out to
+ * where B / sigma is ~3.5 or more (4.5 is used when it does), or a warning
+ * says to build the kernel with a larger r_max.
+ * @param barrier walk->n_radii barrier heights, one per lattice radius,
+ * strictly positive over the slice used: a void threshold enters through its
+ * magnitude, crossed from below, as sif_ep_barrier_smt(walk->sigma, ...)
+ * produces it. The features are built from log(B / sigma), and the
+ * correction was trained over nu from 0.21 upward.
+ * @param collapse Optional, walk->n_radii collapse thresholds delta_c
+ * (constant or moving), strictly positive: with it the result is the
+ * multiplicity of voids NOT inside a cloud, the single-barrier answer times
+ * an emulated void-in-cloud factor K <= 1. NULL for the single void barrier.
+ * @param radii Where the answer is wanted: strictly increasing, within the
+ * walk's lattice. Keep nu above ~0.21 at the smallest; `domain` reports it.
+ * @param n_radii Number of radii, at least 1 (2 with SIF_EP_EMU_BIN_CENTRES)
  * @param domain Optional report; pass NULL to skip
  * @param opt SIF_EP_EMU_AT_RADII (default): the first-crossing density per
- * unit R at each of the n_radii radii. SIF_EP_EMU_BIN_CENTRES: its average
- * over each bin, n_radii - 1 values on the bin centres -- the form a Monte
- * Carlo histogram measures, and so what sif_ep_multiplicity_function returns;
- * use it to compare the two. The forms agree to second order in the spacing
- * (0.01-0.06% at 129 radii).
+ * unit R at each radius. SIF_EP_EMU_BIN_CENTRES: its average over each bin
+ * between consecutive radii, n_radii - 1 values -- what a Monte Carlo
+ * histogram on the same radii measures, and so what
+ * sif_ep_multiplicity_function returns; use it to compare the two.
  *
  * @return Newly allocated array of n_radii values (or n_radii - 1 under
  * SIF_EP_EMU_BIN_CENTRES), released with sif_free_aligned, or NULL on invalid
  * input. An input outside the trained region is NOT invalid: the answer is
  * returned, `domain` records it, and the log names the quantity responsible.
  */
-SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
-  uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
-  const double* deriv_variance, const sif_real* collapse, const double* cov,
-  sif_emu_domain_t* domain, sif_option opt);
+SIF_NODISCARD sif_real* sif_ep_multiplicity_function_emu(const sif_walk_t* walk,
+  const sif_real* barrier, const sif_real* collapse, const sif_real* radii,
+  uint32_t n_radii, sif_emu_domain_t* domain, sif_option opt);
 
 #endif /* SIF_MODEL_EXCURSION_SET_H */

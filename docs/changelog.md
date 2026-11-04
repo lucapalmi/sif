@@ -17,8 +17,17 @@ Current version: v0.4 release 1
 - `sif_config_t.settings`, settings applied at init; `sif_setting_check()`
 - Type stubs for pysif: editors complete functions, parameters and
   docstrings, and mypy/pyright check calls
+- Variance kernel (`sif_variance_kernel_alloc`, `sif_walk_pk`;
+  `pysif.model.VarianceKernel`): sigma(R) and the derivative variance for a
+  new P(k) in ~0.1 ms, 50x more accurate than quadraturing the table
+- Exodus refined centres without minima-only seeds: `SIF_FINDER_REFINE_CENTRES`,
+  `exodus_raw(refine_centres=True)`, `finder.exodus_params.refine_centres`
 
 ### Changed
+
+- The emulator takes a walk from the kernel, a barrier on its lattice and the
+  radii wanted, and picks its own grid (breaking:
+  `ep_multiplicity_function_emu(walk, barrier, radii, collapse=...)`)
 
 - Unknown setting keys and malformed values are refused; `sif_setting_get()`
   no longer stores its fallback

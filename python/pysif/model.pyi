@@ -11,7 +11,8 @@
 Size functions from the BBKS peak statistics, the SvdW and Vdn
 excursion-set models, and the excursion-set first-crossing
 problem in both its Monte Carlo and emulated forms. Also the
-spectral moments and covariance of a model power spectrum, and
+spectral moments and covariance of a model power spectrum, the
+variance kernel the emulator takes its walk from, and
 the spherical-evolution map between linear and non-linear
 density contrast.
 
@@ -145,7 +146,7 @@ def delta_covariance_pk(
 def ep_barrier_smt(sigma: ArrayLike, alpha: float, beta: float,
                    gamma: float) -> _RealArray:
     """Sheth-Mo-Tormen moving barrier, alpha * (1 + (beta/sigma)**gamma).
-    Feed it the sigma returned by delta_covariance_pk, so the barrier and the walk share one variance.
+    Feed it walk.sigma for the emulator, or the sigma returned by delta_covariance_pk for the Monte Carlo, so the barrier and the walk share one variance.
     """
 
 @overload
@@ -194,35 +195,127 @@ def ep_multiplicity_function(radii: ArrayLike, cov: ArrayLike,
                              collapse: float | ArrayLike | None = None
                              ) -> _RealArray | tuple[_RealArray, _Counts]: ...
 
+class VarianceKernel:
+    """sigma(R) and the derivative variance as a precomputed linear map from
+    P(k): built once, then kernel(pk) gives a Walk in tens of
+    microseconds.
+
+    sigma^2, dS/dR and <(d delta / dR)^2> are each linear in P(k), and
+    every transcendental sits in the window terms, which do not depend on
+    the spectrum. The kernel integrates those once, resolving the
+    window's oscillation at every radius, so it is also more accurate
+    than delta_covariance_pk on a table: 3e-6 in the derivative variance
+    of a CDM spectrum at the default 600 nodes, against 1.5e-4 for an
+    8000-point table at R = 150.
+
+    Args:
+        k: The nodes P(k) will be given at, ascending, at least 4; the
+            integrals stop at the first and last. A Boltzmann code's or a
+            P(k) emulator's own array can be passed as it is. None, the
+            default, is 600 log-spaced from 1e-4 to 100 h/Mpc.
+        r_min, r_max: The radius lattice, in Mpc/h. It must reach out to
+            where the barrier is ~3.5 sigma, and in to the smallest radius
+            the multiplicity is wanted at.
+        dln_r: Lattice spacing in ln R; 0.02 holds the emulated
+            multiplicity within 2e-4 of a lattice twice as fine.
+        window: 'top_hat' (default) or 'gaussian'.
+
+    Raises:
+        ValueError: For nodes that are not positive and increasing, or a
+            lattice of fewer than 4 radii.
+    """
+
+    def __init__(self, k: ArrayLike | None = None, r_min: float = 0.5,
+                 r_max: float = 400.0, dln_r: float = 0.02,
+                 window: _Window = "top_hat") -> None: ...
+
+    def __call__(self, pk: ArrayLike) -> Walk: ...
+
+    @property
+    def k(self) -> _RealArray:
+        """The nodes, ascending: where the P(k) passed to the kernel is sampled"""
+
+    @property
+    def radii(self) -> _RealArray:
+        """The radius lattice, r_min e^(j dln_r), ascending, in Mpc/h"""
+
+    @property
+    def dln_r(self) -> float:
+        """Lattice spacing in ln R"""
+
+    @property
+    def window(self) -> _Window:
+        """'top_hat' or 'gaussian'"""
+
+class Walk:
+    """sigma(R) and the derivative variance on a variance kernel's
+    radius lattice, for one power spectrum: what
+    ep_multiplicity_function_emu takes.
+
+    Returned by calling a VarianceKernel on a P(k). Build the
+    barrier from walk.sigma, so the barrier and the walk share one
+    variance. The arrays are read-only views that keep the walk
+    alive.
+
+    Not constructed directly.
+    """
+
+    def __init__(self) -> None: ...
+
+    @property
+    def n_radii(self) -> int:
+        """Number of lattice radii"""
+
+    @property
+    def radii(self) -> _RealArray:
+        """The kernel's radius lattice, ascending, in Mpc/h"""
+
+    @property
+    def sigma(self) -> _RealArray:
+        """sigma(R) at each lattice radius; the one to build the barrier from"""
+
+    @property
+    def deriv_variance(self) -> NDArray[np.float64]:
+        """<(d delta / dS)^2>, S = sigma^2, at each lattice radius (float64)"""
+
+    @property
+    def k(self) -> _RealArray:
+        """The kernel's nodes"""
+
+    @property
+    def pk(self) -> _RealArray:
+        """The spectrum the walk was built from, at the nodes"""
+
+    @property
+    def window(self) -> _Window:
+        """'top_hat' or 'gaussian'"""
+
 @overload
-def ep_multiplicity_function_emu(radii: ArrayLike, sigma: ArrayLike,
-                                 barrier: ArrayLike, deriv_variance: ArrayLike,
-                                 return_domain: Literal[False] = False,
-                                 binned: bool = False,
+def ep_multiplicity_function_emu(walk: Walk, barrier: ArrayLike,
+                                 radii: ArrayLike,
                                  collapse: float | ArrayLike | None = None,
-                                 cov: ArrayLike | None = None) -> _RealArray:
+                                 binned: bool = False,
+                                 return_domain: Literal[False] = False
+                                 ) -> _RealArray:
     """Emulated void multiplicity function: the same quantity as ep_multiplicity_function, without the random walks.
-    The up-crossing rate of Verza et al. (2024) eq. (3.15) -- Musso-Sheth with the exact scale-dependent <(d delta / dS)^2> -- corrected by a small trained network. About 0.06% of the Monte Carlo it was fitted against (median, radii below 80 Mpc/h), for walks starting anywhere from ~2 to 250 Mpc/h, and a few million times faster.
-    Takes sigma, NOT the packed covariance the Monte Carlo needs: the single-barrier emulator reads only the diagonal, so it wants n values rather than n(n+1)/2 (void-in-cloud is the exception, below). deriv_variance is required, from delta_covariance_pk.
-    Returns the answer the Monte Carlo CONVERGES to, not the answer it gives on a coarse grid; the emulated result agrees to 0.02% on 65, 129 and 257 radii.
-    Returns the first-crossing density per unit R at each radius (n values); binned=True returns its average over each bin instead, n - 1 values on the bin centres, which is what the Monte Carlo ep_multiplicity_function measures.
-    Place the largest radius where nu = barrier / sigma is ~3.5 or more (further out costs nothing; with collapse, where delta_c / sigma is ~4 or more too) and keep nu above ~0.21 at the smallest; collapse (delta_c, a number or one per radius) adds void-in-cloud, as a factor K <= 1 on the single-barrier answer (about 0.09% where it matters), and needs cov, the packed covariance from delta_covariance_pk. return_domain=True returns (mult, domain) with in_domain, n_bins_outside, nu_origin, first_step_mass and expected_error.
+    The up-crossing rate of Verza et al. (2024) eq. (3.15) -- Musso-Sheth with the exact scale-dependent <(d delta / dS)^2> -- corrected by a small trained network. About 0.06% of the Monte Carlo it was fitted against (median, radii below 80 Mpc/h), for walks starting anywhere from ~2 to 250 Mpc/h.
+    walk is kernel(pk) for a VarianceKernel; barrier has one value per lattice radius, built from walk.sigma (ep_barrier_smt(walk.sigma, ...)); radii, ascending and within the lattice, are where the answer is wanted. The emulator chooses its own grid, the slice of the lattice from just inside the smallest radius out to where barrier / sigma reaches 4.5, and interpolates to radii.
+    Returns the first-crossing density per unit R at each radius; binned=True returns its average over each bin between consecutive radii instead, len(radii) - 1 values, which is what the Monte Carlo ep_multiplicity_function measures on the same radii.
+    collapse (delta_c, a number or one per lattice radius) adds void-in-cloud, as a factor K <= 1 on the single-barrier answer (about 0.09% where it matters); its covariance is built from the walk's spectrum, which costs milliseconds rather than microseconds. return_domain=True returns (mult, domain) with in_domain, n_bins_outside, nu_origin, first_step_mass and expected_error.
     """
 @overload
-def ep_multiplicity_function_emu(radii: ArrayLike, sigma: ArrayLike,
-                                 barrier: ArrayLike, deriv_variance: ArrayLike,
-                                 *, return_domain: Literal[True],
-                                 binned: bool = False,
+def ep_multiplicity_function_emu(walk: Walk, barrier: ArrayLike,
+                                 radii: ArrayLike,
                                  collapse: float | ArrayLike | None = None,
-                                 cov: ArrayLike | None = None
+                                 binned: bool = False, *,
+                                 return_domain: Literal[True]
                                  ) -> tuple[_RealArray, _Domain]: ...
 @overload
-def ep_multiplicity_function_emu(radii: ArrayLike, sigma: ArrayLike,
-                                 barrier: ArrayLike, deriv_variance: ArrayLike,
-                                 return_domain: bool = False,
-                                 binned: bool = False,
+def ep_multiplicity_function_emu(walk: Walk, barrier: ArrayLike,
+                                 radii: ArrayLike,
                                  collapse: float | ArrayLike | None = None,
-                                 cov: ArrayLike | None = None
+                                 binned: bool = False,
+                                 return_domain: bool = False
                                  ) -> _RealArray | tuple[_RealArray, _Domain]:
     ...
 

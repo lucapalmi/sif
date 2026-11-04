@@ -7,6 +7,7 @@
 #include "py_model.h"
 
 #include "py_delta_common.h"
+#include "py_variance_kernel.h"
 #include "sif/model/delta_moments.h"
 #include "sif/model/excursion_set.h"
 #include <math.h>
@@ -451,112 +452,83 @@ PyObject* py_sif_ep_multiplicity_function(
 }
 
 /*
- * The emulator. Deliberately a different signature from the walk above: it
- * reads only the covariance DIAGONAL, so it takes sigma where the Monte Carlo
- * takes the packed triangle, and its cost is linear rather than quadratic in
- * the radius count.
+ * The emulator. Takes a Walk rather than arrays: the grid is the emulator's
+ * own choice, a slice of the walk's lattice, and the answer comes back at the
+ * radii asked for.
  */
 PyObject* py_sif_ep_multiplicity_function_emu(
   PyObject* self, PyObject* args, PyObject* kwds) {
 
   (void)self;
 
-  PyObject *radii_obj, *sigma_obj, *barrier_obj, *dvar_obj;
+  PyObject *walk_obj, *barrier_obj, *radii_obj;
   PyObject* collapse_obj = Py_None;
-  PyObject* cov_obj = Py_None;
   int return_domain = 0;
   int binned = 0;
 
-  static char* kwlist[] = {"radii", "sigma", "barrier", "deriv_variance",
-    "return_domain", "binned", "collapse", "cov", NULL};
+  static char* kwlist[] = {
+    "walk", "barrier", "radii", "collapse", "binned", "return_domain", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOO|ppOO", kwlist, &radii_obj,
-        &sigma_obj, &barrier_obj, &dvar_obj, &return_domain, &binned,
-        &collapse_obj, &cov_obj)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|Opp", kwlist, &walk_obj,
+        &barrier_obj, &radii_obj, &collapse_obj, &binned, &return_domain)) {
     return NULL;
   }
 
-  PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
-  if (!radii_arr)
+  if (!PyObject_TypeCheck(walk_obj, &sifWalkType) ||
+      !((sifWalkObject*)walk_obj)->walk) {
+    PyErr_Format(PyExc_TypeError,
+      "walk: %s (expected a Walk, from calling a VarianceKernel on a P(k))",
+      Py_TYPE(walk_obj)->tp_name);
     return NULL;
+  }
+  const sif_walk_t* walk = ((sifWalkObject*)walk_obj)->walk;
+  const npy_intp n_lattice = walk->n_radii;
 
   /* One at a time, and bail on the first failure: calling into the C API
    * again with an exception already set can mask the original error and
    * trips the assertions in a debug build of Python. */
-  PyArrayObject* sigma_arr = NULL;
   PyArrayObject* barrier_arr = NULL;
-  PyArrayObject* dvar_arr = NULL;
+  PyArrayObject* radii_arr = NULL;
   PyArrayObject* collapse_arr = NULL;
-  PyArrayObject* cov_arr = NULL;
-
-  sigma_arr = py_sif_as_real_array(sigma_obj, "sigma");
-  if (!sigma_arr)
-    goto fail;
 
   barrier_arr = py_sif_as_real_array(barrier_obj, "barrier");
   if (!barrier_arr)
     goto fail;
+  if (PyArray_SIZE(barrier_arr) != n_lattice) {
+    PyErr_Format(PyExc_ValueError,
+      "barrier: %zd values (expected one per lattice radius, %zd: build it "
+      "from walk.sigma)",
+      PyArray_SIZE(barrier_arr), n_lattice);
+    goto fail;
+  }
 
-  dvar_arr = py_sif_as_double_array(dvar_obj, "deriv_variance");
-  if (!dvar_arr)
+  radii_arr = py_sif_as_real_array(radii_obj, "radii");
+  if (!radii_arr)
+    goto fail;
+
+  if (as_collapse(collapse_obj, n_lattice, &collapse_arr) < 0)
+    goto fail;
+  if (collapse_arr && collapse_positive(collapse_arr) < 0)
     goto fail;
 
   const npy_intp n = PyArray_SIZE(radii_arr);
-
-  if (PyArray_SIZE(sigma_arr) != n || PyArray_SIZE(barrier_arr) != n ||
-      PyArray_SIZE(dvar_arr) != n) {
-    PyErr_SetString(PyExc_ValueError,
-      "sigma, barrier and deriv_variance must each have one entry per radius");
-    goto fail;
-  }
-
-  if (as_collapse(collapse_obj, n, &collapse_arr) < 0)
-    goto fail;
-  if (collapse_arr) {
-    if (collapse_positive(collapse_arr) < 0)
-      goto fail;
-    if (cov_obj == Py_None) {
-      PyErr_SetString(PyExc_ValueError,
-        "collapse needs cov: the packed covariance from delta_covariance_pk, "
-        "which void-in-cloud conditions on");
-      goto fail;
-    }
-    cov_arr = py_sif_as_double_array(cov_obj, "cov");
-    if (!cov_arr)
-      goto fail;
-    if (PyArray_SIZE(cov_arr) != (npy_intp)SIF_COV_SIZE((uint32_t)n)) {
-      PyErr_Format(PyExc_ValueError,
-        "cov: %zd entries (expected the packed triangle of %zd radii, %zd)",
-        PyArray_SIZE(cov_arr), n, (npy_intp)SIF_COV_SIZE((uint32_t)n));
-      goto fail;
-    }
-  }
-
   sif_emu_domain_t domain;
   sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values =
-    sif_ep_multiplicity_function_emu((const sif_real*)PyArray_DATA(radii_arr),
-      (uint32_t)n, (const sif_real*)PyArray_DATA(sigma_arr),
-      (const sif_real*)PyArray_DATA(barrier_arr),
-      (const double*)PyArray_DATA(dvar_arr),
-      collapse_arr ? (const sif_real*)PyArray_DATA(collapse_arr) : NULL,
-      cov_arr ? (const double*)PyArray_DATA(cov_arr) : NULL, &domain,
-      binned ? SIF_EP_EMU_BIN_CENTRES : SIF_EP_EMU_AT_RADII);
+  sif_error_clear();
+  Py_BEGIN_ALLOW_THREADS values = sif_ep_multiplicity_function_emu(walk,
+    (const sif_real*)PyArray_DATA(barrier_arr),
+    collapse_arr ? (const sif_real*)PyArray_DATA(collapse_arr) : NULL,
+    (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n, &domain,
+    binned ? SIF_EP_EMU_BIN_CENTRES : SIF_EP_EMU_AT_RADII);
   Py_END_ALLOW_THREADS
 
-    Py_DECREF(radii_arr);
-  Py_DECREF(sigma_arr);
-  Py_DECREF(barrier_arr);
-  Py_DECREF(dvar_arr);
+    Py_DECREF(barrier_arr);
+  Py_DECREF(radii_arr);
   Py_XDECREF(collapse_arr);
-  Py_XDECREF(cov_arr);
 
-  if (!values) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to evaluate the emulated multiplicity function; see the sif log");
-    return NULL;
-  }
+  if (!values)
+    return py_sif_raise(sif_error_status(), "ep_multiplicity_function_emu");
 
   PyObject* mult_arr = py_sif_owned_array(values, binned ? n - 1 : n);
   if (!mult_arr)
@@ -581,11 +553,8 @@ PyObject* py_sif_ep_multiplicity_function_emu(
   return Py_BuildValue("(NN)", mult_arr, d);
 
 fail:
-  Py_XDECREF(radii_arr);
-  Py_XDECREF(sigma_arr);
   Py_XDECREF(barrier_arr);
-  Py_XDECREF(dvar_arr);
+  Py_XDECREF(radii_arr);
   Py_XDECREF(collapse_arr);
-  Py_XDECREF(cov_arr);
   return NULL;
 }

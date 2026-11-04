@@ -309,6 +309,7 @@ set(SOURCES
 
   # model
     src/model/delta_moments.c
+    src/model/variance_kernel.c
     src/model/bbks.c
     src/model/size_function.c
     src/model/cosmology.c

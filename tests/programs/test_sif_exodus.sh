@@ -164,6 +164,12 @@ expect_status 0 "exodus_params without a variant"
 grep -q '^  variant = "excursion-set",$' out.txt &&
   grep -q '^    seeds = "minima",$' out.txt ||
   fail "exodus_params without a variant: not resolved from the default one"
+sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = true },/' template.lua >params_refine.lua
+run --check params_refine.lua
+expect_status 0 "exodus_params.refine_centres"
+grep -q '^    refine_centres = true,$' out.txt ||
+  fail "exodus_params.refine_centres: not in the resolved configuration"
+resolves_to_itself params_refine_resolved.lua "exodus_params.refine_centres"
 sed 's/  variant = "excursion-set",//' template.lua >no_variant.lua
 run --check no_variant.lua
 expect_status 2 "neither variant nor exodus_params"
@@ -178,6 +184,11 @@ run --check params_bad.lua
 expect_status 2 "seeds = nodes"
 expect_error "finder.exodus_params.seeds: must be one of" "seeds = nodes"
 "$EXE" --template survey >survey_template.lua 2>/dev/null
+sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { refine_centres = true },/' \
+  survey_template.lua >refine_survey.lua
+run --check refine_survey.lua
+expect_status 2 "refine_centres in a survey"
+expect_error "finder.exodus_params.refine_centres: is for a periodic box" "refine_centres in a survey"
 sed 's/variant = "excursion-set"/variant = "excursion-peak"/' survey_template.lua >variant_survey.lua
 run --check variant_survey.lua
 expect_status 2 "variant = excursion-peak in a survey"

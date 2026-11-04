@@ -20,13 +20,21 @@
  * result is a probability density and cannot go negative or integrate above
  * one, it must not depend on how finely the radii were sampled, and the domain
  * report must fire on the two conditions it exists for.
+ *
+ * Those run on the model at a given grid, the internal entry point. The public
+ * one takes a walk from a variance kernel instead, chooses the grid itself and
+ * interpolates: the last sections check the kernel against a direct
+ * integral, and that the public path is the model on the grid it chose.
  */
 
 #include "sif/core/system.h"
 #include "sif/model/delta_moments.h"
 #include "sif/model/excursion_set.h"
+#include "sif/model/variance_kernel.h"
 #include "sif/utils/align.h"
 #include "test_util.h"
+
+#include "model/ep_internal.h"
 
 #include "ep_emu_cases.h"
 
@@ -72,10 +80,10 @@ static void test_against_reference(void) {
     sif_real* barrier = as_real(EP_EMU_BARRIER[c], n);
 
     sif_emu_domain_t dom;
-    sif_real* f = sif_ep_multiplicity_function_emu(
+    sif_real* f = sif__ep_multiplicity_function_emu_grid(
       radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, NULL, &dom, SIF_DEFAULT);
-    sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
-      EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
+    sif_real* fb = sif__ep_multiplicity_function_emu_grid(radii, n, sigma,
+      barrier, EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
 
     CHECK(f != NULL && fb != NULL, "case %d returned NULL on a valid input", c);
 
@@ -138,12 +146,13 @@ static void test_vic_reference(void) {
     sif_real* collapse = as_real(EP_VIC_COLLAPSE[c], n);
 
     sif_emu_domain_t dom;
-    sif_real* f = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
-      EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], &dom, SIF_DEFAULT);
-    sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
-      EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], NULL, SIF_EP_EMU_BIN_CENTRES);
-    sif_real* f1 = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
-      EP_VIC_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
+    sif_real* f = sif__ep_multiplicity_function_emu_grid(radii, n, sigma,
+      barrier, EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], &dom, SIF_DEFAULT);
+    sif_real* fb =
+      sif__ep_multiplicity_function_emu_grid(radii, n, sigma, barrier,
+        EP_VIC_DVAR[c], collapse, EP_VIC_COV[c], NULL, SIF_EP_EMU_BIN_CENTRES);
+    sif_real* f1 = sif__ep_multiplicity_function_emu_grid(radii, n, sigma,
+      barrier, EP_VIC_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
 
     CHECK(f && fb && f1, "void-in-cloud case %d returned NULL", c);
 
@@ -211,9 +220,9 @@ static void test_invariants(void) {
      * probability, alive * (1 - exp(-Lambda)), so they cannot sum past one.
      * The density at the radii is the same function sampled at points; it
      * must be non-negative and finite, and integrate to the same total. */
-    sif_real* fb = sif_ep_multiplicity_function_emu(radii, n, sigma, barrier,
-      EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
-    sif_real* f = sif_ep_multiplicity_function_emu(
+    sif_real* fb = sif__ep_multiplicity_function_emu_grid(radii, n, sigma,
+      barrier, EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_EP_EMU_BIN_CENTRES);
+    sif_real* f = sif__ep_multiplicity_function_emu_grid(
       radii, n, sigma, barrier, EP_EMU_DVAR[c], NULL, NULL, NULL, SIF_DEFAULT);
 
     if (f && fb) {
@@ -313,9 +322,10 @@ static void test_grid_independence(void) {
 
     if (cov) {
       sif_real* barrier = sif_ep_barrier_smt(sigma, n, 0.5f, 0.3f, 0.8f);
-      sif_real* f = barrier ? sif_ep_multiplicity_function_emu(radii, n, sigma,
-                                barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT)
-                            : NULL;
+      sif_real* f = barrier
+                      ? sif__ep_multiplicity_function_emu_grid(radii, n, sigma,
+                          barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT)
+                      : NULL;
       CHECK(f != NULL, "the emulator returned NULL at %u radii", n);
 
       if (f) {
@@ -380,7 +390,7 @@ static void test_domain(void) {
   sif_real* barrier = as_real(EP_EMU_BARRIER[0], n);
 
   sif_emu_domain_t dom;
-  sif_real* f = sif_ep_multiplicity_function_emu(
+  sif_real* f = sif__ep_multiplicity_function_emu_grid(
     radii, n, sigma, barrier, EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
   CHECK(f && dom.in_domain == 1, "a training-like input was not in domain");
   CHECK(dom.first_step_mass < 0.01f,
@@ -399,8 +409,8 @@ static void test_domain(void) {
    */
   {
     const uint32_t cut = n / 2;
-    sif_real* f2 = sif_ep_multiplicity_function_emu(radii, cut, sigma, barrier,
-      EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
+    sif_real* f2 = sif__ep_multiplicity_function_emu_grid(radii, cut, sigma,
+      barrier, EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
     CHECK(f2 != NULL, "a truncated grid was rejected rather than reported");
     CHECK(dom.in_domain == 0,
       "a grid cut to %u radii was reported as in domain, with %.2f%% of walks "
@@ -423,7 +433,7 @@ static void test_domain(void) {
     for (uint32_t i = 0; i < n; i++)
       tall[i] = barrier[i] * 4.0f;
 
-    sif_real* f3 = sif_ep_multiplicity_function_emu(
+    sif_real* f3 = sif__ep_multiplicity_function_emu_grid(
       radii, n, sigma, tall, EP_EMU_DVAR[0], NULL, NULL, &dom, SIF_DEFAULT);
     CHECK(f3 && dom.in_domain == 1,
       "a walk started beyond the trained origins was flagged (%u bins)",
@@ -444,7 +454,7 @@ static void test_domain(void) {
     for (uint32_t i = 0; i < n; i++)
       dvar[i] = 0.5 * EP_EMU_DVAR[0][i];
 
-    sif_real* f4 = sif_ep_multiplicity_function_emu(
+    sif_real* f4 = sif__ep_multiplicity_function_emu_grid(
       radii, n, sigma, barrier, dvar, NULL, NULL, &dom, SIF_DEFAULT);
     CHECK(f4 != NULL, "an out-of-domain spectrum was rejected rather than "
                       "reported");
@@ -473,7 +483,7 @@ static void test_guards(void) {
   const double* dvar = EP_EMU_DVAR[0];
   sif_real* r;
 
-  r = sif_ep_multiplicity_function_emu(
+  r = sif__ep_multiplicity_function_emu_grid(
     NULL, n, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "NULL radii were accepted");
   sif_free_aligned(r);
@@ -486,12 +496,12 @@ static void test_guards(void) {
     sif_real* vs = as_real(EP_VIC_SIGMA[0], m);
     sif_real* vb = as_real(EP_VIC_BARRIER[0], m);
     sif_real* vc = as_real(EP_VIC_COLLAPSE[0], m);
-    r = sif_ep_multiplicity_function_emu(
+    r = sif__ep_multiplicity_function_emu_grid(
       vr, m, vs, vb, EP_VIC_DVAR[0], vc, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a collapse barrier without cov was accepted");
     sif_free_aligned(r);
     vc[m / 2] = 0.0f;
-    r = sif_ep_multiplicity_function_emu(
+    r = sif__ep_multiplicity_function_emu_grid(
       vr, m, vs, vb, EP_VIC_DVAR[0], vc, EP_VIC_COV[0], NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero collapse barrier was accepted");
     sif_free_aligned(r);
@@ -501,18 +511,18 @@ static void test_guards(void) {
     free(vc);
   }
 
-  r = sif_ep_multiplicity_function_emu(
+  r = sif__ep_multiplicity_function_emu_grid(
     radii, n, NULL, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "a NULL sigma was accepted");
   sif_free_aligned(r);
 
-  r = sif_ep_multiplicity_function_emu(
+  r = sif__ep_multiplicity_function_emu_grid(
     radii, n, sigma, barrier, NULL, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL,
     "a NULL derivative variance was accepted; it has no fallback here");
   sif_free_aligned(r);
 
-  r = sif_ep_multiplicity_function_emu(
+  r = sif__ep_multiplicity_function_emu_grid(
     radii, 2, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL, "two radii were accepted by a three-point stencil");
   sif_free_aligned(r);
@@ -523,7 +533,7 @@ static void test_guards(void) {
    * result looking wrong, which is why the boundary is asserted here rather
    * than left to the reference cases (all of which are 128 radii).
    */
-  r = sif_ep_multiplicity_function_emu(
+  r = sif__ep_multiplicity_function_emu_grid(
     radii, 3, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r == NULL,
     "three radii were accepted, leaving the three-point stencil two bin "
@@ -531,7 +541,7 @@ static void test_guards(void) {
   sif_free_aligned(r);
 
   /* Four is the smallest grid the model is defined on, and must work. */
-  r = sif_ep_multiplicity_function_emu(
+  r = sif__ep_multiplicity_function_emu_grid(
     radii, 4, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
   CHECK(r != NULL, "four radii were rejected; that is the documented minimum");
   if (r) {
@@ -547,7 +557,7 @@ static void test_guards(void) {
     sif_real* descending = malloc((size_t)n * sizeof(sif_real));
     for (uint32_t i = 0; i < n; i++)
       descending[i] = radii[n - 1 - i];
-    r = sif_ep_multiplicity_function_emu(
+    r = sif__ep_multiplicity_function_emu_grid(
       descending, n, sigma, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "descending radii were accepted");
     sif_free_aligned(r);
@@ -558,7 +568,7 @@ static void test_guards(void) {
     sif_real* bad = malloc((size_t)n * sizeof(sif_real));
     memcpy(bad, sigma, (size_t)n * sizeof(sif_real));
     bad[3] = 0.0f;
-    r = sif_ep_multiplicity_function_emu(
+    r = sif__ep_multiplicity_function_emu_grid(
       radii, n, bad, barrier, dvar, NULL, NULL, NULL, SIF_DEFAULT);
     CHECK(r == NULL, "a zero sigma was accepted");
     sif_free_aligned(r);
@@ -570,6 +580,454 @@ static void test_guards(void) {
   free(radii);
   free(sigma);
   free(barrier);
+}
+
+/* --- 5. the variance kernel --- */
+
+/*
+ * A smooth CDM-like shape, n_s = 0.96 through the BBKS transfer function,
+ * normalised below. Analytic, so the reference integral can sample it as
+ * finely as it likes rather than inheriting a table's resolution.
+ */
+static double cdm_shape(double k) {
+  const double q = k / 0.21;
+  const double t =
+    log(1.0 + 2.34 * q) / (2.34 * q) *
+    pow(1.0 + 3.89 * q + pow(16.1 * q, 2) + pow(5.46 * q, 3) + pow(6.71 * q, 4),
+      -0.25);
+  return pow(k, 0.96) * t * t;
+}
+
+#define KERNEL_N_K  600
+#define KERNEL_K_LO 1e-4
+#define KERNEL_K_HI 100.0
+
+/* sigma_8 = 0.8, from a direct quadrature of the shape: the kernel under test
+ * must not be the one setting its own normalisation. */
+static double cdm_amplitude(void) {
+  const double R = 8.0;
+  double s = 0.0, prev = 0.0, prev_x = 0.0;
+  const uint32_t n = 400000;
+  for (uint32_t i = 0; i < n; i++) {
+    const double x =
+      log(KERNEL_K_LO) + (log(KERNEL_K_HI) - log(KERNEL_K_LO)) * i / (n - 1.0);
+    const double k = exp(x), kr = k * R;
+    const double w = 3.0 * (sin(kr) - kr * cos(kr)) / (kr * kr * kr);
+    const double v = k * k * k * cdm_shape(k) * w * w;
+    if (i > 0)
+      s += 0.5 * (v + prev) * (x - prev_x);
+    prev = v;
+    prev_x = x;
+  }
+  return 0.64 * 2.0 * M_PI * M_PI / s;
+}
+
+/*
+ * sigma^2, dS/dR and <(d delta / dR)^2> at one radius by brute force: a
+ * trapezoid in k, each step the smaller of 2e-4 in ln k and 1/128 of a period
+ * of sin^2(kR), over the kernel's own k range.
+ */
+static void direct_walk(double amp, double R, double* sigma, double* dvar) {
+  double S = 0.0, D1 = 0.0, D2 = 0.0;
+  double prev[3] = {0.0, 0.0, 0.0}, prev_k = 0.0;
+  const double dlnk = 2e-4;
+  const double dk = M_PI / (128.0 * R);
+  int first = 1;
+
+  for (double k = KERNEL_K_LO;;) {
+    const double kr = k * R;
+    const double s = sin(kr), c = cos(kr);
+    const double w =
+      kr < 1e-2 ? 1.0 - kr * kr / 10.0 : 3.0 * (s - kr * c) / (kr * kr * kr);
+    const double wp = kr < 1e-2 ? -kr / 5.0 + kr * kr * kr / 70.0
+                                : 3.0 * (kr * kr * s - 3.0 * s + 3.0 * kr * c) /
+                                    (kr * kr * kr * kr);
+    /* Per unit k: k^2 P / 2 pi^2 times the window terms. */
+    const double base = amp * k * k * cdm_shape(k) / (2.0 * M_PI * M_PI);
+    const double v[3] = {
+      base * w * w, base * 2.0 * k * w * wp, base * k * k * wp * wp};
+
+    if (!first) {
+      const double h = k - prev_k;
+      S += 0.5 * (v[0] + prev[0]) * h;
+      D1 += 0.5 * (v[1] + prev[1]) * h;
+      D2 += 0.5 * (v[2] + prev[2]) * h;
+    }
+    first = 0;
+    for (int a = 0; a < 3; a++)
+      prev[a] = v[a];
+    prev_k = k;
+
+    if (k >= KERNEL_K_HI)
+      break;
+    double next = k + (k * dlnk < dk ? k * dlnk : dk);
+    if (next > KERNEL_K_HI)
+      next = KERNEL_K_HI;
+    k = next;
+  }
+
+  *sigma = sqrt(S);
+  *dvar = D2 / (D1 * D1);
+}
+
+static void test_kernel(void) {
+  printf("the variance kernel against a direct integral\n");
+
+  const double amp = cdm_amplitude();
+  sif_real k[KERNEL_N_K], pk[KERNEL_N_K];
+  for (uint32_t m = 0; m < KERNEL_N_K; m++) {
+    k[m] = (sif_real)(KERNEL_K_LO *
+                      pow(KERNEL_K_HI / KERNEL_K_LO, m / (KERNEL_N_K - 1.0)));
+    pk[m] = (sif_real)(amp * cdm_shape((double)k[m]));
+  }
+
+  sif_variance_kernel_t* kernel =
+    sif_variance_kernel_alloc(k, KERNEL_N_K, 1.0f, 200.0f, 0.02f, SIF_DEFAULT);
+  CHECK(kernel != NULL, "the kernel returned NULL on a valid input");
+  if (!kernel)
+    return;
+
+  CHECK(kernel->n_radii == 265 && fabs(kernel->radii[0] - 1.0f) < 1e-6f &&
+          kernel->radii[kernel->n_radii - 1] <= 200.0f,
+    "lattice 1 to 200 at dln_r 0.02: %u radii ending at %g (expected 265, "
+    "at most 200)",
+    kernel->n_radii, (double)kernel->radii[kernel->n_radii - 1]);
+
+  sif_walk_t* walk = sif_walk_pk(kernel, pk);
+  CHECK(walk != NULL, "the walk returned NULL on a valid spectrum");
+
+  if (walk) {
+    /*
+     * On this smooth shape 600 nodes reach 1e-7 in the derivative variance
+     * and 4e-8 in sigma; a CAMB spectrum, with its baryon wiggles, 3e-6. The
+     * bounds leave room for the wiggles, and are still far below the 1.5e-4
+     * by which a directly quadratured 8000-point table misses the derivative
+     * variance at large R.
+     */
+    double worst_s = 0.0, worst_v = 0.0;
+    const uint32_t probes[] = {0, 35, 80, 115, 160, 200, 264};
+    for (size_t i = 0; i < sizeof(probes) / sizeof(probes[0]); i++) {
+      const uint32_t j = probes[i];
+      double s, v;
+      direct_walk(amp, (double)walk->radii[j], &s, &v);
+      const double es = fabs((double)walk->sigma[j] / s - 1.0);
+      const double ev = fabs(walk->deriv_variance[j] / v - 1.0);
+      worst_s = es > worst_s ? es : worst_s;
+      worst_v = ev > worst_v ? ev : worst_v;
+    }
+    CHECK(worst_s < 5e-7, "sigma departs from the direct integral by %.2e",
+      worst_s);
+    CHECK(worst_v < 2e-6,
+      "the derivative variance departs from the direct integral by %.2e",
+      worst_v);
+    printf("  600 nodes: sigma within %.1e, derivative variance within %.1e\n",
+      worst_s, worst_v);
+
+    /* Linear in P: twice the spectrum is twice the variance and leaves the
+     * derivative variance, a ratio of two integrals, at a quarter. */
+    sif_real twice[KERNEL_N_K];
+    for (uint32_t m = 0; m < KERNEL_N_K; m++)
+      twice[m] = 2.0f * pk[m];
+    sif_walk_t* w2 = sif_walk_pk(kernel, twice);
+    if (w2) {
+      double worst = 0.0;
+      for (uint32_t j = 0; j < walk->n_radii; j++) {
+        const double e1 =
+          fabs((double)w2->sigma[j] / ((double)walk->sigma[j] * M_SQRT2) - 1.0);
+        const double e2 =
+          fabs(w2->deriv_variance[j] / (0.5 * walk->deriv_variance[j]) - 1.0);
+        worst = e1 > worst ? e1 : worst;
+        worst = e2 > worst ? e2 : worst;
+      }
+      CHECK(worst < 1e-6, "doubling P(k) did not scale the walk: %.2e", worst);
+    }
+    sif_walk_free(w2);
+  }
+
+  /* Guards. */
+  sif_variance_kernel_t* bad;
+  bad = sif_variance_kernel_alloc(k, 3, 1.0f, 200.0f, 0.02f, SIF_DEFAULT);
+  CHECK(bad == NULL, "a kernel with 3 nodes was accepted");
+  sif_variance_kernel_free(bad);
+  bad = sif_variance_kernel_alloc(k, KERNEL_N_K, 2.0f, 1.0f, 0.02f, 0);
+  CHECK(bad == NULL, "r_max below r_min was accepted");
+  sif_variance_kernel_free(bad);
+  bad = sif_variance_kernel_alloc(k, KERNEL_N_K, 1.0f, 1.05f, 0.02f, 0);
+  CHECK(bad == NULL, "a lattice of 3 radii was accepted");
+  sif_variance_kernel_free(bad);
+  bad = sif_variance_kernel_alloc(k, KERNEL_N_K, 1.0f, 200.0f, 0.0f, 0);
+  CHECK(bad == NULL, "dln_r = 0 was accepted");
+  sif_variance_kernel_free(bad);
+  {
+    sif_real kk[KERNEL_N_K];
+    memcpy(kk, k, sizeof(kk));
+    kk[100] = kk[99];
+    bad = sif_variance_kernel_alloc(kk, KERNEL_N_K, 1.0f, 200.0f, 0.02f, 0);
+    CHECK(bad == NULL, "repeated nodes were accepted");
+    sif_variance_kernel_free(bad);
+  }
+  {
+    sif_real neg[KERNEL_N_K];
+    memcpy(neg, pk, sizeof(neg));
+    neg[10] = -1.0f;
+    sif_walk_t* w = sif_walk_pk(kernel, neg);
+    CHECK(w == NULL, "a negative P(k) was accepted");
+    sif_walk_free(w);
+  }
+
+  sif_walk_free(walk);
+  sif_variance_kernel_free(kernel);
+}
+
+/* --- 6. the emulator from a walk --- */
+
+static void test_walk_emulator(void) {
+  printf("the emulator from a walk\n");
+
+  const double amp = cdm_amplitude();
+  sif_real k[KERNEL_N_K], pk[KERNEL_N_K];
+  for (uint32_t m = 0; m < KERNEL_N_K; m++) {
+    k[m] = (sif_real)(KERNEL_K_LO *
+                      pow(KERNEL_K_HI / KERNEL_K_LO, m / (KERNEL_N_K - 1.0)));
+    pk[m] = (sif_real)(amp * cdm_shape((double)k[m]));
+  }
+
+  sif_variance_kernel_t* kernel =
+    sif_variance_kernel_alloc(k, KERNEL_N_K, 1.0f, 300.0f, 0.02f, SIF_DEFAULT);
+  sif_walk_t* walk = kernel ? sif_walk_pk(kernel, pk) : NULL;
+  CHECK(walk != NULL, "no walk to test the emulator on");
+  if (!walk) {
+    sif_variance_kernel_free(kernel);
+    return;
+  }
+
+  const uint32_t n = walk->n_radii;
+  /* A thesis-like void barrier: nu from ~0.3 at 10 Mpc/h up. */
+  sif_real* barrier = sif_ep_barrier_smt(walk->sigma, n, 0.096f, 1.15f, 0.43f);
+
+  /*
+   * At lattice radii the interpolation is the identity, so the answer must be
+   * the model on the grid the entry point chose: one point inside the smallest
+   * radius out to the first with B / sigma >= 4.5, rebuilt here by hand.
+   */
+  const uint32_t j_lo = 120, j_hi = 200;
+  sif_real at[81];
+  for (uint32_t j = j_lo; j <= j_hi; j++)
+    at[j - j_lo] = walk->radii[j];
+
+  uint32_t top = j_hi + 1;
+  while (top < n - 1 && (double)barrier[top] / (double)walk->sigma[top] < 4.5)
+    top++;
+  const uint32_t lo = j_lo - 1;
+
+  sif_emu_domain_t dom;
+  sif_real* f = sif_ep_multiplicity_function_emu(
+    walk, barrier, NULL, at, 81, &dom, SIF_DEFAULT);
+  sif_real* g = sif__ep_multiplicity_function_emu_grid(walk->radii + lo,
+    top - lo + 1, walk->sigma + lo, barrier + lo, walk->deriv_variance + lo,
+    NULL, NULL, NULL, SIF_DEFAULT);
+  CHECK(f && g, "the emulator returned NULL on a valid walk");
+
+  if (f && g) {
+    double worst = 0.0;
+    for (uint32_t i = 0; i < 81; i++) {
+      if (!(g[i + 1] > 0.0f))
+        continue;
+      const double e = fabs((double)f[i] / (double)g[i + 1] - 1.0);
+      worst = e > worst ? e : worst;
+    }
+    CHECK(worst < 1e-5,
+      "at lattice radii the walk path departs from the model on its own grid "
+      "by %.2e",
+      worst);
+    /* Not asserted in domain: the BBKS shape peaks at gamma^2 = 0.2586,
+     * just past the 0.2535 the CAMB spectra of the training reach. That is
+     * the shape, and what is checked here is the path, not the network. */
+    CHECK(dom.nu_origin > 4.5f,
+      "the walk was started at nu %.2f (expected above 4.5)",
+      (double)dom.nu_origin);
+    printf("  at lattice radii: %.1e from the model on the chosen grid, "
+           "nu_origin %.2f\n",
+      worst, (double)dom.nu_origin);
+  }
+  sif_free_aligned(f);
+  sif_free_aligned(g);
+
+  /*
+   * Between lattice radii, against a lattice twice as fine: the interpolation
+   * and the coarser grid together, on radii neither lattice contains.
+   */
+  {
+    sif_variance_kernel_t* fine_k = sif_variance_kernel_alloc(
+      k, KERNEL_N_K, 1.0f, 300.0f, 0.01f, SIF_DEFAULT);
+    sif_walk_t* fine = fine_k ? sif_walk_pk(fine_k, pk) : NULL;
+    sif_real* fb = fine ? sif_ep_barrier_smt(
+                            fine->sigma, fine->n_radii, 0.096f, 1.15f, 0.43f)
+                        : NULL;
+    sif_real radii[25];
+    for (uint32_t i = 0; i < 25; i++)
+      radii[i] = (sif_real)(8.3 * pow(60.0 / 8.3, i / 24.0));
+
+    sif_real* coarse_f = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, radii, 25, NULL, SIF_DEFAULT);
+    sif_real* fine_f = fb ? sif_ep_multiplicity_function_emu(
+                              fine, fb, NULL, radii, 25, NULL, SIF_DEFAULT)
+                          : NULL;
+    CHECK(coarse_f && fine_f, "the emulator returned NULL between lattices");
+    if (coarse_f && fine_f) {
+      double worst = 0.0;
+      for (uint32_t i = 0; i < 25; i++) {
+        const double e = fabs((double)coarse_f[i] / (double)fine_f[i] - 1.0);
+        worst = e > worst ? e : worst;
+      }
+      CHECK(worst < 5e-4,
+        "dln_r 0.02 and 0.01 differ by %.2e between lattice radii", worst);
+      printf("  between lattice radii, dln_r 0.02 against 0.01: %.1e\n", worst);
+    }
+
+    /* Bin averages over the same radii: positive, and between the densities
+     * at their two ends, since f falls monotonically over this range. */
+    sif_real* bins = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, radii, 25, NULL, SIF_EP_EMU_BIN_CENTRES);
+    CHECK(bins != NULL, "bin averages returned NULL");
+    if (bins && coarse_f) {
+      int ok = 1;
+      for (uint32_t i = 0; i < 24; i++) {
+        const double a = (double)coarse_f[i], b = (double)coarse_f[i + 1];
+        const double lo_v = a < b ? a : b, hi_v = a < b ? b : a;
+        if (!((double)bins[i] >= lo_v * (1.0 - 1e-6) &&
+              (double)bins[i] <= hi_v * (1.0 + 1e-6)))
+          ok = 0;
+      }
+      CHECK(ok, "a bin average fell outside the densities at its ends");
+    }
+
+    sif_free_aligned(bins);
+    sif_free_aligned(coarse_f);
+    sif_free_aligned(fine_f);
+    sif_free_aligned(fb);
+    sif_walk_free(fine);
+    sif_variance_kernel_free(fine_k);
+  }
+
+  /*
+   * Void-in-cloud through the walk: the covariance is rebuilt from the walk's
+   * spectrum, so compare against the model given one quadratured from the
+   * analytic shape directly, on the same grid. At 2 to 10 Mpc/h with a
+   * shallow barrier, where sigma is large enough for clouds to matter.
+   */
+  {
+    sif_real* vb = sif_ep_barrier_smt(walk->sigma, n, 0.5f, 0.3f, 0.8f);
+    sif_real* collapse = malloc(n * sizeof(sif_real));
+    for (uint32_t j = 0; j < n; j++)
+      collapse[j] = 1.686f;
+
+    const uint32_t v_lo = 35, n_at = 41;
+    sif_real at_vic[41];
+    for (uint32_t j = 0; j < n_at; j++)
+      at_vic[j] = walk->radii[v_lo + 2 * j];
+
+    const uint32_t lo_v = v_lo - 1;
+    uint32_t t = v_lo + 2 * (n_at - 1) + 1;
+    while (t < n - 1 && ((double)vb[t] / (double)walk->sigma[t] < 4.5 ||
+                          1.686 / (double)walk->sigma[t] < 4.5))
+      t++;
+
+    const uint32_t n_tab = 6000;
+    sif_real* kt = malloc(n_tab * sizeof(sif_real));
+    sif_real* pt = malloc(n_tab * sizeof(sif_real));
+    for (uint32_t i = 0; i < n_tab; i++) {
+      kt[i] = (sif_real)(KERNEL_K_LO *
+                         pow(KERNEL_K_HI / KERNEL_K_LO, i / (n_tab - 1.0)));
+      pt[i] = (sif_real)(amp * cdm_shape((double)kt[i]));
+    }
+    double* cov = sif_delta_covariance_pk(kt, pt, n_tab, walk->radii + lo_v,
+      t - lo_v + 1, NULL, NULL, NULL, SIF_DEFAULT);
+
+    sif_real* fv = sif_ep_multiplicity_function_emu(
+      walk, vb, collapse, at_vic, n_at, NULL, SIF_DEFAULT);
+    sif_real* f1 = sif_ep_multiplicity_function_emu(
+      walk, vb, NULL, at_vic, n_at, NULL, SIF_DEFAULT);
+    sif_real* gv = cov ? sif__ep_multiplicity_function_emu_grid(
+                           walk->radii + lo_v, t - lo_v + 1, walk->sigma + lo_v,
+                           vb + lo_v, walk->deriv_variance + lo_v,
+                           collapse + lo_v, cov, NULL, SIF_DEFAULT)
+                       : NULL;
+    CHECK(fv && f1 && gv, "void-in-cloud through the walk returned NULL");
+    if (fv && f1 && gv) {
+      double worst = 0.0, k_max = 0.0, k_min = 1.0;
+      for (uint32_t j = 0; j < n_at; j++) {
+        if (!(gv[2 * j + 1] > 0.0f) || !(f1[j] > 0.0f))
+          continue;
+        const double e = fabs((double)fv[j] / (double)gv[2 * j + 1] - 1.0);
+        const double kk = (double)fv[j] / (double)f1[j];
+        worst = e > worst ? e : worst;
+        k_max = kk > k_max ? kk : k_max;
+        k_min = kk < k_min ? kk : k_min;
+      }
+      CHECK(k_min < 0.99,
+        "void-in-cloud never mattered here (K >= %.4f); the comparison is "
+        "vacuous",
+        k_min);
+      CHECK(worst < 1e-4,
+        "void-in-cloud through the walk departs from the model given the "
+        "direct covariance by %.2e",
+        worst);
+      CHECK(k_max <= 1.0 + 1e-6, "void-in-cloud raised f: K = %.8f", k_max);
+      printf("  void-in-cloud: %.1e from the direct covariance, K %.4f to "
+             "%.4f\n",
+        worst, k_min, k_max);
+    }
+    sif_free_aligned(fv);
+    sif_free_aligned(f1);
+    sif_free_aligned(gv);
+    sif_free_aligned(cov);
+    sif_free_aligned(vb);
+    free(kt);
+    free(pt);
+    free(collapse);
+  }
+
+  /* Guards. */
+  {
+    sif_real r;
+    sif_real outside[2] = {0.5f, 10.0f};
+    sif_real* res = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, outside, 2, NULL, SIF_DEFAULT);
+    CHECK(res == NULL, "a radius below the lattice was accepted");
+    sif_free_aligned(res);
+
+    sif_real beyond[2] = {10.0f, 400.0f};
+    res = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, beyond, 2, NULL, SIF_DEFAULT);
+    CHECK(res == NULL, "a radius beyond the lattice was accepted");
+    sif_free_aligned(res);
+
+    sif_real down[2] = {20.0f, 10.0f};
+    res = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, down, 2, NULL, SIF_DEFAULT);
+    CHECK(res == NULL, "descending radii were accepted");
+    sif_free_aligned(res);
+
+    r = 10.0f;
+    res = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, &r, 1, NULL, SIF_EP_EMU_BIN_CENTRES);
+    CHECK(res == NULL, "bin averages over a single radius were accepted");
+    sif_free_aligned(res);
+
+    res = sif_ep_multiplicity_function_emu(
+      walk, barrier, NULL, &r, 1, NULL, SIF_DEFAULT);
+    CHECK(res != NULL, "a single radius was rejected");
+    sif_free_aligned(res);
+
+    res = sif_ep_multiplicity_function_emu(NULL, barrier, NULL, &r, 1, NULL, 0);
+    CHECK(res == NULL, "a NULL walk was accepted");
+    sif_free_aligned(res);
+  }
+
+  sif_free_aligned(barrier);
+  sif_walk_free(walk);
+  sif_variance_kernel_free(kernel);
 }
 
 int main(void) {
@@ -586,6 +1044,8 @@ int main(void) {
   test_grid_independence();
   test_domain();
   test_guards();
+  test_kernel();
+  test_walk_emulator();
 
   sif_system_finalise();
 

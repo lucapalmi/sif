@@ -28,6 +28,7 @@
 #include "model/ep_internal.h"
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
+#include "utils/logger_internal.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -723,9 +724,9 @@ done:
   return status;
 }
 
-/* --- The entry point --- */
+/* --- The model on a given grid --- */
 
-sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
+sif_real* sif__ep_multiplicity_function_emu_grid(const sif_real* radii,
   uint32_t n_radii, const sif_real* sigma, const sif_real* barrier,
   const double* deriv_variance, const sif_real* collapse, const double* cov,
   sif_emu_domain_t* domain, sif_option opt) {
@@ -740,10 +741,12 @@ sif_real* sif_ep_multiplicity_function_emu(const sif_real* radii,
     domain->expected_error = 0.0f;
   }
 
-  if (validate(radii, n_radii, sigma, barrier, deriv_variance) != SIF_OK)
+  if (validate(radii, n_radii, sigma, barrier, deriv_variance) != SIF_OK ||
+      (collapse &&
+        validate_collapse(radii, n_radii, collapse, cov) != SIF_OK)) {
+    sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
-  if (collapse && validate_collapse(radii, n_radii, collapse, cov) != SIF_OK)
-    return NULL;
+  }
 
   const uint32_t n = n_radii;
   const uint32_t n_bins = n - 1;
@@ -853,6 +856,330 @@ fail:
   sif_free_aligned(out);
   sif__ep_features_free(&f);
   return NULL;
+}
+
+/* --- The entry point --- */
+
+/*
+ * Where the slice of the lattice starts, as B / sigma (and delta_c / sigma
+ * with void-in-cloud) at its largest radius. Further out nothing has crossed
+ * and the answer does not move, so the margin over the ~3.5 the model needs
+ * costs a few lattice points and nothing else; 4.5 is also what a void-in-cloud
+ * grid needs not to miss the clouds beyond it.
+ */
+#define EP_EMU_NU_START 4.5
+
+/* Below this at the end of the lattice, walks start above the barrier in
+ * numbers the emulator was measured to mishandle: reported. */
+#define EP_EMU_NU_ENOUGH 3.5
+
+/* Spacing in ln k of the table the void-in-cloud covariance is quadratured
+ * on: the covariance's integrand carries W^2 ~ (kR)^-4, which converges at
+ * far coarser sampling than the derivative variance does. */
+#define EP_EMU_COV_DLNK 0.004
+
+static int validate_request(const sif_walk_t* walk, const sif_real* barrier,
+  const sif_real* radii, uint32_t n_radii, int binned) {
+
+  if (!walk || !barrier || !radii) {
+    SIF_LOG_ERROR(TAG, "walk, barrier and radii are required");
+    return SIF_ERR_INVALID;
+  }
+
+  if (walk->n_radii < 4) {
+    SIF_LOG_ERROR(
+      TAG, "walk: %u lattice radii (expected at least 4)", walk->n_radii);
+    return SIF_ERR_INVALID;
+  }
+
+  if (n_radii < (binned ? 2u : 1u)) {
+    SIF_LOG_ERROR(TAG, "radii: %u (expected at least %u%s)", n_radii,
+      binned ? 2u : 1u, binned ? " for bin averages" : "");
+    return SIF_ERR_INVALID;
+  }
+
+  const sif_real lo = walk->radii[0];
+  const sif_real hi = walk->radii[walk->n_radii - 1];
+
+  for (uint32_t i = 0; i < n_radii; i++) {
+    if (!(radii[i] >= lo && radii[i] <= hi)) {
+      SIF_LOG_ERROR(TAG,
+        "radii[%u]: %g (expected within the walk's lattice, %g to %g)", i,
+        (double)radii[i], (double)lo, (double)hi);
+      return SIF_ERR_INVALID;
+    }
+    if (i > 0 && !(radii[i] > radii[i - 1])) {
+      SIF_LOG_ERROR(TAG,
+        "radii[%u]: %g after %g (expected strictly increasing)", i,
+        (double)radii[i], (double)radii[i - 1]);
+      return SIF_ERR_INVALID;
+    }
+  }
+
+  return SIF_OK;
+}
+
+/*
+ * The covariance between the slice's radii, for void-in-cloud. The walk keeps
+ * P(k) only at the kernel's nodes, which are too coarse to quadrature the
+ * window on directly; between them the spectrum is the cubic in ln P through
+ * the four nearest -- in the logarithm here, unlike the kernel, because this
+ * is not a linear map and positivity is what the Gram form needs.
+ */
+static double* slice_covariance(
+  const sif_walk_t* walk, uint32_t lo, uint32_t n_slice) {
+
+  const uint32_t n_k = walk->n_k;
+
+  for (uint32_t m = 0; m < n_k; m++) {
+    if (!(walk->pk[m] > 0.0f)) {
+      SIF_LOG_ERROR(TAG,
+        "collapse: pk[%u] at k = %g is %g (expected positive: the "
+        "void-in-cloud covariance is interpolated in ln P)",
+        m, (double)walk->k[m], (double)walk->pk[m]);
+      sif__error_status_set(SIF_ERR_INVALID);
+      return NULL;
+    }
+  }
+
+  const double lk0 = log((double)walk->k[0]);
+  const double lk1 = log((double)walk->k[n_k - 1]);
+  const uint32_t n_tab = (uint32_t)ceil((lk1 - lk0) / EP_EMU_COV_DLNK) + 1;
+
+  double* lk = malloc((size_t)n_k * sizeof(double));
+  double* lp = malloc((size_t)n_k * sizeof(double));
+  sif_real* kt = malloc((size_t)n_tab * sizeof(sif_real));
+  sif_real* pt = malloc((size_t)n_tab * sizeof(sif_real));
+  if (!lk || !lp || !kt || !pt) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the void-in-cloud P(k) table");
+    free(lk);
+    free(lp);
+    free(kt);
+    free(pt);
+    return NULL;
+  }
+
+  for (uint32_t m = 0; m < n_k; m++) {
+    lk[m] = log((double)walk->k[m]);
+    lp[m] = log((double)walk->pk[m]);
+  }
+
+  uint32_t iv = 0;
+  for (uint32_t i = 0; i < n_tab; i++) {
+    /* The ends are the nodes themselves, so the table spans exactly the
+     * range the kernel integrated over. */
+    const double x = (i + 1 == n_tab)
+                       ? lk1
+                       : lk0 + (lk1 - lk0) * (double)i / (double)(n_tab - 1);
+    while (iv + 2 < n_k && x > lk[iv + 1])
+      iv++;
+
+    uint32_t s = (iv > 0) ? iv - 1 : 0;
+    if (s + 4 > n_k)
+      s = n_k - 4;
+
+    double v = 0.0;
+    for (uint32_t p = 0; p < 4; p++) {
+      double basis = 1.0;
+      for (uint32_t q = 0; q < 4; q++)
+        if (q != p)
+          basis *= (x - lk[s + q]) / (lk[s + p] - lk[s + q]);
+      v += lp[s + p] * basis;
+    }
+
+    kt[i] = (i + 1 == n_tab) ? walk->k[n_k - 1]
+            : (i == 0)       ? walk->k[0]
+                             : (sif_real)exp(x);
+    pt[i] = (sif_real)exp(v);
+  }
+
+  double* cov = sif_delta_covariance_pk(
+    kt, pt, n_tab, walk->radii + lo, n_slice, NULL, NULL, NULL, walk->window);
+
+  free(lk);
+  free(lp);
+  free(kt);
+  free(pt);
+  return cov;
+}
+
+/*
+ * R f at fractional lattice position t of the slice: the cubic through the
+ * four nearest values of ln(R f), which is smooth where f itself falls by
+ * orders of magnitude, or the straight line between the two nearest where one
+ * of the four is not positive.
+ */
+static double rf_at(
+  const double* rf, const double* ln_rf, uint32_t n_slice, double t) {
+
+  int64_t c = (int64_t)floor(t);
+  if (c < 0)
+    c = 0;
+  if (c > (int64_t)n_slice - 2)
+    c = (int64_t)n_slice - 2;
+
+  int64_t s = c - 1;
+  if (s < 0)
+    s = 0;
+  if (s + 4 > (int64_t)n_slice)
+    s = (int64_t)n_slice - 4;
+
+  int positive = 1;
+  for (int64_t p = s; p < s + 4; p++)
+    if (!(rf[p] > 0.0))
+      positive = 0;
+
+  if (!positive) {
+    const double u = t - (double)c;
+    return (1.0 - u) * rf[c] + u * rf[c + 1];
+  }
+
+  double v = 0.0;
+  for (int64_t p = 0; p < 4; p++) {
+    double basis = 1.0;
+    for (int64_t q = 0; q < 4; q++)
+      if (q != p)
+        basis *= (t - (double)(s + q)) / (double)(p - q);
+    v += ln_rf[s + p] * basis;
+  }
+  return exp(v);
+}
+
+sif_real* sif_ep_multiplicity_function_emu(const sif_walk_t* walk,
+  const sif_real* barrier, const sif_real* collapse, const sif_real* radii,
+  uint32_t n_radii, sif_emu_domain_t* domain, sif_option opt) {
+
+  const int binned = (opt & SIF__EP_EMU_OUTPUT_MASK) == SIF_EP_EMU_BIN_CENTRES;
+
+  if (domain) {
+    domain->in_domain = 0;
+    domain->n_bins_outside = 0;
+    domain->nu_origin = 0.0f;
+    domain->first_step_mass = 0.0f;
+    domain->expected_error = 0.0f;
+  }
+
+  if (validate_request(walk, barrier, radii, n_radii, binned) != SIF_OK) {
+    sif__error_status_set(SIF_ERR_INVALID);
+    return NULL;
+  }
+
+  const uint32_t n = walk->n_radii;
+  const double ln_r0 = log((double)walk->radii[0]);
+  const double h = (log((double)walk->radii[n - 1]) - ln_r0) / (double)(n - 1);
+
+  /* The slice: one lattice point inside the smallest radius and one beyond
+   * the largest, so every requested radius has its four-point stencil, then
+   * outward until the walk starts where nothing has crossed yet. */
+  int64_t lo = (int64_t)floor((log((double)radii[0]) - ln_r0) / h) - 1;
+  int64_t hi = (int64_t)ceil((log((double)radii[n_radii - 1]) - ln_r0) / h) + 1;
+  if (lo < 0)
+    lo = 0;
+  if (hi > (int64_t)n - 1)
+    hi = (int64_t)n - 1;
+
+  for (; hi < (int64_t)n - 1; hi++) {
+    const double s = (double)walk->sigma[hi];
+    const int void_ok = (double)barrier[hi] / s >= EP_EMU_NU_START;
+    const int cloud_ok =
+      !collapse || (double)collapse[hi] / s >= EP_EMU_NU_START;
+    if (void_ok && cloud_ok)
+      break;
+  }
+
+  while (hi - lo < 3) {
+    if (hi < (int64_t)n - 1)
+      hi++;
+    else
+      lo--;
+  }
+
+  const double nu_top = (double)barrier[hi] / (double)walk->sigma[hi];
+  if (nu_top < EP_EMU_NU_ENOUGH) {
+    SIF_LOG_WARNING(TAG,
+      "walk lattice ends at R = %g with B / sigma = %g (expected at least %g; "
+      "build the kernel with a larger r_max)",
+      (double)walk->radii[hi], nu_top, EP_EMU_NU_ENOUGH);
+  }
+
+  const uint32_t n_slice = (uint32_t)(hi - lo + 1);
+  const sif_real* slice_radii = walk->radii + lo;
+
+  double* cov = NULL;
+  if (collapse) {
+    cov = slice_covariance(walk, (uint32_t)lo, n_slice);
+    if (!cov)
+      return NULL;
+  }
+
+  sif_real* f = sif__ep_multiplicity_function_emu_grid(slice_radii, n_slice,
+    walk->sigma + lo, barrier + lo, walk->deriv_variance + lo,
+    collapse ? collapse + lo : NULL, cov, domain, SIF_EP_EMU_AT_RADII);
+  sif_free_aligned(cov);
+  if (!f)
+    return NULL;
+
+  const uint32_t n_out = binned ? n_radii - 1 : n_radii;
+  sif_real* out = sif_calloc_aligned((size_t)n_out, sizeof(sif_real));
+  double* rf = malloc((size_t)n_slice * sizeof(double));
+  double* ln_rf = malloc((size_t)n_slice * sizeof(double));
+  if (!out || !rf || !ln_rf) {
+    SIF_LOG_ERROR(TAG, "failed to allocate the emulator output");
+    sif_free_aligned(f);
+    sif_free_aligned(out);
+    free(rf);
+    free(ln_rf);
+    return NULL;
+  }
+
+  for (uint32_t j = 0; j < n_slice; j++) {
+    rf[j] = (double)slice_radii[j] * (double)f[j];
+    ln_rf[j] = rf[j] > 0.0 ? log(rf[j]) : 0.0;
+  }
+  sif_free_aligned(f);
+
+  /* Lattice position of a radius, counted from the slice's first point. */
+  const double t0 = (double)lo;
+#define SLICE_T(r) ((log((double)(r)) - ln_r0) / h - t0)
+
+  if (!binned) {
+    for (uint32_t i = 0; i < n_radii; i++)
+      out[i] = (sif_real)(rf_at(rf, ln_rf, n_slice, SLICE_T(radii[i])) /
+                          (double)radii[i]);
+  } else {
+    /* The integral of f dR over each bin is that of R f over ln R, taken
+     * piece by piece between lattice points so each piece sees one cubic. */
+    static const double gl_x[4] = {-0.8611363115940526, -0.3399810435848563,
+      0.3399810435848563, 0.8611363115940526};
+    static const double gl_w[4] = {0.3478548451374538, 0.6521451548625461,
+      0.6521451548625461, 0.3478548451374538};
+
+    for (uint32_t i = 0; i + 1 < n_radii; i++) {
+      const double ta = SLICE_T(radii[i]);
+      const double tb = SLICE_T(radii[i + 1]);
+      double integral = 0.0;
+
+      for (double a = ta; a < tb;) {
+        double b = floor(a) + 1.0;
+        if (b > tb)
+          b = tb;
+        const double mid = 0.5 * (a + b);
+        const double half = 0.5 * (b - a);
+        for (int g = 0; g < 4; g++)
+          integral +=
+            gl_w[g] * half * rf_at(rf, ln_rf, n_slice, mid + half * gl_x[g]);
+        a = b;
+      }
+
+      out[i] =
+        (sif_real)(integral * h / ((double)radii[i + 1] - (double)radii[i]));
+    }
+  }
+#undef SLICE_T
+
+  free(rf);
+  free(ln_rf);
+  return out;
 }
 
 #undef TAG

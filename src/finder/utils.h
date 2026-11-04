@@ -184,16 +184,16 @@ typedef struct {
 } sif_refine_stats_t;
 
 /**
- * @brief Collect the same candidates as sif__finder_scan_candidates(), with
- * the ones at a local minimum placed where that minimum actually lies between
- * the nodes, and every one ordered by depth on the field the centres are
- * placed on.
+ * @brief Collect the same candidates as sif__finder_scan_candidates(), or
+ * only the local minima among them under @p minima_only, with the ones at a
+ * local minimum placed where that minimum actually lies between the nodes, and
+ * every one ordered by depth on the field the centres are placed on.
  *
  * The threshold is tested on the field as given, so the set of candidates is
- * the plain scan's. Everything after is on that field smoothed once more by a
- * Gaussian of one cell: the top-hat leaves ripple at the cell scale that no
- * stencil can resolve, and without it a sub-cell position follows the ripple
- * rather than the void. The order is on the same field, so that the deepest
+ * the plain scan's. Everything after is on the field @p resmooth leaves: the
+ * top-hat has ripple at the cell scale that no stencil can resolve, and
+ * without a further smoothing a sub-cell position follows the ripple rather
+ * than the void. The order is on the same field, so that the deepest
  * candidate of a basin -- the one accepted first -- is its minimum.
  *
  * A minimum is a candidate strictly below its 26 neighbours, ties going to

@@ -122,7 +122,8 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
 
 def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
                threshold: float, overlap_fraction: float = 0.0, *,
-               seeds: _Seeds = "cells", search_factor: float = 1.5,
+               seeds: _Seeds = "cells", refine_centres: bool = False,
+               search_factor: float = 1.5,
                deconvolution: _Deconvolution = "full",
                consume_grid: bool = False,
                checkpoint: _Path | Literal[False] | None = None,
@@ -151,6 +152,12 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
             local minima of the rung's field smoothed by a further Gaussian
             of 0.15 of the rung, placed between the nodes; periodic boxes
             only, for now.
+        refine_centres: With seeds='cells', place the cells that are those
+            same minima between the nodes and try every cell deepest first
+            on that smoothed field. Every cell stays a candidate, and a
+            void is accepted or refused as ever. One more transform per
+            rung; periodic boxes only, for now. seeds='minima' is always
+            refined.
         search_factor: How far past a rung the rescaling looks for the
             crossing, as a multiple of the rung. Default 1.5. This is the
             finder's dominant cost and it goes as factor**3 - 1, so 1.5
@@ -298,9 +305,9 @@ def read_checkpoint(path: _Path) -> tuple[Catalogue, dict[str, Any]]:
         or 'survey'), weighted, radii (the ladder, largest first),
         rungs_done, n_voids, n_prior, threshold, overlap_fraction,
         search_factor, keep_cic_window, deconvolution, seeds ('cells'
-        or 'minima'), grid_n_cells, box_length, assignment, interlaced,
-        n_particles, total_weight, n_randoms, random_total_weight and
-        offset.
+        or 'minima'), refine_centres, grid_n_cells, box_length, assignment,
+        interlaced, n_particles, total_weight, n_randoms,
+        random_total_weight and offset.
 
     Raises:
         OSError: If the file cannot be read, or is not a checkpoint, is

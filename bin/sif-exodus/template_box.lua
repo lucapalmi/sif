@@ -96,6 +96,7 @@ finder = {
   --   overlap_fraction = 0,   -- of the smaller radius; 0: no overlap
   --   search_factor = 1.5,    -- 1.25 | 1.5 | 1.75 | 2
   --   seeds = "cells",        -- cells | minima
+  --   refine_centres = false, -- place cells that are minima between the nodes
   --   -- How the grid's assignment window is undone before smoothing: full
   --   -- divides it out (boosting aliasing and shot noise near the grid
   --   -- scale); aliasing divides out the window with its aliases (least

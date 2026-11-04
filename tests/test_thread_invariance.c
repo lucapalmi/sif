@@ -55,6 +55,7 @@
 #include "sif/model/cosmology.h"
 #include "sif/model/delta_moments.h"
 #include "sif/model/excursion_set.h"
+#include "sif/model/variance_kernel.h"
 #include "sif/structures/catalogue.h"
 #include "sif/structures/chain_mesh.h"
 #include "sif/structures/delta_distribution.h"
@@ -546,25 +547,47 @@ static void stage_models(products_t* p) {
     sif_free_aligned(cov);
   }
 
-  /* The emulator with void-in-cloud, at enough radii to go parallel. */
+  /* The covariance at enough radii to go parallel. */
   cov = sif_delta_covariance_pk(
     pk_k, pk_p, N_K, emu_radii, N_EMU, sigma, NULL, dvar, SIF_DEFAULT);
   CHECK(cov != NULL, "covariance failed");
   if (cov) {
     PUT_DOUBLES(p, cov, (uint64_t)N_EMU * (N_EMU + 1) / 2, "covariance");
-    sif_real* barrier = sif_ep_barrier_smt(sigma, N_EMU, 0.5f, 0.3f, 0.8f);
-    sif_real collapse[N_EMU];
-    for (uint32_t i = 0; i < N_EMU; i++)
-      collapse[i] = 1.686f;
-    sif_real* f = barrier
-                    ? sif_ep_multiplicity_function_emu(emu_radii, N_EMU, sigma,
-                        barrier, dvar, collapse, cov, NULL, SIF_DEFAULT)
-                    : NULL;
-    CHECK(f != NULL, "void-in-cloud emulator failed");
-    PUT_REALS(p, f, f ? N_EMU : 0, "void-in-cloud multiplicity");
-    sif_free_aligned(f);
-    sif_free_aligned(barrier);
     sif_free_aligned(cov);
+  }
+
+  /* The variance kernel, built in parallel over radii; the walk, a parallel
+   * matrix-vector product; and the emulator with void-in-cloud, whose hazard
+   * goes parallel above 64 radii. */
+  sif_variance_kernel_t* kernel =
+    sif_variance_kernel_alloc(pk_k, N_K, 1.0f, 300.0f, 0.02f, SIF_DEFAULT);
+  CHECK(kernel != NULL, "variance kernel failed");
+  if (kernel) {
+    PUT_DOUBLES(p, kernel->_weights,
+      ((uint64_t)3 * kernel->n_radii + 1) * kernel->n_k, "variance kernel");
+    sif_walk_t* walk = sif_walk_pk(kernel, pk_p);
+    CHECK(walk != NULL, "walk failed");
+    if (walk) {
+      PUT_REALS(p, walk->sigma, walk->n_radii, "walk sigma");
+      PUT_DOUBLES(
+        p, walk->deriv_variance, walk->n_radii, "walk derivative variance");
+      sif_real* barrier =
+        sif_ep_barrier_smt(walk->sigma, walk->n_radii, 0.5f, 0.3f, 0.8f);
+      sif_real* collapse = malloc(walk->n_radii * sizeof(sif_real));
+      for (uint32_t i = 0; collapse && i < walk->n_radii; i++)
+        collapse[i] = 1.686f;
+      sif_real* f = (barrier && collapse)
+                      ? sif_ep_multiplicity_function_emu(walk, barrier,
+                          collapse, emu_radii, N_EMU, NULL, SIF_DEFAULT)
+                      : NULL;
+      CHECK(f != NULL, "void-in-cloud emulator failed");
+      PUT_REALS(p, f, f ? N_EMU : 0, "void-in-cloud multiplicity");
+      sif_free_aligned(f);
+      sif_free_aligned(barrier);
+      free(collapse);
+      sif_walk_free(walk);
+    }
+    sif_variance_kernel_free(kernel);
   }
 }
 
@@ -610,6 +633,14 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
       CHECK(minima && minima->n_voids > 0, "exodus found no minima");
       put_catalogue(p, "exodus, minima centres", minima);
       sif_catalogue_free(minima);
+
+      /* The cells on the same scan: every candidate kept, the minima among
+       * them with offsets of their own. */
+      sif_catalogue_t* refined = sif_finder_exodus_raw(g, m, radii, n_radii,
+        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_REFINE_CENTRES, NULL);
+      CHECK(refined && refined->n_voids > 0, "exodus found no refined cells");
+      put_catalogue(p, "exodus, refined cells", refined);
+      sif_catalogue_free(refined);
     }
 
     if (cat && !weighted) {

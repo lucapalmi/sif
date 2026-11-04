@@ -66,8 +66,9 @@ typedef uint32_t sif_option;
  * A finder smooths the grid in place at every radius, so the input is gone by
  * the time it finishes. By default it is transformed back at the end; this flag
  * skips that, saving one inverse FFT for a caller that is going to discard the
- * grid anyway. Under SIF_FINDER_SEEDS_MINIMA the exodus finder leaves that
- * field smoothed by the Gaussian its minima are found on as well.
+ * grid anyway. Under SIF_FINDER_SEEDS_MINIMA or SIF_FINDER_REFINE_CENTRES the
+ * exodus finder leaves that field smoothed by the Gaussian its minima are
+ * found on as well.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
 
@@ -162,7 +163,7 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * @name Where exodus voids are seeded
  * Bit 9, one of two; with their overlap fraction they are the two
  * sif_exodus_variant_t. The overlap fraction, the search factor and the
- * window options apply to both alike.
+ * window options apply to both alike. Bit 10 refines the centres of the cells.
  *
  * Cells are exactly the finder of 0.4 and before: a crossing past a rung's
  * reach is refused, and a void is refused by any accepted one it overlaps.
@@ -189,7 +190,17 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * cells in radius. Periodic boxes only, for now.
  */
 #define SIF_FINDER_SEEDS_MINIMA (1u << 9)
-#define SIF__FINDER_SEEDS_MASK  (1u << 9)
+/**
+ * Refine the centres of SIF_FINDER_SEEDS_CELLS as SIF_FINDER_SEEDS_MINIMA's
+ * are, keeping every cell below the threshold a candidate. The cells that are
+ * minima of the field smoothed by that same Gaussian are placed between the
+ * nodes, the rest stay on theirs, and all go deepest first on that field, so
+ * a basin's minimum is tried before the cells on its slope. A crossing past
+ * the reach and an overlap are refused as ever. One more transform per rung.
+ * Periodic boxes only, for now. Minima are refined with or without this.
+ */
+#define SIF_FINDER_REFINE_CENTRES (1u << 10)
+#define SIF__FINDER_SEEDS_MASK    (3u << 9)
 /** @} */
 /** @} */
 

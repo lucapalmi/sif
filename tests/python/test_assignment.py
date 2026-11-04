@@ -127,6 +127,16 @@ def test_exodus_takes_variants(field, mesh, tmp_path, variant):
     np.testing.assert_array_equal(cat.centres, raw.centres)
 
 
+def test_refine_centres(field, mesh):
+    # The keyword reaches the finder: the refined cells' catalogue is another.
+    plain = pysif.finders.exodus_raw(contrast(field), mesh, RADII, -0.7,
+                                     checkpoint=False)
+    cat = pysif.finders.exodus_raw(contrast(field), mesh, RADII, -0.7,
+                                   checkpoint=False, refine_centres=True)
+    assert cat.n_voids > 0
+    assert not np.array_equal(cat.centres, plain.centres)
+
+
 def test_variant_refusals(field, mesh):
     g = contrast(field)
     with pytest.raises(ValueError, match="variant must be 'excursion-set'"):
@@ -135,7 +145,8 @@ def test_variant_refusals(field, mesh):
         pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
                                  seeds="nodes")
     # What a variant fixes is not taken alongside it.
-    for kw in ({"seeds": "minima"}, {"overlap_fraction": 0.5},
+    for kw in ({"seeds": "minima"}, {"refine_centres": True},
+               {"overlap_fraction": 0.5},
                {"deconvolution": "aliasing"}, {"search_factor": 2.0}):
         with pytest.raises(TypeError):
             pysif.finders.exodus(g, mesh, RADII, -0.7, **kw)

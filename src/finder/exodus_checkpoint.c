@@ -166,8 +166,10 @@ int sif__exodus_checkpoint_write(const char* path,
 
 /* What a header's seeds mean, for messages. */
 static const char* centres_label(uint32_t options) {
-  return (options & SIF_FINDER_SEEDS_MINIMA)
-           ? "minima (smoothed at the rung's scale)"
+  if (options & SIF_FINDER_SEEDS_MINIMA)
+    return "minima (smoothed at the rung's scale)";
+  return (options & SIF_FINDER_REFINE_CENTRES)
+           ? "every cell, the minima between the nodes"
            : "every cell, on its node";
 }
 

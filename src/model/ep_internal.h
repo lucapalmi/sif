@@ -209,4 +209,32 @@ int sif__ep_vic_hazard_value(const double* cov, const double* S,
 SIF_NODISCARD sif_real* sif__ep_multiplicity_upcrossing(
   const sif_ep_features_t* f, const sif_real* radii, uint32_t n);
 
+/**
+ * @brief The emulator on the caller's own grid: the model as it was fitted,
+ * before sif_ep_multiplicity_function_emu chooses the grid and interpolates
+ * to the radii asked for.
+ *
+ * The test suite pins this against the Python reference on stored grids.
+ *
+ * @param radii Strictly increasing, at least 4. The largest should sit where
+ * B / sigma (and delta_c / sigma with `collapse`) is ~4.5 or more, the
+ * smallest where it is above ~0.21.
+ * @param sigma, barrier, deriv_variance One entry per radius, as a walk holds
+ * them; barrier strictly positive.
+ * @param collapse Optional, one delta_c per radius; NULL without void-in-cloud.
+ * @param cov The packed covariance between the radii; required with
+ * `collapse`, ignored without.
+ * @param domain Optional report.
+ * @param opt SIF_EP_EMU_AT_RADII: the density at each radius, n_radii values.
+ * SIF_EP_EMU_BIN_CENTRES: its average over each bin, n_radii - 1 values.
+ *
+ * @return Newly allocated, released with sif_free_aligned, or NULL on invalid
+ * input.
+ */
+SIF_NODISCARD sif_real* sif__ep_multiplicity_function_emu_grid(
+  const sif_real* radii, uint32_t n_radii, const sif_real* sigma,
+  const sif_real* barrier, const double* deriv_variance,
+  const sif_real* collapse, const double* cov, sif_emu_domain_t* domain,
+  sif_option opt);
+
 #endif /* SIF__MODEL_EP_INTERNAL_H */

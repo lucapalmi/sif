@@ -205,6 +205,28 @@ def test_variant_checkpoints(grid, mesh, tmp_path):
         pysif.finders.exodus(grid(), mesh, RADII, THRESHOLD, checkpoint=False)
 
 
+def test_refined_checkpoints(grid, mesh, tmp_path):
+    # A run of refined cells is a run of its own, resumed as one; minima are
+    # refined either way, so asking for it changes nothing about theirs.
+    path = tmp_path / "cells.ckpt"
+    cat = run(grid, mesh, checkpoint=path, keep_checkpoint=True,
+              refine_centres=True)
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["seeds"] == "cells" and info["refine_centres"] is True
+    with pytest.raises(ValueError, match=r"not this run: centres every cell"):
+        run(grid, mesh, checkpoint=path)
+    again = run(grid, mesh, checkpoint=path, keep_checkpoint=True,
+                refine_centres=True)
+    np.testing.assert_array_equal(columns(again), columns(cat))
+
+    path = tmp_path / "minima.ckpt"
+    run(grid, mesh, checkpoint=path, keep_checkpoint=True, seeds="minima")
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["seeds"] == "minima" and info["refine_centres"] is True
+    run(grid, mesh, checkpoint=path, keep_checkpoint=True, seeds="minima",
+        refine_centres=True)
+
+
 def test_prior(grid, mesh):
     # The larger rungs' voids, extended with the rest of the ladder: one run.
     ref = run(grid, mesh, checkpoint=False)

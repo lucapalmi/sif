@@ -203,8 +203,10 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * default (SIF_FINDER_SEEDS_CELLS) every cell at or below the threshold is a
  * candidate, deepest first, on its node: the finder of 0.4.
  * SIF_FINDER_SEEDS_MINIMA takes the minima of the rung's field smoothed at
- * the rung's scale, refined off their nodes. The threshold is always tested
- * on the top-hat alone.
+ * the rung's scale, refined off their nodes. SIF_FINDER_REFINE_CENTRES keeps
+ * every cell a candidate and refines those same minima among them, changing
+ * nothing else about the cells. The threshold is always tested on the top-hat
+ * alone.
  *
  * A catalogue does not depend on the thread count, bit for bit. It does
  * depend on the grid's last bits: a grid this hands back is restored to float
@@ -226,8 +228,8 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
  * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
  * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
- * SIF_FINDER_SEEDS_*, SIF_FINDER_NO_CHECKPOINT and SIF_FINDER_SEARCH_*. The box
- * is always periodic; a survey, with edges, is sif_finder_exodus_survey_raw().
+ * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_CENTRES, SIF_FINDER_NO_CHECKPOINT and
+ * SIF_FINDER_SEARCH_*. The box is always periodic; a survey, with edges, is sif_finder_exodus_survey_raw().
  * @param extras Where to checkpoint and what to start from, or NULL for
  * neither: see sif_finder_exodus_extras_t.
  *
@@ -373,7 +375,7 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey(sif_grid_t* data_grid,
  * @param opt Finder options: SIF_FINDER_CONSUME_GRID (both grids),
  * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
  * SIF_FINDER_NO_CHECKPOINT and SIF_FINDER_SEARCH_*. The seeds are
- * SIF_FINDER_SEEDS_CELLS's, for now.
+ * SIF_FINDER_SEEDS_CELLS's on their nodes, for now.
  * @param extras As in sif_finder_exodus_raw().
  *
  * @return Newly allocated catalogue, with its footprint columns, in the
@@ -429,8 +431,9 @@ typedef struct {
   uint32_t is_weighted;
   /**
    * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor,
-   * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW and the
-   * SIF_FINDER_SEEDS_*. Version 1 had no seeds, and reads as
+   * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW, the
+   * SIF_FINDER_SEEDS_* and SIF_FINDER_REFINE_CENTRES, which is only set on
+   * cells. Version 1 had no seeds, and reads as
    * SIF_FINDER_SEEDS_CELLS.
    */
   uint32_t options;

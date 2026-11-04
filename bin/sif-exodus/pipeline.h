@@ -250,6 +250,8 @@ typedef struct {
     double search_factor;
     /* Where candidates come from. */
     exodus_seeds_t seeds;
+    /* Whether cells that are minima sit between the nodes. Minima always do. */
+    bool refine_centres;
     /* How the assignment window is undone. */
     exodus_deconvolution_t deconvolution;
   } finder;

@@ -95,6 +95,10 @@
  * rather than refused, and a void displaces the smaller ones it overlaps
  * instead of being refused by them; see find_conflicts().
  *
+ * SIF_FINDER_REFINE_CENTRES takes the placing alone to the cells: every cell
+ * stays a candidate and is accepted and refused as in 0.4, but the minima
+ * among them sit between the nodes and all are ordered on the smoothed field.
+ *
  *
  * Surveys
  * -------
@@ -241,9 +245,12 @@ typedef struct {
    * its scale, each placed between the nodes with its offset in `offsets`,
    * and `below` the scan's scratch. Cells are the finder of 0.4, which
    * refuses a crossing past the reach and a void that overlaps any accepted
-   * one; minima extend the reach and displace.
+   * one; minima extend the reach and displace. `refine_centres` is the scan
+   * that places centres, which the minima always use and the cells under
+   * SIF_FINDER_REFINE_CENTRES; nothing else follows from it.
    */
   int seed_minima;
+  int refine_centres;
 
   /* Under the minima, the accepted voids a new one collides with,
    * and how many voids the rung has taken back out of the catalogue: their
@@ -485,7 +492,8 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   if (!ctx->mask)
     return SIF_ERR_ALLOC;
   ctx->seed_minima = (opt & SIF_FINDER_SEEDS_MINIMA) != 0;
-  if (ctx->seed_minima) {
+  ctx->refine_centres = (opt & SIF__FINDER_SEEDS_MASK) != 0;
+  if (ctx->refine_centres) {
     ctx->below = sif_bitmask_alloc(grid->total_cells);
     if (!ctx->below)
       return SIF_ERR_ALLOC;
@@ -993,11 +1001,14 @@ int sif__exodus_check_weights(const sif_chain_mesh_t* mesh) {
 /* --- Driver --- */
 
 /* Whether this build can run the seeds `options` ask for on this kind of
- * run: either in a box, only SIF_FINDER_SEEDS_CELLS in a survey, for now. */
+ * run: any in a box, only SIF_FINDER_SEEDS_CELLS on their nodes in a survey,
+ * for now. */
 int sif__exodus_check_seeds(sif_option options, int survey) {
-  if (survey && (options & SIF_FINDER_SEEDS_MINIMA)) {
-    SIF_LOG_ERROR(TAG, "options: SIF_FINDER_SEEDS_MINIMA: a survey (expected "
-                       "SIF_FINDER_SEEDS_CELLS, for now)");
+  if (survey && (options & SIF__FINDER_SEEDS_MASK)) {
+    SIF_LOG_ERROR(TAG, "options: %s: a survey (expected "
+                       "SIF_FINDER_SEEDS_CELLS on their nodes, for now)",
+      (options & SIF_FINDER_SEEDS_MINIMA) ? "SIF_FINDER_SEEDS_MINIMA"
+                                          : "SIF_FINDER_REFINE_CENTRES");
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -1192,6 +1203,10 @@ sif_catalogue_t* sif_finder_exodus_raw(sif_grid_t* grid,
     return NULL;
   }
 
+  /* Minima are refined either way, and one checkpoint has to serve both. */
+  if (options & SIF_FINDER_SEEDS_MINIMA)
+    options &= ~SIF_FINDER_REFINE_CENTRES;
+
   return sif__exodus_run(grid, mesh, radii, n_radii, threshold,
     overlap_fraction, options, NULL, NULL, NULL, extras);
 }
@@ -1221,7 +1236,7 @@ static uint32_t halt_after = 0;
 
 void sif__exodus_halt_after_set(uint32_t n_rungs) { halt_after = n_rungs; }
 
-/* The Gaussian minima are found on, under SIF_FINDER_SEEDS_MINIMA, as a
+/* The Gaussian minima are found on, wherever centres are refined, as a
  * fraction of the rung. 0.15 tracks the minima of a 1500^3 grid to within a
  * few percent from 600^3 up, in the L2800 tests; 0.30 does as well but merges
  * more of them. */
@@ -1588,7 +1603,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     }
 
     sif_refine_stats_t refine = {0};
-    const int plain = !ctx.seed_minima;
+    const int plain = !ctx.refine_centres;
     if (plain) {
       status =
         sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
@@ -1599,9 +1614,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         .grid = grid,
         .radius = radius,
         .sigma = RUNG_MINIMA_SIGMA * radius};
-      status =
-        sif__finder_scan_refined(grid, ctx.mask, ctx.below, threshold, survey,
-          1, 1, &ctx.candidates, &ctx.offsets, &refine, resmooth_rung, &rs);
+      status = sif__finder_scan_refined(grid, ctx.mask, ctx.below, threshold,
+        survey, 1, ctx.seed_minima, &ctx.candidates, &ctx.offsets, &refine,
+        resmooth_rung, &rs);
     }
     if (status != SIF_OK)
       break;
@@ -2049,7 +2064,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       " batches, commit %.2fs",
       t_scanned - t_rung, t_evaluate, n_batches, t_commit);
 
-    if (ctx.seed_minima)
+    if (ctx.refine_centres)
       SIF_LOG_TRACE(TAG, "accepted between the nodes: %6" PRIu64, n_refined);
 
     /* The same ratio again, but over the voids that survived to the catalogue:

@@ -487,6 +487,7 @@ static void run_radius_oracle(void) {
     /* Centres off the nodes: the radius reported is still exactly the
      * tracers' at the centre reported. */
     {16.0f, SIF_FINDER_SEEDS_MINIMA, 1.5},
+    {16.0f, SIF_FINDER_REFINE_CENTRES, 1.5},
   };
 
   for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
@@ -758,6 +759,13 @@ static void run_checkpoints(void) {
     exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_SEEDS_MINIMA, path, NULL);
   CHECK(!cat && error_has("not this run: centres every cell, on its node"),
     "minima centres were not refused (%s)", sif_error_message());
+  sif_catalogue_free(cat);
+
+  sif_error_clear();
+  cat =
+    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_REFINE_CENTRES, path, NULL);
+  CHECK(!cat && error_has("this run's: every cell, the minima between"),
+    "refined cells were not refused (%s)", sif_error_message());
   sif_catalogue_free(cat);
 
   sif_error_clear();
@@ -1425,6 +1433,83 @@ static void run_variants(void) {
   sif_field_free(f);
 }
 
+/*
+ * SIF_FINDER_REFINE_CENTRES places cells between the nodes and leaves the rules
+ * of the cells alone: no two voids overlap, and where a void sits off its node
+ * the cells' catalogue has none that do. Minima are refined anyway, so asking
+ * for it on top of them changes nothing.
+ */
+static void run_refined_cells(void) {
+  printf("refined cells\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  make_field(x, y, z);
+  sif_field_t* f = sif_field_alloc(N_P);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  setup_t s = {sif_grid_alloc(N_GRID, BOX), NULL, f};
+  s.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+  free(x);
+  free(y);
+  free(z);
+
+  const sif_option none = SIF_FINDER_NO_CHECKPOINT;
+  sif_catalogue_t* cat[2] = {
+    exodus_x(&s, radii, n_radii, -0.7f, none, NULL, NULL),
+    exodus_x(&s, radii, n_radii, -0.7f, none | SIF_FINDER_REFINE_CENTRES, NULL,
+      NULL)};
+
+  const sif_real cell = s.grid->cell_length;
+  uint64_t off_node[2] = {0, 0};
+  for (int k = 0; k < 2; k++) {
+    CHECK(cat[k] && cat[k]->n_voids > 0, "run %d found nothing", k);
+    for (uint64_t i = 0; cat[k] && i < cat[k]->n_voids; i++) {
+      const sif_real c[3] = {cat[k]->cx[i], cat[k]->cy[i], cat[k]->cz[i]};
+      int on_node = 1;
+      for (int a = 0; a < 3; a++)
+        on_node &= SIF_REAL_FLOOR(c[a] / cell + 0.5f) * cell == c[a];
+      off_node[k] += !on_node;
+    }
+  }
+  CHECK(off_node[0] == 0, "%llu cells off their nodes",
+    (unsigned long long)off_node[0]);
+  CHECK(off_node[1] > 0, "no refined cell left its node");
+
+  for (uint64_t i = 0; cat[1] && i < cat[1]->n_voids; i++)
+    for (uint64_t j = 0; j < i; j++) {
+      sif_real d2 = 0.0f;
+      const sif_real d[3] = {cat[1]->cx[i] - cat[1]->cx[j],
+        cat[1]->cy[i] - cat[1]->cy[j], cat[1]->cz[i] - cat[1]->cz[j]};
+      for (int a = 0; a < 3; a++) {
+        const sif_real da = SIF_REAL_ABS(d[a]);
+        const sif_real w = da > 0.5f * BOX ? BOX - da : da;
+        d2 += w * w;
+      }
+      const sif_real sum = cat[1]->radii[i] + cat[1]->radii[j];
+      CHECK(d2 >= sum * sum, "voids %llu and %llu overlap",
+        (unsigned long long)i, (unsigned long long)j);
+    }
+
+  sif_catalogue_t* minima =
+    exodus_x(&s, radii, n_radii, -0.7f, none | SIF_FINDER_SEEDS_MINIMA, NULL,
+      NULL);
+  sif_catalogue_t* both = exodus_x(&s, radii, n_radii, -0.7f,
+    none | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_CENTRES, NULL, NULL);
+  CHECK(minima && minima->n_voids > 0, "minima found nothing");
+  check_same_catalogue("minima, refined", both, minima);
+
+  sif_catalogue_free(cat[0]);
+  sif_catalogue_free(cat[1]);
+  sif_catalogue_free(minima);
+  sif_catalogue_free(both);
+  sif_chain_mesh_free(s.mesh);
+  sif_grid_free(s.grid);
+  sif_field_free(f);
+  printf("  ok\n");
+}
+
 /* Files left in @p path, other than . and .. */
 static int dir_entries(const char* path) {
   int n = 0;
@@ -1477,8 +1562,9 @@ static void run_save_memory(void) {
   } cases[] = {
     {"cells", SIF_FINDER_SEEDS_CELLS, 0.0f},
     {"minima", SIF_FINDER_SEEDS_MINIMA, 1.0f},
+    {"refined cells", SIF_FINDER_REFINE_CENTRES, 0.0f},
   };
-  for (int k = 0; k < 2; k++) {
+  for (int k = 0; k < 3; k++) {
     const sif_option opt = cases[k].opt | SIF_FINDER_NO_CHECKPOINT;
 
     regrid(&s);
@@ -1548,6 +1634,7 @@ int main(void) {
   run_case("overlap 0.2", 0, 0.2f);
   run_case("consume_grid", SIF_FINDER_CONSUME_GRID, 0.0f);
   run_case("minima centres", SIF_FINDER_SEEDS_MINIMA, 0.0f);
+  run_case("refined cells", SIF_FINDER_REFINE_CENTRES, 0.0f);
 #endif
 
   run_weighted_cases();
@@ -1565,6 +1652,7 @@ int main(void) {
   run_grid_cells();
 #if !SIF_TEST_INSTRUMENTED
   run_variants();
+  run_refined_cells();
 #endif
   run_save_memory();
 
