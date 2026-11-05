@@ -5,6 +5,14 @@ Current version: v0.5 release 0
 
 ## Unreleased
 
+### Changed
+
+- EVM size function: the barrier is the maximum a posteriori of the 100000-step
+  calibration chain (final cosmology: h = 0.67, no massive neutrinos, n_s =
+  0.96) and the five mapping constants are refitted with it, so
+  `size_function_evm` and its variants change by under 1% over most radii and
+  by a few per cent in the large-radius tail
+
 ### Added
 
 - Exodus Lagrangian overlap: voids kept apart on R (1 + threshold)^(1/3), the

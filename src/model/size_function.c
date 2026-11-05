@@ -386,10 +386,10 @@ sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  * carried to any other epoch or cosmology by linear growth rescaling the
  * field. The values are the maximum a posteriori of the calibration chain.
  */
-#define EVM_BARRIER_A      1.295609294830281
-#define EVM_BARRIER_B      1.3782884464438276
-#define EVM_BARRIER_BETA0  0.014867575268555028
-#define EVM_BARRIER_GAMMA0 0.42590405524560554
+#define EVM_BARRIER_A      1.2842100392060727
+#define EVM_BARRIER_B      1.377811236063481
+#define EVM_BARRIER_BETA0  0.015392670655598361
+#define EVM_BARRIER_GAMMA0 0.4236497081815056
 
 /* sigma at R = 12 Mpc of the calibration cosmology, at z = 99 and z = 0. They
  * are part of the model: the same two numbers for every cosmology. */
@@ -398,11 +398,11 @@ sif_size_function_t* sif_size_function_vdn(const sif_real* k,
 
 /* The correction's constants, the maximum a posteriori of their chain, and
  * the ln(nu) its variable u is measured from. */
-#define EVM_MAPPING_A   0.19421695931546248
-#define EVM_MAPPING_C1  0.2242333261503064
-#define EVM_MAPPING_C2  0.7311577281984404
-#define EVM_MAPPING_C3  0.8140954933390583
-#define EVM_MAPPING_C4  1.6801368020718135
+#define EVM_MAPPING_A   0.19461446470444646
+#define EVM_MAPPING_C1  0.23252781852690818
+#define EVM_MAPPING_C2  0.7393559149238662
+#define EVM_MAPPING_C3  0.8171305888425725
+#define EVM_MAPPING_C4  1.6790895818555394
 #define EVM_LN_NU_PIVOT 0.3483074
 
 /* What the model was fitted over. delta_L at z = 99 is the threshold the

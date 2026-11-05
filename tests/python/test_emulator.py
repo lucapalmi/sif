@@ -183,8 +183,8 @@ def evm_pipeline(kernel, pk, radii, delta_nl):
     sigma12 = float(sigma_at(12.0 * H))
     q = sigma12 / SIGMA12_Z99
     depth = -M.spherical_map_linear(delta_nl)
-    alpha = 1.295609 * depth ** 1.378288 * q ** (1.0 - 1.378288)
-    beta, gamma = 0.014868 * q, 0.425904
+    alpha = 1.28421 * depth ** 1.377811 * q ** (1.0 - 1.377811)
+    beta, gamma = 0.015393 * q, 0.423650
 
     barrier = M.ep_barrier_smt(walk.sigma, alpha, beta, gamma)
     r_l = radii * (1.0 + delta_nl) ** (1.0 / 3.0)
@@ -198,7 +198,7 @@ def evm_pipeline(kernel, pk, radii, delta_nl):
     w = np.log(1.0 + delta_nl)
     ell = np.log(sigma12 / SIGMA12_Z0)
     s = np.log(sigma)
-    a, c1, c2, c3, c4 = 0.194217, 0.224233, 0.731158, 0.814095, 1.680137
+    a, c1, c2, c3, c4 = 0.194614, 0.232528, 0.739356, 0.817131, 1.679090
     big_q = w - ell ** 2 * w - ell * u
     e = u + np.exp(w - ell * (ell - big_q ** 2))
     ln_t = a * (ell * (w - ell * u * np.exp(ell))
