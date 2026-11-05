@@ -29,10 +29,10 @@ releases.
 
 ## Installation
 
-You can install the Python package with pip or conda
+You can install the Python package with pip or conda (conda might not be available yet)
 ```
 pip install pysif
-conda install -c conda-forge pysif
+conda install -c conda-forge pysif 
 ```
 To use the C library, clone and compile the repository. A complete guide to 
 the installation is available 
