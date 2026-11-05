@@ -7,6 +7,7 @@
 #include "py_model.h"
 
 #include "py_delta_common.h"
+#include "py_variance_kernel.h"
 #include "sif/model/delta_moments.h"
 #include "sif/model/excursion_set.h"
 #include "sif/model/size_function.h"
@@ -20,6 +21,28 @@ typedef sif_size_function_t* (*vsf_fn)(const sif_real*, const sif_real*,
 
 /* Forward-declared: shared with the mapping entry points further down. */
 static int py_sif_spherical_option(const char* method, sif_option* opt);
+
+/* The units= and method= every model size function takes. */
+static int py_sif_vsf_options(
+  const char* units, const char* method, sif_option* options) {
+
+  *options = SIF_DEFAULT;
+  if (units == NULL || strcmp(units, "ln_r") == 0) {
+    *options |= SIF_VSF_BIN_LN;
+  } else if (strcmp(units, "r") == 0) {
+    *options |= SIF_VSF_BIN_LINEAR;
+  } else {
+    PyErr_Format(PyExc_ValueError,
+      "units must be None, 'ln_r' (dn/dlnR) or 'r' (dn/dR), not '%s'", units);
+    return -1;
+  }
+
+  sif_option spherical;
+  if (py_sif_spherical_option(method, &spherical) != 0)
+    return -1;
+  *options |= spherical;
+  return 0;
+}
 
 static PyObject* size_function(
   PyObject* args, PyObject* kwds, vsf_fn compute, const char* name) {
@@ -39,21 +62,9 @@ static PyObject* size_function(
     return NULL;
   }
 
-  sif_option options = SIF_DEFAULT;
-  if (units == NULL || strcmp(units, "ln_r") == 0) {
-    options |= SIF_VSF_BIN_LN;
-  } else if (strcmp(units, "r") == 0) {
-    options |= SIF_VSF_BIN_LINEAR;
-  } else {
-    PyErr_Format(PyExc_ValueError,
-      "units must be None, 'ln_r' (dn/dlnR) or 'r' (dn/dR), not '%s'", units);
+  sif_option options;
+  if (py_sif_vsf_options(units, method, &options) != 0)
     return NULL;
-  }
-
-  sif_option spherical;
-  if (py_sif_spherical_option(method, &spherical) != 0)
-    return NULL;
-  options |= spherical;
 
   if (!(delta_v < 0.0)) {
     PyErr_SetString(PyExc_ValueError, "delta_v must be strictly negative");
@@ -121,6 +132,159 @@ PyObject* py_sif_size_function_svdw(
 PyObject* py_sif_size_function_vdn(
   PyObject* self, PyObject* args, PyObject* kwds) {
   return size_function(args, kwds, sif_size_function_vdn, "Vdn");
+}
+
+/* The checks both EVM entry points make on their common arguments. */
+static int evm_check_scalars(double delta_v, double h) {
+  if (!(delta_v < 0.0)) {
+    PyErr_SetString(PyExc_ValueError, "delta_v must be strictly negative");
+    return -1;
+  }
+  if (!(h > 0.0)) {
+    PyErr_SetString(PyExc_ValueError, "h must be strictly positive");
+    return -1;
+  }
+  return 0;
+}
+
+PyObject* py_sif_size_function_evm(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  PyObject* k_obj;
+  PyObject* pk_obj;
+  PyObject* radii_obj;
+  double delta_v;
+  double h;
+  const char* units = NULL;
+  const char* method = NULL;
+
+  static char* kwlist[] = {
+    "k", "pk", "radii", "delta_v", "h", "units", "method", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOdd|zz", kwlist, &k_obj,
+        &pk_obj, &radii_obj, &delta_v, &h, &units, &method)) {
+    return NULL;
+  }
+
+  sif_option options;
+  if (py_sif_vsf_options(units, method, &options) != 0 ||
+      evm_check_scalars(delta_v, h) != 0) {
+    return NULL;
+  }
+
+  PyArrayObject* k_arr = py_sif_as_real_array(k_obj, "k");
+  if (!k_arr)
+    return NULL;
+
+  PyArrayObject* pk_arr = py_sif_as_real_array(pk_obj, "pk");
+  if (!pk_arr) {
+    Py_DECREF(k_arr);
+    return NULL;
+  }
+
+  PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
+  if (!radii_arr) {
+    Py_DECREF(k_arr);
+    Py_DECREF(pk_arr);
+    return NULL;
+  }
+
+  if (PyArray_SIZE(k_arr) != PyArray_SIZE(pk_arr)) {
+    Py_DECREF(k_arr);
+    Py_DECREF(pk_arr);
+    Py_DECREF(radii_arr);
+    PyErr_SetString(PyExc_ValueError, "k and pk must have the same length");
+    return NULL;
+  }
+
+  const npy_intp n_points = PyArray_SIZE(k_arr);
+  const npy_intp n_radii = PyArray_SIZE(radii_arr);
+
+  sif_size_function_t* vsf = NULL;
+
+  sif_error_clear();
+  Py_BEGIN_ALLOW_THREADS vsf = sif_size_function_evm(
+    (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
+    (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
+    (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, options);
+  Py_END_ALLOW_THREADS
+
+    Py_DECREF(k_arr);
+  Py_DECREF(pk_arr);
+  Py_DECREF(radii_arr);
+
+  if (!vsf)
+    return py_sif_raise(sif_error_status(), "size_function_evm");
+
+  return py_sif_wrap_size_function(vsf);
+}
+
+PyObject* py_sif_size_function_evm_kernel(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  PyObject* kernel_obj;
+  PyObject* pk_obj;
+  PyObject* radii_obj;
+  double delta_v;
+  double h;
+  const char* units = NULL;
+  const char* method = NULL;
+
+  static char* kwlist[] = {
+    "kernel", "pk", "radii", "delta_v", "h", "units", "method", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OOdd|zz", kwlist,
+        &sifVarianceKernelType, &kernel_obj, &pk_obj, &radii_obj, &delta_v, &h,
+        &units, &method)) {
+    return NULL;
+  }
+
+  const sif_variance_kernel_t* kernel =
+    ((sifVarianceKernelObject*)kernel_obj)->kernel;
+  if (!kernel) {
+    PyErr_SetString(PyExc_RuntimeError, "VarianceKernel: not initialised");
+    return NULL;
+  }
+
+  sif_option options;
+  if (py_sif_vsf_options(units, method, &options) != 0 ||
+      evm_check_scalars(delta_v, h) != 0) {
+    return NULL;
+  }
+
+  PyArrayObject* pk_arr = py_sif_as_real_array(pk_obj, "pk");
+  if (!pk_arr)
+    return NULL;
+
+  if (PyArray_SIZE(pk_arr) != (npy_intp)kernel->n_k) {
+    PyErr_Format(PyExc_ValueError, "pk: %zd values (expected one per node, %u)",
+      PyArray_SIZE(pk_arr), kernel->n_k);
+    Py_DECREF(pk_arr);
+    return NULL;
+  }
+
+  PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
+  if (!radii_arr) {
+    Py_DECREF(pk_arr);
+    return NULL;
+  }
+
+  const npy_intp n_radii = PyArray_SIZE(radii_arr);
+
+  sif_size_function_t* vsf = NULL;
+
+  sif_error_clear();
+  Py_BEGIN_ALLOW_THREADS vsf =
+    sif_size_function_evm_kernel(kernel, (const sif_real*)PyArray_DATA(pk_arr),
+      (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
+      (sif_real)delta_v, (sif_real)h, options);
+  Py_END_ALLOW_THREADS
+
+    Py_DECREF(pk_arr);
+  Py_DECREF(radii_arr);
+
+  if (!vsf)
+    return py_sif_raise(sif_error_status(), "size_function_evm");
+
+  return py_sif_wrap_size_function(vsf);
 }
 
 PyObject* py_sif_delta_sigma_slope_pk(

@@ -20,6 +20,9 @@ Current version: v0.4 release 1
 - Variance kernel (`sif_variance_kernel_alloc`, `sif_walk_pk`;
   `pysif.model.VarianceKernel`): sigma(R) and the derivative variance for a
   new P(k) in ~0.1 ms, 50x more accurate than quadraturing the table
+- EVM void size function (`sif_size_function_evm`, `size_function_evm`): the
+  calibrated barrier, the emulator and the fitted mapping; the `_kernel`
+  variant takes a built variance kernel, for chains
 - Exodus refined centres without minima-only seeds: `SIF_FINDER_REFINE_CENTRES`,
   `exodus_raw(refine_centres=True)`, `finder.exodus_params.refine_centres`
 

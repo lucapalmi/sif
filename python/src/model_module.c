@@ -236,6 +236,39 @@ static PyMethodDef model_methods[] = {
     "Identical to SvdW but divided by the Eulerian volume, which keeps the "
     "void volume fraction below unity. Same arguments as size_function_svdw."},
 
+  {"size_function_evm", (PyCFunction)py_sif_size_function_evm,
+    METH_VARARGS | METH_KEYWORDS,
+    "size_function_evm(k, pk, radii, delta_v, h, units='ln_r', method='b94')"
+    "\n"
+    "--\n\n"
+    "The EVM void size function, as a SizeFunction over the given "
+    "Eulerian radii: the moving barrier calibrated at z = 99, its "
+    "emulated first crossing, and a fitted volume-conserving mapping.\n"
+    "pk is the linear P(k) at the epoch wanted, and no redshift is "
+    "passed: the epoch is seen through sigma12, for which h places 12 "
+    "Mpc on radii in Mpc/h. delta_v is the linear barrier, as for "
+    "size_function_svdw; spherical_map_linear converts a threshold "
+    "quoted as an observed underdensity. Calibrated on one cosmology for "
+    "sigma12 from 0.39 to 1 and |delta_v| sigma12(z=99) / sigma12 from "
+    "0.003 to 0.045; outside them a warning is logged. Radii past the "
+    "emulated first crossing give 0.\n"
+    "Builds a VarianceKernel on every call, a good part of a second; "
+    "size_function_evm_kernel takes one built beforehand."},
+
+  {"size_function_evm_kernel", (PyCFunction)py_sif_size_function_evm_kernel,
+    METH_VARARGS | METH_KEYWORDS,
+    "size_function_evm_kernel(kernel, pk, radii, delta_v, h, units='ln_r', "
+    "method='b94')"
+    "\n"
+    "--\n\n"
+    "size_function_evm on a VarianceKernel built beforehand, for chains: "
+    "only pk changes between calls, and it is given at kernel.k.\n"
+    "The kernel must have a top-hat window and a lattice holding 12 Mpc "
+    "and radii, reaching in to the Lagrangian radii and out to where the "
+    "barrier is ~3.5 sigma: VarianceKernel(r_min=0.3, r_max=1000.0) is "
+    "what the model was calibrated with. Other arguments as "
+    "size_function_evm."},
+
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef model_module = {PyModuleDef_HEAD_INIT,

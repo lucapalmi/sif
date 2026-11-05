@@ -59,6 +59,12 @@ PyObject* py_sif_size_function_svdw(
 PyObject* py_sif_size_function_vdn(
   PyObject* self, PyObject* args, PyObject* kwds);
 
+PyObject* py_sif_size_function_evm(
+  PyObject* self, PyObject* args, PyObject* kwds);
+
+PyObject* py_sif_size_function_evm_kernel(
+  PyObject* self, PyObject* args, PyObject* kwds);
+
 PyObject* py_sif_delta_covariance_pk(
   PyObject* self, PyObject* args, PyObject* kwds);
 

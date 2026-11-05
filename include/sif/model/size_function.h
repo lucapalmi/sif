@@ -20,6 +20,7 @@
 #include <stdint.h>
 
 #include "sif/core/macros.h"
+#include "sif/model/variance_kernel.h"
 #include "sif/structures/size_function.h"
 
 /* Bernardeau (1994) fit constant linking the linear and non-linear void
@@ -111,5 +112,74 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_svdw(const sif_real* k,
 SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
   uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt);
+
+/**
+ * @brief The EVM void size function: a calibrated moving barrier, its emulated
+ * first crossing, and a fitted Lagrangian-to-Eulerian mapping.
+ *
+ * sigma(R) comes from the spectrum, and with sigma12 = sigma(12 Mpc) it fixes
+ * the Sheth-Mo-Tormen barrier calibrated at z = 99. The emulator
+ * (sif_ep_multiplicity_function_emu, single barrier) gives the Lagrangian
+ * abundance n_L, and
+ *
+ *     dn/dln R_E = (1 + delta_NL) n_L(R_L) T,  R_L = R_E (1 + delta_NL)^(1/3)
+ *
+ * where T is a five-constant correction to the volume-conserving mapping,
+ * a function of B / sigma and sigma at R_E, delta_NL and sigma12. Nothing is
+ * free: all nine constants are the maximum a posteriori of their calibration.
+ *
+ * The epoch and the cosmology are seen only through the spectrum, which is the
+ * linear P(k) at the redshift wanted; no redshift is passed.
+ *
+ * @note Calibrated on one cosmology, for sigma12 between 0.39 and 1 and
+ * |delta_v| sigma12(z = 99) / sigma12 between 0.003 and 0.045, at radii above
+ * nu ~ 0.5. Outside the first two a warning is logged and the answer is
+ * still returned. The correction is not a derived law, so do not expect it to
+ * extrapolate.
+ *
+ * @note Builds a variance kernel on every call, which takes a good part of a
+ * second. To evaluate many spectra, build the kernel once and call
+ * sif_size_function_evm_kernel.
+ *
+ * @param k Wavenumbers, strictly positive and strictly increasing, at least 4.
+ * Sampled well enough for sif_variance_kernel_alloc, whose integrals stop at
+ * the first and last.
+ * @param pk Linear power spectrum sampled at k
+ * @param n_points Length of k and pk
+ * @param radii Eulerian (observed) void radii, strictly positive and strictly
+ * increasing
+ * @param n_radii Number of radii
+ * @param delta_v Linear void barrier, strictly negative. A threshold quoted as
+ * an observed underdensity goes through sif_spherical_map_linear first.
+ * @param h Hubble parameter in units of 100 km/s/Mpc, strictly positive: it
+ * places 12 Mpc on radii measured in Mpc/h
+ * @param opt SIF_VSF_BIN_LN (default) or SIF_VSF_BIN_LINEAR for the units,
+ * combined with SIF_SPHERICAL_B94 (default, what the model was calibrated
+ * with) or SIF_SPHERICAL_EXACT for delta_NL. The window is always a top-hat.
+ *
+ * @return Newly allocated size function with n_bins = n_radii, released with
+ * sif_size_function_free, or NULL on invalid input. A radius where the
+ * emulated multiplicity underflows gives exactly 0.
+ */
+SIF_NODISCARD sif_size_function_t* sif_size_function_evm(const sif_real* k,
+  const sif_real* pk, uint32_t n_points, const sif_real* radii,
+  uint32_t n_radii, sif_real delta_v, sif_real h, sif_option opt);
+
+/**
+ * @brief sif_size_function_evm on a variance kernel built beforehand: what a
+ * chain should call, since only the spectrum changes between evaluations.
+ *
+ * @param kernel From sif_variance_kernel_alloc, with a top-hat window; not
+ * modified. Its lattice must hold 12 Mpc and `radii`, reach in to the
+ * Lagrangian radii and out to where B / sigma is ~3.5 or more. 0.3 to 1000
+ * Mpc/h at a spacing of 0.02 in ln R is what the model was calibrated with.
+ * @param pk kernel->n_k values, P(k) at kernel->k
+ *
+ * Remaining parameters, and the result, are as sif_size_function_evm.
+ */
+SIF_NODISCARD sif_size_function_t* sif_size_function_evm_kernel(
+  const sif_variance_kernel_t* kernel, const sif_real* pk,
+  const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
+  sif_option opt);
 
 #endif /* SIF_MODEL_SIZE_FUNCTION_H */

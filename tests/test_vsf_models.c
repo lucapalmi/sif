@@ -17,6 +17,7 @@
 #include "sif/model/delta_moments.h"
 #include "sif/model/excursion_set.h"
 #include "sif/model/size_function.h"
+#include "sif/model/variance_kernel.h"
 #include "sif/structures/delta_moments.h"
 #include "sif/structures/size_function.h"
 #include "sif/utils/align.h"
@@ -420,6 +421,113 @@ static void test_svdw_vdn_ratio(void) {
   free(radii);
 }
 
+/* A CDM-like spectrum through the BBKS transfer, n_s = 0.96, sigma_8 ~ 0.8. */
+static double cdm_pk(double k) {
+  const double q = k / 0.21;
+  const double t = log(1.0 + 2.34 * q) / (2.34 * q) *
+                   pow(1.0 + 3.89 * q + pow(16.1 * q, 2.0) +
+                         pow(5.46 * q, 3.0) + pow(6.71 * q, 4.0),
+                     -0.25);
+  return 1.468e6 * pow(k, 0.96) * t * t;
+}
+
+/*
+ * The agreement with the scripts the model was calibrated with is tested from
+ * Python, where those steps can be written out (tests/python/test_emulator.py).
+ * Here: the two entry points are one model, the options reach it, its output
+ * is well-formed past the emulator's reach, and bad arguments are refused.
+ */
+static void test_evm(void) {
+  printf("EVM size function\n");
+
+  enum { n_k = 600, n_r = 30 };
+  sif_real* k = malloc(n_k * sizeof(sif_real));
+  sif_real* pk = malloc(n_k * sizeof(sif_real));
+  sif_real radii[n_r];
+
+  for (uint32_t i = 0; i < n_k; i++) {
+    k[i] =
+      (sif_real)(3.1e-4 * exp(log(100.0 / 3.1e-4) * i / (double)(n_k - 1)));
+    pk[i] = (sif_real)cdm_pk((double)k[i]);
+  }
+  for (uint32_t i = 0; i < n_r; i++)
+    radii[i] = (sif_real)(6.0 * exp(log(150.0) * i / (double)(n_r - 1)));
+
+  const sif_real dv = sif_spherical_map_linear(-0.5f, SIF_SPHERICAL_B94);
+  const sif_real h = 0.67f;
+
+  sif_variance_kernel_t* kernel = sif_variance_kernel_alloc(
+    k, n_k, 0.3f, 1000.0f, 0.02f, SIF_DELTA_FILTER_TOP_HAT);
+  CHECK(kernel != NULL, "kernel returned NULL");
+
+  sif_size_function_t* direct =
+    sif_size_function_evm_kernel(kernel, pk, radii, n_r, dv, h, SIF_DEFAULT);
+  sif_size_function_t* wrapped =
+    sif_size_function_evm(k, pk, n_k, radii, n_r, dv, h, SIF_DEFAULT);
+  sif_size_function_t* per_r = sif_size_function_evm_kernel(
+    kernel, pk, radii, n_r, dv, h, SIF_VSF_BIN_LINEAR);
+  sif_size_function_t* exact = sif_size_function_evm_kernel(
+    kernel, pk, radii, n_r, dv, h, SIF_SPHERICAL_EXACT);
+
+  CHECK(direct && wrapped && per_r && exact, "EVM returned NULL");
+
+  if (direct && wrapped && per_r && exact) {
+    int differs = 0;
+    for (uint32_t i = 0; i < n_r; i++) {
+      CHECK(wrapped->vsf[i] == direct->vsf[i],
+        "wrapper and kernel versions differ at R = %g", (double)radii[i]);
+      CHECK(isfinite(direct->vsf[i]) && direct->vsf[i] >= 0.0f, "vsf[%u] is %g",
+        i, (double)direct->vsf[i]);
+
+      const double expect = (double)direct->vsf[i] / (double)radii[i];
+      CHECK(fabs((double)per_r->vsf[i] - expect) <= 1e-5 * expect,
+        "dn/dR is not dn/dlnR over R at R = %g", (double)radii[i]);
+
+      if (exact->vsf[i] != direct->vsf[i])
+        differs = 1;
+    }
+    CHECK(differs, "SIF_SPHERICAL_EXACT is not reaching the mapping");
+    CHECK(direct->vsf[0] > 0.0f && direct->vsf[n_r - 1] == 0.0f,
+      "expected voids at the first radius and none at the last");
+    CHECK(direct->n_bins == n_r && direct->r_min == radii[0] &&
+            direct->r_max == radii[n_r - 1],
+      "the size function container is inconsistent");
+  }
+
+  /* Each refused rather than evaluated. */
+  sif_real descending[2] = {20.0f, 10.0f};
+  sif_real too_large[2] = {10.0f, 5000.0f};
+  sif_variance_kernel_t* gaussian = sif_variance_kernel_alloc(
+    k, n_k, 0.3f, 1000.0f, 0.02f, SIF_DELTA_FILTER_GAUSSIAN);
+
+  CHECK(!sif_size_function_evm_kernel(NULL, pk, radii, n_r, dv, h, SIF_DEFAULT),
+    "accepted a NULL kernel");
+  CHECK(!sif_size_function_evm_kernel(
+          kernel, pk, descending, 2, dv, h, SIF_DEFAULT),
+    "accepted descending radii");
+  CHECK(
+    !sif_size_function_evm_kernel(kernel, pk, too_large, 2, dv, h, SIF_DEFAULT),
+    "accepted a radius beyond the lattice");
+  CHECK(
+    !sif_size_function_evm_kernel(kernel, pk, radii, n_r, 0.5f, h, SIF_DEFAULT),
+    "accepted a positive delta_v");
+  CHECK(!sif_size_function_evm_kernel(
+          kernel, pk, radii, n_r, dv, 0.0f, SIF_DEFAULT),
+    "accepted h = 0");
+  CHECK(
+    !sif_size_function_evm_kernel(gaussian, pk, radii, n_r, dv, h, SIF_DEFAULT),
+    "accepted a Gaussian kernel");
+
+  sif_variance_kernel_free(gaussian);
+  sif_variance_kernel_free(kernel);
+  sif_size_function_free(direct);
+  sif_size_function_free(wrapped);
+  sif_size_function_free(per_r);
+  sif_size_function_free(exact);
+  free(k);
+  free(pk);
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -435,6 +543,7 @@ int main(void) {
   test_delta_mapping();
   test_multiplicity_continuity();
   test_svdw_vdn_ratio();
+  test_evm();
 
   sif_system_finalise();
 
