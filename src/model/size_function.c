@@ -466,13 +466,12 @@ static double evm_ln_correction(double u, double w, double l, double s) {
            offset * offset);
 }
 
-sif_size_function_t* sif_size_function_evm_kernel(
-  const sif_variance_kernel_t* kernel, const sif_real* pk,
+sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
   const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
   sif_option opt) {
 
-  if (!kernel || !pk) {
-    SIF_LOG_ERROR(TAG, "kernel and pk are required");
+  if (!walk) {
+    SIF_LOG_ERROR(TAG, "walk is required");
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
@@ -483,15 +482,15 @@ sif_size_function_t* sif_size_function_evm_kernel(
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
-  if ((kernel->window & SIF__DELTA_FILTER_MASK) != SIF_DELTA_FILTER_TOP_HAT) {
-    SIF_LOG_ERROR(TAG, "kernel: Gaussian window (expected top-hat)");
+  if ((walk->window & SIF__DELTA_FILTER_MASK) != SIF_DELTA_FILTER_TOP_HAT) {
+    SIF_LOG_ERROR(TAG, "walk: Gaussian window (expected top-hat)");
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
 
   const double radius12 = EVM_SIGMA12_RADIUS_MPC * (double)h;
-  const double lattice_lo = (double)kernel->radii[0];
-  const double lattice_hi = (double)kernel->radii[kernel->n_radii - 1];
+  const double lattice_lo = (double)walk->radii[0];
+  const double lattice_hi = (double)walk->radii[walk->n_radii - 1];
 
   if (!(radius12 >= lattice_lo && radius12 <= lattice_hi)) {
     SIF_LOG_ERROR(TAG, "12 Mpc = %g Mpc/h: outside the lattice, %g to %g",
@@ -509,10 +508,6 @@ sif_size_function_t* sif_size_function_evm_kernel(
 
   const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, opt);
   if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
-    return NULL;
-
-  sif_walk_t* walk = sif_walk_pk(kernel, pk);
-  if (!walk)
     return NULL;
 
   const double sigma12 = walk_sigma_at(walk, radius12);
@@ -591,8 +586,23 @@ sif_size_function_t* sif_size_function_evm_kernel(
   sif_free_aligned(barrier);
   sif_free_aligned(f);
   free(lagrangian);
-  sif_walk_free(walk);
 
+  return out;
+}
+
+sif_size_function_t* sif_size_function_evm_kernel(
+  const sif_variance_kernel_t* kernel, const sif_real* pk,
+  const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
+  sif_option opt) {
+
+  sif_walk_t* walk = sif_walk_pk(kernel, pk);
+  if (!walk)
+    return NULL;
+
+  sif_size_function_t* out =
+    sif_size_function_evm_walk(walk, radii, n_radii, delta_v, h, opt);
+
+  sif_walk_free(walk);
   return out;
 }
 

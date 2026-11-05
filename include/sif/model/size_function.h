@@ -131,11 +131,11 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  * The epoch and the cosmology are seen only through the spectrum, which is the
  * linear P(k) at the redshift wanted; no redshift is passed.
  *
- * @note Calibrated on one cosmology, for sigma12 between 0.39 and 1 and
- * |delta_v| sigma12(z = 99) / sigma12 between 0.003 and 0.045, at radii above
- * nu ~ 0.5. Outside the first two a warning is logged and the answer is
- * still returned. The correction is not a derived law, so do not expect it to
- * extrapolate.
+ * @note Calibrated on one cosmology, for sigma12 between 0.39 and 1, a
+ * magnitude of delta_v at z = 99 (scaled by sigma12(z = 99) / sigma12) between
+ * 0.003 and 0.045, and radii above nu ~ 0.5. Outside the first two a warning is
+ * logged and the answer is still returned. The correction is not a derived law,
+ * so do not expect it to extrapolate.
  *
  * @note Builds a variance kernel on every call, which takes a good part of a
  * second. To evaluate many spectra, build the kernel once and call
@@ -181,5 +181,18 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_evm_kernel(
   const sif_variance_kernel_t* kernel, const sif_real* pk,
   const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
   sif_option opt);
+
+/**
+ * @brief sif_size_function_evm_kernel on a walk built beforehand: for several
+ * thresholds of one spectrum, which then share the walk.
+ *
+ * @param walk From sif_walk_pk, of a kernel as sif_size_function_evm_kernel
+ * requires; not modified.
+ *
+ * Remaining parameters, and the result, are as sif_size_function_evm.
+ */
+SIF_NODISCARD sif_size_function_t* sif_size_function_evm_walk(
+  const sif_walk_t* walk, const sif_real* radii, uint32_t n_radii,
+  sif_real delta_v, sif_real h, sif_option opt);
 
 #endif /* SIF_MODEL_SIZE_FUNCTION_H */

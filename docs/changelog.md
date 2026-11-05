@@ -1,12 +1,13 @@
 # Changelog
 
-Current version: v0.4 release 1
+Current version: v0.5 release 0
 
 
-## Unreleased
+## v0.5.0 -- 5/11/2026
 
 ### Added
 
+- conda-forge package: one OpenMP runtime shared with numpy and scipy
 - Settings can be given per process: `SIF_<KEY>` environment variables and
   `sif_setting_override()` (`set_setting(..., persist=False)`)
 - `SIF_HOME` moves the settings, wisdom and cache root off `$HOME/.sif`
@@ -21,8 +22,8 @@ Current version: v0.4 release 1
   `pysif.model.VarianceKernel`): sigma(R) and the derivative variance for a
   new P(k) in ~0.1 ms, 50x more accurate than quadraturing the table
 - EVM void size function (`sif_size_function_evm`, `size_function_evm`): the
-  calibrated barrier, the emulator and the fitted mapping; the `_kernel`
-  variant takes a built variance kernel, for chains
+  calibrated barrier, the emulator and the fitted mapping; the `_kernel` and
+  `_walk` variants take a built variance kernel or walk, for chains
 - Exodus refined centres without minima-only seeds: `SIF_FINDER_REFINE_CENTRES`,
   `exodus_raw(refine_centres=True)`, `finder.exodus_params.refine_centres`
 
@@ -31,7 +32,6 @@ Current version: v0.4 release 1
 - The emulator takes a walk from the kernel, a barrier on its lattice and the
   radii wanted, and picks its own grid (breaking:
   `ep_multiplicity_function_emu(walk, barrier, radii, collapse=...)`)
-
 - Unknown setting keys and malformed values are refused; `sif_setting_get()`
   no longer stores its fallback
 - The settings file lists every setting with a comment, defaults commented out

@@ -287,6 +287,57 @@ PyObject* py_sif_size_function_evm_kernel(
   return py_sif_wrap_size_function(vsf);
 }
 
+PyObject* py_sif_size_function_evm_walk(
+  PyObject* self, PyObject* args, PyObject* kwds) {
+  PyObject* walk_obj;
+  PyObject* radii_obj;
+  double delta_v;
+  double h;
+  const char* units = NULL;
+  const char* method = NULL;
+
+  static char* kwlist[] = {
+    "walk", "radii", "delta_v", "h", "units", "method", NULL};
+
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Odd|zz", kwlist, &sifWalkType,
+        &walk_obj, &radii_obj, &delta_v, &h, &units, &method)) {
+    return NULL;
+  }
+
+  const sif_walk_t* walk = ((sifWalkObject*)walk_obj)->walk;
+  if (!walk) {
+    PyErr_SetString(PyExc_RuntimeError, "Walk: not initialised");
+    return NULL;
+  }
+
+  sif_option options;
+  if (py_sif_vsf_options(units, method, &options) != 0 ||
+      evm_check_scalars(delta_v, h) != 0) {
+    return NULL;
+  }
+
+  PyArrayObject* radii_arr = py_sif_as_real_array(radii_obj, "radii");
+  if (!radii_arr)
+    return NULL;
+
+  const npy_intp n_radii = PyArray_SIZE(radii_arr);
+
+  sif_size_function_t* vsf = NULL;
+
+  sif_error_clear();
+  Py_BEGIN_ALLOW_THREADS vsf =
+    sif_size_function_evm_walk(walk, (const sif_real*)PyArray_DATA(radii_arr),
+      (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, options);
+  Py_END_ALLOW_THREADS
+
+    Py_DECREF(radii_arr);
+
+  if (!vsf)
+    return py_sif_raise(sif_error_status(), "size_function_evm");
+
+  return py_sif_wrap_size_function(vsf);
+}
+
 PyObject* py_sif_delta_sigma_slope_pk(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* k_obj;

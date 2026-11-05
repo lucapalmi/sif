@@ -19,8 +19,8 @@ fast and reliable
 - **measuring:** functions to measure the size function, velocity and density
 profiles for any void catalogue
 - **modelling:** functions to compute the [SvdW](https://arxiv.org/abs/astro-ph/0311260),
-[Vdn](https://arxiv.org/abs/1304.6087) and [excursion-peak](https://arxiv.org/abs/2401.14451)
-models for void abundances
+[Vdn](https://arxiv.org/abs/1304.6087), [excursion-peak](https://arxiv.org/abs/2401.14451)
+and EVM models for void abundances
 
 ## Project status
 
@@ -29,9 +29,10 @@ releases.
 
 ## Installation
 
-You can install the Python package with pip
+You can install the Python package with pip or conda
 ```
 pip install pysif
+conda install -c conda-forge pysif
 ```
 To use the C library, clone and compile the repository. A complete guide to 
 the installation is available 

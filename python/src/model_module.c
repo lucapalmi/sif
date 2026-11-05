@@ -249,7 +249,8 @@ static PyMethodDef model_methods[] = {
     "Mpc on radii in Mpc/h. delta_v is the linear barrier, as for "
     "size_function_svdw; spherical_map_linear converts a threshold "
     "quoted as an observed underdensity. Calibrated on one cosmology for "
-    "sigma12 from 0.39 to 1 and |delta_v| sigma12(z=99) / sigma12 from "
+    "sigma12 from 0.39 to 1 and a magnitude of delta_v at z = 99 (scaled "
+    "by sigma12(z=99) / sigma12) from "
     "0.003 to 0.045; outside them a warning is logged. Radii past the "
     "emulated first crossing give 0.\n"
     "Builds a VarianceKernel on every call, a good part of a second; "
@@ -268,6 +269,18 @@ static PyMethodDef model_methods[] = {
     "barrier is ~3.5 sigma: VarianceKernel(r_min=0.3, r_max=1000.0) is "
     "what the model was calibrated with. Other arguments as "
     "size_function_evm."},
+
+  {"size_function_evm_walk", (PyCFunction)py_sif_size_function_evm_walk,
+    METH_VARARGS | METH_KEYWORDS,
+    "size_function_evm_walk(walk, radii, delta_v, h, units='ln_r', "
+    "method='b94')"
+    "\n"
+    "--\n\n"
+    "size_function_evm_kernel on a Walk built beforehand, for several "
+    "thresholds of one spectrum: walk = kernel(pk), then one call per "
+    "delta_v.\n"
+    "The walk comes from a kernel as size_function_evm_kernel requires. "
+    "Other arguments as size_function_evm."},
 
   {NULL, NULL, 0, NULL}};
 

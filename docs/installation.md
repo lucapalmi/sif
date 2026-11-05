@@ -8,7 +8,12 @@ You can install the latest stable release with pip
 ```shell
 pip install pysif
 ```
-In this case, the library is configured with HDF5 and FITS support.
+or, from version 0.5.0, with conda
+
+```shell
+conda install -c conda-forge pysif
+```
+In both cases, the library is configured with HDF5 and FITS support. Prefer the conda package in a conda environment: it shares one OpenMP runtime with numpy and scipy, where a wheel carries its own, and two runtimes in one process can deadlock.
 
 :::: 
 

@@ -469,13 +469,19 @@ static void test_evm(void) {
   sif_size_function_t* exact = sif_size_function_evm_kernel(
     kernel, pk, radii, n_r, dv, h, SIF_SPHERICAL_EXACT);
 
-  CHECK(direct && wrapped && per_r && exact, "EVM returned NULL");
+  sif_walk_t* walk = sif_walk_pk(kernel, pk);
+  sif_size_function_t* shared =
+    sif_size_function_evm_walk(walk, radii, n_r, dv, h, SIF_DEFAULT);
 
-  if (direct && wrapped && per_r && exact) {
+  CHECK(direct && wrapped && per_r && exact && shared, "EVM returned NULL");
+
+  if (direct && wrapped && per_r && exact && shared) {
     int differs = 0;
     for (uint32_t i = 0; i < n_r; i++) {
       CHECK(wrapped->vsf[i] == direct->vsf[i],
         "wrapper and kernel versions differ at R = %g", (double)radii[i]);
+      CHECK(shared->vsf[i] == direct->vsf[i],
+        "walk and kernel versions differ at R = %g", (double)radii[i]);
       CHECK(isfinite(direct->vsf[i]) && direct->vsf[i] >= 0.0f, "vsf[%u] is %g",
         i, (double)direct->vsf[i]);
 
@@ -502,6 +508,8 @@ static void test_evm(void) {
 
   CHECK(!sif_size_function_evm_kernel(NULL, pk, radii, n_r, dv, h, SIF_DEFAULT),
     "accepted a NULL kernel");
+  CHECK(!sif_size_function_evm_walk(NULL, radii, n_r, dv, h, SIF_DEFAULT),
+    "accepted a NULL walk");
   CHECK(!sif_size_function_evm_kernel(
           kernel, pk, descending, 2, dv, h, SIF_DEFAULT),
     "accepted descending radii");
@@ -519,7 +527,9 @@ static void test_evm(void) {
     "accepted a Gaussian kernel");
 
   sif_variance_kernel_free(gaussian);
+  sif_walk_free(walk);
   sif_variance_kernel_free(kernel);
+  sif_size_function_free(shared);
   sif_size_function_free(direct);
   sif_size_function_free(wrapped);
   sif_size_function_free(per_r);

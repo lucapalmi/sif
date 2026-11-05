@@ -231,6 +231,18 @@ def test_evm_wrapper_is_the_kernel_version(evm_kernel):
     np.testing.assert_array_equal(wrapped.r_centres, radii.astype(np.float32))
 
 
+def test_evm_walk_is_the_kernel_version(evm_kernel):
+    pk = cdm(evm_kernel.k)
+    walk = evm_kernel(pk)
+    radii = np.geomspace(6.0, 60.0, 12)
+    for delta_nl in (-0.3, -0.5, -0.7):
+        delta_v = M.spherical_map_linear(delta_nl)
+        shared = M.size_function_evm_walk(walk, radii, delta_v, H, units="r")
+        direct = M.size_function_evm_kernel(
+            evm_kernel, pk, radii, delta_v, H, units="r")
+        np.testing.assert_array_equal(shared.vsf, direct.vsf)
+
+
 def test_evm_arguments_reach_the_c_side(evm_kernel):
     pk = cdm(evm_kernel.k)
     radii = np.geomspace(6.0, 60.0, 12)
@@ -277,3 +289,7 @@ def test_evm_refusals(evm_kernel):
     with pytest.raises(ValueError):
         M.size_function_evm_kernel(
             gaussian, cdm(gaussian.k), radii, -0.9, H)
+    with pytest.raises(ValueError):
+        M.size_function_evm_walk(gaussian(cdm(gaussian.k)), radii, -0.9, H)
+    with pytest.raises(TypeError):
+        M.size_function_evm_walk(evm_kernel, radii, -0.9, H)
