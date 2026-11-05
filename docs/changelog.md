@@ -3,6 +3,15 @@
 Current version: v0.5 release 0
 
 
+## Unreleased
+
+### Added
+
+- Exodus Lagrangian overlap: voids kept apart on R (1 + threshold)^(1/3), the
+  catalogue keeping R. Variant `"lagrangian-overlap"`, `overlap_type=` in
+  `exodus_raw()`, `SIF_FINDER_LAGRANGIAN_OVERLAP`
+
+
 ## v0.5.0 -- 5/11/2026
 
 ### Added

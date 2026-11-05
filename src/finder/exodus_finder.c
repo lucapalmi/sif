@@ -100,6 +100,21 @@
  * among them sit between the nodes and all are ordered on the smoothed field.
  *
  *
+ * Which radius two voids collide at
+ * ---------------------------------
+ *
+ * The radius a void is measured to is the Eulerian one, and it is what the
+ * catalogue holds. Under SIF_FINDER_LAGRANGIAN_OVERLAP the overlap is judged
+ * on the radius the same mass had at the mean density instead, and every void
+ * is enclosed at the threshold, so that is R (1 + threshold)^(1/3) whatever
+ * the void: one factor, ctx->overlap_scale. It is applied where a radius meets
+ * the overlap and nowhere else. The catalogue, max_accepted_r and the
+ * comparison of which void is larger all stay in R, and a collision distance
+ * is scale * (r + r_j - f min(r, r_j)), so that each proof below that a
+ * test only ever refuses a certain collision carries over with the factor on
+ * both sides.
+ *
+ *
  * Surveys
  * -------
  *
@@ -281,6 +296,10 @@ typedef struct {
    */
   sif_real max_accepted_r;
 
+  /* Takes a radius to the one overlap is tested on: 1, or
+   * (1 + threshold)^(1/3) under SIF_FINDER_LAGRANGIAN_OVERLAP. */
+  sif_real overlap_scale;
+
   /*
    * What a survey run adds, all NULL for a box. The random grid is smoothed
    * alongside the data one in a workspace of its own, and `occupied` marks the
@@ -342,7 +361,8 @@ static inline void candidate_centre(const exodus_ctx_t* ctx, uint64_t k,
  * further |off| away, and the mask then proves a collision only while
  * |off| < r - f * min(r, r_acc) -- of which r * (1 - f) is the bound that
  * holds whatever r_acc is. Short of that, near f = 1, the candidate goes on to
- * the exact test rather than being dropped on its node's word.
+ * the exact test rather than being dropped on its node's word. All of these
+ * are the radii overlap is tested on; `r` comes in as measured.
  *
  * The collision distance grows with r, so a rejection at the rung holds at
  * every radius the rescaling can return.
@@ -359,7 +379,7 @@ static inline int masked_overlap(const exodus_ctx_t* ctx, uint64_t k,
   const sif_offset_t* o = &ctx->offsets.items[c->refined - 1];
   const sif_real off =
     SIF_REAL_SQRT(o->dx * o->dx + o->dy * o->dy + o->dz * o->dz) * cell_length;
-  return off < r * (1.0f - overlap_fraction);
+  return off < ctx->overlap_scale * r * (1.0f - overlap_fraction);
 }
 
 static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
@@ -462,12 +482,15 @@ static int ctx_init_grid(sif_fft_workspace_t** ws_out, sif_grid_t* grid,
 /* random_grid and random_mesh are NULL for a box run. */
 static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, const sif_real* radii, uint32_t n_radii,
-  sif_option opt, sif_grid_t* random_grid, const sif_chain_mesh_t* random_mesh,
-  int save_memory) {
+  sif_real threshold, sif_option opt, sif_grid_t* random_grid,
+  const sif_chain_mesh_t* random_mesh, int save_memory) {
 
   memset(ctx, 0, sizeof(*ctx));
 
   ctx->mesh = mesh;
+  ctx->overlap_scale = (opt & SIF_FINDER_LAGRANGIAN_OVERLAP)
+                         ? (sif_real)cbrt(1.0 + (double)threshold)
+                         : 1.0f;
   ctx->random_grid = random_grid;
   ctx->random_mesh = random_mesh;
   const int survey = (random_mesh != NULL);
@@ -569,8 +592,8 @@ static int accept_void(exodus_ctx_t* ctx, const sif_grid_t* grid, sif_real cx,
   if (status != SIF_OK)
     return status;
 
-  sif__mark_sphere(
-    ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask, grid->cell_length);
+  sif__mark_sphere(ctx->mask, cx, cy, cz, ctx->overlap_scale * r, grid->n_cells,
+    grid->p2_mask, grid->cell_length);
 
   /* Updated here rather than scanned for later, so every overlap test after
    * this point sizes its search box against a catalogue that includes this
@@ -599,7 +622,8 @@ static int find_conflicts(exodus_ctx_t* ctx, sif_real cx, sif_real cy,
   const sif_cell_linked_list_t* cll = ctx->void_cll;
   const sif_real half = 0.5f * box;
   const sif_real max_r = ctx->max_accepted_r;
-  const sif_real reach = r + max_r - f * (r < max_r ? r : max_r);
+  const sif_real scale = ctx->overlap_scale;
+  const sif_real reach = scale * (r + max_r - f * (r < max_r ? r : max_r));
   const int32_t n = (int32_t)cll->n_cells;
   const sif_real x[3] = {cx, cy, cz};
 
@@ -631,7 +655,7 @@ static int find_conflicts(exodus_ctx_t* ctx, sif_real cx, sif_real cy,
           dy = dy > half ? box - dy : dy;
           dz = dz > half ? box - dz : dz;
           const sif_real ri = cat->radii[i];
-          const sif_real tot = r + ri - f * (r < ri ? r : ri);
+          const sif_real tot = scale * (r + ri - f * (r < ri ? r : ri));
           if (dx * dx + dy * dy + dz * dz >= tot * tot)
             continue;
           if (ctx->n_conflicts == ctx->conflicts_capacity) {
@@ -684,7 +708,8 @@ static double collision_radius(const exodus_ctx_t* ctx, sif_real cx,
   const double L = (double)box;
   const double half = 0.5 * L;
   const double ff = (double)f;
-  const sif_real reach = r_hi + ctx->max_accepted_r;
+  const double scale = (double)ctx->overlap_scale;
+  const sif_real reach = ctx->overlap_scale * (r_hi + ctx->max_accepted_r);
   const int32_t n = (int32_t)cll->n_cells;
   const sif_real x[3] = {cx, cy, cz};
 
@@ -717,8 +742,10 @@ static double collision_radius(const exodus_ctx_t* ctx, sif_real cx,
           dx = dx > half ? L - dx : dx;
           dy = dy > half ? L - dy : dy;
           dz = dz > half ? L - dz : dz;
-          const double D = sqrt(dx * dx + dy * dy + dz * dz) +
-                           COLLISION_SLACK * (L + (double)r_hi + rj);
+          /* The separation in units of the measured radii. */
+          const double D = (sqrt(dx * dx + dy * dy + dz * dz) +
+                             COLLISION_SLACK * (L + (double)r_hi + rj)) /
+                           scale;
 
           /* tot(r) = r + rj - f min(r, rj): rj at r = 0, (2 - f) rj at
            * r = rj, slope 1 - f below that and 1 above. */
@@ -811,8 +838,8 @@ static int prefilter_cells(exodus_ctx_t* ctx, const sif_grid_t* grid,
       sif_real cc[3];
       candidate_centre(ctx, k, grid, ix, iy, iz, cc);
       if (sif__overlap_exact(ctx->cat, cc[0], cc[1], cc[2], radius,
-            ctx->max_accepted_r, grid->box_length, ctx->void_cll,
-            grid->p2_mask, overlap_fraction)) {
+            ctx->max_accepted_r, grid->box_length, ctx->void_cll, grid->p2_mask,
+            overlap_fraction, ctx->overlap_scale)) {
         n_overlap++;
         continue;
       }
@@ -844,6 +871,7 @@ static int displace_void(
   sif_catalogue_t* cat = ctx->cat;
   const sif_real cx = cat->cx[i], cy = cat->cy[i], cz = cat->cz[i];
   const sif_real r = cat->radii[i];
+  const sif_real scale = ctx->overlap_scale;
 
   int status = sif_cell_linked_list_remove(ctx->void_cll, i, cx, cy, cz);
   if (status != SIF_OK)
@@ -853,11 +881,11 @@ static int displace_void(
 
   /* Its cells, then back the ones another void it intersects still covers.
    * The walk leaves ctx->conflicts alone: the caller is iterating it. */
-  sif__clear_sphere(
-    ctx->mask, cx, cy, cz, r, grid->n_cells, grid->p2_mask, grid->cell_length);
+  sif__clear_sphere(ctx->mask, cx, cy, cz, scale * r, grid->n_cells,
+    grid->p2_mask, grid->cell_length);
   const sif_cell_linked_list_t* cll = ctx->void_cll;
   const sif_real box = grid->box_length, half = 0.5f * box;
-  const sif_real reach = r + ctx->max_accepted_r;
+  const sif_real reach = scale * (r + ctx->max_accepted_r);
   const int32_t n = (int32_t)cll->n_cells;
   const sif_real x[3] = {cx, cy, cz};
   int32_t lo[3], hi[3];
@@ -883,10 +911,11 @@ static int displace_void(
           dx = dx > half ? box - dx : dx;
           dy = dy > half ? box - dy : dy;
           dz = dz > half ? box - dz : dz;
-          const sif_real t = r + cat->radii[j];
+          const sif_real t = scale * (r + cat->radii[j]);
           if (dx * dx + dy * dy + dz * dz < t * t)
             sif__mark_sphere(ctx->mask, cat->cx[j], cat->cy[j], cat->cz[j],
-              cat->radii[j], grid->n_cells, grid->p2_mask, grid->cell_length);
+              scale * cat->radii[j], grid->n_cells, grid->p2_mask,
+              grid->cell_length);
         }
       }
   return SIF_OK;
@@ -1086,6 +1115,8 @@ static const struct {
   [SIF_EXODUS_EXCURSION_SET] = {"excursion-set", 0.0f, SIF_FINDER_SEEDS_CELLS},
   [SIF_EXODUS_EXCURSION_PEAK] = {"excursion-peak", 1.0f,
     SIF_FINDER_SEEDS_MINIMA},
+  [SIF_EXODUS_LAGRANGIAN_OVERLAP] = {"lagrangian-overlap", 0.0f,
+    SIF_FINDER_SEEDS_CELLS | SIF_FINDER_LAGRANGIAN_OVERLAP},
 };
 
 static int variant_valid(sif_exodus_variant_t variant) {
@@ -1122,7 +1153,8 @@ int sif_finder_exodus_variant_from_name(
     }
   }
   SIF_LOG_ERROR(TAG,
-    "variant: \"%s\" (expected excursion-set or excursion-peak)",
+    "variant: \"%s\" (expected excursion-set, excursion-peak or "
+    "lagrangian-overlap)",
     name ? name : "(null)");
   return SIF_ERR_INVALID;
 }
@@ -1340,7 +1372,8 @@ static int run_start(checkpoint_t* ck, run_start_t* start,
   h->is_survey = random_mesh != NULL;
   h->is_weighted = mesh->weights != NULL;
   h->options = options & (SIF__FINDER_SEARCH_MASK | SIF_FINDER_KEEP_CIC_WINDOW |
-                           SIF__FINDER_SEEDS_MASK | SIF_FINDER_ALIASING_WINDOW);
+                           SIF__FINDER_SEEDS_MASK | SIF_FINDER_ALIASING_WINDOW |
+                           SIF_FINDER_LAGRANGIAN_OVERLAP);
   h->n_radii = n_radii;
   h->grid_n_cells = grid->n_cells;
   h->assignment = ((uint32_t)sif__fft_grid_window_order(grid) & 0xffu) |
@@ -1477,8 +1510,8 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   }
 
   exodus_ctx_t ctx;
-  const int init = ctx_init(&ctx, grid, mesh, radii, n_radii, options,
-    random_grid, random_mesh, extras && extras->save_memory);
+  const int init = ctx_init(&ctx, grid, mesh, radii, n_radii, threshold,
+    options, random_grid, random_mesh, extras && extras->save_memory);
   if (init != SIF_OK) {
     sif_catalogue_free(start.voids);
     checkpoint_finish(&ck, init);
@@ -1495,6 +1528,10 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       start.voids->cz[v], start.voids->radii[v]);
   sif_catalogue_free(start.voids);
   start.voids = NULL;
+
+  if (options & SIF_FINDER_LAGRANGIAN_OVERLAP)
+    SIF_LOG_TRACE(TAG, "overlap: on Lagrangian radii, %.4f of the measured",
+      (double)ctx.overlap_scale);
 
   /* Loop invariants: the mean tracer density never changes between radii. */
   const sif_real box_volume =
@@ -1701,7 +1738,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     }
 
     const int32_t proxy_pole =
-      (int32_t)(radius * (1.0f - overlap_fraction) / grid->cell_length) - 1;
+      (int32_t)(ctx.overlap_scale * radius * (1.0f - overlap_fraction) /
+                grid->cell_length) -
+      1;
 
     /* The collision witness, see collision_radius(): for the box's unweighted
      * kernel, the one it mirrors. The core is the rescaling's own. */
@@ -1801,8 +1840,8 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         res->cz = cz;
 
         if (sif__overlap_exact(ctx.cat, cx, cy, cz, radius, ctx.max_accepted_r,
-              grid->box_length, ctx.void_cll, grid->p2_mask,
-              overlap_fraction)) {
+              grid->box_length, ctx.void_cll, grid->p2_mask, overlap_fraction,
+              ctx.overlap_scale)) {
           res->status = BATCH_REJECTED_MESH;
           continue;
         }
@@ -1927,7 +1966,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           }
           if (sif__overlap_exact(ctx.cat, res->cx, res->cy, res->cz, radius,
                 ctx.max_accepted_r, grid->box_length, ctx.void_cll,
-                grid->p2_mask, overlap_fraction)) {
+                grid->p2_mask, overlap_fraction, ctx.overlap_scale)) {
             stats.rejected_overlap++;
             continue;
           }
@@ -1976,8 +2015,8 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
          * phase 1 used belonged to the rung, and the rung is only a lower
          * bound on that. */
         const int32_t exact_pole =
-          (int32_t)(res->r_scaled * (1.0f - overlap_fraction) /
-                    grid->cell_length) -
+          (int32_t)(ctx.overlap_scale * res->r_scaled *
+                    (1.0f - overlap_fraction) / grid->cell_length) -
           1;
         if (exact_pole > 0 &&
             sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, res->ix,
@@ -1988,7 +2027,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
         if (sif__overlap_exact(ctx.cat, res->cx, res->cy, res->cz,
               res->r_scaled, ctx.max_accepted_r, grid->box_length, ctx.void_cll,
-              grid->p2_mask, overlap_fraction)) {
+              grid->p2_mask, overlap_fraction, ctx.overlap_scale)) {
           stats.rejected_exact++;
           continue;
         }

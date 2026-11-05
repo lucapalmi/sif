@@ -170,6 +170,22 @@ expect_status 0 "exodus_params.refine_centres"
 grep -q '^    refine_centres = true,$' out.txt ||
   fail "exodus_params.refine_centres: not in the resolved configuration"
 resolves_to_itself params_refine_resolved.lua "exodus_params.refine_centres"
+sed 's/  variant = "excursion-set",/  exodus_params = { overlap_type = "lagrangian" },/' template.lua >params_lagrangian.lua
+run --check params_lagrangian.lua
+expect_status 0 "exodus_params.overlap_type"
+grep -q '^    overlap_type = "lagrangian",$' out.txt ||
+  fail "exodus_params.overlap_type: not in the resolved configuration"
+resolves_to_itself params_lagrangian_resolved.lua "exodus_params.overlap_type"
+sed 's/variant = "excursion-set"/variant = "lagrangian-overlap"/' template.lua >variant_lagrangian.lua
+run --check variant_lagrangian.lua
+expect_status 0 "variant = lagrangian-overlap --check"
+grep -q 'overlap_type' out.txt &&
+  fail "variant = lagrangian-overlap: its overlap type written as an override"
+resolves_to_itself variant_lagrangian_resolved.lua "variant = lagrangian-overlap"
+sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { overlap_type = "comoving" },/' template.lua >overlap_bad.lua
+run --check overlap_bad.lua
+expect_status 2 "overlap_type = comoving"
+expect_error "finder.exodus_params.overlap_type: must be one of" "overlap_type = comoving"
 sed 's/  variant = "excursion-set",//' template.lua >no_variant.lua
 run --check no_variant.lua
 expect_status 2 "neither variant nor exodus_params"
@@ -914,6 +930,15 @@ grep -q '^#variant="excursion-peak"$' holes_peak.txt &&
   fail "variant = excursion-peak: its settings are not recorded"
 [ "$(voids holes_peak.txt | wc -l)" -ge 3 ] ||
   fail "variant = excursion-peak: too few voids"
+
+# Lagrangian overlap: the variant, and the same thing asked of the settings.
+run -D out=holes_lag.txt -D variant=lagrangian-overlap holes.lua
+expect_status 0 "variant = lagrangian-overlap"
+grep -q '^#variant="lagrangian-overlap"$' holes_lag.txt &&
+  grep -q '^#overlap_type="lagrangian"$' holes_lag.txt ||
+  fail "variant = lagrangian-overlap: its settings are not recorded"
+[ "$(voids holes_lag.txt | wc -l)" -ge 3 ] ||
+  fail "variant = lagrangian-overlap: too few voids"
 
 run -D out=nock.txt --no-checkpoint --check holes.lua
 expect_status 0 "--no-checkpoint"

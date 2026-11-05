@@ -284,15 +284,16 @@ uint8_t sif__overlap_quick(const sif_bitmask_t* mask, uint32_t n_cells,
  * @brief Exact overlap test against every void near the candidate.
  *
  * Two voids collide when their separation falls below
- * r1 + r2 - overlap_fraction * min(r1, r2), so @p overlap_fraction is measured
- * against the smaller of the pair.
+ * scale * (r1 + r2 - overlap_fraction * min(r1, r2)), so @p overlap_fraction
+ * is measured against the smaller of the pair. @p scale takes the radii, given
+ * as they are catalogued, to the ones the test is on: 1 for those themselves.
  *
  * @return Non-zero if the candidate overlaps an accepted void.
  */
 uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx, sif_real cy,
   sif_real cz, sif_real r, sif_real max_r, sif_real box_length,
   const sif_cell_linked_list_t* cll, uint32_t p2_mask,
-  sif_real overlap_fraction);
+  sif_real overlap_fraction, sif_real scale);
 
 /**
  * @brief Mark every grid cell whose centre lies inside an accepted void.

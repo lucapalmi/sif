@@ -91,6 +91,12 @@ typedef enum {
  * the SIF_FINDER_SEEDS_* values. */
 typedef enum { EXODUS_SEEDS_CELLS, EXODUS_SEEDS_MINIMA } exodus_seeds_t;
 
+/* finder.exodus_params.overlap_type: the radii overlap is tested on. */
+typedef enum {
+  EXODUS_OVERLAP_EULERIAN,
+  EXODUS_OVERLAP_LAGRANGIAN
+} exodus_overlap_t;
+
 /* finder.deconvolution: how the grid's assignment window is undone before
  * smoothing. */
 typedef enum {
@@ -245,6 +251,8 @@ typedef struct {
     bool customised;
     /* Allowed overlap, as a fraction of the smaller void's radius. */
     double overlap_fraction;
+    /* The radii that fraction, and every overlap test, are on. */
+    exodus_overlap_t overlap_type;
     /* How far past a rung the rescaling looks, as a multiple of it: 1.25,
      * 1.5, 1.75 or 2.0 (the SIF_FINDER_SEARCH_* family). */
     double search_factor;

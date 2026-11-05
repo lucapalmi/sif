@@ -304,6 +304,13 @@ static sif_option centres_option(const exodus_params_t* p) {
                                   : SIF_FINDER_SEEDS_CELLS;
 }
 
+/* SIF_FINDER_LAGRANGIAN_OVERLAP, if the finder settings ask for it. */
+static sif_option overlap_option(const exodus_params_t* p) {
+  return p->finder.overlap_type == EXODUS_OVERLAP_LAGRANGIAN
+           ? SIF_FINDER_LAGRANGIAN_OVERLAP
+           : 0;
+}
+
 /* The finder options for finder.deconvolution. */
 static sif_option window_option(const exodus_params_t* p) {
   switch (p->finder.deconvolution) {
@@ -334,6 +341,9 @@ static void describe_catalogue(
   s |= sif_catalogue_meta_real_set(cat, "threshold", p->finder.threshold);
   s |= sif_catalogue_meta_real_set(
     cat, "overlap_fraction", p->finder.overlap_fraction);
+  s |= sif_catalogue_meta_string_set(cat, "overlap_type",
+    p->finder.overlap_type == EXODUS_OVERLAP_LAGRANGIAN ? "lagrangian"
+                                                        : "eulerian");
   s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
   s |= sif_catalogue_meta_string_set(
     cat, "seeds", p->finder.seeds == EXODUS_SEEDS_MINIMA ? "minima" : "cells");
@@ -651,8 +661,8 @@ int pipeline_box(const exodus_params_t* p) {
     .save_memory = p->save_memory};
   cat = sif_finder_exodus_raw(grid, mesh, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
-    SIF_FINDER_CONSUME_GRID | search | centres_option(p) | window_option(p) |
-      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+    SIF_FINDER_CONSUME_GRID | search | centres_option(p) | overlap_option(p) |
+      window_option(p) | (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(mesh);
   mesh = NULL;
@@ -1096,8 +1106,8 @@ int pipeline_survey(const exodus_params_t* p) {
   cat = sif_finder_exodus_survey_raw(data_grid, random_grid, data_mesh,
     random_mesh, offset, radii, p->finder.n_radii,
     (sif_real)p->finder.threshold, (sif_real)p->finder.overlap_fraction,
-    SIF_FINDER_CONSUME_GRID | search | centres_option(p) | window_option(p) |
-      (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
+    SIF_FINDER_CONSUME_GRID | search | centres_option(p) | overlap_option(p) |
+      window_option(p) | (p->checkpoint ? 0 : SIF_FINDER_NO_CHECKPOINT),
     &extras);
   sif_chain_mesh_free(random_mesh);
   sif_chain_mesh_free(data_mesh);

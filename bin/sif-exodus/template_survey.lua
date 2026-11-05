@@ -83,13 +83,16 @@ finder = {
   -- on minima of the density smoothed at each rung's scale, a void refused
   -- only by a larger one it sits inside; its void size function depends on
   -- the grid less.
-  -- Only excursion-set runs on a survey, for now.
+  -- excursion-set, or lagrangian-overlap to keep voids apart on their
+  -- Lagrangian radii, R (1 + threshold)^(1/3); the catalogue keeps R.
+  -- excursion-peak does not run on a survey, for now.
   variant = "excursion-set",
   -- The settings a variant fixes, to change one or to set them all
   -- without a variant (they then start from excursion-set's). Each one
   -- given overrides the variant's.
   -- exodus_params = {
   --   overlap_fraction = 0,   -- of the smaller radius; 0: no overlap
+  --   overlap_type = "eulerian", -- eulerian | lagrangian: the radii it is on
   --   search_factor = 1.5,    -- 1.25 | 1.5 | 1.75 | 2
   --   seeds = "cells",        -- cells | minima: periodic boxes only, for now
   --   -- How the grid's assignment window is undone before smoothing: full

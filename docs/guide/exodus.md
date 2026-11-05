@@ -23,13 +23,14 @@ already found (point 1).
 
 ## The variants
 
-exodus comes in two variants, which are simply two configurations of the 
-algorithm that follow two different definitions of void:
+exodus comes in three variants, which are simply configurations of the
+algorithm that follow different definitions of void:
 
 | Variant | Candidates | Centre | Overlap |
 |---|---|---|---|
 | `"excursion-set"` (default) | every cell below the threshold | its grid node | 0 | 
 | `"excursion-peak"` | local minima of the rung's field, smoothed by 0.15 R | refined between the nodes | 1 |
+| `"lagrangian-overlap"` | every cell below the threshold | its grid node | 0, on the Lagrangian radii |
 
 With `"excursion-set"`, each cell below threshold is a candidate, and voids 
 follow a strict, non-overlapping rule. This configuration follows the same
@@ -38,6 +39,12 @@ definition adopted by the finder of [Pylians3](https://pylians3.readthedocs.io/e
 `"excursion-peak"` follows a slightly different definition of void, where
 a cell below threshold is a candidate only if it's a strict minimum of the 
 field. Also, voids can overlap up to their centres.
+
+`"lagrangian-overlap"` is `"excursion-set"` with the overlap tested on each
+void's Lagrangian radius, $R_L = R\,(1+\delta)^{1/3}$ with $\delta$ the
+threshold: the size of the void's mass at the mean density. The overlap fraction,
+the masked cells and the exact radius check all use $R_L$, but the catalogue
+keeps $R$, so its spheres can overlap.
 
 :::::{tab-set}
 
@@ -69,7 +76,8 @@ sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii, -0.7f,
 ### Beyond the variants
 
 A variant is just a preset of the finder's settings: the candidates (`seeds`,
-`"cells"` or `"minima"`), the overlap fraction, the search factor (1.5) and the
+`"cells"` or `"minima"`), the overlap fraction, the radii it is tested on
+(`overlap_type`, `"eulerian"` or `"lagrangian"`), the search factor (1.5) and the
 window deconvolution (`"full"`). Any other combination can be run with the raw
 finder, which takes each setting separately. In **sif-exodus**,
 `finder.exodus_params` overrides the settings of the variant, or sets all of

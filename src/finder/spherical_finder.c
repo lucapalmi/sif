@@ -240,7 +240,7 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
       const sif_real cz = (sif_real)iz * grid->cell_length;
 
       if (sif__overlap_exact(ctx.cat, cx, cy, cz, radius, max_radius,
-            grid->box_length, ctx.cll, grid->p2_mask, overlap_fraction)) {
+            grid->box_length, ctx.cll, grid->p2_mask, overlap_fraction, 1.0f)) {
         stats.rejected_overlap++;
         continue;
       }

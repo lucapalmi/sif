@@ -369,6 +369,12 @@ int sif__exodus_checkpoint_match(const char* path,
   if ((got->options ^ want->options) & SIF__FINDER_SEEDS_MASK)
     MISMATCH("centres %s (this run's: %s)", centres_label(got->options),
       centres_label(want->options));
+  if ((got->options ^ want->options) & SIF_FINDER_LAGRANGIAN_OVERLAP)
+    MISMATCH("overlap on %s radii (this run's: %s)",
+      (got->options & SIF_FINDER_LAGRANGIAN_OVERLAP) ? "Lagrangian"
+                                                     : "Eulerian",
+      (want->options & SIF_FINDER_LAGRANGIAN_OVERLAP) ? "Lagrangian"
+                                                      : "Eulerian");
 
   if (got->grid_n_cells != want->grid_n_cells ||
       got->box_length != want->box_length)

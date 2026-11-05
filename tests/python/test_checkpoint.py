@@ -227,6 +227,25 @@ def test_refined_checkpoints(grid, mesh, tmp_path):
         refine_centres=True)
 
 
+def test_lagrangian_checkpoints(grid, mesh, tmp_path):
+    # A run on Lagrangian radii is a run of its own, resumed as one, and the
+    # variant is excursion-set with that one setting.
+    path = tmp_path / "lagrangian.ckpt"
+    cat = run(grid, mesh, checkpoint=path, keep_checkpoint=True,
+              overlap_type="lagrangian")
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["overlap_type"] == "lagrangian"
+    with pytest.raises(ValueError, match=r"overlap on Lagrangian radii"):
+        run(grid, mesh, checkpoint=path)
+    variant = pysif.finders.exodus(grid(), mesh, RADII, THRESHOLD,
+                                   variant="lagrangian-overlap")
+    np.testing.assert_array_equal(columns(variant), columns(cat))
+    assert cat.n_voids >= run(grid, mesh, checkpoint=False).n_voids
+
+    with pytest.raises(ValueError, match="overlap_type must be"):
+        run(grid, mesh, overlap_type="comoving")
+
+
 def test_prior(grid, mesh):
     # The larger rungs' voids, extended with the rest of the ladder: one run.
     ref = run(grid, mesh, checkpoint=False)

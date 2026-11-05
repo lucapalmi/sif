@@ -398,7 +398,7 @@ catalogue = pysif.finders.exodus_survey(
     random_mesh=random_mesh,
     offset=offset,          # the voids come back in the catalogues' frame
     radii=search_radii,
-    threshold=threshold     # variant="excursion-set", the only one on a survey
+    threshold=threshold     # variant="excursion-set"; excursion-peak needs a box
 )
 
 # optionally, we can translate the voids positions in sky coordinates
@@ -632,7 +632,7 @@ grid = { n_cells = 512 }
 finder = {
   radii = geomspace(10, 60, 60),
   threshold = -0.7,
-  variant = "excursion-set",  -- the only one on a survey, for now
+  variant = "excursion-set",  -- excursion-peak does not run on a survey, for now
 }
 
 -- the run's settings, the cosmology among them, go in the metadata

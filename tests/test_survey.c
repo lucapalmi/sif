@@ -609,12 +609,20 @@ static void run_workflow(void) {
   sif_catalogue_free(extended);
   sif_catalogue_free(head);
 
-  /* The variant entry point: excursion-set is the run above, and
-   * excursion-peak, being for a periodic box, is refused. */
+  /* The variant entry point: excursion-set is the run above, lagrangian-overlap
+   * lets more voids in, and excursion-peak, being for a periodic box, is
+   * refused. */
   REGRID();
   sif_catalogue_t* preset = sif_finder_exodus_survey(gd, gr, md, mr, offset,
     radii, n_radii, -0.7f, SIF_EXODUS_EXCURSION_SET, NULL);
   same_voids("survey, excursion-set", preset, cat);
+  sif_catalogue_free(preset);
+  REGRID();
+  preset = sif_finder_exodus_survey(gd, gr, md, mr, offset, radii, n_radii,
+    -0.7f, SIF_EXODUS_LAGRANGIAN_OVERLAP, NULL);
+  CHECK(preset && preset->n_voids >= cat->n_voids,
+    "survey, lagrangian-overlap: %" PRIu64 " voids against %" PRIu64,
+    preset ? preset->n_voids : 0, cat->n_voids);
   sif_catalogue_free(preset);
   sif_error_clear();
   preset = sif_finder_exodus_survey(gd, gr, md, mr, offset, radii, n_radii,

@@ -56,7 +56,7 @@ typedef uint32_t sif_option;
 
 /**
  * @defgroup opt_finder Finder options
- * @brief Bits 8-15 (16-17 are the chain mesh's).
+ * @brief Bits 8-15 and 18 (16-17 are the chain mesh's).
  * @{
  */
 /**
@@ -202,6 +202,16 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 #define SIF_FINDER_REFINE_CENTRES (1u << 10)
 #define SIF__FINDER_SEEDS_MASK    (3u << 9)
 /** @} */
+
+/**
+ * Test overlap between exodus voids on their Lagrangian radii, the radius
+ * each one's mass had at the mean density: R_L = R (1 + threshold)^(1/3), the
+ * same fraction of R for every void, since each is enclosed at the threshold.
+ * The overlap fraction, the mask of accepted cells and every other overlap
+ * test all see R_L. The catalogue keeps R, so catalogued spheres can overlap
+ * by more than the overlap fraction says.
+ */
+#define SIF_FINDER_LAGRANGIAN_OVERLAP (1u << 18)
 /** @} */
 
 /**

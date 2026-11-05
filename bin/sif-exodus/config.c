@@ -85,7 +85,8 @@ static const char* const SURVEY_MESH_KEYS[] = {
 static const char* const FINDER_KEYS[] = {"radii", "radii_units", "threshold",
   "variant", "exodus_params", "overlap_fraction", "search_factor", NULL};
 static const char* const EXODUS_PARAMS_KEYS[] = {"overlap_fraction",
-  "search_factor", "seeds", "refine_centres", "deconvolution", NULL};
+  "overlap_type", "search_factor", "seeds", "refine_centres", "deconvolution",
+  NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
 static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
 static const char* const RUN_KEYS[] = {
@@ -115,8 +116,11 @@ static const char* const LENGTHS[] = {"kpc", "mpc", "auto", NULL};
 static const char* const ASSIGNMENTS[] = {"ngp", "cic", "tsc", "pcs", NULL};
 static const char* const DECONVOLUTIONS[] = {"full", "aliasing", "none", NULL};
 /* In the order of sif_exodus_variant_t. */
-static const char* const VARIANTS[] = {"excursion-set", "excursion-peak", NULL};
+static const char* const VARIANTS[] = {
+  "excursion-set", "excursion-peak", "lagrangian-overlap", NULL};
 static const char* const SEEDS[] = {"cells", "minima", NULL};
+/* In the order of exodus_overlap_t. */
+static const char* const OVERLAP_TYPES[] = {"eulerian", "lagrangian", NULL};
 static const char* const LOG_LEVELS[] = {
   "trace", "debug", "info", "warning", "error", "none", NULL};
 
@@ -1452,14 +1456,18 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
     p->finder.overlap_fraction = (double)overlap;
     p->finder.seeds = (options & SIF_FINDER_SEEDS_MINIMA) ? EXODUS_SEEDS_MINIMA
                                                           : EXODUS_SEEDS_CELLS;
+    p->finder.overlap_type = (options & SIF_FINDER_LAGRANGIAN_OVERLAP)
+                               ? EXODUS_OVERLAP_LAGRANGIAN
+                               : EXODUS_OVERLAP_EULERIAN;
   }
 
   const int ptype = field(L, t, "exodus_params");
   const int e = lua_gettop(L);
   if (ptype == LUA_TNIL && !variant_given) {
     report(r, "finder.variant",
-      "missing: \"excursion-set\" or \"excursion-peak\", or the settings "
-      "themselves in finder.exodus_params");
+      "missing: \"excursion-set\", \"excursion-peak\" or "
+      "\"lagrangian-overlap\", or the settings themselves in "
+      "finder.exodus_params");
   } else if (ptype != LUA_TNIL && ptype != LUA_TTABLE) {
     report(r, "finder.exodus_params", "must be a table, got a %s",
       lua_typename(L, ptype));
@@ -1482,6 +1490,8 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
           "must be 1.25, 1.5, 1.75 or 2, got %g", x);
     }
     int which;
+    if (get_enum(r, e, path, "overlap_type", OVERLAP_TYPES, &which))
+      p->finder.overlap_type = (exodus_overlap_t)which;
     if (get_enum(r, e, path, "seeds", SEEDS, &which))
       p->finder.seeds = (exodus_seeds_t)which;
     bool refine;
@@ -1492,6 +1502,7 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
       p->finder.deconvolution = (exodus_deconvolution_t)kind;
     p->finder.customised =
       before.finder.overlap_fraction != p->finder.overlap_fraction ||
+      before.finder.overlap_type != p->finder.overlap_type ||
       before.finder.search_factor != p->finder.search_factor ||
       before.finder.seeds != p->finder.seeds ||
       before.finder.refine_centres != p->finder.refine_centres ||
@@ -1505,8 +1516,8 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
 
   if (p->mode == EXODUS_MODE_SURVEY && p->finder.seeds != EXODUS_SEEDS_CELLS)
     report(r, variant_given ? "finder.variant" : "finder.exodus_params",
-      "%s is for a periodic box, for now (expected \"excursion-set\" in a "
-      "survey: seeds = \"cells\")",
+      "%s is for a periodic box, for now (expected seeds = \"cells\" in a "
+      "survey: \"excursion-set\" or \"lagrangian-overlap\")",
       variant_given ? VARIANTS[variant] : "seeds = \"minima\"");
   lua_settop(L, t - 1);
 }
@@ -2120,12 +2131,18 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
   const exodus_seeds_t seeds = (options & SIF_FINDER_SEEDS_MINIMA)
                                  ? EXODUS_SEEDS_MINIMA
                                  : EXODUS_SEEDS_CELLS;
+  const exodus_overlap_t overlap_type =
+    (options & SIF_FINDER_LAGRANGIAN_OVERLAP) ? EXODUS_OVERLAP_LAGRANGIAN
+                                              : EXODUS_OVERLAP_EULERIAN;
   if (p->finder.customised) {
     fputs("  exodus_params = {\n", out);
     if (p->finder.overlap_fraction != (double)overlap) {
       format_double(num, sizeof num, p->finder.overlap_fraction);
       fprintf(out, "    overlap_fraction = %s,\n", num);
     }
+    if (p->finder.overlap_type != overlap_type)
+      fprintf(out, "    overlap_type = \"%s\",\n",
+        OVERLAP_TYPES[p->finder.overlap_type]);
     if (p->finder.search_factor != 1.5) {
       format_double(num, sizeof num, p->finder.search_factor);
       fprintf(out, "    search_factor = %s,\n", num);
@@ -2951,6 +2968,11 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
     snprintf(why, sizeof why, "%s (this run's: %s)",
       centres_name(h.options & SIF__FINDER_SEEDS_MASK),
       centres_name(want_centres));
+  else if (((h.options & SIF_FINDER_LAGRANGIAN_OVERLAP) != 0) !=
+           (p->finder.overlap_type == EXODUS_OVERLAP_LAGRANGIAN))
+    snprintf(why, sizeof why, "overlap type %s (this run's: %s)",
+      OVERLAP_TYPES[(h.options & SIF_FINDER_LAGRANGIAN_OVERLAP) != 0],
+      OVERLAP_TYPES[p->finder.overlap_type]);
   else if (saved_deconvolution(h.options) != p->finder.deconvolution)
     snprintf(why, sizeof why, "window deconvolution %s (this run's: %s)",
       DECONVOLUTIONS[saved_deconvolution(h.options)],

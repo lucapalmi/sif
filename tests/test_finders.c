@@ -1182,13 +1182,21 @@ static void run_overlap_reach(void) {
     const sif_real f = fractions[k];
     const sif_real collide = 60.0f + 10.0f - f * 10.0f;
     for (sif_real sep = 5.0f; sep < 80.0f; sep += 2.5f) {
-      const int hit =
-        sif__overlap_exact(cat, 500 + sep, 500, 500, 60, 10, L, cll, 0, f);
+      const int hit = sif__overlap_exact(
+        cat, 500 + sep, 500, 500, 60, 10, L, cll, 0, f, 1.0f);
       CHECK(hit == (sep < collide),
         "f = %.1f: a void of 60 at %.1f from one of 10 %s (collides below "
         "%.1f)",
         (double)f, (double)sep, hit ? "collided" : "did not collide",
         (double)collide);
+
+      /* Scaled radii: the same test, at half the separation. */
+      const int half = sif__overlap_exact(
+        cat, 500 + 0.5f * sep, 500, 500, 60, 10, L, cll, 0, f, 0.5f);
+      CHECK(half == hit,
+        "f = %.1f: scaled by 0.5, %.2f apart %s (collides below %.2f)",
+        (double)f, 0.5 * (double)sep, half ? "collided" : "did not collide",
+        0.5 * (double)collide);
     }
   }
 
@@ -1253,11 +1261,11 @@ static void run_refusals(void) {
     sif_catalogue_free(cat);
   }
 
-  /* Variants: no third one. */
+  /* Variants: no fourth one. */
   sif_error_clear();
   sif_catalogue_t* bad = sif_finder_exodus(
     g, mesh, radii, n_radii, -0.7f, SIF__EXODUS_N_VARIANTS, NULL);
-  CHECK(!bad && error_has("variant: 2 (expected 0 to 1)") &&
+  CHECK(!bad && error_has("variant: 3 (expected 0 to 2)") &&
           sif_error_status() == SIF_ERR_INVALID,
     "an unknown variant: '%s'", sif_error_message());
   sif_catalogue_free(bad);
@@ -1357,7 +1365,7 @@ static void run_grid_cells(void) {
 
 /*
  * The variants: each is sif_finder_exodus_raw() at its preset, bit for bit,
- * the presets are the two agreed combinations, and the names go both ways.
+ * the presets are the agreed combinations, and the names go both ways.
  */
 static void run_variants(void) {
   printf("variants\n");
@@ -1371,6 +1379,8 @@ static void run_variants(void) {
     {SIF_EXODUS_EXCURSION_SET, "excursion-set", 0.0f, SIF_FINDER_SEEDS_CELLS},
     {SIF_EXODUS_EXCURSION_PEAK, "excursion-peak", 1.0f,
       SIF_FINDER_SEEDS_MINIMA},
+    {SIF_EXODUS_LAGRANGIAN_OVERLAP, "lagrangian-overlap", 0.0f,
+      SIF_FINDER_SEEDS_CELLS | SIF_FINDER_LAGRANGIAN_OVERLAP},
   };
   const int n_want = (int)(sizeof(want) / sizeof(want[0]));
 
@@ -1616,6 +1626,176 @@ static void run_save_memory(void) {
   printf("  ok\n");
 }
 
+/* Separation of voids i and j in the periodic box. */
+static double void_separation(
+  const sif_catalogue_t* c, uint64_t i, uint64_t j) {
+
+  const double d[3] = {fabs((double)c->cx[i] - (double)c->cx[j]),
+    fabs((double)c->cy[i] - (double)c->cy[j]),
+    fabs((double)c->cz[i] - (double)c->cz[j])};
+  double d2 = 0.0;
+  for (int a = 0; a < 3; a++) {
+    const double w = d[a] > 0.5 * BOX ? BOX - d[a] : d[a];
+    d2 += w * w;
+  }
+  return sqrt(d2);
+}
+
+/*
+ * SIF_FINDER_LAGRANGIAN_OVERLAP: voids stay apart on the scaled radii, on
+ * either seeds; the first void, which nothing refuses, is the one the Eulerian
+ * run finds, radius included; a resumed run puts the mask back on the same
+ * radii, and a checkpoint is not resumed across the two; the witness, which
+ * only the unweighted mesh has, changes nothing. Two holes side by side are
+ * two voids whose catalogued spheres overlap and scaled ones do not.
+ */
+static void run_lagrangian_overlap(void) {
+  printf("lagrangian overlap\n");
+
+  sif_real* x = malloc(N_P * sizeof(sif_real));
+  sif_real* y = malloc(N_P * sizeof(sif_real));
+  sif_real* z = malloc(N_P * sizeof(sif_real));
+  make_field(x, y, z);
+  sif_field_t* f = sif_field_alloc(N_P);
+  CHECK(sif_field_assign_positions(f, x, y, z) == SIF_OK,
+    "sif_field_assign_positions failed");
+  setup_t s = {sif_grid_alloc(N_GRID, BOX), NULL, f};
+  s.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f, SIF_MESH_DROP_INDICES);
+
+  const sif_real threshold = -0.7f;
+  const double scale = cbrt(1.0 + (double)threshold);
+  const sif_option none = SIF_FINDER_NO_CHECKPOINT;
+  const sif_option lagrangian = SIF_FINDER_LAGRANGIAN_OVERLAP;
+
+  sif_catalogue_t* eul =
+    exodus_x(&s, radii, n_radii, threshold, none, NULL, NULL);
+  sif_catalogue_t* lag =
+    exodus_x(&s, radii, n_radii, threshold, none | lagrangian, NULL, NULL);
+  CHECK(eul && eul->n_voids > 0 && lag && lag->n_voids >= eul->n_voids,
+    "%" PRIu64 " voids, Eulerian ones %" PRIu64, lag ? lag->n_voids : 0,
+    eul ? eul->n_voids : 0);
+  CHECK(lag && eul && lag->cx[0] == eul->cx[0] && lag->cy[0] == eul->cy[0] &&
+          lag->cz[0] == eul->cz[0] && lag->radii[0] == eul->radii[0],
+    "the first void differs from the Eulerian run's");
+
+  for (uint64_t i = 0; lag && i < lag->n_voids; i++) {
+    for (uint64_t j = i + 1; j < lag->n_voids; j++) {
+      const double d = void_separation(lag, i, j);
+      const double sum = (double)lag->radii[i] + (double)lag->radii[j];
+      CHECK(d >= scale * sum * (1.0 - 1e-5),
+        "voids of %g and %g %g apart: they overlap on the scaled radii",
+        (double)lag->radii[i], (double)lag->radii[j], d);
+    }
+  }
+
+  /* Minima at f = 1, where voids displace each other: no centre lies inside
+   * the scaled sphere of a larger void. */
+  regrid(&s);
+  sif_catalogue_t* peak = sif_finder_exodus_raw(s.grid, s.mesh, radii, n_radii,
+    threshold, 1.0f, none | lagrangian | SIF_FINDER_SEEDS_MINIMA, NULL);
+  CHECK(peak && peak->n_voids > 0, "minima: found nothing");
+  for (uint64_t i = 0; peak && i < peak->n_voids; i++) {
+    for (uint64_t j = i + 1; j < peak->n_voids; j++) {
+      const double larger = peak->radii[i] > peak->radii[j]
+                              ? (double)peak->radii[i]
+                              : (double)peak->radii[j];
+      const double d = void_separation(peak, i, j);
+      CHECK(d >= scale * larger * (1.0 - 1e-5),
+        "minima %g apart, the larger of %g: inside its scaled sphere", d,
+        larger);
+    }
+  }
+  sif_catalogue_free(peak);
+
+  /* Halted part-way and resumed: the voids of the first rungs mask on the
+   * scaled radii again. */
+  const char* path = "test_finders_lagrangian.ckpt";
+  unlink(path);
+  sif__exodus_halt_after_set(3);
+  sif_catalogue_t* halted =
+    exodus_x(&s, radii, n_radii, threshold, lagrangian, path, NULL);
+  sif__exodus_halt_after_set(0);
+  CHECK(!halted && file_exists(path), "the halted run left no checkpoint");
+  sif_catalogue_free(halted);
+
+  sif_error_clear();
+  sif_catalogue_t* other =
+    exodus_x(&s, radii, n_radii, threshold, 0, path, NULL);
+  CHECK(!other && error_has("overlap on Lagrangian radii"),
+    "a Eulerian run resumed a Lagrangian checkpoint: '%s'",
+    sif_error_message());
+  sif_catalogue_free(other);
+
+  sif_catalogue_t* resumed =
+    exodus_x(&s, radii, n_radii, threshold, lagrangian, path, NULL);
+  check_same_catalogue("resumed", resumed, lag);
+  sif_catalogue_free(resumed);
+  unlink(path);
+
+  /* Weights of 1: the same run without the witness. */
+  sif_real* ones = malloc(N_P * sizeof(sif_real));
+  for (uint32_t i = 0; i < N_P; i++)
+    ones[i] = 1.0f;
+  sif_field_t* fw = weighted_field(x, y, z, ones);
+  setup_t w = {sif_grid_alloc(N_GRID, BOX), NULL, fw};
+  w.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, fw, SIF_MESH_DROP_INDICES);
+  sif_catalogue_t* weighted =
+    exodus_x(&w, radii, n_radii, threshold, none | lagrangian, NULL, NULL);
+  check_same_catalogue("weights of 1", weighted, lag);
+  sif_catalogue_free(weighted);
+  sif_chain_mesh_free(w.mesh);
+  sif_grid_free(w.grid);
+  sif_field_free(fw);
+  free(ones);
+
+  sif_catalogue_free(lag);
+  sif_catalogue_free(eul);
+  sif_chain_mesh_free(s.mesh);
+  sif_grid_free(s.grid);
+  sif_field_free(f);
+
+  /* The holes are 20 in radius and 42 apart: each crosses at about 22, so
+   * the spheres meet, and scales to about 15, so the scaled ones do not. */
+  const double sep = 42.0, hole = 20.0;
+  uint64_t n = 0;
+  while (n < N_P) {
+    const double p[3] = {
+      next_uniform() * BOX, next_uniform() * BOX, next_uniform() * BOX};
+    const double dy = p[1] - 100.0, dz = p[2] - 100.0;
+    const double a = p[0] - 100.0 + 0.5 * sep, b = p[0] - 100.0 - 0.5 * sep;
+    if ((a * a + dy * dy + dz * dz < hole * hole ||
+          b * b + dy * dy + dz * dz < hole * hole) &&
+        next_uniform() > 0.03)
+      continue;
+    x[n] = (sif_real)p[0];
+    y[n] = (sif_real)p[1];
+    z[n] = (sif_real)p[2];
+    n++;
+  }
+  sif_field_t* f2 = weighted_field(x, y, z, NULL);
+  setup_t two = {sif_grid_alloc(N_GRID, BOX), NULL, f2};
+  two.mesh = sif_chain_mesh_alloc(MESH_CELLS, BOX, f2, SIF_MESH_DROP_INDICES);
+  lag =
+    exodus_x(&two, radii, n_radii, threshold, none | lagrangian, NULL, NULL);
+  CHECK(lag && lag->n_voids == 2, "two holes: %" PRIu64 " voids",
+    lag ? lag->n_voids : 0);
+  if (lag && lag->n_voids == 2) {
+    const double d = void_separation(lag, 0, 1);
+    const double sum = (double)lag->radii[0] + (double)lag->radii[1];
+    CHECK(d < sum && d >= scale * sum,
+      "two holes: %g apart with radii summing to %g", d, sum);
+  }
+  sif_catalogue_free(lag);
+  sif_chain_mesh_free(two.mesh);
+  sif_grid_free(two.grid);
+  sif_field_free(f2);
+
+  free(x);
+  free(y);
+  free(z);
+  printf("  ok\n");
+}
+
 int main(void) {
   sif_fft_config_t fftcfg = {.skip_tuning = true};
   sif_config_t cfg = {.fft_config = &fftcfg,
@@ -1635,6 +1815,7 @@ int main(void) {
   run_case("consume_grid", SIF_FINDER_CONSUME_GRID, 0.0f);
   run_case("minima centres", SIF_FINDER_SEEDS_MINIMA, 0.0f);
   run_case("refined cells", SIF_FINDER_REFINE_CENTRES, 0.0f);
+  run_case("lagrangian overlap", SIF_FINDER_LAGRANGIAN_OVERLAP, 0.0f);
 #endif
 
   run_weighted_cases();
@@ -1653,6 +1834,7 @@ int main(void) {
 #if !SIF_TEST_INSTRUMENTED
   run_variants();
   run_refined_cells();
+  run_lagrangian_overlap();
 #endif
   run_save_memory();
 

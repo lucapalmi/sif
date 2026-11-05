@@ -27,7 +27,9 @@ from numpy.typing import ArrayLike
 from . import Catalogue, ChainMesh, Field, Grid, _RealArray, _Vec3
 
 _Path = str | bytes | PathLike[str] | PathLike[bytes]
-_Variant = Literal["excursion-set", "excursion-peak"]
+_Variant = Literal["excursion-set", "excursion-peak", "lagrangian-overlap"]
+_SurveyVariant = Literal["excursion-set", "lagrangian-overlap"]
+_OverlapType = Literal["eulerian", "lagrangian"]
 _Deconvolution = Literal["full", "aliasing", "none"]
 _Seeds = Literal["cells", "minima"]
 
@@ -43,7 +45,7 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
     threshold. The radii therefore come from the data rather than from the
     ladder, which is why this needs the particles as well as the grid.
 
-    What a void is is the variant: one of two, which fix every setting of
+    What a void is is the variant: one of three, which fix every setting of
     the finder. exodus_raw() takes those settings one by one, for any
     other combination.
 
@@ -58,6 +60,10 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
       larger one. The void size function is within about 1.5% of a finer
       grid's from about 6 cells in radius; start the ladder about 1.5
       times below the smallest radius you report.
+    - 'lagrangian-overlap': 'excursion-set', with voids kept apart on their
+      Lagrangian radii, R (1 + threshold)^(1/3), instead of the radii they
+      are measured to. The catalogue still holds the measured ones, so its
+      spheres can overlap.
 
     The mesh is borrowed and never freed, so it can be reused across runs
     at different thresholds. Velocities and original indices are never
@@ -77,7 +83,7 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
         radii: Smoothing radii to try.
         threshold: Density contrast a cell must reach to seed a void, in
             (-1, 0).
-        variant: Which finder, from the two above.
+        variant: Which finder, from the three above.
         checkpoint: Where the run saves its progress after every rung: a
             path, or None (the default) for exodus-<hex>.ckpt in the
             working directory, logged as the run starts. A path that exists
@@ -122,6 +128,7 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
 
 def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
                threshold: float, overlap_fraction: float = 0.0, *,
+               overlap_type: _OverlapType = "eulerian",
                seeds: _Seeds = "cells", refine_centres: bool = False,
                search_factor: float = 1.5,
                deconvolution: _Deconvolution = "full",
@@ -131,9 +138,10 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
                save_memory: bool = False) -> Catalogue:
     """exodus(), with every setting a variant fixes taken one by one.
 
-    The variants are two points of this: excursion-set is
+    The variants are three points of this: excursion-set is
     overlap_fraction=0 with seeds='cells', excursion-peak is
-    overlap_fraction=1 with seeds='minima'. Everything else at its
+    overlap_fraction=1 with seeds='minima', and lagrangian-overlap is
+    excursion-set with overlap_type='lagrangian'. Everything else at its
     default.
 
     With seeds='minima' the finder measures a crossing past a rung's reach
@@ -147,6 +155,11 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
             the smaller one's radius, in [0, 1]. 0 forbids overlap
             entirely; 1 refuses a void only when its centre is inside
             another.
+        overlap_type: Which radii overlap is tested on. 'eulerian': the ones
+            in the catalogue. 'lagrangian': each void's Lagrangian radius,
+            R (1 + threshold)^(1/3), the size of its mass at the mean
+            density; the overlap fraction, the masked cells and every
+            overlap test use it, and the catalogue keeps R.
         seeds: Where candidates come from. 'cells': every cell below the
             threshold at a rung, on its node, deepest first. 'minima': the
             local minima of the rung's field smoothed by a further Gaussian
@@ -186,7 +199,7 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
 def exodus_survey(data_grid: Grid, random_grid: Grid, data_mesh: ChainMesh,
                   random_mesh: ChainMesh, offset: _Vec3, radii: ArrayLike,
                   threshold: float,
-                  variant: Literal["excursion-set"] = "excursion-set", *,
+                  variant: _SurveyVariant = "excursion-set", *,
                   checkpoint: _Path | None = None,
                   prior: Catalogue | None = None,
                   keep_checkpoint: bool = False,
@@ -194,7 +207,7 @@ def exodus_survey(data_grid: Grid, random_grid: Grid, data_mesh: ChainMesh,
     """Find voids in a survey: any geometry, described by a random catalogue.
 
     The same finder as exodus(), with the box mean replaced by the randoms.
-    Only the excursion-set variant runs on a survey, for now.
+    The excursion-peak variant does not run on a survey, for now.
     A sphere's expected content is the random weight inside it times
     alpha = W_data / W_random, so its contrast is D(<r) / (alpha R(<r)) - 1:
     the footprint, its holes and the radial selection all come in through
@@ -232,7 +245,7 @@ def exodus_survey(data_grid: Grid, random_grid: Grid, data_mesh: ChainMesh,
         radii: Smoothing radii to try.
         threshold: Density contrast a void is grown to, against the
             randoms, in (-1, 0).
-        variant: As in exodus(); 'excursion-set' only, for now.
+        variant: As in exodus(); not 'excursion-peak', for now.
         checkpoint: As in exodus(); the offset is part of what a resume
             checks.
         prior: As in exodus(), in your own frame (Cartesian: to_cartesian()
@@ -258,6 +271,7 @@ def exodus_survey_raw(data_grid: Grid, random_grid: Grid,
                       data_mesh: ChainMesh, random_mesh: ChainMesh,
                       offset: _Vec3, radii: ArrayLike, threshold: float,
                       overlap_fraction: float = 0.0, *,
+                      overlap_type: _OverlapType = "eulerian",
                       seeds: _Seeds = "cells", search_factor: float = 1.5,
                       deconvolution: _Deconvolution = "full",
                       consume_grid: bool = False,
@@ -272,7 +286,8 @@ def exodus_survey_raw(data_grid: Grid, random_grid: Grid,
         data_grid, random_grid, data_mesh, random_mesh: As in
             exodus_survey().
         offset, radii, threshold: As in exodus_survey().
-        overlap_fraction, seeds, deconvolution: As in exodus_raw().
+        overlap_fraction, overlap_type, seeds, deconvolution: As in
+            exodus_raw().
         search_factor: As in exodus_raw(). Pass the same one to
             survey_box().
         consume_grid: Skip restoring both grids.
@@ -304,8 +319,9 @@ def read_checkpoint(path: _Path) -> tuple[Catalogue, dict[str, Any]]:
         survey's moved back out of its box. The dict holds mode ('box'
         or 'survey'), weighted, radii (the ladder, largest first),
         rungs_done, n_voids, n_prior, threshold, overlap_fraction,
-        search_factor, keep_cic_window, deconvolution, seeds ('cells'
-        or 'minima'), refine_centres, grid_n_cells, box_length, assignment,
+        overlap_type, search_factor, keep_cic_window, deconvolution, seeds
+        ('cells' or 'minima'), refine_centres, grid_n_cells, box_length,
+        assignment,
         interlaced, n_particles, total_weight, n_randoms,
         random_total_weight and offset.
 

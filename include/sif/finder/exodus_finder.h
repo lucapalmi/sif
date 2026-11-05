@@ -43,10 +43,10 @@ typedef struct {
    *
    * A file that does not exist is created, and rewritten after every rung.
    * One that exists is resumed: its header has to describe this run -- the
-   * same ladder, threshold, overlap fraction, search factor, CIC window
-   * option, grid geometry, tracer counts and total weights, and for a survey
-   * the same offset -- or the call fails saying which differs. The grid and
-   * the mesh themselves are not compared, so resuming against different
+   * same ladder, threshold, overlap fraction and radii, search factor, CIC
+   * window option, grid geometry, tracer counts and total weights, and for a
+   * survey the same offset -- or the call fails saying which differs. The grid
+   * and the mesh themselves are not compared, so resuming against different
    * tracers that happen to agree on all of that is the caller's mistake to
    * avoid.
    *
@@ -113,9 +113,11 @@ typedef struct {
  * size function describe. Excursion-peak voids are spheres centred on minima
  * of the density smoothed at their rung's scale (SIF_FINDER_SEEDS_MINIMA),
  * with full overlap allowed, so that a void is refused only when its centre
- * falls inside a larger one.
+ * falls inside a larger one. Lagrangian-overlap voids are excursion-set voids
+ * kept apart on their Lagrangian radii (SIF_FINDER_LAGRANGIAN_OVERLAP) instead
+ * of their measured ones, which stay the radii of the catalogue.
  *
- * Both variants use the default search factor and window deconvolution, and
+ * All variants use the default search factor and window deconvolution, and
  * checkpoint. sif_finder_exodus_preset() gives what each one sets, and
  * sif_finder_exodus_raw() runs any other combination.
  */
@@ -125,6 +127,8 @@ typedef enum {
   SIF_EXODUS_EXCURSION_SET = 0,
   /** The minima of each rung's field, full overlap. */
   SIF_EXODUS_EXCURSION_PEAK,
+  /** SIF_EXODUS_EXCURSION_SET, with no overlap of the Lagrangian radii. */
+  SIF_EXODUS_LAGRANGIAN_OVERLAP,
   SIF__EXODUS_N_VARIANTS
 } sif_exodus_variant_t;
 
@@ -133,8 +137,9 @@ typedef enum {
  *
  * @param variant One of sif_exodus_variant_t.
  * @param overlap_fraction Receives the overlap fraction.
- * @param opt Receives the options: the SIF_FINDER_SEEDS_*, and nothing else,
- * so the search factor and the window deconvolution are at their defaults.
+ * @param opt Receives the options: the SIF_FINDER_SEEDS_* and
+ * SIF_FINDER_LAGRANGIAN_OVERLAP, and nothing else, so the search factor and
+ * the window deconvolution are at their defaults.
  * @return SIF_OK, or SIF_ERR_INVALID for a variant out of range, leaving the
  * outputs untouched.
  */
@@ -143,7 +148,8 @@ SIF_NODISCARD int sif_finder_exodus_preset(
 
 /**
  * @brief A variant's name, as the bindings and sif-exodus take it:
- * "excursion-set" or "excursion-peak". NULL for a variant out of range.
+ * "excursion-set", "excursion-peak" or "lagrangian-overlap". NULL for a
+ * variant out of range.
  */
 const char* sif_finder_exodus_variant_name(sif_exodus_variant_t variant);
 
@@ -228,8 +234,10 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
  * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
  * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
- * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_CENTRES, SIF_FINDER_NO_CHECKPOINT and
- * SIF_FINDER_SEARCH_*. The box is always periodic; a survey, with edges, is sif_finder_exodus_survey_raw().
+ * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_CENTRES,
+ * SIF_FINDER_LAGRANGIAN_OVERLAP, SIF_FINDER_NO_CHECKPOINT and
+ * SIF_FINDER_SEARCH_*. The box is always periodic; a survey, with edges, is
+ * sif_finder_exodus_survey_raw().
  * @param extras Where to checkpoint and what to start from, or NULL for
  * neither: see sif_finder_exodus_extras_t.
  *
@@ -285,8 +293,7 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_raw(sif_grid_t* grid,
  *
  * sif_finder_exodus_survey_raw() with the settings of
  * sif_finder_exodus_preset(): see there for the inputs and what comes back.
- * Only SIF_EXODUS_EXCURSION_SET runs on a survey, for now; the other variant
- * fails.
+ * SIF_EXODUS_EXCURSION_PEAK does not run on a survey, for now, and fails.
  *
  * @param variant Which finder; see sif_exodus_variant_t.
  * @param extras As in sif_finder_exodus().
@@ -432,9 +439,9 @@ typedef struct {
   /**
    * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor,
    * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW, the
-   * SIF_FINDER_SEEDS_* and SIF_FINDER_REFINE_CENTRES, which is only set on
-   * cells. Version 1 had no seeds, and reads as
-   * SIF_FINDER_SEEDS_CELLS.
+   * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_CENTRES, which is only set on
+   * cells, and SIF_FINDER_LAGRANGIAN_OVERLAP. Version 1 had no seeds, and
+   * reads as SIF_FINDER_SEEDS_CELLS.
    */
   uint32_t options;
   /** Rungs on the ladder. */

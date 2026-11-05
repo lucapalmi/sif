@@ -629,7 +629,7 @@ SIF_HOT_LOOP SIF_PURE_FUNCTION uint8_t sif__overlap_quick(
 SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx,
   sif_real cy, sif_real cz, sif_real r, sif_real max_r, sif_real box_length,
   const sif_cell_linked_list_t* cll, uint32_t p2_mask,
-  sif_real overlap_fraction) {
+  sif_real overlap_fraction, sif_real scale) {
 
   (void)p2_mask; /* the list has its own grid, see cll_mask below */
 
@@ -645,7 +645,8 @@ SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx,
    * this used to be, is that only while r <= max_r -- and a rescaled radius
    * is often past every one accepted so far. At f = 1 a candidate of 60 then
    * missed a void of 10 centred 55 inside it. */
-  sif_real search_rad = r + max_r - overlap_fraction * (r < max_r ? r : max_r);
+  sif_real search_rad =
+    scale * (r + max_r - overlap_fraction * (r < max_r ? r : max_r));
 
   int32_t ix_min =
     (int32_t)SIF_REAL_FLOOR((cx - search_rad) * cll->inv_cell_length);
@@ -689,7 +690,8 @@ SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx,
             /* Shrink the collision radius by the smaller of the two, so
              * overlap_fraction means "fraction of the smaller void". */
             sif_real min_r = (r < cat_r[curr]) ? r : cat_r[curr];
-            sif_real r_tot = r + cat_r[curr] - overlap_fraction * min_r;
+            sif_real r_tot =
+              scale * (r + cat_r[curr] - overlap_fraction * min_r);
 
             sif_real r2 = r_tot * r_tot;
             sif_real dx = cx - cat_cx[curr];
@@ -702,7 +704,8 @@ SIF_HOT_LOOP uint8_t sif__overlap_exact(const sif_catalogue_t* cat, sif_real cx,
         } else {
           while (curr != -1) {
             sif_real min_r = (r < cat_r[curr]) ? r : cat_r[curr];
-            sif_real r_tot = r + cat_r[curr] - overlap_fraction * min_r;
+            sif_real r_tot =
+              scale * (r + cat_r[curr] - overlap_fraction * min_r);
             sif_real r_tot2 = r_tot * r_tot;
 
             sif_real dx = SIF_REAL_ABS(cx - cat_cx[curr]);

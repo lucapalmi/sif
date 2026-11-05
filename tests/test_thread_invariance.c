@@ -641,6 +641,23 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
       CHECK(refined && refined->n_voids > 0, "exodus found no refined cells");
       put_catalogue(p, "exodus, refined cells", refined);
       sif_catalogue_free(refined);
+
+      /* Accepts and, on the minima, displacements, on the scaled radii. */
+      sif_catalogue_t* lagrangian = sif_finder_exodus_raw(g, m, radii, n_radii,
+        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_LAGRANGIAN_OVERLAP, NULL);
+      CHECK(lagrangian && lagrangian->n_voids > 0,
+        "exodus found no voids on Lagrangian overlap");
+      put_catalogue(p, "exodus, lagrangian overlap", lagrangian);
+      sif_catalogue_free(lagrangian);
+
+      sif_catalogue_t* lag_minima =
+        sif_finder_exodus_raw(g, m, radii, n_radii, THRESHOLD, 1.0f,
+          no_ckpt | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_LAGRANGIAN_OVERLAP,
+          NULL);
+      CHECK(lag_minima && lag_minima->n_voids > 0,
+        "exodus found no minima on Lagrangian overlap");
+      put_catalogue(p, "exodus, minima on lagrangian overlap", lag_minima);
+      sif_catalogue_free(lag_minima);
     }
 
     if (cat && !weighted) {

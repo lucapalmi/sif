@@ -270,7 +270,7 @@ static int exodus_extras(PyObject* checkpoint, PyObject* prior,
   return 0;
 }
 
-/* variant=, by name; ValueError naming the four otherwise. */
+/* variant=, by name; ValueError naming them otherwise. */
 static int variant_option(const char* name, sif_exodus_variant_t* variant) {
   for (int v = 0; name && v < SIF__EXODUS_N_VARIANTS; v++) {
     if (strcmp(name, sif_finder_exodus_variant_name(v)) == 0) {
@@ -279,7 +279,8 @@ static int variant_option(const char* name, sif_exodus_variant_t* variant) {
     }
   }
   PyErr_Format(PyExc_ValueError,
-    "variant must be 'excursion-set' or 'excursion-peak', not '%s'",
+    "variant must be 'excursion-set', 'excursion-peak' or "
+    "'lagrangian-overlap', not '%s'",
     name ? name : "None");
   return -1;
 }
@@ -296,6 +297,19 @@ static int seeds_option(const char* name, sif_option* options) {
     return -1;
   }
   return 0;
+}
+
+/* overlap_type='eulerian' (or None) or 'lagrangian'. */
+static int overlap_option(const char* name, sif_option* options) {
+  if (name == NULL || strcmp(name, "eulerian") == 0)
+    return 0;
+  if (strcmp(name, "lagrangian") == 0) {
+    *options |= SIF_FINDER_LAGRANGIAN_OVERLAP;
+    return 0;
+  }
+  PyErr_Format(PyExc_ValueError,
+    "overlap_type must be 'eulerian' or 'lagrangian', not '%s'", name);
+  return -1;
 }
 
 /* What a checkpoint's options say the seeds are, as seeds= names them. */
@@ -378,6 +392,7 @@ PyObject* py_sif_finder_exodus_raw(
   PyObject *grid_obj = NULL, *mesh_obj = NULL, *radii_obj = NULL;
   double threshold;
   double overlap_fraction = 0.0;
+  const char* overlap_type = NULL;
   const char* seeds = NULL;
   int refine_centres = 0;
   double search_factor = 1.5;
@@ -389,15 +404,15 @@ PyObject* py_sif_finder_exodus_raw(
   int save_memory = 0;
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
-    "overlap_fraction", "seeds", "refine_centres", "search_factor",
-    "deconvolution", "consume_grid", "checkpoint", "prior", "keep_checkpoint",
-    "save_memory", NULL};
+    "overlap_fraction", "overlap_type", "seeds", "refine_centres",
+    "search_factor", "deconvolution", "consume_grid", "checkpoint", "prior",
+    "keep_checkpoint", "save_memory", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|d$zpdzpOOpp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|d$zzpdzpOOpp", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
-        &threshold, &overlap_fraction, &seeds, &refine_centres, &search_factor,
-        &deconvolution, &consume_grid, &checkpoint, &prior, &keep_checkpoint,
-        &save_memory))
+        &threshold, &overlap_fraction, &overlap_type, &seeds, &refine_centres,
+        &search_factor, &deconvolution, &consume_grid, &checkpoint, &prior,
+        &keep_checkpoint, &save_memory))
     return NULL;
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : 0;
@@ -405,6 +420,7 @@ PyObject* py_sif_finder_exodus_raw(
     options |= SIF_FINDER_REFINE_CENTRES;
   sif_option window = 0, reach = 0;
   if (seeds_option(seeds, &options) < 0 ||
+      overlap_option(overlap_type, &options) < 0 ||
       py_sif_parse_deconvolution(deconvolution, SIF_FINDER_KEEP_CIC_WINDOW,
         SIF_FINDER_ALIASING_WINDOW, &window) < 0 ||
       search_factor_option(search_factor, &reach) < 0)
@@ -567,6 +583,7 @@ PyObject* py_sif_finder_exodus_survey_raw(
   double o[3];
   double threshold;
   double overlap_fraction = 0.0;
+  const char* overlap_type = NULL;
   const char* seeds = NULL;
   double search_factor = 1.5;
   const char* deconvolution = NULL;
@@ -577,21 +594,22 @@ PyObject* py_sif_finder_exodus_survey_raw(
   int save_memory = 0;
 
   static char* kwlist[] = {"data_grid", "random_grid", "data_mesh",
-    "random_mesh", "offset", "radii", "threshold", "overlap_fraction", "seeds",
-    "search_factor", "deconvolution", "consume_grid", "checkpoint", "prior",
-    "keep_checkpoint", "save_memory", NULL};
+    "random_mesh", "offset", "radii", "threshold", "overlap_fraction",
+    "overlap_type", "seeds", "search_factor", "deconvolution", "consume_grid",
+    "checkpoint", "prior", "keep_checkpoint", "save_memory", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|d$zdzpOOpp",
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!O!O!(ddd)Od|d$zzdzpOOpp",
         kwlist, &sifGridType, &data_grid_obj, &sifGridType, &random_grid_obj,
         &sifChainMeshType, &data_mesh_obj, &sifChainMeshType, &random_mesh_obj,
-        &o[0], &o[1], &o[2], &radii_obj, &threshold, &overlap_fraction, &seeds,
-        &search_factor, &deconvolution, &consume_grid, &checkpoint, &prior,
-        &keep_checkpoint, &save_memory))
+        &o[0], &o[1], &o[2], &radii_obj, &threshold, &overlap_fraction,
+        &overlap_type, &seeds, &search_factor, &deconvolution, &consume_grid,
+        &checkpoint, &prior, &keep_checkpoint, &save_memory))
     return NULL;
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : 0;
   sif_option window = 0, reach = 0;
   if (seeds_option(seeds, &options) < 0 ||
+      overlap_option(overlap_type, &options) < 0 ||
       py_sif_parse_deconvolution(deconvolution, SIF_FINDER_KEEP_CIC_WINDOW,
         SIF_FINDER_ALIASING_WINDOW, &window) < 0 ||
       search_factor_option(search_factor, &reach) < 0)
@@ -711,14 +729,16 @@ PyObject* py_sif_finder_read_checkpoint(
   }
 
   PyObject* info = Py_BuildValue(
-    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:d,s:O,s:s,s:s,s:O,s:I,s:d,s:s,s:O,"
+    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:s,s:d,s:O,s:s,s:s,s:O,s:I,s:d,s:s,s:O,"
     "s:K,s:d,s:K,s:d,s:(ddd)}",
     "mode", h.is_survey ? "survey" : "box", "weighted",
     h.is_weighted ? Py_True : Py_False, "radii", radii, "rungs_done",
     (unsigned)h.next_rung, "n_voids", (unsigned long long)h.n_voids, "n_prior",
     (unsigned long long)h.n_prior, "threshold", h.threshold, "overlap_fraction",
-    h.overlap_fraction, "search_factor",
-    (double)sif__finder_search_factor(h.options), "keep_cic_window",
+    h.overlap_fraction, "overlap_type",
+    (h.options & SIF_FINDER_LAGRANGIAN_OVERLAP) ? "lagrangian" : "eulerian",
+    "search_factor", (double)sif__finder_search_factor(h.options),
+    "keep_cic_window",
     (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? Py_True : Py_False,
     "deconvolution",
     (h.options & SIF_FINDER_KEEP_CIC_WINDOW)   ? "none"
