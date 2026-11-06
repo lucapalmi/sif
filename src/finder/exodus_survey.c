@@ -422,8 +422,9 @@ sif_catalogue_t* sif_finder_exodus_survey_raw(sif_grid_t* data_grid,
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
-  if (sif__exodus_check_seeds(options, 1) != SIF_OK) {
-    sif__error_status_set(SIF_ERR_INVALID);
+  const int seeds_status = sif__exodus_check_seeds(options, 1);
+  if (seeds_status != SIF_OK) {
+    sif__error_status_set(seeds_status);
     return NULL;
   }
   for (int k = 0; offset && k < 3; k++) {

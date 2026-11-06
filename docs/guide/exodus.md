@@ -76,10 +76,13 @@ sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii, -0.7f,
 ### Beyond the variants
 
 A variant is just a preset of the finder's settings: the candidates (`seeds`,
-`"cells"` or `"minima"`), the overlap fraction, the radii it is tested on
+`"cells"` or `"minima"`), where they are placed (`refine_centres`, `"none"`,
+`"gaussian"` or `"tracers"`), whether a crossing past a rung's reach is measured
+(`extend_reach`), whether a void displaces smaller ones it overlaps (`displace`),
+the overlap fraction, the radii it is tested on
 (`overlap_type`, `"eulerian"` or `"lagrangian"`), the search factor (1.5) and the
 window deconvolution (`"full"`). Any other combination can be run with the raw
-finder, which takes each setting separately. In **sif-exodus**,
+finder, which takes each setting separately, each independent of the others. In **sif-exodus**,
 `finder.exodus_params` overrides the settings of the variant, or sets all of
 them on its own, starting from the default variant. One of the two is required.
 
@@ -99,14 +102,18 @@ finder = {
 ::::{tab-item} Python
 ```python
 voids = pysif.finders.exodus_raw(grid, mesh, radii, -0.7, overlap_fraction=0.5,
-                                 seeds="minima")
+                                 seeds="minima", refine_centres="gaussian",
+                                 extend_reach=True, displace=True)
 ```
 ::::
 
 ::::{tab-item} C
 ```c
 sif_catalogue_t* voids = sif_finder_exodus_raw(grid, mesh, radii, n_radii,
-  -0.7f, 0.5f, SIF_FINDER_SEEDS_MINIMA, NULL);
+  -0.7f, 0.5f,
+  SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_GAUSSIAN |
+    SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE,
+  NULL);
 ```
 ::::
 

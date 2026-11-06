@@ -66,9 +66,8 @@ typedef uint32_t sif_option;
  * A finder smooths the grid in place at every radius, so the input is gone by
  * the time it finishes. By default it is transformed back at the end; this flag
  * skips that, saving one inverse FFT for a caller that is going to discard the
- * grid anyway. Under SIF_FINDER_SEEDS_MINIMA or SIF_FINDER_REFINE_CENTRES the
- * exodus finder leaves that field smoothed by the Gaussian its minima are
- * found on as well.
+ * grid anyway. Under SIF_FINDER_REFINE_GAUSSIAN the exodus finder leaves that
+ * field smoothed by the Gaussian its minima are found on as well.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
 
@@ -161,15 +160,8 @@ static inline float sif__finder_search_factor(uint32_t opt) {
 
 /**
  * @name Where exodus voids are seeded
- * Bit 9, one of two; with their overlap fraction they are the two
- * sif_exodus_variant_t. The overlap fraction, the search factor and the
- * window options apply to both alike. Bit 10 refines the centres of the cells.
- *
- * Cells are exactly the finder of 0.4 and before: a crossing past a rung's
- * reach is refused, and a void is refused by any accepted one it overlaps.
- * Minima measure such a crossing with the reach extended, and let a void
- * displace the smaller ones it overlaps, since a void that grew past its
- * rung can be larger than voids accepted before it.
+ * Bit 9, one of two: which points are candidates. Nothing else follows from
+ * it: every other exodus option applies to both alike.
  * @{
  */
 /**
@@ -181,27 +173,61 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  */
 #define SIF_FINDER_SEEDS_CELLS (0u << 9)
 /**
- * The local minima of the rung's field are the candidates, centred where the
- * minimum lies between the nodes by a Newton step on the 3x3x3 Hessian.
- * Minima are found on the field smoothed by a Gaussian of 0.15 of the rung on
- * top of the top-hat -- one more transform per rung -- a smoothing tied to
- * the void, so a grid that resolves the rung finds the same minima as any
- * finer one: the VSF is within about 1.5% of a finer grid's from about 6
- * cells in radius. Periodic boxes only, for now.
+ * The local minima of the rung's top-hat field below the threshold are the
+ * candidates. SIF_FINDER_REFINE_GAUSSIAN finds them on a smoother field and
+ * places them between the nodes, which is what makes them the same on every
+ * grid that resolves the rung. Periodic boxes only, for now.
  */
 #define SIF_FINDER_SEEDS_MINIMA (1u << 9)
-/**
- * Refine the centres of SIF_FINDER_SEEDS_CELLS as SIF_FINDER_SEEDS_MINIMA's
- * are, keeping every cell below the threshold a candidate. The cells that are
- * minima of the field smoothed by that same Gaussian are placed between the
- * nodes, the rest stay on theirs, and all go deepest first on that field, so
- * a basin's minimum is tried before the cells on its slope. A crossing past
- * the reach and an overlap are refused as ever. One more transform per rung.
- * Periodic boxes only, for now. Minima are refined with or without this.
- */
-#define SIF_FINDER_REFINE_CENTRES (1u << 10)
-#define SIF__FINDER_SEEDS_MASK    (3u << 9)
+#define SIF__FINDER_SEEDS_MASK  (1u << 9)
 /** @} */
+
+/**
+ * @name How exodus centres are refined
+ * Bits 19-20, one of four: where the candidates that SIF_FINDER_SEEDS_* chose
+ * are placed. None of them changes how a void is accepted or refused. Periodic
+ * boxes only, for now.
+ * @{
+ */
+/** Candidates stay on their nodes. The default. */
+#define SIF_FINDER_REFINE_NONE (0u << 19)
+/**
+ * Find the minima on the rung's field smoothed by a Gaussian of 0.15 of the
+ * rung on top of the top-hat -- one more transform per rung -- and place them
+ * between the nodes by a Newton step on the 3x3x3 Hessian. A smoothing tied to
+ * the void means a grid that resolves the rung finds the same minima as any
+ * finer one. Candidates go deepest first on that field, so under
+ * SIF_FINDER_SEEDS_CELLS a basin's minimum is tried before the cells on its
+ * slope, which stay on their nodes. The threshold is still tested on the
+ * top-hat. With SIF_FINDER_SEEDS_MINIMA the VSF is within about 1.5% of a finer
+ * grid's from about 6 cells in radius.
+ */
+#define SIF_FINDER_REFINE_GAUSSIAN (1u << 19)
+/**
+ * Centre candidates on tracers. With SIF_FINDER_SEEDS_CELLS the tracers replace
+ * the cells: every tracer where the top-hat field, interpolated between the
+ * nodes, is at or below the threshold. With SIF_FINDER_SEEDS_MINIMA each minimum
+ * moves to its nearest tracer, and is dropped if the field there is above the
+ * threshold. Tracers avoid the centres of voids, so voids are lost.
+ */
+#define SIF_FINDER_REFINE_TRACERS (2u << 19)
+/** Reserved for the climb up R(x); refused with SIF_ERR_UNSUPPORTED, for now. */
+#define SIF_FINDER_REFINE_CLIMB (3u << 19)
+#define SIF__FINDER_REFINE_MASK (3u << 19)
+/** @} */
+
+/**
+ * Measure a crossing past a rung's reach with the reach extended, up to the top
+ * rung's, instead of refusing the candidate. Periodic boxes only, for now.
+ */
+#define SIF_FINDER_EXTEND_REACH (1u << 21)
+
+/**
+ * Let a void displace the smaller accepted ones it overlaps, instead of being
+ * refused by any of them, since a void can grow past its rung and be larger
+ * than voids accepted before it. Periodic boxes only, for now.
+ */
+#define SIF_FINDER_DISPLACE (1u << 22)
 
 /**
  * Test overlap between exodus voids on their Lagrangian radii, the radius

@@ -552,6 +552,227 @@ int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
   return SIF_OK;
 }
 
+/* The field at (x, y, z), trilinear between the nodes of a periodic grid. */
+static inline double interpolate_field(const sif_grid_t* grid, double x,
+  double y, double z) {
+
+  const int64_t n = grid->n_cells;
+  const double inv_cell = 1.0 / (double)grid->cell_length;
+  const double p[3] = {x * inv_cell, y * inv_cell, z * inv_cell};
+  int64_t lo[3];
+  double w[3];
+  for (int a = 0; a < 3; a++) {
+    const double f = floor(p[a]);
+    lo[a] = (int64_t)f;
+    w[a] = p[a] - f;
+  }
+
+  double value = 0.0;
+  for (int a = 0; a < 2; a++)
+    for (int b = 0; b < 2; b++)
+      for (int c = 0; c < 2; c++) {
+        const uint64_t ix = (uint64_t)((lo[0] + a + n) % n);
+        const uint64_t iy = (uint64_t)((lo[1] + b + n) % n);
+        const uint64_t iz = (uint64_t)((lo[2] + c + n) % n);
+        value += (a ? w[0] : 1.0 - w[0]) * (b ? w[1] : 1.0 - w[1]) *
+                 (c ? w[2] : 1.0 - w[2]) *
+                 (double)grid->values[((ix * n) + iy) * n + iz];
+      }
+  return value;
+}
+
+/* A candidate at the point (x, y, z), at `depth`: on the node nearest it, with
+ * what is left over in slot `slot` of the offsets. */
+static inline void place_on_point(const sif_grid_t* grid, double x, double y,
+  double z, double depth, uint64_t slot, sif_candidate_t* cand,
+  sif_offset_t* off) {
+
+  const int64_t n = grid->n_cells;
+  const double inv_cell = 1.0 / (double)grid->cell_length;
+  const double p[3] = {x * inv_cell, y * inv_cell, z * inv_cell};
+  const double node[3] = {
+    floor(p[0] + 0.5), floor(p[1] + 0.5), floor(p[2] + 0.5)};
+  const uint64_t ix = (uint64_t)(((int64_t)node[0] + n) % n);
+  const uint64_t iy = (uint64_t)(((int64_t)node[1] + n) % n);
+  const uint64_t iz = (uint64_t)(((int64_t)node[2] + n) % n);
+
+  cand->delta = (sif_real)depth;
+  cand->flat_idx = (ix * (uint64_t)n + iy) * (uint64_t)n + iz;
+  cand->refined = (uint32_t)(slot + 1);
+  off->dx = (sif_real)(p[0] - node[0]);
+  off->dy = (sif_real)(p[1] - node[1]);
+  off->dz = (sif_real)(p[2] - node[2]);
+}
+
+int sif__finder_scan_tracers(const sif_grid_t* grid, const sif_real* x,
+  const sif_real* y, const sif_real* z, uint64_t n_points, sif_real threshold,
+  sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets) {
+
+  uint64_t counts[FINDER_SCAN_CHUNKS];
+
+  candidates->count = 0;
+  offsets->count = 0;
+
+#pragma omp parallel for schedule(dynamic, 1)
+  for (int c = 0; c < FINDER_SCAN_CHUNKS; c++) {
+    const uint64_t first = n_points * (uint64_t)c / FINDER_SCAN_CHUNKS;
+    const uint64_t last = n_points * (uint64_t)(c + 1) / FINDER_SCAN_CHUNKS;
+    uint64_t k = 0;
+    for (uint64_t i = first; i < last; i++)
+      k += interpolate_field(grid, x[i], y[i], z[i]) <= (double)threshold;
+    counts[c] = k;
+  }
+
+  uint64_t total = 0;
+  for (int c = 0; c < FINDER_SCAN_CHUNKS; c++) {
+    const uint64_t k = counts[c];
+    counts[c] = total;
+    total += k;
+  }
+  if (total == 0)
+    return SIF_OK;
+
+  /* The index rides in 32 bits next to the depth, as a minimum's does. */
+  if (total >= UINT32_MAX) {
+    SIF_LOG_ERROR("finder", "%" PRIu64 " tracers: more than %u can be refined",
+      total, UINT32_MAX - 1);
+    return SIF_ERR_RANGE;
+  }
+
+  int status = buffer_reserve((void**)&candidates->items,
+    &candidates->capacity, total, sizeof(sif_candidate_t));
+  if (status == SIF_OK)
+    status = buffer_reserve(
+      (void**)&offsets->items, &offsets->capacity, total, sizeof(sif_offset_t));
+  if (status != SIF_OK)
+    return status;
+
+  sif_candidate_t* cand = candidates->items;
+  sif_offset_t* off = offsets->items;
+
+#pragma omp parallel for schedule(dynamic, 1)
+  for (int c = 0; c < FINDER_SCAN_CHUNKS; c++) {
+    const uint64_t first = n_points * (uint64_t)c / FINDER_SCAN_CHUNKS;
+    const uint64_t last = n_points * (uint64_t)(c + 1) / FINDER_SCAN_CHUNKS;
+    uint64_t k = counts[c];
+    for (uint64_t i = first; i < last; i++) {
+      const double depth = interpolate_field(grid, x[i], y[i], z[i]);
+      if (!(depth <= (double)threshold))
+        continue;
+      place_on_point(grid, x[i], y[i], z[i], depth, k, &cand[k], &off[k]);
+      k++;
+    }
+  }
+
+  sort_candidates(cand, total);
+  candidates->count = total;
+  offsets->count = total;
+
+  return SIF_OK;
+}
+
+/* The tracer nearest (x, y, z), periodically, in shells of mesh cells: once a
+ * shell of s cells is done, everything within s cell lengths has been seen.
+ * Equally near tracers go to the first in the mesh, however they were met. */
+static uint64_t nearest_tracer(
+  const sif_chain_mesh_t* mesh, double x, double y, double z) {
+
+  const int32_t n = (int32_t)mesh->n_cells;
+  const double cell = (double)mesh->cell_length;
+  const double box = (double)mesh->box_length;
+  const double half = 0.5 * box;
+  const double p[3] = {x, y, z};
+  int32_t c[3];
+  for (int a = 0; a < 3; a++) {
+    c[a] = (int32_t)(p[a] / cell);
+    c[a] = c[a] < 0 ? 0 : (c[a] >= n ? n - 1 : c[a]);
+  }
+
+  double best = INFINITY;
+  uint64_t who = UINT64_MAX;
+
+  for (int32_t s = 0; s <= n / 2 + 1; s++) {
+    for (int32_t dx = -s; dx <= s; dx++)
+      for (int32_t dy = -s; dy <= s; dy++) {
+        const int on_shell = abs(dx) == s || abs(dy) == s;
+        const int32_t step = on_shell || s == 0 ? 1 : 2 * s;
+        for (int32_t dz = -s; dz <= s; dz += step) {
+          const uint64_t ix = (uint64_t)((c[0] + dx + 2 * n) % n);
+          const uint64_t iy = (uint64_t)((c[1] + dy + 2 * n) % n);
+          const uint64_t iz = (uint64_t)((c[2] + dz + 2 * n) % n);
+          const uint64_t flat =
+            (ix * (uint64_t)n + iy) * (uint64_t)n + iz;
+          for (uint64_t i = mesh->cell_offsets[flat];
+            i < mesh->cell_offsets[flat + 1]; i++) {
+            const double q[3] = {mesh->x[i], mesh->y[i], mesh->z[i]};
+            double d2 = 0.0;
+            for (int a = 0; a < 3; a++) {
+              double d = fabs(q[a] - p[a]);
+              d = d > half ? box - d : d;
+              d2 += d * d;
+            }
+            if (d2 < best || (d2 == best && i < who)) {
+              best = d2;
+              who = i;
+            }
+          }
+        }
+      }
+    if (who != UINT64_MAX && best <= (double)s * s * cell * cell)
+      break;
+  }
+  return who;
+}
+
+int sif__finder_snap_to_tracers(const sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, sif_real threshold,
+  sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets) {
+
+  const uint64_t count = candidates->count;
+  const uint64_t n = grid->n_cells;
+  const double cell = (double)grid->cell_length;
+
+  offsets->count = 0;
+  if (count == 0)
+    return SIF_OK;
+  if (count >= UINT32_MAX) {
+    SIF_LOG_ERROR("finder", "%" PRIu64 " minima: more than %u can be refined",
+      count, UINT32_MAX - 1);
+    return SIF_ERR_RANGE;
+  }
+  const int status = buffer_reserve(
+    (void**)&offsets->items, &offsets->capacity, count, sizeof(sif_offset_t));
+  if (status != SIF_OK)
+    return status;
+
+  sif_candidate_t* cand = candidates->items;
+  sif_offset_t* off = offsets->items;
+
+#pragma omp parallel for schedule(dynamic, 64)
+  for (uint64_t k = 0; k < count; k++) {
+    const uint64_t flat = cand[k].flat_idx;
+    const uint64_t t = nearest_tracer(mesh, (double)(flat / (n * n)) * cell,
+      (double)((flat / n) % n) * cell, (double)(flat % n) * cell);
+    const double x = mesh->x[t], y = mesh->y[t], z = mesh->z[t];
+    const double depth = interpolate_field(grid, x, y, z);
+    cand[k].refined = 0;
+    if (depth <= (double)threshold)
+      place_on_point(grid, x, y, z, depth, k, &cand[k], &off[k]);
+  }
+
+  /* Offsets stay where they are: a kept candidate points at its own. */
+  uint64_t kept = 0;
+  for (uint64_t k = 0; k < count; k++)
+    if (cand[k].refined)
+      cand[kept++] = cand[k];
+
+  sort_candidates(cand, kept);
+  candidates->count = kept;
+  offsets->count = count;
+
+  return SIF_OK;
+}
+
 void sif__finder_log_radius(const char* tag, sif_real radius,
   const sif_finder_radius_stats_t* stats, uint64_t total_voids,
   double elapsed_s) {

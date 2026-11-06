@@ -77,6 +77,11 @@
 
 static int failures = 0;
 
+/* What excursion-peak sets, the overlap apart. */
+#define PEAK_OPTIONS                                                           \
+  (SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_GAUSSIAN |                      \
+    SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE)
+
 #define CHECK(cond, msg, ...)                                                  \
   do {                                                                         \
     if (!(cond)) {                                                             \
@@ -629,7 +634,7 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
      * a thread decides. */
     if (m && !weighted) {
       sif_catalogue_t* minima = sif_finder_exodus_raw(g, m, radii, n_radii,
-        THRESHOLD, 1.0f, no_ckpt | SIF_FINDER_SEEDS_MINIMA, NULL);
+        THRESHOLD, 1.0f, no_ckpt | PEAK_OPTIONS, NULL);
       CHECK(minima && minima->n_voids > 0, "exodus found no minima");
       put_catalogue(p, "exodus, minima centres", minima);
       sif_catalogue_free(minima);
@@ -637,10 +642,29 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
       /* The cells on the same scan: every candidate kept, the minima among
        * them with offsets of their own. */
       sif_catalogue_t* refined = sif_finder_exodus_raw(g, m, radii, n_radii,
-        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_REFINE_CENTRES, NULL);
+        THRESHOLD, 0.0f, no_ckpt | SIF_FINDER_REFINE_GAUSSIAN, NULL);
       CHECK(refined && refined->n_voids > 0, "exodus found no refined cells");
       put_catalogue(p, "exodus, refined cells", refined);
       sif_catalogue_free(refined);
+
+      /* Every other way of combining the settings, none depending on what a
+       * thread decides either. */
+      static const sif_option seeds[] = {
+        SIF_FINDER_SEEDS_CELLS, SIF_FINDER_SEEDS_MINIMA};
+      static const sif_option modes[] = {SIF_FINDER_REFINE_NONE,
+        SIF_FINDER_REFINE_GAUSSIAN, SIF_FINDER_REFINE_TRACERS};
+      for (int c = 0; c < 2 * 3 * 2 * 2; c++) {
+        const sif_option opt = seeds[c % 2] | modes[(c / 2) % 3] |
+                               ((c / 6) % 2 ? SIF_FINDER_EXTEND_REACH : 0) |
+                               ((c / 12) % 2 ? SIF_FINDER_DISPLACE : 0);
+        sif_catalogue_t* combo = sif_finder_exodus_raw(g, m, radii, n_radii,
+          THRESHOLD, 0.0f, no_ckpt | opt, NULL);
+        CHECK(combo, "exodus failed on settings %d", c);
+        char name[48];
+        snprintf(name, sizeof(name), "exodus, settings %d", c);
+        put_catalogue(p, name, combo);
+        sif_catalogue_free(combo);
+      }
 
       /* Accepts and, on the minima, displacements, on the scaled radii. */
       sif_catalogue_t* lagrangian = sif_finder_exodus_raw(g, m, radii, n_radii,
@@ -652,7 +676,7 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
 
       sif_catalogue_t* lag_minima =
         sif_finder_exodus_raw(g, m, radii, n_radii, THRESHOLD, 1.0f,
-          no_ckpt | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_LAGRANGIAN_OVERLAP,
+          no_ckpt | PEAK_OPTIONS | SIF_FINDER_LAGRANGIAN_OVERLAP,
           NULL);
       CHECK(lag_minima && lag_minima->n_voids > 0,
         "exodus found no minima on Lagrangian overlap");

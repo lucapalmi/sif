@@ -1058,10 +1058,10 @@ SIF_HOT_LOOP sif_real sif__exodus_find_radius_weighted(
  * a yes here into a no there.
  *
  * `closed` asks in addition that the search sphere is not underdense out to
- * r_search, which the minima need: there a sphere that is gets measured again
- * with the reach extended, and the radius that comes back has no upper bound.
- * Under the cell seeds the sphere is simply refused, which is a refusal
- * either way.
+ * r_search, which an extended reach under displacement needs: there a sphere
+ * that is gets measured again, the radius that comes back has no upper bound,
+ * and it may displace what it collides with. Otherwise the collision refuses it
+ * at any radius, which is a refusal either way.
  */
 #define WITNESS_SLACK 1e-5f
 

@@ -299,6 +299,26 @@ static int seeds_option(const char* name, sif_option* options) {
   return 0;
 }
 
+/* refine_centres='none' (or None), 'gaussian', 'tracers' or 'climb'. */
+static int refine_option(const char* name, sif_option* options) {
+  if (name == NULL || strcmp(name, "none") == 0) {
+    *options |= SIF_FINDER_REFINE_NONE;
+  } else if (strcmp(name, "gaussian") == 0) {
+    *options |= SIF_FINDER_REFINE_GAUSSIAN;
+  } else if (strcmp(name, "tracers") == 0) {
+    *options |= SIF_FINDER_REFINE_TRACERS;
+  } else if (strcmp(name, "climb") == 0) {
+    *options |= SIF_FINDER_REFINE_CLIMB;
+  } else {
+    PyErr_Format(PyExc_ValueError,
+      "refine_centres must be 'none', 'gaussian', 'tracers' or 'climb', "
+      "not '%s'",
+      name);
+    return -1;
+  }
+  return 0;
+}
+
 /* overlap_type='eulerian' (or None) or 'lagrangian'. */
 static int overlap_option(const char* name, sif_option* options) {
   if (name == NULL || strcmp(name, "eulerian") == 0)
@@ -315,6 +335,21 @@ static int overlap_option(const char* name, sif_option* options) {
 /* What a checkpoint's options say the seeds are, as seeds= names them. */
 static const char* checkpoint_seeds(uint32_t options) {
   return (options & SIF_FINDER_SEEDS_MINIMA) ? "minima" : "cells";
+}
+
+/* What a checkpoint's options say the refinement is, as refine_centres= names
+ * it. */
+static const char* checkpoint_refine(uint32_t options) {
+  switch (options & SIF__FINDER_REFINE_MASK) {
+  case SIF_FINDER_REFINE_GAUSSIAN:
+    return "gaussian";
+  case SIF_FINDER_REFINE_TRACERS:
+    return "tracers";
+  case SIF_FINDER_REFINE_CLIMB:
+    return "climb";
+  default:
+    return "none";
+  }
 }
 
 /*
@@ -394,7 +429,9 @@ PyObject* py_sif_finder_exodus_raw(
   double overlap_fraction = 0.0;
   const char* overlap_type = NULL;
   const char* seeds = NULL;
-  int refine_centres = 0;
+  const char* refine_centres = NULL;
+  int extend_reach = 0;
+  int displace = 0;
   double search_factor = 1.5;
   const char* deconvolution = NULL;
   int consume_grid = 0;
@@ -405,21 +442,25 @@ PyObject* py_sif_finder_exodus_raw(
 
   static char* kwlist[] = {"grid", "mesh", "radii", "threshold",
     "overlap_fraction", "overlap_type", "seeds", "refine_centres",
-    "search_factor", "deconvolution", "consume_grid", "checkpoint", "prior",
-    "keep_checkpoint", "save_memory", NULL};
+    "extend_reach", "displace", "search_factor", "deconvolution",
+    "consume_grid", "checkpoint", "prior", "keep_checkpoint", "save_memory",
+    NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|d$zzpdzpOOpp", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!O!Od|d$zzzppdzpOOpp", kwlist,
         &sifGridType, &grid_obj, &sifChainMeshType, &mesh_obj, &radii_obj,
         &threshold, &overlap_fraction, &overlap_type, &seeds, &refine_centres,
-        &search_factor, &deconvolution, &consume_grid, &checkpoint, &prior,
+        &extend_reach, &displace, &search_factor, &deconvolution, &consume_grid, &checkpoint, &prior,
         &keep_checkpoint, &save_memory))
     return NULL;
 
   sif_option options = consume_grid ? SIF_FINDER_CONSUME_GRID : 0;
-  if (refine_centres)
-    options |= SIF_FINDER_REFINE_CENTRES;
+  if (extend_reach)
+    options |= SIF_FINDER_EXTEND_REACH;
+  if (displace)
+    options |= SIF_FINDER_DISPLACE;
   sif_option window = 0, reach = 0;
   if (seeds_option(seeds, &options) < 0 ||
+      refine_option(refine_centres, &options) < 0 ||
       overlap_option(overlap_type, &options) < 0 ||
       py_sif_parse_deconvolution(deconvolution, SIF_FINDER_KEEP_CIC_WINDOW,
         SIF_FINDER_ALIASING_WINDOW, &window) < 0 ||
@@ -729,7 +770,8 @@ PyObject* py_sif_finder_read_checkpoint(
   }
 
   PyObject* info = Py_BuildValue(
-    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:s,s:d,s:O,s:s,s:s,s:O,s:I,s:d,s:s,s:O,"
+    "{s:s,s:O,s:N,s:I,s:K,s:K,s:d,s:d,s:s,s:d,s:O,s:s,s:s,s:s,s:O,s:O,s:I,s:d,"
+    "s:s,s:O,"
     "s:K,s:d,s:K,s:d,s:(ddd)}",
     "mode", h.is_survey ? "survey" : "box", "weighted",
     h.is_weighted ? Py_True : Py_False, "radii", radii, "rungs_done",
@@ -745,7 +787,9 @@ PyObject* py_sif_finder_read_checkpoint(
     : (h.options & SIF_FINDER_ALIASING_WINDOW) ? "aliasing"
                                                : "full",
     "seeds", checkpoint_seeds(h.options), "refine_centres",
-    (h.options & SIF__FINDER_SEEDS_MASK) ? Py_True : Py_False, "grid_n_cells",
+    checkpoint_refine(h.options), "extend_reach",
+    (h.options & SIF_FINDER_EXTEND_REACH) ? Py_True : Py_False, "displace",
+    (h.options & SIF_FINDER_DISPLACE) ? Py_True : Py_False, "grid_n_cells",
     (unsigned)h.grid_n_cells, "box_length", h.box_length, "assignment",
     checkpoint_scheme(h.assignment), "interlaced",
     (h.assignment >> 8) ? Py_True : Py_False, "n_particles",

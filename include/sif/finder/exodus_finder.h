@@ -111,8 +111,7 @@ typedef struct {
  * Excursion-set voids are spheres grown from every cell below the threshold,
  * with no overlap allowed: the voids the excursion-set models of the void
  * size function describe. Excursion-peak voids are spheres centred on minima
- * of the density smoothed at their rung's scale (SIF_FINDER_SEEDS_MINIMA),
- * with full overlap allowed, so that a void is refused only when its centre
+ * of the density smoothed at their rung's scale, with full overlap allowed, so that a void is refused only when its centre
  * falls inside a larger one. Lagrangian-overlap voids are excursion-set voids
  * kept apart on their Lagrangian radii (SIF_FINDER_LAGRANGIAN_OVERLAP) instead
  * of their measured ones, which stay the radii of the catalogue.
@@ -137,7 +136,8 @@ typedef enum {
  *
  * @param variant One of sif_exodus_variant_t.
  * @param overlap_fraction Receives the overlap fraction.
- * @param opt Receives the options: the SIF_FINDER_SEEDS_* and
+ * @param opt Receives the options: the SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_*,
+ * SIF_FINDER_EXTEND_REACH, SIF_FINDER_DISPLACE and
  * SIF_FINDER_LAGRANGIAN_OVERLAP, and nothing else, so the search factor and
  * the window deconvolution are at their defaults.
  * @return SIF_OK, or SIF_ERR_INVALID for a variant out of range, leaving the
@@ -208,11 +208,13 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * The candidates are one of two kinds, the SIF_FINDER_SEEDS_* options. By
  * default (SIF_FINDER_SEEDS_CELLS) every cell at or below the threshold is a
  * candidate, deepest first, on its node: the finder of 0.4.
- * SIF_FINDER_SEEDS_MINIMA takes the minima of the rung's field smoothed at
- * the rung's scale, refined off their nodes. SIF_FINDER_REFINE_CENTRES keeps
- * every cell a candidate and refines those same minima among them, changing
- * nothing else about the cells. The threshold is always tested on the top-hat
- * alone.
+ * SIF_FINDER_SEEDS_MINIMA takes the minima of the rung's field alone. The
+ * SIF_FINDER_REFINE_* then say where they sit: on their nodes by default,
+ * SIF_FINDER_REFINE_GAUSSIAN finds the minima on the field smoothed at the
+ * rung's scale and places them between the nodes, SIF_FINDER_REFINE_TRACERS
+ * centres them on tracers. The threshold is always tested on the top-hat alone.
+ * Each of these, SIF_FINDER_EXTEND_REACH and SIF_FINDER_DISPLACE can be set
+ * whatever the others are.
  *
  * A catalogue does not depend on the thread count, bit for bit. It does
  * depend on the grid's last bits: a grid this hands back is restored to float
@@ -234,8 +236,8 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * the smaller one's radius, in [0, 1]; see sif_finder_spherical().
  * @param opt Finder options. Honours SIF_FINDER_CONSUME_GRID,
  * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW,
- * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_CENTRES,
- * SIF_FINDER_LAGRANGIAN_OVERLAP, SIF_FINDER_NO_CHECKPOINT and
+ * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_*, SIF_FINDER_EXTEND_REACH,
+ * SIF_FINDER_DISPLACE, SIF_FINDER_LAGRANGIAN_OVERLAP, SIF_FINDER_NO_CHECKPOINT and
  * SIF_FINDER_SEARCH_*. The box is always periodic; a survey, with edges, is
  * sif_finder_exodus_survey_raw().
  * @param extras Where to checkpoint and what to start from, or NULL for
@@ -405,7 +407,7 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_survey_raw(
 /** @brief Magic number at the start of every exodus checkpoint. */
 #define SIF_FINDER_CHECKPOINT_MAGIC "XCKP"
 /** @brief Version of the checkpoint layout this build reads and writes. */
-#define SIF_FINDER_CHECKPOINT_VERSION 2
+#define SIF_FINDER_CHECKPOINT_VERSION 3
 
 /**
  * @brief The fixed 192-byte header of an exodus checkpoint.
@@ -439,9 +441,11 @@ typedef struct {
   /**
    * The options that change the catalogue: the SIF_FINDER_SEARCH_* factor,
    * SIF_FINDER_KEEP_CIC_WINDOW, SIF_FINDER_ALIASING_WINDOW, the
-   * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_CENTRES, which is only set on
-   * cells, and SIF_FINDER_LAGRANGIAN_OVERLAP. Version 1 had no seeds, and
-   * reads as SIF_FINDER_SEEDS_CELLS.
+   * SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_*, SIF_FINDER_EXTEND_REACH,
+   * SIF_FINDER_DISPLACE and SIF_FINDER_LAGRANGIAN_OVERLAP. Version 1 had no
+   * seeds, and reads as SIF_FINDER_SEEDS_CELLS. Up to version 2 all refinement
+   * was the Gaussian's, bit 10 on cells and always on minima, and minima
+   * always extended the reach and displaced; they read so.
    */
   uint32_t options;
   /** Rungs on the ladder. */
@@ -499,6 +503,30 @@ typedef struct {
   /** Reserved, zero, to hold the header at 192 bytes. */
   char reserved[36];
 } sif_finder_exodus_checkpoint_t;
+
+/**
+ * Brings a header of an older version to what this build's options mean, once
+ * its checksum has been checked. Its version stays as it was read.
+ */
+static inline void sif__finder_checkpoint_upgrade(
+  sif_finder_exodus_checkpoint_t* h) {
+
+  /* Version 1 predates the assignment schemes: CIC, not interlaced. */
+  if (h->version < 2)
+    h->assignment = SIF_ASSIGNMENT_CIC;
+
+  /* Up to version 2 refining was bit 10 on cells and only ever the Gaussian,
+   * and the minima implied it, the extended reach and displacement. */
+  if (h->version < 3) {
+    const uint32_t old_refine = 1u << 10;
+    if (h->options & old_refine)
+      h->options |= SIF_FINDER_REFINE_GAUSSIAN;
+    if (h->options & SIF_FINDER_SEEDS_MINIMA)
+      h->options |= SIF_FINDER_REFINE_GAUSSIAN | SIF_FINDER_EXTEND_REACH |
+                    SIF_FINDER_DISPLACE;
+    h->options &= ~old_refine;
+  }
+}
 
 /**
  * @brief Read an exodus checkpoint: what it says about its run, and the

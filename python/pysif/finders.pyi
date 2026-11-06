@@ -32,6 +32,7 @@ _SurveyVariant = Literal["excursion-set", "lagrangian-overlap"]
 _OverlapType = Literal["eulerian", "lagrangian"]
 _Deconvolution = Literal["full", "aliasing", "none"]
 _Seeds = Literal["cells", "minima"]
+_RefineCentres = Literal["none", "gaussian", "tracers", "climb"]
 
 def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
            variant: _Variant = "excursion-set", *,
@@ -129,7 +130,9 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
 def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
                threshold: float, overlap_fraction: float = 0.0, *,
                overlap_type: _OverlapType = "eulerian",
-               seeds: _Seeds = "cells", refine_centres: bool = False,
+               seeds: _Seeds = "cells",
+               refine_centres: _RefineCentres | None = "none",
+               extend_reach: bool = False, displace: bool = False,
                search_factor: float = 1.5,
                deconvolution: _Deconvolution = "full",
                consume_grid: bool = False,
@@ -138,17 +141,11 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
                save_memory: bool = False) -> Catalogue:
     """exodus(), with every setting a variant fixes taken one by one.
 
-    The variants are three points of this: excursion-set is
-    overlap_fraction=0 with seeds='cells', excursion-peak is
-    overlap_fraction=1 with seeds='minima', and lagrangian-overlap is
-    excursion-set with overlap_type='lagrangian'. Everything else at its
-    default.
-
-    With seeds='minima' the finder measures a crossing past a rung's reach
-    by extending the reach, and lets a void displace the smaller ones it
-    overlaps, since a void that grew past its rung can be larger than voids
-    accepted before it. seeds='cells' is exactly the finder of 0.4.
-
+    The variants are three points of this: excursion-set is every setting
+    at its default, the finder of 0.4; excursion-peak is overlap_fraction=1,
+    seeds='minima', refine_centres='gaussian', extend_reach=True and
+    displace=True; and lagrangian-overlap is excursion-set with
+    overlap_type='lagrangian'. Each setting goes with any value of the others.\n
     Args:
         grid, mesh, radii, threshold: As in exodus().
         overlap_fraction: How much two voids may overlap, as a fraction of
@@ -161,16 +158,24 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
             density; the overlap fraction, the masked cells and every
             overlap test use it, and the catalogue keeps R.
         seeds: Where candidates come from. 'cells': every cell below the
-            threshold at a rung, on its node, deepest first. 'minima': the
-            local minima of the rung's field smoothed by a further Gaussian
-            of 0.15 of the rung, placed between the nodes; periodic boxes
-            only, for now.
-        refine_centres: With seeds='cells', place the cells that are those
-            same minima between the nodes and try every cell deepest first
-            on that smoothed field. Every cell stays a candidate, and a
-            void is accepted or refused as ever. One more transform per
-            rung; periodic boxes only, for now. seeds='minima' is always
-            refined.
+            threshold at a rung, deepest first. 'minima': the local minima
+            of the rung's field among them; periodic boxes only, for now.
+        refine_centres: Where candidates are placed; periodic boxes only,
+            for now. 'none': on their nodes. 'gaussian': the minima are found
+            on the field smoothed by a further Gaussian of 0.15 of the rung,
+            at one more transform per rung, and placed between the nodes;
+            candidates go deepest first on that field, and with seeds='cells'
+            the rest stay on their nodes. 'tracers': the tracers where the
+            interpolated field is below the threshold replace the cells, and
+            with seeds='minima' each minimum moves to its nearest tracer,
+            dropped if the field there is above the threshold. 'climb' is
+            reserved: it raises RuntimeError, for now.
+        extend_reach: Measure a crossing past a rung's reach with the reach
+            extended, instead of refusing the candidate; periodic boxes only,
+            for now.
+        displace: Let a void displace the smaller accepted ones it overlaps,
+            instead of being refused by any of them; periodic boxes only, for
+            now.
         search_factor: How far past a rung the rescaling looks for the
             crossing, as a multiple of the rung. Default 1.5. This is the
             finder's dominant cost and it goes as factor**3 - 1, so 1.5
@@ -320,7 +325,8 @@ def read_checkpoint(path: _Path) -> tuple[Catalogue, dict[str, Any]]:
         or 'survey'), weighted, radii (the ladder, largest first),
         rungs_done, n_voids, n_prior, threshold, overlap_fraction,
         overlap_type, search_factor, keep_cic_window, deconvolution, seeds
-        ('cells' or 'minima'), refine_centres, grid_n_cells, box_length,
+        ('cells' or 'minima'), refine_centres (as exodus_raw() names it),
+        extend_reach, displace, grid_n_cells, box_length,
         assignment,
         interlaced, n_particles, total_weight, n_randoms,
         random_total_weight and offset.

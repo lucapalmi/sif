@@ -109,7 +109,9 @@ def test_deconvolution_refusals(field, mesh):
 
 VARIANTS = {
     "excursion-set": {},
-    "excursion-peak": {"overlap_fraction": 1, "seeds": "minima"},
+    "excursion-peak": {"overlap_fraction": 1, "seeds": "minima",
+                       "refine_centres": "gaussian", "extend_reach": True,
+                       "displace": True},
 }
 
 
@@ -127,14 +129,38 @@ def test_exodus_takes_variants(field, mesh, tmp_path, variant):
     np.testing.assert_array_equal(cat.centres, raw.centres)
 
 
-def test_refine_centres(field, mesh):
+# The holes here are empty, so tracers only reach a shallower threshold.
+@pytest.mark.parametrize("mode, threshold", [("gaussian", -0.7),
+                                             ("tracers", -0.3)])
+def test_refine_centres(field, mesh, mode, threshold):
     # The keyword reaches the finder: the refined cells' catalogue is another.
-    plain = pysif.finders.exodus_raw(contrast(field), mesh, RADII, -0.7,
+    plain = pysif.finders.exodus_raw(contrast(field), mesh, RADII, threshold,
                                      checkpoint=False)
-    cat = pysif.finders.exodus_raw(contrast(field), mesh, RADII, -0.7,
-                                   checkpoint=False, refine_centres=True)
+    cat = pysif.finders.exodus_raw(contrast(field), mesh, RADII, threshold,
+                                   checkpoint=False, refine_centres=mode)
     assert cat.n_voids > 0
     assert not np.array_equal(cat.centres, plain.centres)
+
+
+@pytest.mark.parametrize("seeds", ["cells", "minima"])
+@pytest.mark.parametrize("refine", ["none", "gaussian", "tracers"])
+@pytest.mark.parametrize("extend_reach", [False, True])
+@pytest.mark.parametrize("displace", [False, True])
+def test_settings_are_independent(field, mesh, seeds, refine, extend_reach,
+                                  displace):
+    # Every combination runs, and keeps the overlap it was asked for.
+    cat = pysif.finders.exodus_raw(contrast(field), mesh, RADII, -0.3,
+                                   checkpoint=False, seeds=seeds,
+                                   refine_centres=refine,
+                                   extend_reach=extend_reach,
+                                   displace=displace)
+    assert cat.n_voids > 0
+    c, r = np.asarray(cat.centres, dtype=float), np.asarray(cat.radii, float)
+    c = c.T if c.shape[0] == 3 else c
+    d = np.abs(c[:, None] - c[None])
+    d = np.sqrt((np.minimum(d, BOX - d) ** 2).sum(-1))
+    np.fill_diagonal(d, np.inf)
+    assert (d >= (r[:, None] + r[None]) * (1 - 1e-5)).all()
 
 
 def test_variant_refusals(field, mesh):
@@ -144,8 +170,18 @@ def test_variant_refusals(field, mesh):
     with pytest.raises(ValueError, match="seeds must be 'cells' or 'minima'"):
         pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
                                  seeds="nodes")
+    with pytest.raises(ValueError, match="refine_centres must be 'none'"):
+        pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
+                                 refine_centres="newton")
+    with pytest.raises(TypeError):
+        pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
+                                 refine_centres=True)
+    with pytest.raises(RuntimeError):
+        pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
+                                 refine_centres="climb")
     # What a variant fixes is not taken alongside it.
-    for kw in ({"seeds": "minima"}, {"refine_centres": True},
+    for kw in ({"seeds": "minima"}, {"refine_centres": "gaussian"},
+               {"extend_reach": True}, {"displace": True},
                {"overlap_fraction": 0.5},
                {"deconvolution": "aliasing"}, {"search_factor": 2.0}):
         with pytest.raises(TypeError):

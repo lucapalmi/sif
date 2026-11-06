@@ -91,6 +91,15 @@ typedef enum {
  * the SIF_FINDER_SEEDS_* values. */
 typedef enum { EXODUS_SEEDS_CELLS, EXODUS_SEEDS_MINIMA } exodus_seeds_t;
 
+/* finder.exodus_params.refine_centres: where candidates are placed, in the
+ * order of the SIF_FINDER_REFINE_* values. */
+typedef enum {
+  EXODUS_REFINE_NONE,
+  EXODUS_REFINE_GAUSSIAN,
+  EXODUS_REFINE_TRACERS,
+  EXODUS_REFINE_CLIMB
+} exodus_refine_t;
+
 /* finder.exodus_params.overlap_type: the radii overlap is tested on. */
 typedef enum {
   EXODUS_OVERLAP_EULERIAN,
@@ -258,8 +267,12 @@ typedef struct {
     double search_factor;
     /* Where candidates come from. */
     exodus_seeds_t seeds;
-    /* Whether cells that are minima sit between the nodes. Minima always do. */
-    bool refine_centres;
+    /* Where candidates are placed. */
+    exodus_refine_t refine_centres;
+    /* Whether a crossing past a rung's reach is measured rather than refused. */
+    bool extend_reach;
+    /* Whether a void displaces the smaller ones it overlaps. */
+    bool displace;
     /* How the assignment window is undone. */
     exodus_deconvolution_t deconvolution;
   } finder;

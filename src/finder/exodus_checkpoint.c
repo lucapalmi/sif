@@ -166,9 +166,15 @@ int sif__exodus_checkpoint_write(const char* path,
 
 /* What a header's seeds mean, for messages. */
 static const char* centres_label(uint32_t options) {
+  const uint32_t refine = options & SIF__FINDER_REFINE_MASK;
   if (options & SIF_FINDER_SEEDS_MINIMA)
-    return "minima (smoothed at the rung's scale)";
-  return (options & SIF_FINDER_REFINE_CENTRES)
+    return refine == SIF_FINDER_REFINE_GAUSSIAN
+             ? "minima (smoothed at the rung's scale)"
+           : refine == SIF_FINDER_REFINE_TRACERS ? "minima, on their tracers"
+                                                 : "minima, on their nodes";
+  if (refine == SIF_FINDER_REFINE_TRACERS)
+    return "the tracers";
+  return refine == SIF_FINDER_REFINE_GAUSSIAN
            ? "every cell, the minima between the nodes"
            : "every cell, on its node";
 }
@@ -291,10 +297,8 @@ int sif__exodus_checkpoint_load(const char* path,
   }
 
   /* Brought up to date only now, the checksum being over the header as it
-   * was written. Version 1 predates the assignment schemes: CIC, not
-   * interlaced. */
-  if (h.version < 2)
-    h.assignment = SIF_ASSIGNMENT_CIC;
+   * was written. */
+  sif__finder_checkpoint_upgrade(&h);
 
   *header = h;
   status = SIF_OK;
@@ -366,9 +370,18 @@ int sif__exodus_checkpoint_match(const char* path,
     MISMATCH("CIC window %s (this run %s it)",
       (got->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved",
       (want->options & SIF_FINDER_KEEP_CIC_WINDOW) ? "keeps" : "deconvolves");
-  if ((got->options ^ want->options) & SIF__FINDER_SEEDS_MASK)
+  if ((got->options ^ want->options) &
+      (SIF__FINDER_SEEDS_MASK | SIF__FINDER_REFINE_MASK))
     MISMATCH("centres %s (this run's: %s)", centres_label(got->options),
       centres_label(want->options));
+  if ((got->options ^ want->options) & SIF_FINDER_EXTEND_REACH)
+    MISMATCH("reach %s (this run's: %s)",
+      (got->options & SIF_FINDER_EXTEND_REACH) ? "extended" : "fixed",
+      (want->options & SIF_FINDER_EXTEND_REACH) ? "extended" : "fixed");
+  if ((got->options ^ want->options) & SIF_FINDER_DISPLACE)
+    MISMATCH("displacement %s (this run's: %s)",
+      (got->options & SIF_FINDER_DISPLACE) ? "on" : "off",
+      (want->options & SIF_FINDER_DISPLACE) ? "on" : "off");
   if ((got->options ^ want->options) & SIF_FINDER_LAGRANGIAN_OVERLAP)
     MISMATCH("overlap on %s radii (this run's: %s)",
       (got->options & SIF_FINDER_LAGRANGIAN_OVERLAP) ? "Lagrangian"
@@ -519,6 +532,10 @@ int sif_finder_exodus_checkpoint_check(const char* filepath, FILE* report) {
     fprintf(report, "CIC window    %s\n",
       (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved");
     fprintf(report, "centres       %s\n", centres_label(h.options));
+    fprintf(report, "reach         %s\n",
+      (h.options & SIF_FINDER_EXTEND_REACH) ? "extended" : "fixed");
+    fprintf(report, "displacement  %s\n",
+      (h.options & SIF_FINDER_DISPLACE) ? "on" : "off");
     fprintf(report, "grid          %u^3 cells over %.8g, %s%s\n",
       h.grid_n_cells, h.box_length, scheme_label(h.assignment),
       (h.assignment >> 8) ? " interlaced" : "");

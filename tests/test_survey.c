@@ -243,7 +243,7 @@ static void run_case(const char* label, int selection, uint64_t n_randoms) {
   sif_error_clear();
   refused =
     sif_finder_exodus_survey_raw(data.grid, rand.grid, data.mesh, rand.mesh,
-      NULL, radii, n_radii, -0.7f, 0.0f, SIF_FINDER_REFINE_CENTRES, NULL);
+      NULL, radii, n_radii, -0.7f, 0.0f, SIF_FINDER_REFINE_GAUSSIAN, NULL);
   CHECK(!refused && sif_error_status() == SIF_ERR_INVALID,
     "%s: refined cells in a survey were not refused", label);
   sif_catalogue_free(refused);

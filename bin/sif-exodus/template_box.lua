@@ -99,7 +99,12 @@ finder = {
   --   overlap_type = "eulerian", -- eulerian | lagrangian: the radii it is on
   --   search_factor = 1.5,    -- 1.25 | 1.5 | 1.75 | 2
   --   seeds = "cells",        -- cells | minima
-  --   refine_centres = false, -- place cells that are minima between the nodes
+  --   -- Where candidates sit: none leaves them on their nodes; gaussian finds
+  --   -- the minima on the field smoothed at the rung's scale and places them
+  --   -- between the nodes; tracers centres them on tracers.
+  --   refine_centres = "none",
+  --   extend_reach = false,   -- measure a crossing past a rung's reach
+  --   displace = false,       -- a void displaces smaller ones it overlaps
   --   -- How the grid's assignment window is undone before smoothing: full
   --   -- divides it out (boosting aliasing and shot noise near the grid
   --   -- scale); aliasing divides out the window with its aliases (least

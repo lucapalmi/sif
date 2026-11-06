@@ -65,7 +65,7 @@ def run(grid, mesh, radii=RADII, **kw):
 CIC = 2  # sif_assignment_t
 
 
-def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID, version=2,
+def write_checkpoint(path, cat, rungs_done, grid_cells=N_GRID, version=3,
                      options=0, assignment=CIC, overlap=0.0):
     """A checkpoint of a box run over RADII, from the layout in
     exodus_finder.h: the 192-byte header, the ladder largest first, then x,
@@ -184,8 +184,8 @@ def test_version_1_checkpoint(grid, mesh, tmp_path):
 def test_unknown_version_is_refused(grid, mesh, tmp_path):
     head = run(grid, mesh, RADII[:2], checkpoint=False)
     path = tmp_path / "run.ckpt"
-    write_checkpoint(path, head, rungs_done=2, version=3)
-    with pytest.raises(OSError, match=r"version 3 \(expected 1 to 2\)"):
+    write_checkpoint(path, head, rungs_done=2, version=4)
+    with pytest.raises(OSError, match=r"version 4 \(expected 1 to 3\)"):
         pysif.finders.read_checkpoint(path)
 
 
@@ -193,7 +193,9 @@ def test_variant_checkpoints(grid, mesh, tmp_path):
     # A variant always checkpoints; where to, and whether to keep it, are
     # still the caller's.
     path = tmp_path / "run.ckpt"
-    ref = run(grid, mesh, checkpoint=False, seeds="minima", overlap_fraction=1)
+    ref = run(grid, mesh, checkpoint=False, seeds="minima",
+              refine_centres="gaussian", extend_reach=True, displace=True,
+              overlap_fraction=1)
     cat = pysif.finders.exodus(grid(), mesh, RADII, THRESHOLD,
                                variant="excursion-peak", checkpoint=path,
                                keep_checkpoint=True)
@@ -206,25 +208,56 @@ def test_variant_checkpoints(grid, mesh, tmp_path):
 
 
 def test_refined_checkpoints(grid, mesh, tmp_path):
-    # A run of refined cells is a run of its own, resumed as one; minima are
-    # refined either way, so asking for it changes nothing about theirs.
+    # A run of refined cells is a run of its own, resumed as one, and so are
+    # refined minima against unrefined ones.
     path = tmp_path / "cells.ckpt"
     cat = run(grid, mesh, checkpoint=path, keep_checkpoint=True,
-              refine_centres=True)
+              refine_centres="gaussian")
     _, info = pysif.finders.read_checkpoint(path)
-    assert info["seeds"] == "cells" and info["refine_centres"] is True
+    assert info["seeds"] == "cells" and info["refine_centres"] == "gaussian"
     with pytest.raises(ValueError, match=r"not this run: centres every cell"):
         run(grid, mesh, checkpoint=path)
     again = run(grid, mesh, checkpoint=path, keep_checkpoint=True,
-                refine_centres=True)
+                refine_centres="gaussian")
     np.testing.assert_array_equal(columns(again), columns(cat))
 
     path = tmp_path / "minima.ckpt"
     run(grid, mesh, checkpoint=path, keep_checkpoint=True, seeds="minima")
     _, info = pysif.finders.read_checkpoint(path)
-    assert info["seeds"] == "minima" and info["refine_centres"] is True
-    run(grid, mesh, checkpoint=path, keep_checkpoint=True, seeds="minima",
-        refine_centres=True)
+    assert info["seeds"] == "minima" and info["refine_centres"] == "none"
+    with pytest.raises(ValueError, match=r"not this run: centres minima"):
+        run(grid, mesh, checkpoint=path, seeds="minima",
+            refine_centres="gaussian")
+
+
+@pytest.mark.parametrize("options, seeds", [(1 << 10, "cells"),
+                                            (1 << 9, "minima")])
+def test_version_2_refinement(grid, mesh, tmp_path, options, seeds):
+    # Up to version 2 refining was bit 10 on cells and always the Gaussian,
+    # and minima implied it, the extended reach and displacement: such a run
+    # resumes as one.
+    minima = seeds == "minima"
+    kw = {"seeds": seeds, "refine_centres": "gaussian", "extend_reach": minima,
+          "displace": minima}
+    ref = run(grid, mesh, checkpoint=False, **kw)
+    head = run(grid, mesh, RADII[:2], checkpoint=False, **kw)
+    path = tmp_path / "run.ckpt"
+    write_checkpoint(path, head, rungs_done=2, version=2, options=options)
+    _, info = pysif.finders.read_checkpoint(path)
+    assert info["seeds"] == seeds and info["refine_centres"] == "gaussian"
+    assert info["extend_reach"] is minima and info["displace"] is minima
+    resumed = run(grid, mesh, checkpoint=path, **kw)
+    np.testing.assert_array_equal(columns(resumed), columns(ref))
+
+
+@pytest.mark.parametrize("kw, message", [
+    ({"extend_reach": True}, "not this run: reach fixed"),
+    ({"displace": True}, "not this run: displacement off")])
+def test_acceptance_rules_are_part_of_a_run(grid, mesh, tmp_path, kw, message):
+    path = tmp_path / "run.ckpt"
+    run(grid, mesh, checkpoint=path, keep_checkpoint=True)
+    with pytest.raises(ValueError, match=message):
+        run(grid, mesh, checkpoint=path, **kw)
 
 
 def test_lagrangian_checkpoints(grid, mesh, tmp_path):

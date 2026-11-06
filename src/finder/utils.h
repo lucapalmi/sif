@@ -20,6 +20,7 @@
 #include "sif/structures/bitmask.h"
 #include "sif/structures/catalogue.h"
 #include "sif/structures/cell_linked_list.h"
+#include "sif/structures/chain_mesh.h"
 #include "sif/structures/grid.h"
 
 #include "math/fft.h"
@@ -232,6 +233,48 @@ int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
   int minima_only, sif_candidate_buffer_t* candidates,
   sif_offset_buffer_t* offsets, sif_refine_stats_t* stats,
   int (*resmooth)(void*), void* resmooth_arg);
+
+/**
+ * @brief The tracers as a rung's candidates, for SIF_FINDER_REFINE_TRACERS.
+ *
+ * A tracer is a candidate where the field, interpolated trilinearly between
+ * the nodes, is at or below the threshold. Each sits on the node nearest it,
+ * with what is left over in `offsets`, deepest first on the interpolated
+ * field. Several can share a node, and the mask is left to the tests that know
+ * the offset: a masked node proves no collision for a centre off it.
+ *
+ * @param grid The field, in a periodic box.
+ * @param x, y, z The tracers, inside the box.
+ * @param n_points How many.
+ * @param threshold Candidates are at or below this.
+ * @param candidates Filled with the candidates.
+ * @param offsets Filled with one entry per candidate.
+ * @return SIF_OK, where a count of 0 is a legitimate result, SIF_ERR_ALLOC, or
+ * SIF_ERR_RANGE for more candidates than an index can hold.
+ */
+int sif__finder_scan_tracers(const sif_grid_t* grid, const sif_real* x,
+  const sif_real* y, const sif_real* z, uint64_t n_points, sif_real threshold,
+  sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets);
+
+/**
+ * @brief Moves each candidate to the tracer nearest it, for minima under
+ * SIF_FINDER_REFINE_TRACERS.
+ *
+ * A candidate is dropped where the field at its tracer, interpolated as in
+ * sif__finder_scan_tracers(), is above the threshold, and the rest go deepest
+ * first there. Two candidates can land on one tracer.
+ *
+ * @param grid The field, in a periodic box.
+ * @param mesh The tracers, with at least one.
+ * @param threshold Candidates are at or below this.
+ * @param candidates The candidates on their nodes, unrefined; filled again.
+ * @param offsets Filled with an entry per candidate, some unused.
+ * @return SIF_OK, SIF_ERR_ALLOC, or SIF_ERR_RANGE for more candidates than an
+ * index can hold.
+ */
+int sif__finder_snap_to_tracers(const sif_grid_t* grid,
+  const sif_chain_mesh_t* mesh, sif_real threshold,
+  sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets);
 
 /* --- per-radius reporting --- */
 

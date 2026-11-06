@@ -295,13 +295,17 @@ static sif_option grid_option(const exodus_params_t* p) {
   return p->grid.interlace ? SIF_GRID_INTERLACE : 0;
 }
 
-/* The SIF_FINDER_SEEDS_* and SIF_FINDER_REFINE_CENTRES the finder settings ask
- * for. */
+/* The SIF_FINDER_SEEDS_*, SIF_FINDER_REFINE_*, SIF_FINDER_EXTEND_REACH and
+ * SIF_FINDER_DISPLACE the finder settings ask for. */
 static sif_option centres_option(const exodus_params_t* p) {
-  if (p->finder.seeds == EXODUS_SEEDS_MINIMA)
-    return SIF_FINDER_SEEDS_MINIMA;
-  return p->finder.refine_centres ? SIF_FINDER_REFINE_CENTRES
-                                  : SIF_FINDER_SEEDS_CELLS;
+  static const sif_option refine[] = {SIF_FINDER_REFINE_NONE,
+    SIF_FINDER_REFINE_GAUSSIAN, SIF_FINDER_REFINE_TRACERS,
+    SIF_FINDER_REFINE_CLIMB};
+  return (p->finder.seeds == EXODUS_SEEDS_MINIMA ? SIF_FINDER_SEEDS_MINIMA
+                                                 : SIF_FINDER_SEEDS_CELLS) |
+         refine[p->finder.refine_centres] |
+         (p->finder.extend_reach ? SIF_FINDER_EXTEND_REACH : 0) |
+         (p->finder.displace ? SIF_FINDER_DISPLACE : 0);
 }
 
 /* SIF_FINDER_LAGRANGIAN_OVERLAP, if the finder settings ask for it. */
@@ -347,8 +351,11 @@ static void describe_catalogue(
   s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
   s |= sif_catalogue_meta_string_set(
     cat, "seeds", p->finder.seeds == EXODUS_SEEDS_MINIMA ? "minima" : "cells");
-  s |= sif_catalogue_meta_int_set(cat, "refine_centres",
-    p->finder.seeds == EXODUS_SEEDS_MINIMA || p->finder.refine_centres);
+  static const char* const refine[] = {"none", "gaussian", "tracers", "climb"};
+  s |= sif_catalogue_meta_string_set(
+    cat, "refine_centres", refine[p->finder.refine_centres]);
+  s |= sif_catalogue_meta_int_set(cat, "extend_reach", p->finder.extend_reach);
+  s |= sif_catalogue_meta_int_set(cat, "displace", p->finder.displace);
   static const char* const deconvolutions[] = {"full", "aliasing", "none"};
   s |= sif_catalogue_meta_string_set(
     cat, "deconvolution", deconvolutions[p->finder.deconvolution]);

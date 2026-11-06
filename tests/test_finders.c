@@ -43,6 +43,11 @@ static int failures = 0;
     }                                                                          \
   } while (0)
 
+/* What excursion-peak sets, the overlap apart. */
+#define PEAK_OPTIONS                                                           \
+  (SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_GAUSSIAN |                      \
+    SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE)
+
 #define BOX    200.0f
 #define N_GRID 32
 /* NOT scaled under sanitizers: the finder needs a physically meaningful
@@ -486,8 +491,9 @@ static void run_radius_oracle(void) {
     {13.0f, SIF_FINDER_SEARCH_1_25, 1.25},
     /* Centres off the nodes: the radius reported is still exactly the
      * tracers' at the centre reported. */
-    {16.0f, SIF_FINDER_SEEDS_MINIMA, 1.5},
-    {16.0f, SIF_FINDER_REFINE_CENTRES, 1.5},
+    {16.0f, PEAK_OPTIONS, 1.5},
+    {16.0f, SIF_FINDER_REFINE_GAUSSIAN, 1.5},
+    {16.0f, SIF_FINDER_REFINE_TRACERS, 1.5},
   };
 
   for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
@@ -763,7 +769,7 @@ static void run_checkpoints(void) {
 
   sif_error_clear();
   cat =
-    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_REFINE_CENTRES, path, NULL);
+    exodus_x(&s, radii, n_radii, -0.7f, SIF_FINDER_REFINE_GAUSSIAN, path, NULL);
   CHECK(!cat && error_has("this run's: every cell, the minima between"),
     "refined cells were not refused (%s)", sif_error_message());
   sif_catalogue_free(cat);
@@ -1113,7 +1119,8 @@ static void run_grid_shift(void) {
     const char* name;
     sif_option opt;
   } modes[2] = {
-    {"cells", SIF_FINDER_SEEDS_CELLS}, {"minima", SIF_FINDER_SEEDS_MINIMA}};
+    {"cells", SIF_FINDER_SEEDS_CELLS},
+    {"minima", PEAK_OPTIONS}};
   sif_catalogue_t* cat[2][2] = {{NULL, NULL}, {NULL, NULL}};
   for (int moved = 0; moved < 2; moved++) {
     const sif_real* p = x + 3 * np * moved;
@@ -1378,7 +1385,7 @@ static void run_variants(void) {
   } want[] = {
     {SIF_EXODUS_EXCURSION_SET, "excursion-set", 0.0f, SIF_FINDER_SEEDS_CELLS},
     {SIF_EXODUS_EXCURSION_PEAK, "excursion-peak", 1.0f,
-      SIF_FINDER_SEEDS_MINIMA},
+      PEAK_OPTIONS},
     {SIF_EXODUS_LAGRANGIAN_OVERLAP, "lagrangian-overlap", 0.0f,
       SIF_FINDER_SEEDS_CELLS | SIF_FINDER_LAGRANGIAN_OVERLAP},
   };
@@ -1444,11 +1451,36 @@ static void run_variants(void) {
 }
 
 /*
- * SIF_FINDER_REFINE_CENTRES places cells between the nodes and leaves the rules
+ * SIF_FINDER_REFINE_GAUSSIAN places cells between the nodes and leaves the rules
  * of the cells alone: no two voids overlap, and where a void sits off its node
- * the cells' catalogue has none that do. Minima are refined anyway, so asking
- * for it on top of them changes nothing.
+ * the cells' catalogue has none that do. Minima sit on their nodes unless it is
+ * asked for, and SIF_FINDER_REFINE_TRACERS centres every void on a tracer.
  */
+static int centre_on_node(const sif_catalogue_t* cat, uint64_t i, sif_real cell) {
+  const sif_real c[3] = {cat->cx[i], cat->cy[i], cat->cz[i]};
+  int on_node = 1;
+  for (int a = 0; a < 3; a++)
+    on_node &= SIF_REAL_FLOOR(c[a] / cell + 0.5f) * cell == c[a];
+  return on_node;
+}
+
+static void check_on_tracers(const char* what, const sif_catalogue_t* cat,
+  const sif_chain_mesh_t* mesh, sif_real cell) {
+  for (uint64_t i = 0; cat && i < cat->n_voids; i++) {
+    double nearest = 1e30;
+    for (uint64_t p = 0; p < mesh->n_particles; p++) {
+      const double d[3] = {fabs((double)cat->cx[i] - (double)mesh->x[p]),
+        fabs((double)cat->cy[i] - (double)mesh->y[p]),
+        fabs((double)cat->cz[i] - (double)mesh->z[p])};
+      nearest = fmin(nearest,
+        fmax(fmin(d[0], BOX - d[0]),
+          fmax(fmin(d[1], BOX - d[1]), fmin(d[2], BOX - d[2]))));
+    }
+    CHECK(nearest < 1e-3 * cell, "%s: void %llu is %g from the nearest tracer",
+      what, (unsigned long long)i, nearest);
+  }
+}
+
 static void run_refined_cells(void) {
   printf("refined cells\n");
 
@@ -1468,20 +1500,15 @@ static void run_refined_cells(void) {
   const sif_option none = SIF_FINDER_NO_CHECKPOINT;
   sif_catalogue_t* cat[2] = {
     exodus_x(&s, radii, n_radii, -0.7f, none, NULL, NULL),
-    exodus_x(&s, radii, n_radii, -0.7f, none | SIF_FINDER_REFINE_CENTRES, NULL,
+    exodus_x(&s, radii, n_radii, -0.7f, none | SIF_FINDER_REFINE_GAUSSIAN, NULL,
       NULL)};
 
   const sif_real cell = s.grid->cell_length;
   uint64_t off_node[2] = {0, 0};
   for (int k = 0; k < 2; k++) {
     CHECK(cat[k] && cat[k]->n_voids > 0, "run %d found nothing", k);
-    for (uint64_t i = 0; cat[k] && i < cat[k]->n_voids; i++) {
-      const sif_real c[3] = {cat[k]->cx[i], cat[k]->cy[i], cat[k]->cz[i]};
-      int on_node = 1;
-      for (int a = 0; a < 3; a++)
-        on_node &= SIF_REAL_FLOOR(c[a] / cell + 0.5f) * cell == c[a];
-      off_node[k] += !on_node;
-    }
+    for (uint64_t i = 0; cat[k] && i < cat[k]->n_voids; i++)
+      off_node[k] += !centre_on_node(cat[k], i, cell);
   }
   CHECK(off_node[0] == 0, "%llu cells off their nodes",
     (unsigned long long)off_node[0]);
@@ -1506,14 +1533,45 @@ static void run_refined_cells(void) {
     exodus_x(&s, radii, n_radii, -0.7f, none | SIF_FINDER_SEEDS_MINIMA, NULL,
       NULL);
   sif_catalogue_t* both = exodus_x(&s, radii, n_radii, -0.7f,
-    none | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_CENTRES, NULL, NULL);
+    none | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_GAUSSIAN, NULL, NULL);
   CHECK(minima && minima->n_voids > 0, "minima found nothing");
-  check_same_catalogue("minima, refined", both, minima);
+  CHECK(both && both->n_voids > 0, "refined minima found nothing");
+  uint64_t minima_off = 0, both_off = 0;
+  for (uint64_t i = 0; minima && i < minima->n_voids; i++)
+    minima_off += !centre_on_node(minima, i, cell);
+  for (uint64_t i = 0; both && i < both->n_voids; i++)
+    both_off += !centre_on_node(both, i, cell);
+  CHECK(minima_off == 0, "%llu unrefined minima off their nodes",
+    (unsigned long long)minima_off);
+  CHECK(both_off > 0, "no refined minimum left its node");
+
+  /* Every centre is a tracer, whichever the candidates, to the rounding of a
+   * position rebuilt from its node and offset. */
+  sif_catalogue_t* tracers = exodus_x(
+    &s, radii, n_radii, -0.7f, none | SIF_FINDER_REFINE_TRACERS, NULL, NULL);
+  sif_catalogue_t* snapped = exodus_x(&s, radii, n_radii, -0.7f,
+    none | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_TRACERS, NULL, NULL);
+  CHECK(tracers && tracers->n_voids > 0, "tracers found nothing");
+  CHECK(snapped && snapped->n_voids > 0, "minima on tracers found nothing");
+  check_on_tracers("tracers", tracers, s.mesh, cell);
+  check_on_tracers("minima on tracers", snapped, s.mesh, cell);
+
+  /* The climb is not there yet. */
+  sif_catalogue_t* refused = NULL;
+  sif_error_clear();
+  refused = exodus_x(
+    &s, radii, n_radii, -0.7f, none | SIF_FINDER_REFINE_CLIMB, NULL, NULL);
+  CHECK(!refused && sif_error_status() == SIF_ERR_UNSUPPORTED,
+    "the climb was not refused");
+  sif_catalogue_free(refused);
+  sif_error_clear();
 
   sif_catalogue_free(cat[0]);
   sif_catalogue_free(cat[1]);
   sif_catalogue_free(minima);
   sif_catalogue_free(both);
+  sif_catalogue_free(tracers);
+  sif_catalogue_free(snapped);
   sif_chain_mesh_free(s.mesh);
   sif_grid_free(s.grid);
   sif_field_free(f);
@@ -1571,8 +1629,8 @@ static void run_save_memory(void) {
     sif_real overlap;
   } cases[] = {
     {"cells", SIF_FINDER_SEEDS_CELLS, 0.0f},
-    {"minima", SIF_FINDER_SEEDS_MINIMA, 1.0f},
-    {"refined cells", SIF_FINDER_REFINE_CENTRES, 0.0f},
+    {"minima", PEAK_OPTIONS, 1.0f},
+    {"refined cells", SIF_FINDER_REFINE_GAUSSIAN, 0.0f},
   };
   for (int k = 0; k < 3; k++) {
     const sif_option opt = cases[k].opt | SIF_FINDER_NO_CHECKPOINT;
@@ -1692,7 +1750,9 @@ static void run_lagrangian_overlap(void) {
    * the scaled sphere of a larger void. */
   regrid(&s);
   sif_catalogue_t* peak = sif_finder_exodus_raw(s.grid, s.mesh, radii, n_radii,
-    threshold, 1.0f, none | lagrangian | SIF_FINDER_SEEDS_MINIMA, NULL);
+    threshold, 1.0f,
+    none | lagrangian | PEAK_OPTIONS,
+    NULL);
   CHECK(peak && peak->n_voids > 0, "minima: found nothing");
   for (uint64_t i = 0; peak && i < peak->n_voids; i++) {
     for (uint64_t j = i + 1; j < peak->n_voids; j++) {
@@ -1813,8 +1873,9 @@ int main(void) {
      is enough to cover the pipeline without a multi-minute test. */
   run_case("overlap 0.2", 0, 0.2f);
   run_case("consume_grid", SIF_FINDER_CONSUME_GRID, 0.0f);
-  run_case("minima centres", SIF_FINDER_SEEDS_MINIMA, 0.0f);
-  run_case("refined cells", SIF_FINDER_REFINE_CENTRES, 0.0f);
+  run_case("minima centres",
+    PEAK_OPTIONS, 0.0f);
+  run_case("refined cells", SIF_FINDER_REFINE_GAUSSIAN, 0.0f);
   run_case("lagrangian overlap", SIF_FINDER_LAGRANGIAN_OVERLAP, 0.0f);
 #endif
 

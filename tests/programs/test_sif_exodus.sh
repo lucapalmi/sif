@@ -164,10 +164,10 @@ expect_status 0 "exodus_params without a variant"
 grep -q '^  variant = "excursion-set",$' out.txt &&
   grep -q '^    seeds = "minima",$' out.txt ||
   fail "exodus_params without a variant: not resolved from the default one"
-sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = true },/' template.lua >params_refine.lua
+sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = "gaussian" },/' template.lua >params_refine.lua
 run --check params_refine.lua
 expect_status 0 "exodus_params.refine_centres"
-grep -q '^    refine_centres = true,$' out.txt ||
+grep -q '^    refine_centres = "gaussian",$' out.txt ||
   fail "exodus_params.refine_centres: not in the resolved configuration"
 resolves_to_itself params_refine_resolved.lua "exodus_params.refine_centres"
 sed 's/  variant = "excursion-set",/  exodus_params = { overlap_type = "lagrangian" },/' template.lua >params_lagrangian.lua
@@ -200,11 +200,33 @@ run --check params_bad.lua
 expect_status 2 "seeds = nodes"
 expect_error "finder.exodus_params.seeds: must be one of" "seeds = nodes"
 "$EXE" --template survey >survey_template.lua 2>/dev/null
-sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { refine_centres = true },/' \
+sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { refine_centres = "gaussian" },/' \
   survey_template.lua >refine_survey.lua
 run --check refine_survey.lua
 expect_status 2 "refine_centres in a survey"
 expect_error "finder.exodus_params.refine_centres: is for a periodic box" "refine_centres in a survey"
+
+sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = "climb" },/' template.lua >refine_climb.lua
+run --check refine_climb.lua
+expect_status 2 "refine_centres = climb"
+expect_error "is not implemented" "refine_centres = climb"
+
+sed 's/  variant = "excursion-set",/  exodus_params = { seeds = "minima", refine_centres = "tracers", extend_reach = true, displace = true },/' template.lua >params_all.lua
+run --check params_all.lua
+expect_status 0 "any settings together"
+grep -q '^    extend_reach = true,$' out.txt && grep -q '^    displace = true,$' out.txt ||
+  fail "extend_reach, displace: not in the resolved configuration"
+resolves_to_itself params_all_resolved.lua "extend_reach, displace"
+
+sed 's/variant = "excursion-set",/variant = "excursion-set", exodus_params = { displace = true },/' \
+  survey_template.lua >displace_survey.lua
+run --check displace_survey.lua
+expect_status 2 "displace in a survey"
+expect_error "finder.exodus_params.displace: is for a periodic box" "displace in a survey"
+
+sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = true },/' template.lua >refine_bool.lua
+run --check refine_bool.lua
+expect_status 2 "refine_centres = true"
 sed 's/variant = "excursion-set"/variant = "excursion-peak"/' survey_template.lua >variant_survey.lua
 run --check variant_survey.lua
 expect_status 2 "variant = excursion-peak in a survey"
