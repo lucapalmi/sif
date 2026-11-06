@@ -10,9 +10,9 @@ Current version: v0.5 release 0
 - Exodus settings are now independent of each other (breaking): `seeds="minima"`
   is the minima alone, and the old behaviour is `refine_centres="gaussian"`,
   `extend_reach=True` and `displace=True` on top of it
-- Exodus `refine_centres` takes a mode, `"none"`, `"gaussian"` or `"tracers"`,
-  instead of a bool; `SIF_FINDER_REFINE_CENTRES` is now `SIF_FINDER_REFINE_*`
-  (breaking; `"climb"` is reserved, older checkpoints still resume)
+- Exodus `refine_centres` takes a mode, `"none"`, `"gaussian"`, `"tracers"` or
+  `"hill"`, instead of a bool; `SIF_FINDER_REFINE_CENTRES` is now
+  `SIF_FINDER_REFINE_*` (breaking; older checkpoints still resume)
 - EVM size function: the barrier is the maximum a posteriori of the 100000-step
   calibration chain (final cosmology: h = 0.67, no massive neutrinos, n_s =
   0.96) and the five mapping constants are refitted with it, so

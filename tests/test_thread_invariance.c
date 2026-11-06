@@ -652,11 +652,12 @@ static void stage_finders(products_t* p, uint64_t* n_found) {
       static const sif_option seeds[] = {
         SIF_FINDER_SEEDS_CELLS, SIF_FINDER_SEEDS_MINIMA};
       static const sif_option modes[] = {SIF_FINDER_REFINE_NONE,
-        SIF_FINDER_REFINE_GAUSSIAN, SIF_FINDER_REFINE_TRACERS};
-      for (int c = 0; c < 2 * 3 * 2 * 2; c++) {
-        const sif_option opt = seeds[c % 2] | modes[(c / 2) % 3] |
-                               ((c / 6) % 2 ? SIF_FINDER_EXTEND_REACH : 0) |
-                               ((c / 12) % 2 ? SIF_FINDER_DISPLACE : 0);
+        SIF_FINDER_REFINE_GAUSSIAN, SIF_FINDER_REFINE_TRACERS,
+        SIF_FINDER_REFINE_HILL};
+      for (int c = 0; c < 2 * 4 * 2 * 2; c++) {
+        const sif_option opt = seeds[c % 2] | modes[(c / 2) % 4] |
+                               ((c / 8) % 2 ? SIF_FINDER_EXTEND_REACH : 0) |
+                               ((c / 16) % 2 ? SIF_FINDER_DISPLACE : 0);
         sif_catalogue_t* combo = sif_finder_exodus_raw(g, m, radii, n_radii,
           THRESHOLD, 0.0f, no_ckpt | opt, NULL);
         CHECK(combo, "exodus failed on settings %d", c);

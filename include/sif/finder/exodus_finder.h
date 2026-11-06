@@ -212,7 +212,8 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus(sif_grid_t* grid,
  * SIF_FINDER_REFINE_* then say where they sit: on their nodes by default,
  * SIF_FINDER_REFINE_GAUSSIAN finds the minima on the field smoothed at the
  * rung's scale and places them between the nodes, SIF_FINDER_REFINE_TRACERS
- * centres them on tracers. The threshold is always tested on the top-hat alone.
+ * centres them on tracers, SIF_FINDER_REFINE_HILL moves them to where the
+ * void's radius is largest. The threshold is always tested on the top-hat alone.
  * Each of these, SIF_FINDER_EXTEND_REACH and SIF_FINDER_DISPLACE can be set
  * whatever the others are.
  *

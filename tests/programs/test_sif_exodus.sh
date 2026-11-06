@@ -206,10 +206,9 @@ run --check refine_survey.lua
 expect_status 2 "refine_centres in a survey"
 expect_error "finder.exodus_params.refine_centres: is for a periodic box" "refine_centres in a survey"
 
-sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = "climb" },/' template.lua >refine_climb.lua
+sed 's/  variant = "excursion-set",/  exodus_params = { refine_centres = "hill" },/' template.lua >refine_climb.lua
 run --check refine_climb.lua
-expect_status 2 "refine_centres = climb"
-expect_error "is not implemented" "refine_centres = climb"
+expect_status 0 "refine_centres = hill"
 
 sed 's/  variant = "excursion-set",/  exodus_params = { seeds = "minima", refine_centres = "tracers", extend_reach = true, displace = true },/' template.lua >params_all.lua
 run --check params_all.lua

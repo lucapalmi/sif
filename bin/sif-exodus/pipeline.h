@@ -97,7 +97,7 @@ typedef enum {
   EXODUS_REFINE_NONE,
   EXODUS_REFINE_GAUSSIAN,
   EXODUS_REFINE_TRACERS,
-  EXODUS_REFINE_CLIMB
+  EXODUS_REFINE_HILL
 } exodus_refine_t;
 
 /* finder.exodus_params.overlap_type: the radii overlap is tested on. */

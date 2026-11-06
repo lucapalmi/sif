@@ -32,7 +32,7 @@ _SurveyVariant = Literal["excursion-set", "lagrangian-overlap"]
 _OverlapType = Literal["eulerian", "lagrangian"]
 _Deconvolution = Literal["full", "aliasing", "none"]
 _Seeds = Literal["cells", "minima"]
-_RefineCentres = Literal["none", "gaussian", "tracers", "climb"]
+_RefineCentres = Literal["none", "gaussian", "tracers", "hill"]
 
 def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
            variant: _Variant = "excursion-set", *,
@@ -145,7 +145,8 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
     at its default, the finder of 0.4; excursion-peak is overlap_fraction=1,
     seeds='minima', refine_centres='gaussian', extend_reach=True and
     displace=True; and lagrangian-overlap is excursion-set with
-    overlap_type='lagrangian'. Each setting goes with any value of the others.\n
+    overlap_type='lagrangian'. Each setting goes with any value of the others.
+
     Args:
         grid, mesh, radii, threshold: As in exodus().
         overlap_fraction: How much two voids may overlap, as a fraction of
@@ -168,8 +169,12 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
             the rest stay on their nodes. 'tracers': the tracers where the
             interpolated field is below the threshold replace the cells, and
             with seeds='minima' each minimum moves to its nearest tracer,
-            dropped if the field there is above the threshold. 'climb' is
-            reserved: it raises RuntimeError, for now.
+            dropped if the field there is above the threshold. 'hill':
+            as 'gaussian', then each centre moves to the point near it where
+            the void's radius is largest: a climb on the tracers, and a search
+            around its end for a higher peak. Radii grow by a few percent, but
+            centres vary more between grids; slow with seeds='cells', and
+            unweighted tracers only, for now.
         extend_reach: Measure a crossing past a rung's reach with the reach
             extended, instead of refusing the candidate; periodic boxes only,
             for now.

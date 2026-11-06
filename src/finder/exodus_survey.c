@@ -422,7 +422,7 @@ sif_catalogue_t* sif_finder_exodus_survey_raw(sif_grid_t* data_grid,
     sif__error_status_set(SIF_ERR_INVALID);
     return NULL;
   }
-  const int seeds_status = sif__exodus_check_seeds(options, 1);
+  const int seeds_status = sif__exodus_check_seeds(options, 1, 0);
   if (seeds_status != SIF_OK) {
     sif__error_status_set(seeds_status);
     return NULL;

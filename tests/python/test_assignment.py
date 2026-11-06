@@ -131,7 +131,8 @@ def test_exodus_takes_variants(field, mesh, tmp_path, variant):
 
 # The holes here are empty, so tracers only reach a shallower threshold.
 @pytest.mark.parametrize("mode, threshold", [("gaussian", -0.7),
-                                             ("tracers", -0.3)])
+                                             ("tracers", -0.3),
+                                             ("hill", -0.7)])
 def test_refine_centres(field, mesh, mode, threshold):
     # The keyword reaches the finder: the refined cells' catalogue is another.
     plain = pysif.finders.exodus_raw(contrast(field), mesh, RADII, threshold,
@@ -143,7 +144,8 @@ def test_refine_centres(field, mesh, mode, threshold):
 
 
 @pytest.mark.parametrize("seeds", ["cells", "minima"])
-@pytest.mark.parametrize("refine", ["none", "gaussian", "tracers"])
+@pytest.mark.parametrize("refine", ["none", "gaussian", "tracers",
+                                    "hill"])
 @pytest.mark.parametrize("extend_reach", [False, True])
 @pytest.mark.parametrize("displace", [False, True])
 def test_settings_are_independent(field, mesh, seeds, refine, extend_reach,
@@ -176,9 +178,6 @@ def test_variant_refusals(field, mesh):
     with pytest.raises(TypeError):
         pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
                                  refine_centres=True)
-    with pytest.raises(RuntimeError):
-        pysif.finders.exodus_raw(g, mesh, RADII, -0.7, checkpoint=False,
-                                 refine_centres="climb")
     # What a variant fixes is not taken alongside it.
     for kw in ({"seeds": "minima"}, {"refine_centres": "gaussian"},
                {"extend_reach": True}, {"displace": True},

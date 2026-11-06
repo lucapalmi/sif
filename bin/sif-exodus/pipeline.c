@@ -300,7 +300,7 @@ static sif_option grid_option(const exodus_params_t* p) {
 static sif_option centres_option(const exodus_params_t* p) {
   static const sif_option refine[] = {SIF_FINDER_REFINE_NONE,
     SIF_FINDER_REFINE_GAUSSIAN, SIF_FINDER_REFINE_TRACERS,
-    SIF_FINDER_REFINE_CLIMB};
+    SIF_FINDER_REFINE_HILL};
   return (p->finder.seeds == EXODUS_SEEDS_MINIMA ? SIF_FINDER_SEEDS_MINIMA
                                                  : SIF_FINDER_SEEDS_CELLS) |
          refine[p->finder.refine_centres] |
@@ -351,7 +351,8 @@ static void describe_catalogue(
   s |= sif_catalogue_meta_real_set(cat, "search_factor", p->finder.search_factor);
   s |= sif_catalogue_meta_string_set(
     cat, "seeds", p->finder.seeds == EXODUS_SEEDS_MINIMA ? "minima" : "cells");
-  static const char* const refine[] = {"none", "gaussian", "tracers", "climb"};
+  static const char* const refine[] = {
+    "none", "gaussian", "tracers", "hill"};
   s |= sif_catalogue_meta_string_set(
     cat, "refine_centres", refine[p->finder.refine_centres]);
   s |= sif_catalogue_meta_int_set(cat, "extend_reach", p->finder.extend_reach);

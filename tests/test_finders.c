@@ -494,6 +494,7 @@ static void run_radius_oracle(void) {
     {16.0f, PEAK_OPTIONS, 1.5},
     {16.0f, SIF_FINDER_REFINE_GAUSSIAN, 1.5},
     {16.0f, SIF_FINDER_REFINE_TRACERS, 1.5},
+    {16.0f, SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_HILL, 1.5},
   };
 
   for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
@@ -1556,15 +1557,34 @@ static void run_refined_cells(void) {
   check_on_tracers("tracers", tracers, s.mesh, cell);
   check_on_tracers("minima on tracers", snapped, s.mesh, cell);
 
-  /* The climb is not there yet. */
-  sif_catalogue_t* refused = NULL;
-  sif_error_clear();
-  refused = exodus_x(
-    &s, radii, n_radii, -0.7f, none | SIF_FINDER_REFINE_CLIMB, NULL, NULL);
-  CHECK(!refused && sif_error_status() == SIF_ERR_UNSUPPORTED,
-    "the climb was not refused");
-  sif_catalogue_free(refused);
-  sif_error_clear();
+  /* The climb finds the larger radii it is there for, and no void overlaps
+   * another for it. */
+  sif_catalogue_t* climbed = exodus_x(&s, radii, n_radii, -0.7f,
+    none | SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_HILL, NULL, NULL);
+  CHECK(climbed && climbed->n_voids > 0, "the climb found nothing");
+  double sum_both = 0.0, sum_climbed = 0.0;
+  for (uint64_t i = 0; both && i < both->n_voids; i++)
+    sum_both += both->radii[i];
+  for (uint64_t i = 0; climbed && i < climbed->n_voids; i++)
+    sum_climbed += climbed->radii[i];
+  CHECK(both && climbed &&
+          sum_climbed / climbed->n_voids > sum_both / both->n_voids,
+    "the climb's voids are no larger on average");
+  for (uint64_t i = 0; climbed && i < climbed->n_voids; i++)
+    for (uint64_t j = 0; j < i; j++) {
+      sif_real d2 = 0.0f;
+      const sif_real d[3] = {climbed->cx[i] - climbed->cx[j],
+        climbed->cy[i] - climbed->cy[j], climbed->cz[i] - climbed->cz[j]};
+      for (int a = 0; a < 3; a++) {
+        const sif_real da = SIF_REAL_ABS(d[a]);
+        const sif_real w = da > 0.5f * BOX ? BOX - da : da;
+        d2 += w * w;
+      }
+      const sif_real sum = climbed->radii[i] + climbed->radii[j];
+      CHECK(d2 >= sum * sum, "climbed voids %llu and %llu overlap",
+        (unsigned long long)i, (unsigned long long)j);
+    }
+  sif_catalogue_free(climbed);
 
   sif_catalogue_free(cat[0]);
   sif_catalogue_free(cat[1]);

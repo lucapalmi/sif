@@ -108,6 +108,17 @@ typedef struct {
    * the sequential commit, so no synchronisation is needed. */
   uint64_t span_sum;
   uint64_t span_count;
+
+  /* SIF_FINDER_REFINE_HILL: the shell a centre climbs over, as positions
+   * relative to the centre it was gathered around, and their distances from
+   * it. Allocated on first use. */
+  sif_real *ox, *oy, *oz, *od; /* the store, grouped by radial bin */
+  sif_real *tx, *ty, *tz, *td; /* the store being built */
+  uint32_t* obin;              /* bin starts, n_bins + 1 of them */
+  uint32_t obin_capacity;
+  uint32_t opt_count;    /* tracers in the store */
+  uint32_t opt_building; /* tracers in the building buffers */
+  uint32_t opt_capacity; /* of each of the eight buffers */
 } radial_scratch_t;
 
 /* --- Mesh traversal template --- */
@@ -191,6 +202,32 @@ SIF_NODISCARD int sif__exodus_template_build(mesh_template_t* tpl,
   sif_real r_search);
 void sif__exodus_template_free(mesh_template_t* tpl);
 
+/* How far inside and outside the radius a climb's store reaches, as fractions
+ * of it. A rung's climb template has to reach (1 + REACH) r_search. */
+#define SIF__EXODUS_CLIMB_REACH    0.30f
+#define SIF__EXODUS_CLIMB_HEADROOM 0.60f
+
+/* Everything a climb needs that does not change over it. */
+typedef struct exodus_climb {
+  const sif_chain_mesh_t* mesh;
+  const mesh_template_t* tpl;  /* the rescaling's, for full rescalings */
+  const mesh_template_t* otpl; /* the climb's, for gathers */
+  sif_real r_search, threshold, vol_factor, rmin, K2;
+  uint32_t window;
+  /* The next level of the extended reach, for a void whose crossing lies past
+   * this one's; NULL at the top or without SIF_FINDER_EXTEND_REACH. */
+  const struct exodus_climb* ext;
+} exodus_climb_t;
+
+/**
+ * @brief SIF_FINDER_REFINE_HILL: moves c to the point near it where the
+ * crossing radius is largest, from the radius r0 measured there, and returns
+ * the radius at that point. c stays where it is if nothing beats r0. -1 if the
+ * climb reaches a crossing past every reach it has.
+ */
+sif_real sif__exodus_hill(const exodus_climb_t* oc, sif_real c[3],
+  sif_real r0, radial_scratch_t* s);
+
 void sif__exodus_rescale_report_add(rescale_report_t* rep, sif_real ratio);
 void sif__exodus_rescale_report_log(const rescale_report_t* rep);
 
@@ -270,8 +307,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
   const sif_finder_exodus_extras_t* extras);
 
 /** @brief The argument checks a box and a survey run share, each logging
- * what it refuses: SIF_OK or SIF_ERR_INVALID. */
-SIF_NODISCARD int sif__exodus_check_seeds(sif_option options, int survey);
+ * what it refuses: SIF_OK, SIF_ERR_INVALID or SIF_ERR_UNSUPPORTED. */
+SIF_NODISCARD int sif__exodus_check_seeds(
+  sif_option options, int survey, int weighted);
 SIF_NODISCARD int sif__exodus_check_extras(
   const sif_finder_exodus_extras_t* extras, sif_option options,
   const sif_real offset[3], sif_real box_length);

@@ -101,7 +101,8 @@ finder = {
   --   seeds = "cells",        -- cells | minima
   --   -- Where candidates sit: none leaves them on their nodes; gaussian finds
   --   -- the minima on the field smoothed at the rung's scale and places them
-  --   -- between the nodes; tracers centres them on tracers.
+  --   -- between the nodes; tracers centres them on tracers; hill does
+  --   -- as gaussian, then moves each to where the void's radius is largest.
   --   refine_centres = "none",
   --   extend_reach = false,   -- measure a crossing past a rung's reach
   --   displace = false,       -- a void displaces smaller ones it overlaps

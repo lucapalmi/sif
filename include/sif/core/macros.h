@@ -66,8 +66,9 @@ typedef uint32_t sif_option;
  * A finder smooths the grid in place at every radius, so the input is gone by
  * the time it finishes. By default it is transformed back at the end; this flag
  * skips that, saving one inverse FFT for a caller that is going to discard the
- * grid anyway. Under SIF_FINDER_REFINE_GAUSSIAN the exodus finder leaves that
- * field smoothed by the Gaussian its minima are found on as well.
+ * grid anyway. Under SIF_FINDER_REFINE_GAUSSIAN or SIF_FINDER_REFINE_HILL
+ * the exodus finder leaves that field smoothed by the Gaussian its minima are
+ * found on as well.
  */
 #define SIF_FINDER_CONSUME_GRID (1u << 15)
 
@@ -211,8 +212,15 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * threshold. Tracers avoid the centres of voids, so voids are lost.
  */
 #define SIF_FINDER_REFINE_TRACERS (2u << 19)
-/** Reserved for the climb up R(x); refused with SIF_ERR_UNSUPPORTED, for now. */
-#define SIF_FINDER_REFINE_CLIMB (3u << 19)
+/**
+ * Place candidates as SIF_FINDER_REFINE_GAUSSIAN does, then move each to the
+ * point near it where the void's radius is largest: a climb on the tracers,
+ * then a search around its end for a higher peak. Radii are larger by a few
+ * percent, but centres move between grids more than the Gaussian's do. Slow on
+ * SIF_FINDER_SEEDS_CELLS, where every cell climbs. Not on weighted tracers, for
+ * now.
+ */
+#define SIF_FINDER_REFINE_HILL (3u << 19)
 #define SIF__FINDER_REFINE_MASK (3u << 19)
 /** @} */
 

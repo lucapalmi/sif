@@ -121,7 +121,7 @@ static const char* const VARIANTS[] = {
 static const char* const SEEDS[] = {"cells", "minima", NULL};
 /* In the order of exodus_refine_t. */
 static const char* const REFINE_MODES[] = {
-  "none", "gaussian", "tracers", "climb", NULL};
+  "none", "gaussian", "tracers", "hill", NULL};
 /* The exodus_refine_t a run's options ask for. */
 static exodus_refine_t refine_of(uint32_t options) {
   return (exodus_refine_t)((options & SIF__FINDER_REFINE_MASK) /
@@ -1526,10 +1526,6 @@ static void read_finder(reader_t* r, int root, exodus_config_t* c) {
       before.finder.deconvolution != p->finder.deconvolution;
   }
   lua_settop(L, e - 1);
-
-  if (p->finder.refine_centres == EXODUS_REFINE_CLIMB)
-    report(r, "finder.exodus_params.refine_centres",
-      "\"climb\" is not implemented (expected none, gaussian or tracers)");
 
   if (p->mode == EXODUS_MODE_SURVEY && p->finder.seeds != EXODUS_SEEDS_CELLS)
     report(r, variant_given ? "finder.variant" : "finder.exodus_params",

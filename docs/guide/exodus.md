@@ -77,7 +77,7 @@ sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii, -0.7f,
 
 A variant is just a preset of the finder's settings: the candidates (`seeds`,
 `"cells"` or `"minima"`), where they are placed (`refine_centres`, `"none"`,
-`"gaussian"` or `"tracers"`), whether a crossing past a rung's reach is measured
+`"gaussian"`, `"tracers"` or `"hill"`), whether a crossing past a rung's reach is measured
 (`extend_reach`), whether a void displaces smaller ones it overlaps (`displace`),
 the overlap fraction, the radii it is tested on
 (`overlap_type`, `"eulerian"` or `"lagrangian"`), the search factor (1.5) and the

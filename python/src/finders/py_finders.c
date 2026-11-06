@@ -299,7 +299,7 @@ static int seeds_option(const char* name, sif_option* options) {
   return 0;
 }
 
-/* refine_centres='none' (or None), 'gaussian', 'tracers' or 'climb'. */
+/* refine_centres='none' (or None), 'gaussian', 'tracers' or 'hill'. */
 static int refine_option(const char* name, sif_option* options) {
   if (name == NULL || strcmp(name, "none") == 0) {
     *options |= SIF_FINDER_REFINE_NONE;
@@ -307,11 +307,11 @@ static int refine_option(const char* name, sif_option* options) {
     *options |= SIF_FINDER_REFINE_GAUSSIAN;
   } else if (strcmp(name, "tracers") == 0) {
     *options |= SIF_FINDER_REFINE_TRACERS;
-  } else if (strcmp(name, "climb") == 0) {
-    *options |= SIF_FINDER_REFINE_CLIMB;
+  } else if (strcmp(name, "hill") == 0) {
+    *options |= SIF_FINDER_REFINE_HILL;
   } else {
     PyErr_Format(PyExc_ValueError,
-      "refine_centres must be 'none', 'gaussian', 'tracers' or 'climb', "
+      "refine_centres must be 'none', 'gaussian', 'tracers' or 'hill', "
       "not '%s'",
       name);
     return -1;
@@ -345,8 +345,8 @@ static const char* checkpoint_refine(uint32_t options) {
     return "gaussian";
   case SIF_FINDER_REFINE_TRACERS:
     return "tracers";
-  case SIF_FINDER_REFINE_CLIMB:
-    return "climb";
+  case SIF_FINDER_REFINE_HILL:
+    return "hill";
   default:
     return "none";
   }

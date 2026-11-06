@@ -100,7 +100,9 @@
  *
  * SIF_FINDER_REFINE_TRACERS replaces the cells by the tracers below the
  * threshold, see sif__finder_scan_tracers(), and moves minima to their nearest
- * tracer, see sif__finder_snap_to_tracers().
+ * tracer, see sif__finder_snap_to_tracers(). SIF_FINDER_REFINE_HILL places
+ * them as the Gaussian does, then moves each to where the crossing radius is
+ * largest, see sif__exodus_hill(), in a pass of its own over a batch.
  *
  * How a void is then accepted is two options of its own, on any candidates.
  * Under SIF_FINDER_EXTEND_REACH a crossing past the rung's reach is measured
@@ -164,6 +166,14 @@
 #include "exodus_internal.h"
 #include "utils.h"
 SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
+
+/* A climb to run, keyed by its seed radius for the largest-first pass. */
+typedef struct climb_order {
+  sif_real r;
+  uint32_t b;
+} climb_order_t;
+SIF_DEFINE_QUICKSORT(
+  sort_climbs, climb_order_t, a.r > b.r || (a.r == b.r && a.b < b.b))
 
 #define TAG "exodus_finder"
 
@@ -244,6 +254,13 @@ typedef struct {
   sif_real r_scaled;
   sif_real cx, cy, cz;
   uint32_t ix, iy, iz;
+  /* Under SIF_FINDER_REFINE_HILL, a centre that moved: where it started,
+   * and how far it ended from its node. */
+  uint8_t moved;
+  sif_real r_seed;
+  sif_real sx, sy, sz;
+  uint32_t six, siy, siz;
+  sif_real off;
 } batch_result_t;
 
 #define BATCH_REJECTED_PROXY   1
@@ -271,6 +288,7 @@ typedef struct {
    */
   int seed_minima;
   sif_option refine;
+  int climb; /* SIF_FINDER_REFINE_HILL */
 
   /* SIF_FINDER_EXTEND_REACH and SIF_FINDER_DISPLACE. Without them a crossing
    * past the reach and a void that overlaps any accepted one are refused, as
@@ -290,6 +308,7 @@ typedef struct {
   sif_bitmask_t* below;
 
   batch_result_t* batch_results;
+  climb_order_t* batch_order; /* the climbs of a batch, largest first */
   uint64_t* batch_indices;
 
   radial_scratch_t* scratch; /* one per thread */
@@ -378,6 +397,13 @@ static inline void candidate_centre(const exodus_ctx_t* ctx, uint64_t k,
  * The collision distance grows with r, so a rejection at the rung holds at
  * every radius the rescaling can return.
  */
+/* The same test for a centre that climbed `off` from the node it now has. */
+static inline int masked_overlap_at(const exodus_ctx_t* ctx, uint64_t flat,
+  sif_real off, sif_real r, sif_real overlap_fraction) {
+  return sif_bitmask_get(ctx->mask, flat) &&
+         off < ctx->overlap_scale * r * (1.0f - overlap_fraction);
+}
+
 static inline int masked_overlap(const exodus_ctx_t* ctx, uint64_t k,
   sif_real r, sif_real overlap_fraction, sif_real cell_length) {
 
@@ -424,6 +450,7 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
   }
 
   sif_free_aligned(ctx->batch_results);
+  sif_free_aligned(ctx->batch_order);
   sif_free_aligned(ctx->batch_indices);
   free(ctx->conflicts);
   sif__candidate_buffer_free(&ctx->candidates);
@@ -527,9 +554,11 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
   ctx->seed_minima = (opt & SIF_FINDER_SEEDS_MINIMA) != 0;
   ctx->refine = opt & SIF__FINDER_REFINE_MASK;
+  ctx->climb = ctx->refine == SIF_FINDER_REFINE_HILL;
   ctx->extend_reach = (opt & SIF_FINDER_EXTEND_REACH) != 0;
   ctx->displace = (opt & SIF_FINDER_DISPLACE) != 0;
-  if (ctx->seed_minima || ctx->refine == SIF_FINDER_REFINE_GAUSSIAN) {
+  if (ctx->seed_minima || ctx->refine == SIF_FINDER_REFINE_GAUSSIAN ||
+      ctx->climb) {
     ctx->below = sif_bitmask_alloc(grid->total_cells);
     if (!ctx->below)
       return SIF_ERR_ALLOC;
@@ -541,8 +570,9 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
     return SIF_ERR_ALLOC;
 
   ctx->batch_results = sif_malloc_aligned(BATCH_MAX * sizeof(batch_result_t));
+  ctx->batch_order = sif_malloc_aligned(BATCH_MAX * sizeof(climb_order_t));
   ctx->batch_indices = sif_malloc_aligned(BATCH_MAX * sizeof(uint64_t));
-  if (!ctx->batch_results || !ctx->batch_indices)
+  if (!ctx->batch_results || !ctx->batch_indices || !ctx->batch_order)
     return SIF_ERR_ALLOC;
 
   /* One radial scratch per thread. Its size is set by the bin count, not by
@@ -1043,15 +1073,15 @@ int sif__exodus_check_weights(const sif_chain_mesh_t* mesh) {
 /* --- Driver --- */
 
 /* Whether this build can run the settings in `options` on this kind of run:
- * all but the climb in a box, only SIF_FINDER_SEEDS_CELLS on their nodes and
- * the rules of 0.4 in a survey, for now. */
-int sif__exodus_check_seeds(sif_option options, int survey) {
+ * all in a box, but for the climb on weighted tracers; only
+ * SIF_FINDER_SEEDS_CELLS on their nodes and the rules of 0.4 in a survey, for
+ * now. */
+int sif__exodus_check_seeds(sif_option options, int survey, int weighted) {
   const sif_option refine = options & SIF__FINDER_REFINE_MASK;
 
-  if (refine == SIF_FINDER_REFINE_CLIMB) {
-    SIF_LOG_ERROR(TAG, "options: SIF_FINDER_REFINE_CLIMB: not implemented "
-                       "(expected SIF_FINDER_REFINE_NONE, _GAUSSIAN or "
-                       "_TRACERS)");
+  if (refine == SIF_FINDER_REFINE_HILL && weighted && !survey) {
+    SIF_LOG_ERROR(TAG, "options: SIF_FINDER_REFINE_HILL: weighted tracers "
+                       "(expected unweighted ones, for now)");
     return SIF_ERR_UNSUPPORTED;
   }
 
@@ -1059,6 +1089,7 @@ int sif__exodus_check_seeds(sif_option options, int survey) {
     (options & SIF_FINDER_SEEDS_MINIMA)    ? "SIF_FINDER_SEEDS_MINIMA"
     : refine == SIF_FINDER_REFINE_GAUSSIAN ? "SIF_FINDER_REFINE_GAUSSIAN"
     : refine == SIF_FINDER_REFINE_TRACERS  ? "SIF_FINDER_REFINE_TRACERS"
+    : refine                               ? "SIF_FINDER_REFINE_HILL"
     : (options & SIF_FINDER_EXTEND_REACH)  ? "SIF_FINDER_EXTEND_REACH"
     : (options & SIF_FINDER_DISPLACE)      ? "SIF_FINDER_DISPLACE"
                                            : NULL;
@@ -1253,7 +1284,7 @@ sif_catalogue_t* sif_finder_exodus_raw(sif_grid_t* grid,
     return NULL;
   }
 
-  const int seeds_status = sif__exodus_check_seeds(options, 0);
+  const int seeds_status = sif__exodus_check_seeds(options, 0, mesh->weights != NULL);
   if (seeds_status != SIF_OK) {
     sif__error_status_set(seeds_status);
     return NULL;
@@ -1609,8 +1640,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
    */
   uint32_t n_ext = 0;
   sif_real ext_reach[EXT_MAX_LEVELS], ext_rmin[EXT_MAX_LEVELS];
-  mesh_template_t etpl[EXT_MAX_LEVELS];
+  mesh_template_t etpl[EXT_MAX_LEVELS], eotpl[EXT_MAX_LEVELS];
   memset(etpl, 0, sizeof(etpl));
+  memset(eotpl, 0, sizeof(eotpl));
   if (ctx.extend_reach && status == SIF_OK) {
     const sif_real r_ext = sif__exodus_max_search_radius(
       ctx.sorted_radii, n_radii, grid->cell_length, options);
@@ -1628,6 +1660,10 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         (k ? ext_reach[k - 1] : ext_reach[0] / EXT_GROWTH) / EXT_SLACK;
       status = sif__exodus_template_build(&etpl[k], ctx.mesh->n_cells,
         ctx.mesh->cell_length, ext_rmin[k], ext_reach[k]);
+      if (status == SIF_OK && ctx.climb)
+        status = sif__exodus_template_build(&eotpl[k], ctx.mesh->n_cells,
+          ctx.mesh->cell_length, ext_rmin[k],
+          (1.0f + SIF__EXODUS_CLIMB_REACH) * ext_reach[k]);
     }
   }
 
@@ -1667,7 +1703,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     }
 
     sif_refine_stats_t refine = {0};
-    const int gaussian = ctx.refine == SIF_FINDER_REFINE_GAUSSIAN;
+    const int gaussian = ctx.refine == SIF_FINDER_REFINE_GAUSSIAN || ctx.climb;
     const int find_minima = ctx.seed_minima || gaussian;
     const int tracers = ctx.refine == SIF_FINDER_REFINE_TRACERS;
     if (tracers && !ctx.seed_minima) {
@@ -1778,9 +1814,24 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
                 grid->cell_length) -
       1;
 
+    /* The climb's shell reaches past the reach by how far a centre may move,
+     * which the rescaling's template does not. */
+    mesh_template_t otpl = {0};
+    if (ctx.climb) {
+      status = sif__exodus_template_build(&otpl, ctx.mesh->n_cells,
+        ctx.mesh->cell_length, rmin,
+        (1.0f + SIF__EXODUS_CLIMB_REACH) * r_search);
+      if (status != SIF_OK) {
+        sif__exodus_template_free(&tpl);
+        sif__exodus_template_free(&rtpl);
+        break;
+      }
+    }
+
     /* The collision witness, see collision_radius(): for the box's unweighted
-     * kernel, the one it mirrors. The core is the rescaling's own. */
-    const int witness = !survey && !weighted;
+     * kernel, the one it mirrors. The core is the rescaling's own. A collision
+     * at the candidate says nothing about where a climb takes it. */
+    const int witness = !survey && !weighted && !ctx.climb;
     const sif_real r_core2 = rmin * rmin;
     const sif_real witness_min_rj =
       ctx.displace ? r_search * (1.0f + (sif_real)COLLISION_SLACK) : 0.0f;
@@ -1795,6 +1846,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       if (status != SIF_OK) {
         sif__exodus_template_free(&tpl);
         sif__exodus_template_free(&rtpl);
+        sif__exodus_template_free(&otpl);
         break;
       }
       n_candidates = ctx.candidates.count;
@@ -1808,7 +1860,12 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     if (batch_floor > BATCH_MAX)
       batch_floor = BATCH_MAX;
 
-    uint64_t batch_cap = batch_floor;
+    /* Under the climb the window stays at the ceiling: a climb costs far more
+     * than the speculation it could waste, and an accept invalidates only the
+     * candidates the new void covers. A displacement ends the batch, so there
+     * the window is left to adapt. */
+    const int pin_batch = ctx.climb && !ctx.displace;
+    uint64_t batch_cap = pin_batch ? BATCH_MAX : batch_floor;
 
     /* Re-learned per radius alongside the batch window: the annulus geometry,
      * and with it the bin thickness, changes with every smoothing radius. */
@@ -1945,7 +2002,93 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         }
 
         res->r_scaled = r_scaled;
+        res->r_seed = r_scaled;
+        res->moved = 0;
         res->status = BATCH_ACCEPTED;
+      }
+
+      /* The climbs, in a pass of their own and largest seed first: what a
+       * climb costs grows as its radius cubed, and one large climb started
+       * last would hold the whole team at the barrier. Each result depends on
+       * its own candidate alone and the commit keeps the batch's order, so
+       * the order of this pass changes nothing else. */
+      if (ctx.climb) {
+        uint64_t n_climbs = 0;
+        for (uint64_t b = 0; b < batch_count; b++)
+          if (ctx.batch_results[b].status == BATCH_ACCEPTED)
+            ctx.batch_order[n_climbs++] =
+              (climb_order_t){ctx.batch_results[b].r_seed, (uint32_t)b};
+        sort_climbs(ctx.batch_order, n_climbs);
+
+#pragma omp parallel for schedule(dynamic, 1) num_threads(ctx.n_threads)
+        for (uint64_t j = 0; j < n_climbs; j++) {
+          const int tid = sif__system_thread_num();
+          batch_result_t* res = &ctx.batch_results[ctx.batch_order[j].b];
+          const sif_real K = (threshold + 1.0f) * vol_factor;
+          exodus_climb_t levels[EXT_MAX_LEVELS];
+          for (uint32_t e = ext0; e < n_ext; e++)
+            levels[e] = (exodus_climb_t){.mesh = ctx.mesh,
+              .tpl = &etpl[e],
+              .otpl = &eotpl[e],
+              .r_search = ext_reach[e],
+              .threshold = threshold,
+              .vol_factor = vol_factor,
+              .rmin = ext_rmin[e],
+              .K2 = K * K,
+              .window = resolve_window,
+              .ext = e + 1 < n_ext ? &levels[e + 1] : NULL};
+          const exodus_climb_t oc = {.mesh = ctx.mesh,
+            .tpl = &tpl,
+            .otpl = &otpl,
+            .r_search = r_search,
+            .threshold = threshold,
+            .vol_factor = vol_factor,
+            .rmin = rmin,
+            .K2 = K * K,
+            .window = resolve_window,
+            .ext = ext0 < n_ext ? &levels[ext0] : NULL};
+
+          sif_real co[3] = {res->cx, res->cy, res->cz};
+          const sif_real r =
+            sif__exodus_hill(&oc, co, res->r_seed, &ctx.scratch[tid]);
+          if (r < 0.0f) {
+            res->rescale_reason = RESCALE_BEYOND_SEARCH;
+            res->status = BATCH_REJECTED_RESCALE;
+            continue;
+          }
+          res->r_scaled = r;
+          if (co[0] == res->cx && co[1] == res->cy && co[2] == res->cz)
+            continue;
+
+          /* The overlap tests of the commit read the node nearest the centre,
+           * within half a cell of it on every axis, as a refined candidate's
+           * is. */
+          res->sx = res->cx;
+          res->sy = res->cy;
+          res->sz = res->cz;
+          res->six = res->ix;
+          res->siy = res->iy;
+          res->siz = res->iz;
+          const uint32_t n = grid->n_cells;
+          const sif_real l = grid->cell_length;
+          const uint32_t node[3] = {(uint32_t)(co[0] / l + 0.5f) % n,
+            (uint32_t)(co[1] / l + 0.5f) % n, (uint32_t)(co[2] / l + 0.5f) % n};
+          sif_real off2 = 0.0f;
+          for (int a = 0; a < 3; a++) {
+            sif_real d = co[a] - (sif_real)node[a] * l;
+            if (d > 0.5f * grid->box_length)
+              d -= grid->box_length;
+            off2 += d * d;
+          }
+          res->ix = node[0];
+          res->iy = node[1];
+          res->iz = node[2];
+          res->cx = co[0];
+          res->cy = co[1];
+          res->cz = co[2];
+          res->off = SIF_REAL_SQRT(off2);
+          res->moved = 1;
+        }
       }
 
       const double t_evaluated = wall_s();
@@ -1982,34 +2125,44 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
          * below go on to decide about the void itself. */
         sif__exodus_rescale_report_add(&rescale, res->r_scaled / radius);
 
-        /* Under displacement a void is refused only by a larger one, and
-         * displaces the smaller ones it collides with; see find_conflicts().
-         * Phases 0 and 1 tested the candidate against the catalogue as the
-         * batch began, and the displacement below can take out a void those
-         * tests would have refused it by, so they are repeated against the
-         * catalogue as it stands: the outcome is then the one a strictly
-         * sequential pass would give, however the batches fell. The mask
-         * tests further down would refuse a void without asking which is
-         * larger, so they are left to the runs without it. */
-        if (ctx.displace) {
+        /* Phases 0 and 1 tested the candidate against the catalogue as the
+         * batch began. Those tests are subsumed by the ones further down
+         * unless the centre has since moved, or a displacement can take out a
+         * void they would have refused it by; then they are repeated at the
+         * centre they judged, against the catalogue as it stands, so that the
+         * outcome is the one a strictly sequential pass would give, however
+         * the batches fell. */
+        if (ctx.displace || res->moved) {
+          const sif_real sx = res->moved ? res->sx : res->cx;
+          const sif_real sy = res->moved ? res->sy : res->cy;
+          const sif_real sz = res->moved ? res->sz : res->cz;
+          const uint32_t six = res->moved ? res->six : res->ix;
+          const uint32_t siy = res->moved ? res->siy : res->iy;
+          const uint32_t siz = res->moved ? res->siz : res->iz;
           if (masked_overlap(&ctx, ctx.batch_indices[b], radius,
                 overlap_fraction, grid->cell_length)) {
             stats.rejected_masked++;
             continue;
           }
           if (proxy_pole > 0 &&
-              sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask,
-                res->ix, res->iy, res->iz, (uint32_t)proxy_pole)) {
+              sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, six,
+                siy, siz, (uint32_t)proxy_pole)) {
             stats.rejected_proxy++;
             continue;
           }
-          if (sif__overlap_exact(ctx.cat, res->cx, res->cy, res->cz, radius,
+          if (sif__overlap_exact(ctx.cat, sx, sy, sz, radius,
                 ctx.max_accepted_r, grid->box_length, ctx.void_cll,
                 grid->p2_mask, overlap_fraction, ctx.overlap_scale)) {
             stats.rejected_overlap++;
             continue;
           }
+        }
 
+        /* Under displacement a void is refused only by a larger one, and
+         * displaces the smaller ones it collides with; see find_conflicts().
+         * The mask tests further down would refuse a void without asking
+         * which is larger, so they are left to the runs without it. */
+        if (ctx.displace) {
           sif_real largest;
           status = find_conflicts(&ctx, res->cx, res->cy, res->cz,
             res->r_scaled, overlap_fraction, grid->box_length, &largest);
@@ -2042,8 +2195,15 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           goto accept;
         }
 
-        if (masked_overlap(&ctx, ctx.batch_indices[b], res->r_scaled,
-              overlap_fraction, grid->cell_length)) {
+        const int masked =
+          res->moved
+            ? masked_overlap_at(&ctx,
+                ((uint64_t)res->ix * grid->n_cells + res->iy) * grid->n_cells +
+                  res->iz,
+                res->off, res->r_scaled, overlap_fraction)
+            : masked_overlap(&ctx, ctx.batch_indices[b], res->r_scaled,
+                overlap_fraction, grid->cell_length);
+        if (masked) {
           stats.rejected_masked++;
           continue;
         }
@@ -2097,7 +2257,9 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
        * overshot. */
       const uint64_t n_accepted = stats.accepted - accepted_before;
 
-      if (n_accepted == 0) {
+      if (pin_batch) {
+        /* see batch_cap */
+      } else if (n_accepted == 0) {
         batch_cap += batch_floor;
         if (batch_cap > BATCH_MAX)
           batch_cap = BATCH_MAX;
@@ -2133,6 +2295,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
     sif__exodus_template_free(&tpl);
     sif__exodus_template_free(&rtpl);
+    sif__exodus_template_free(&otpl);
 
     sif_timer_stop(&timer);
 
@@ -2175,6 +2338,8 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
 
   for (uint32_t k = 0; k < n_ext; k++)
     sif__exodus_template_free(&etpl[k]);
+  for (uint32_t k = 0; k < n_ext; k++)
+    sif__exodus_template_free(&eotpl[k]);
 
   /* Restored after a failure too: the caller gets back the grid they gave,
    * not the last rung's smoothing of it. */

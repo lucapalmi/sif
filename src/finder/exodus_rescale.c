@@ -13,6 +13,7 @@
 
 #include <math.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "sif/core/macros.h"
@@ -122,6 +123,11 @@ void sif__exodus_scratch_free(radial_scratch_t* s) {
   sif_free_aligned(s->rbins);
   sif_free_aligned(s->refine);
   sif_free_aligned(s->pairs);
+  sif_real* const opt[8] = {
+    s->ox, s->oy, s->oz, s->od, s->tx, s->ty, s->tz, s->td};
+  for (int k = 0; k < 8; k++)
+    sif_free_aligned(opt[k]);
+  free(s->obin);
   memset(s, 0, sizeof(*s));
 }
 
@@ -1158,6 +1164,715 @@ int sif__exodus_witness(const sif_chain_mesh_t* mesh, sif_real cx, sif_real cy,
   }
 
   return 1;
+}
+
+/* --- Centre climb --- */
+
+/*
+ * SIF_FINDER_REFINE_HILL moves a void to the point near its candidate
+ * centre at which the crossing radius is largest.
+ *
+ * Such a point is what the void definition asks for. Write D(x, R) for the
+ * contrast inside the sphere of radius R about x and R(x) for the crossing,
+ * D(x, R(x)) = threshold. Then grad R = -grad_x D / (dD/dR), and at an outer
+ * crossing dD/dR > 0: R is stationary exactly where x is stationary in the
+ * field smoothed at R(x), and a maximum of R is a minimum of that field. The
+ * grid's candidate is only a starting point; the climb finishes the job on
+ * the tracers, at the void's own radius.
+ *
+ * What a trial costs is what matters, and a trial only needs the tracers
+ * near the sphere's surface. The tracers in a shell about the reference
+ * centre are gathered once and grouped into thin radial bins. For a trial
+ * a distance tau from the reference, every tracer in a bin wholly below
+ * best - tau is inside the trial sphere of any radius at least `best`, and
+ * every one in a bin wholly above best + h + tau is outside the sphere of
+ * best + h; only the bins in between are measured, so a trial costs the
+ * tracers in a band of thickness h + 2 tau rather than the shell's. The
+ * crossing is looked for in [best, best + h], which is all a trial has to
+ * decide -- whether it beats the current radius, and by how much -- with h
+ * doubled while the sphere of best + h is still underdense. When the climb
+ * has moved away from the reference, the store is re-binned about the new
+ * point in memory; when it has moved past what the store covers, it is
+ * gathered again. A trial the store cannot answer is measured by a full
+ * rescaling.
+ *
+ * The search is deterministic. From the current centre it first steps
+ * against the surface dipole -- the unit vectors to the tracers within
+ * OPT_SURFACE of the current radius: the side with more of them is the side
+ * the sphere is pressed against -- doubling the step while that keeps
+ * winning. When it does not, the six axis steps are tried, the best taken if
+ * it strictly beats the current radius, and the step is halved when none
+ * does, down to OPT_STEP_MIN of the radius.
+ *
+ * A centre that moved is rescaled once at its final position, and that is
+ * the radius reported: the outermost crossing out to r_search, as the
+ * rescaling defines it, which a band about the current radius cannot rule
+ * on. A crossing beyond r_search there means the void the candidate climbed
+ * to belongs to a larger rung, and the candidate is rejected the way a
+ * rescaling past its reach is.
+ */
+/* How far past the current radius the store reaches, as a fraction of it:
+ * room for the radius to grow without a trial running off the store. */
+#define OPT_STEP0       0.10f
+#define OPT_STEP_MAX    0.20f
+#define OPT_STEP_MIN    0.01f
+#define OPT_SURFACE     0.05f
+#define OPT_MAX_GATHERS 6u
+#define OPT_PER_BIN     32u
+/* Tracers one thread may hold for a shell. A shell that needs more is not
+ * optimised; at a radius that large the grid has placed the centre to a
+ * small fraction of it anyway. */
+#define OPT_MAX_SHELL (1u << 23)
+
+/* What a trial can come back as, besides a radius. */
+#define OPT_NONE    (-1.0f) /* no crossing in [best, best + h]: no better */
+#define OPT_ESCAPE  (-2.0f) /* the sphere of best + h is still underdense */
+#define OPT_INVALID (-3.0f) /* the band reaches past what the store holds */
+#define OPT_BEYOND  (-4.0f) /* the crossing lies beyond r_search */
+
+/* The store: tracers in (r_in, r_out] about the reference centre, as
+ * positions relative to it, grouped by n_bins radial bins of width bin_w,
+ * bin b starting at bin_start[b]; and how many lie within r_in. */
+typedef struct {
+  uint64_t n_inner;
+  sif_real r_in, r_out, bin_w;
+  uint32_t n_bins;
+} opt_store_t;
+
+static int opt_reserve(radial_scratch_t* s, uint64_t needed) {
+  if (needed <= s->opt_capacity)
+    return SIF_OK;
+  if (needed > OPT_MAX_SHELL)
+    return SIF_ERR_RANGE;
+
+  uint64_t cap = s->opt_capacity ? s->opt_capacity : 4096u;
+  while (cap < needed)
+    cap *= 2;
+  if (cap > OPT_MAX_SHELL)
+    cap = OPT_MAX_SHELL;
+
+  sif_real** bufs[8] = {
+    &s->ox, &s->oy, &s->oz, &s->od, &s->tx, &s->ty, &s->tz, &s->td};
+  for (int k = 0; k < 8; k++) {
+    sif_real* grown = sif_malloc_aligned((size_t)cap * sizeof(sif_real));
+    if (!grown)
+      return SIF_ERR_ALLOC;
+    /* Only the building buffers carry anything across a growth. */
+    if (k >= 4 && s->opt_building)
+      memcpy(grown, *bufs[k], (size_t)s->opt_building * sizeof(sif_real));
+    sif_free_aligned(*bufs[k]);
+    *bufs[k] = grown;
+  }
+  s->opt_capacity = (uint32_t)cap;
+  return SIF_OK;
+}
+
+/* Groups the opt_building tracers of the building buffers into the store's
+ * bins over (st->r_in, st->r_out]. */
+static int opt_bucket(radial_scratch_t* s, opt_store_t* st) {
+  const uint32_t m = s->opt_building;
+  uint32_t nb = m / OPT_PER_BIN;
+  if (nb < 16)
+    nb = 16;
+  if (nb > (1u << 16))
+    nb = 1u << 16;
+  if (nb + 1 > s->obin_capacity) {
+    uint32_t* grown = realloc(s->obin, (size_t)(nb + 1) * sizeof(uint32_t));
+    if (!grown)
+      return SIF_ERR_ALLOC;
+    s->obin = grown;
+    s->obin_capacity = nb + 1;
+  }
+  st->n_bins = nb;
+  st->bin_w = (st->r_out - st->r_in) / (sif_real)nb;
+  const sif_real inv_w = 1.0f / st->bin_w;
+
+  uint32_t* start = s->obin;
+  memset(start, 0, (size_t)(nb + 1) * sizeof(uint32_t));
+  for (uint32_t i = 0; i < m; i++) {
+    int32_t b = (int32_t)((s->td[i] - st->r_in) * inv_w);
+    b = b < 0 ? 0 : (b >= (int32_t)nb ? (int32_t)nb - 1 : b);
+    start[b + 1]++;
+  }
+  for (uint32_t b = 0; b < nb; b++)
+    start[b + 1] += start[b];
+
+  /* Scatter in input order, so the grouping is a fixed function of it. A
+   * cursor per bin, kept in the building distances' place once read. */
+  for (uint32_t i = 0; i < m; i++) {
+    int32_t b = (int32_t)((s->td[i] - st->r_in) * inv_w);
+    b = b < 0 ? 0 : (b >= (int32_t)nb ? (int32_t)nb - 1 : b);
+    const uint32_t j = start[b]++;
+    s->ox[j] = s->tx[i];
+    s->oy[j] = s->ty[i];
+    s->oz[j] = s->tz[i];
+    s->od[j] = s->td[i];
+  }
+  /* The cursors now sit at each bin's end, i.e. the next bin's start. */
+  memmove(start + 1, start, (size_t)nb * sizeof(uint32_t));
+  start[0] = 0;
+
+  s->opt_count = m;
+  s->opt_building = 0;
+  return SIF_OK;
+}
+
+/* Appends a tracer at (x, y, z) relative to the reference, d from it, to the
+ * building buffers. */
+static SIF_ALWAYS_INLINE int opt_append(
+  radial_scratch_t* s, sif_real x, sif_real y, sif_real z, sif_real d) {
+  if (s->opt_building >= s->opt_capacity) {
+    const int status = opt_reserve(s, (uint64_t)s->opt_building + 1);
+    if (status != SIF_OK)
+      return status;
+  }
+  const uint32_t k = s->opt_building++;
+  s->tx[k] = x;
+  s->ty[k] = y;
+  s->tz[k] = z;
+  s->td[k] = d;
+  return SIF_OK;
+}
+
+/*
+ * Fills the store from the mesh: the tracers about (cx, cy, cz) within r_in
+ * counted, those in (r_in, r_out] kept. `tpl` must reach r_out.
+ *
+ * @return SIF_OK, SIF_ERR_RANGE for a shell past OPT_MAX_SHELL, or
+ * SIF_ERR_ALLOC
+ */
+static int opt_gather(const sif_chain_mesh_t* mesh, const mesh_template_t* tpl,
+  sif_real cx, sif_real cy, sif_real cz, radial_scratch_t* s,
+  opt_store_t* st) {
+
+  const sif_real* mx = SIF_ASSUME_ALIGNED(mesh->x);
+  const sif_real* my = SIF_ASSUME_ALIGNED(mesh->y);
+  const sif_real* mz = SIF_ASSUME_ALIGNED(mesh->z);
+  const sif_real inv_l = 1.0f / mesh->cell_length;
+  const mesh_query_t q = {
+    .mesh = mesh,
+    .tpl = tpl,
+    .cx = cx,
+    .cy = cy,
+    .cz = cz,
+    .centre_ix = (int32_t)(cx * inv_l),
+    .centre_iy = (int32_t)(cy * inv_l),
+    .centre_iz = (int32_t)(cz * inv_l),
+    .n_cells = (int32_t)mesh->n_cells,
+    .box_length = mesh->box_length,
+  };
+  const sif_real r_in2 = st->r_in > 0.0f ? st->r_in * st->r_in : 0.0f;
+  const sif_real r_out2 = st->r_out * st->r_out;
+
+  s->opt_building = 0;
+  st->n_inner = 0;
+  for (uint32_t i = 0; i < tpl->count; i++) {
+    if (tpl->min_d2[i] > r_out2)
+      continue;
+
+    uint64_t p_start, p_end, flat;
+    sif_real ex, ey, ez;
+    if (!query_cell(&q, i, &p_start, &p_end, &flat, &ex, &ey, &ez))
+      continue;
+
+    if (tpl->max_d2[i] <= r_in2) {
+      st->n_inner += p_end - p_start;
+      continue;
+    }
+
+    const int status =
+      opt_reserve(s, (uint64_t)s->opt_building + (p_end - p_start));
+    if (status != SIF_OK)
+      return status;
+
+    for (uint64_t p = p_start; p < p_end; p++) {
+      const sif_real d2 = dist2(mx[p], my[p], mz[p], ex, ey, ez);
+      if (d2 <= r_in2) {
+        st->n_inner++;
+      } else if (d2 <= r_out2) {
+        const uint32_t k = s->opt_building++;
+        s->tx[k] = mx[p] - ex;
+        s->ty[k] = my[p] - ey;
+        s->tz[k] = mz[p] - ez;
+        s->td[k] = SIF_REAL_SQRT(d2);
+      }
+    }
+  }
+  return opt_bucket(s, st);
+}
+
+/*
+ * Re-bins the store about the reference shifted by t, |t| = tau: what it
+ * still covers there is (r_in + tau, r_out - tau]. No mesh pass.
+ */
+static int opt_recentre(
+  radial_scratch_t* s, opt_store_t* st, const sif_real t[3], sif_real tau) {
+  const sif_real r_in = st->r_in + tau;
+  const sif_real r_out = st->r_out - tau;
+  s->opt_building = 0;
+  for (uint32_t i = 0; i < s->opt_count; i++) {
+    const sif_real x = s->ox[i] - t[0];
+    const sif_real y = s->oy[i] - t[1];
+    const sif_real z = s->oz[i] - t[2];
+    const sif_real d = SIF_REAL_SQRT(x * x + y * y + z * z);
+    if (d <= r_in) {
+      st->n_inner++;
+    } else if (d <= r_out) {
+      const int status = opt_append(s, x, y, z, d);
+      if (status != SIF_OK)
+        return status;
+    }
+  }
+  st->r_in = r_in;
+  st->r_out = r_out;
+  return opt_bucket(s, st);
+}
+
+/* The store's bin holding distance d, clamped. */
+static inline int32_t opt_bin(const opt_store_t* st, sif_real d) {
+  int32_t b = (int32_t)SIF_REAL_FLOOR((d - st->r_in) / st->bin_w);
+  return b < 0 ? 0 : (b >= (int32_t)st->n_bins ? (int32_t)st->n_bins - 1 : b);
+}
+
+/*
+ * The outermost tracer distance in [best, best + h] about the reference
+ * shifted by t at which the enclosed count passes, walked outside-in as
+ * resolve_bin() walks it; or OPT_NONE, OPT_ESCAPE or OPT_INVALID.
+ */
+/* The band's bins in opt_eval(), uniform in squared distance. */
+#define OPT_EVAL_PER_BIN 16u
+static SIF_ALWAYS_INLINE uint32_t opt_eval_bin(
+  sif_real d2, sif_real lo2, sif_real inv_w, uint32_t nb) {
+  const int32_t b = (int32_t)((d2 - lo2) * inv_w);
+  return b < 0 ? 0u : (b >= (int32_t)nb ? nb - 1u : (uint32_t)b);
+}
+
+static sif_real opt_eval(radial_scratch_t* s, const opt_store_t* st,
+  const sif_real t[3], sif_real best, sif_real h, sif_real K2) {
+
+  const sif_real tau = SIF_REAL_SQRT(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+  const sif_real lo = best - tau;
+  const sif_real hi = best + h + tau;
+  if (lo < st->r_in || hi > st->r_out)
+    return OPT_INVALID;
+
+  /* Bins wholly below lo are inside; a bin's lower edge is where it
+   * starts, so the band starts at lo's bin, and ends at hi's. */
+  const int32_t b_lo = opt_bin(st, lo);
+  const int32_t b_hi = opt_bin(st, hi);
+  uint64_t below = st->n_inner + s->obin[b_lo];
+
+  const sif_real best2 = best * best;
+  const sif_real top = best + h;
+  const sif_real top2 = top * top;
+
+  /* Room for the whole band up front, so the loop writes every distance and
+   * only advances past those inside (best, top]: no branch, no growth check.
+   * Nothing in the buffer is kept across the growth. */
+  const uint32_t first = s->obin[b_lo], last = s->obin[b_hi + 1];
+  s->refine_count = 0;
+  if (refine_reserve(s, last - first + 1, 0) != SIF_OK)
+    return OPT_INVALID;
+  sif_real* restrict out = s->refine;
+  const sif_real* restrict ox = s->ox;
+  const sif_real* restrict oy = s->oy;
+  const sif_real* restrict oz = s->oz;
+  uint32_t m = 0;
+  uint32_t n_below = 0;
+  for (uint32_t i = first; i < last; i++) {
+    const sif_real d2 = dist2(ox[i], oy[i], oz[i], t[0], t[1], t[2]);
+    n_below += d2 < best2;
+    out[m] = d2;
+    m += (d2 >= best2) & (d2 <= top2);
+  }
+  below += n_below;
+
+  uint64_t current_N = below + m;
+  {
+    const sif_real n = (sif_real)current_N;
+    if (n * n <= K2 * top2 * top2 * top2)
+      return OPT_ESCAPE;
+  }
+  /* The walk from the top of the band, as the rescaling does it: binned in
+   * squared distance, a bin skipped when even its best case -- a tracer at
+   * its upper edge with only what lies below the bin inside -- is too dense,
+   * and only the bin that may hold the crossing sorted. */
+  const uint32_t nb = m / OPT_EVAL_PER_BIN < MAX_RADIAL_BINS
+                        ? (m / OPT_EVAL_PER_BIN > 1 ? m / OPT_EVAL_PER_BIN : 1)
+                        : MAX_RADIAL_BINS;
+  const sif_real span = top2 - best2;
+  const sif_real inv_w = span > 0.0f ? (sif_real)nb / span : 0.0f;
+  uint32_t* bins = s->bins;
+  memset(bins, 0, (size_t)nb * sizeof(uint32_t));
+  for (uint32_t i = 0; i < m; i++)
+    bins[opt_eval_bin(s->refine[i], best2, inv_w, nb)]++;
+
+  sif_real* r = s->refine;
+  uint32_t live = m; /* the bins not yet resolved occupy r[0, live) */
+  for (int32_t b = (int32_t)nb - 1; b >= 0; b--) {
+    const uint32_t cnt = bins[b];
+    if (cnt == 0)
+      continue;
+    const uint64_t n_below_bin = current_N - cnt;
+    const sif_real hi = b == (int32_t)nb - 1
+                          ? top2
+                          : (best2 + (sif_real)(b + 1) * span / (sif_real)nb) *
+                              (1.0f + 1e-6f);
+    const sif_real nbb = (sif_real)n_below_bin;
+    if (nbb * nbb > K2 * hi * hi * hi) {
+      current_N -= cnt;
+      continue;
+    }
+    /* Bring the bin's tracers to the end of the live range and walk them
+     * from the top. */
+    uint32_t end = live;
+    for (uint32_t i = 0; i < end;) {
+      if (opt_eval_bin(r[i], best2, inv_w, nb) == (uint32_t)b) {
+        const sif_real tmp = r[--end];
+        r[end] = r[i];
+        r[i] = tmp;
+      } else {
+        i++;
+      }
+    }
+    sort_real_asc(r + end, live - end);
+    for (int64_t k = (int64_t)live - 1; k >= (int64_t)end; k--) {
+      const sif_real d2 = r[k];
+      const sif_real n_in = (sif_real)(current_N - 1);
+      if (n_in * n_in <= K2 * d2 * d2 * d2)
+        return SIF_REAL_SQRT(d2);
+      current_N--;
+    }
+    live = end;
+  }
+  return OPT_NONE;
+}
+
+/* The direction against the surface dipole about the reference shifted by
+ * t, at radius r: the unit vectors to the stored tracers within w of r,
+ * summed, negated and normalised. 0 if there are none, or they cancel. */
+static int opt_direction(const radial_scratch_t* s, const opt_store_t* st,
+  const sif_real t[3], sif_real r, sif_real w, sif_real u[3]) {
+
+  const sif_real tau = SIF_REAL_SQRT(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+  const int32_t b_lo = opt_bin(st, r - w - tau);
+  const int32_t b_hi = opt_bin(st, r + w + tau);
+  const sif_real lo2 = (r - w) * (r - w);
+  const sif_real hi2 = (r + w) * (r + w);
+  double g[3] = {0.0, 0.0, 0.0};
+  for (uint32_t i = s->obin[b_lo]; i < s->obin[b_hi + 1]; i++) {
+    const sif_real dx = s->ox[i] - t[0];
+    const sif_real dy = s->oy[i] - t[1];
+    const sif_real dz = s->oz[i] - t[2];
+    const sif_real d2 = dx * dx + dy * dy + dz * dz;
+    if (d2 < lo2 || d2 > hi2 || d2 == 0.0f)
+      continue;
+    const double inv = 1.0 / sqrt((double)d2);
+    g[0] += dx * inv;
+    g[1] += dy * inv;
+    g[2] += dz * inv;
+  }
+  const double norm = sqrt(g[0] * g[0] + g[1] * g[1] + g[2] * g[2]);
+  if (!(norm > 0.0))
+    return 0;
+  for (int a = 0; a < 3; a++)
+    u[a] = (sif_real)(-g[a] / norm);
+  return 1;
+}
+
+static inline sif_real opt_wrap(sif_real x, sif_real box) {
+  if (x < 0.0f)
+    x += box;
+  if (x >= box)
+    x -= box;
+  return x;
+}
+
+/* A trial the store cannot answer: a full rescaling at ref + t. */
+static sif_real opt_rescale(
+  const exodus_climb_t* oc, radial_scratch_t* s, const sif_real ref[3],
+  const sif_real t[3]) {
+  const sif_real box = oc->mesh->box_length;
+  uint8_t why;
+  const sif_real r = sif__exodus_find_radius(oc->mesh, opt_wrap(ref[0] + t[0], box),
+    opt_wrap(ref[1] + t[1], box), opt_wrap(ref[2] + t[2], box), oc->r_search,
+    oc->threshold, oc->vol_factor, s, oc->rmin, oc->tpl, oc->window, &why);
+  if (r >= 0.0f)
+    return r;
+  return why == RESCALE_BEYOND_SEARCH ? OPT_BEYOND : OPT_NONE;
+}
+
+/* The radius at ref + t if it beats `best`, OPT_NONE if it does not, or
+ * OPT_BEYOND: the band first, widened while the crossing escapes it, then a
+ * full rescaling if the store runs out. */
+static sif_real opt_trial(const exodus_climb_t* oc, radial_scratch_t* s,
+  const opt_store_t* st, const sif_real ref[3], const sif_real t[3],
+  sif_real best, sif_real h) {
+  for (;;) {
+    const sif_real v = opt_eval(s, st, t, best, h, oc->K2);
+    if (v == OPT_ESCAPE) {
+      h *= 2.0f;
+      continue;
+    }
+    if (v == OPT_INVALID)
+      return opt_rescale(oc, s, ref, t);
+    return v;
+  }
+}
+
+/*
+ * Moves c to the point near it where the crossing radius is largest,
+ * starting from the radius r0 the rescaling measured at c, and returns the
+ * radius there. Returns r0 with c unchanged if no move improves on it, or if
+ * the shell is too large to hold; -1 if the climb reaches a point whose
+ * crossing lies beyond even the extended reach -- past the top of the ladder.
+ *
+ * A crossing past this rung's reach is not a reason to stop: every larger
+ * rung has already run, so nothing later would measure the void, and whether
+ * it stands is the overlap test's to say, at the caller's overlap fraction.
+ * The climb carries on with the reach extended a level at a time along
+ * oc->ext, gathering its shell again for each.
+ */
+static sif_real climb_centre(const exodus_climb_t* oc, sif_real c[3], sif_real r0,
+  radial_scratch_t* s) {
+
+  const sif_real box = oc->mesh->box_length;
+  const sif_real step_min = OPT_STEP_MIN * r0;
+  const sif_real step_max = OPT_STEP_MAX * r0;
+
+  const exodus_climb_t* o = oc;
+  while (r0 > o->r_search && o->ext)
+    o = o->ext;
+  sif_real ref[3] = {c[0], c[1], c[2]};
+  sif_real t[3] = {0.0f, 0.0f, 0.0f};
+  sif_real best = r0;
+  sif_real step = OPT_STEP0 * r0;
+  int moved = 0;
+  uint32_t gathers = 0;
+  int need_gather = 1;
+  opt_store_t st;
+
+  while (step >= step_min) {
+    const sif_real tau = SIF_REAL_SQRT(t[0] * t[0] + t[1] * t[1] + t[2] * t[2]);
+
+    /* Keep the reference close to the climb, so bands stay thin. */
+    if (!need_gather && tau > 2.0f * step) {
+      if (st.r_in + tau <= best - 3.0f * step &&
+          st.r_out - tau >= best + 8.0f * step) {
+        if (opt_recentre(s, &st, t, tau) != SIF_OK)
+          break;
+        for (int a = 0; a < 3; a++)
+          ref[a] = opt_wrap(ref[a] + t[a], box);
+        t[0] = t[1] = t[2] = 0.0f;
+      } else {
+        for (int a = 0; a < 3; a++)
+          ref[a] = opt_wrap(ref[a] + t[a], box);
+        t[0] = t[1] = t[2] = 0.0f;
+        need_gather = 1;
+      }
+    }
+    if (need_gather) {
+      if (gathers++ >= OPT_MAX_GATHERS)
+        break;
+      st.r_in = best - SIF__EXODUS_CLIMB_REACH * best;
+      st.r_out = SIF_REAL_MIN(best + SIF__EXODUS_CLIMB_HEADROOM * best,
+        o->r_search + SIF__EXODUS_CLIMB_REACH * best);
+      if (opt_gather(o->mesh, o->otpl, ref[0], ref[1], ref[2], s, &st) !=
+          SIF_OK)
+        break;
+      need_gather = 0;
+    }
+
+    const sif_real h = step;
+
+    /* First against the surface dipole, doubling while that wins; then the
+     * six axis steps. */
+    sif_real tr[3];
+    sif_real v = OPT_NONE;
+    int won = 0;
+    sif_real u[3];
+    if (opt_direction(s, &st, t, best, OPT_SURFACE * best, u)) {
+      for (int a = 0; a < 3; a++)
+        tr[a] = t[a] + step * u[a];
+      v = opt_trial(o, s, &st, ref, tr, best, h);
+      won = v > best || v == OPT_BEYOND;
+    }
+    if (won && v != OPT_BEYOND) {
+      best = v;
+      t[0] = tr[0];
+      t[1] = tr[1];
+      t[2] = tr[2];
+      moved = 1;
+      step = SIF_REAL_MIN(2.0f * step, step_max);
+      continue;
+    }
+    if (!won) {
+      sif_real top = best;
+      int top_dir = -1;
+      for (int d = 0; d < 6 && v != OPT_BEYOND; d++) {
+        sif_real tt[3] = {t[0], t[1], t[2]};
+        tt[d >> 1] += (d & 1) ? -step : step;
+        const sif_real vv = opt_trial(o, s, &st, ref, tt, best, h);
+        if (vv == OPT_BEYOND) {
+          v = vv;
+          tr[0] = tt[0];
+          tr[1] = tt[1];
+          tr[2] = tt[2];
+        } else if (vv > top) {
+          top = vv;
+          top_dir = d;
+        }
+      }
+      if (v != OPT_BEYOND) {
+        if (top_dir >= 0) {
+          t[top_dir >> 1] += (top_dir & 1) ? -step : step;
+          best = top;
+          moved = 1;
+          continue;
+        }
+        step *= 0.5f;
+        continue;
+      }
+    }
+
+    /* A trial whose crossing lies past this reach: measure it with the next
+     * level out, and the one after while it is still past, move there -- it
+     * beats anything within the reach -- and climb on from it with a shell
+     * gathered for the larger radius. */
+    sif_real ve = OPT_BEYOND;
+    while (ve == OPT_BEYOND && o->ext) {
+      o = o->ext;
+      ve = opt_rescale(o, s, ref, tr);
+    }
+    if (ve > best) {
+      for (int a = 0; a < 3; a++)
+        ref[a] = opt_wrap(ref[a] + tr[a], box);
+      t[0] = t[1] = t[2] = 0.0f;
+      best = ve;
+      moved = 1;
+      need_gather = 1;
+      continue;
+    }
+    if (ve != OPT_BEYOND) {
+      need_gather = 1; /* the store was gathered for the old reach */
+      step *= 0.5f;
+      continue;
+    }
+    return -1.0f;
+  }
+
+  if (!moved)
+    return r0;
+
+  sif_real fin[3];
+  for (int a = 0; a < 3; a++)
+    fin[a] = opt_wrap(ref[a] + t[a], box);
+  const sif_real zero[3] = {0.0f, 0.0f, 0.0f};
+  sif_real rf = opt_rescale(o, s, fin, zero);
+  while (rf == OPT_BEYOND && o->ext) {
+    o = o->ext;
+    rf = opt_rescale(o, s, fin, zero);
+  }
+  if (rf == OPT_BEYOND)
+    return -1.0f;
+  if (!(rf >= r0))
+    return r0;
+  c[0] = fin[0];
+  c[1] = fin[1];
+  c[2] = fin[2];
+  return rf;
+}
+
+/* From a climb's end, the search for a better peak nearby: R(x) is rough at
+ * the scale of the tracers, so a climb stops on whichever bump it meets first.
+ * OPT_SEARCH_DIRS probes at OPT_SEARCH_DIST of the radius, and a new climb from
+ * the best of them, kept if it ends OPT_SEARCH_GAIN higher, up to
+ * OPT_SEARCH_ROUNDS times. A probe is measured on the store from well below the
+ * radius: most lie lower than the peak, and may lie under the rung, which a
+ * rescaling would refuse. */
+#define OPT_SEARCH_DIST   0.30f
+#define OPT_SEARCH_FLOOR  0.70f
+#define OPT_SEARCH_ROUNDS 3
+#define OPT_SEARCH_GAIN   1.001f
+#define OPT_SEARCH_DIRS   26
+
+/* The radius at c shifted by OPT_SEARCH_DIST of `best` along each of the 26
+ * directions to a cube's faces, edges and corners: the highest in *top, its
+ * direction in `dir`. 0 if none has a crossing the search can use. */
+static int opt_probe(const exodus_climb_t* oc, radial_scratch_t* s,
+  const sif_real c[3], sif_real best, sif_real dir[3], sif_real* top) {
+
+  const exodus_climb_t* o = oc;
+  while (best > o->r_search && o->ext)
+    o = o->ext;
+
+  /* Inside the band a probe can reach: down to the floor less the shift, out
+   * to the radius plus the shift. */
+  opt_store_t st;
+  st.r_in = (OPT_SEARCH_FLOOR - OPT_SEARCH_DIST) * best * 0.9f;
+  st.r_out = SIF_REAL_MIN(best + SIF__EXODUS_CLIMB_HEADROOM * best,
+    o->r_search + SIF__EXODUS_CLIMB_REACH * best);
+  if (opt_gather(o->mesh, o->otpl, c[0], c[1], c[2], s, &st) != SIF_OK)
+    return 0;
+
+  const sif_real shift = OPT_SEARCH_DIST * best;
+  const sif_real floor_r = OPT_SEARCH_FLOOR * best;
+  *top = 0.0f;
+  int found = 0;
+  for (int i = -1; i <= 1; i++)
+    for (int j = -1; j <= 1; j++)
+      for (int k = -1; k <= 1; k++) {
+        if (i == 0 && j == 0 && k == 0)
+          continue;
+        const sif_real inv =
+          1.0f / SIF_REAL_SQRT((sif_real)(i * i + j * j + k * k));
+        const sif_real u[3] = {i * inv, j * inv, k * inv};
+        const sif_real t[3] = {shift * u[0], shift * u[1], shift * u[2]};
+        const sif_real v =
+          opt_trial(o, s, &st, c, t, floor_r, best - floor_r);
+        if (v > *top) {
+          *top = v;
+          dir[0] = u[0];
+          dir[1] = u[1];
+          dir[2] = u[2];
+          found = 1;
+        }
+      }
+  return found;
+}
+
+sif_real sif__exodus_hill(const exodus_climb_t* oc, sif_real c[3],
+  sif_real r0, radial_scratch_t* s) {
+
+  const sif_real box = oc->mesh->box_length;
+  sif_real best = climb_centre(oc, c, r0, s);
+  if (best < 0.0f)
+    return best;
+
+  for (int round = 0; round < OPT_SEARCH_ROUNDS; round++) {
+    sif_real dir[3], v;
+    if (!opt_probe(oc, s, c, best, dir, &v))
+      break;
+
+    sif_real at[3];
+    for (int a = 0; a < 3; a++)
+      at[a] = opt_wrap(c[a] + OPT_SEARCH_DIST * best * dir[a], box);
+
+    /* The radius a catalogue reports is the rescaling's, so what a probe's
+     * climb ends on is only taken from one: a climb that stayed put returned
+     * the probe's own estimate, and one that ran past the top of the ladder
+     * loses nothing the void already has. */
+    const sif_real start[3] = {at[0], at[1], at[2]};
+    const sif_real r = climb_centre(oc, at, v, s);
+    if (r < 0.0f || !(r > best * OPT_SEARCH_GAIN) ||
+        (at[0] == start[0] && at[1] == start[1] && at[2] == start[2]))
+      break;
+    c[0] = at[0];
+    c[1] = at[1];
+    c[2] = at[2];
+    best = r;
+  }
+  return best;
 }
 
 /* --- Survey rescaling --- */
