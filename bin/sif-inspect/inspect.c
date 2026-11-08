@@ -111,7 +111,7 @@ int inspect_file(const char* path, file_kind_t kind, const inspect_opts_t* o) {
     break;
   default:
     fprintf(stderr,
-      "%s: not a kind of file --check recognises (FITS, HDF5, GADGET, "
+      "%s: not a kind of file sif-inspect recognises (FITS, HDF5, GADGET, "
       ".xfield, ASCII, exodus checkpoint); say which with --format\n",
       path);
     return 2;

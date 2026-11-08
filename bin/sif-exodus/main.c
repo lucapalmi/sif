@@ -9,24 +9,21 @@
  *
  *   sif-exodus [-D name=value ...] CONFIG     run
  *   sif-exodus --check [-D ...] CONFIG        resolve and check, do not run
- *   sif-exodus --check FILE                   check a data file or a
- *                                             checkpoint
  *   sif-exodus --template box|survey          a configuration to start from
  *
- * Exit status: 0 on success, 1 when the run fails, 2 when the command line,
- * the configuration or the file checked is wrong -- which --check says
- * without running.
+ * Data files and checkpoints are sif-inspect's to check.
+ *
+ * Exit status: 0 on success, 1 when the run fails, 2 when the command line
+ * or the configuration is wrong -- which --check says without running.
  */
 
 #include "config.h"
-#include "inspect.h"
 #include "pipeline.h"
 
 #include "sif/core/macros.h"
 #include "sif/core/system.h"
 #include "sif/utils/logger.h"
 
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -37,10 +34,10 @@
 static void print_usage(FILE* out) {
   fputs(
     "usage: sif-exodus [options] CONFIG\n"
-    "       sif-exodus --check [options] FILE\n"
     "\n"
     "Run the exodus void finder as CONFIG, a Lua script, describes, or\n"
-    "check a configuration or a data file without running.\n"
+    "check CONFIG without running. sif-inspect checks data files and\n"
+    "checkpoints.\n"
     "\n"
     "options:\n"
     "  -D NAME=VALUE  set NAME to the string VALUE in CONFIG; repeatable\n"
@@ -50,21 +47,8 @@ static void print_usage(FILE* out) {
     "                 output path + .ckpt; run.checkpoint in CONFIG)\n"
     "  --no-checkpoint\n"
     "                 save no progress\n"
-    "  -c, --check    check FILE and stop: a configuration is resolved,\n"
-    "                 checked and printed; a data file (ASCII, FITS,\n"
-    "                 HDF5, GADGET, .xfield) or a checkpoint is checked\n"
-    "                 for problems and summarised\n"
-    "  --deep         with --check, read every value: a data file's\n"
-    "                 ranges, a configuration's inputs as the run would\n"
-    "  --format KIND  with --check, the kind of FILE, instead of telling\n"
-    "                 it from its contents: lua, ascii, fits, hdf5, gadget,\n"
-    "                 xfield or checkpoint\n"
-    "  --columns FMT  with --check on an ASCII file, the column format to\n"
-    "                 check it against, as in a configuration: \"x y z w\"\n"
-    "  --delimiter C  with --check on an ASCII file, the column delimiter\n"
-    "                 (default a blank; \"tab\" for a tab)\n"
-    "  --skip-header N\n"
-    "                 with --check on an ASCII file, lines to skip first\n"
+    "  -c, --check    resolve, check and print CONFIG, and stop\n"
+    "  --deep         with --check, read CONFIG's inputs as the run would\n"
     "  -t, --template MODE\n"
     "                 print a configuration to start from, for MODE box\n"
     "                 or survey, and stop\n"
@@ -86,8 +70,7 @@ int main(int argc, char** argv) {
   config_define_t defines[MAX_DEFINES];
   size_t n_defines = 0;
   bool check_only = false;
-  inspect_opts_t io = {FILE_KIND_AUTO, NULL, '\0', 0, false};
-  bool ascii_options = false;
+  bool deep = false;
   config_overrides_t overrides = {NULL, false};
 
   for (int i = 1; i < argc; i++) {
@@ -134,50 +117,17 @@ int main(int argc, char** argv) {
     } else if (strcmp(arg, "--no-checkpoint") == 0) {
       overrides.no_checkpoint = true;
     } else if (strcmp(arg, "--deep") == 0) {
-      io.deep = true;
-    } else if (strcmp(arg, "--format") == 0) {
-      const char* v = option_value(argc, argv, &i);
-      if (!v)
-        return 2;
-      if (inspect_kind_parse(v, &io.format) != 0) {
-        fprintf(stderr,
-          "sif-exodus: --format %s: expected lua, ascii, fits, hdf5, gadget, "
-          "xfield or checkpoint\n",
-          v);
-        return 2;
-      }
-    } else if (strcmp(arg, "--columns") == 0) {
-      if (!(io.columns = option_value(argc, argv, &i)))
-        return 2;
-      ascii_options = true;
-    } else if (strcmp(arg, "--delimiter") == 0) {
-      const char* v = option_value(argc, argv, &i);
-      if (!v)
-        return 2;
-      if (strcmp(v, "tab") == 0 || strcmp(v, "\\t") == 0)
-        io.delimiter = '\t';
-      else if (strcmp(v, "space") == 0)
-        io.delimiter = ' ';
-      else if (strlen(v) == 1)
-        io.delimiter = v[0];
-      else {
-        fprintf(
-          stderr, "sif-exodus: --delimiter %s: one character, or \"tab\"\n", v);
-        return 2;
-      }
-      ascii_options = true;
-    } else if (strcmp(arg, "--skip-header") == 0) {
-      const char* v = option_value(argc, argv, &i);
-      if (!v)
-        return 2;
-      char* end;
-      const unsigned long n = strtoul(v, &end, 10);
-      if (end == v || *end != '\0' || v[0] == '-' || n > UINT32_MAX) {
-        fprintf(stderr, "sif-exodus: --skip-header %s: a number of lines\n", v);
-        return 2;
-      }
-      io.skip_header = (uint32_t)n;
-      ascii_options = true;
+      deep = true;
+    } else if (strcmp(arg, "--format") == 0 ||
+               strcmp(arg, "--columns") == 0 ||
+               strcmp(arg, "--delimiter") == 0 ||
+               strcmp(arg, "--skip-header") == 0) {
+      /* sif-exodus --check took data files until 0.5. */
+      fprintf(stderr,
+        "sif-exodus: %s: data files are checked by sif-inspect now: "
+        "sif-inspect %s ...\n",
+        arg, arg);
+      return 2;
     } else if (strncmp(arg, "-D", 2) == 0) {
       /* -D NAME=VALUE or -DNAME=VALUE. The name is cut out of argv in place:
        * nothing else reads it. */
@@ -225,60 +175,28 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  if (!check_only &&
-      (io.deep || io.format != FILE_KIND_AUTO || ascii_options)) {
-    fprintf(stderr, "sif-exodus: --deep, --format, --columns, --delimiter and "
-                    "--skip-header go with --check\n");
+  if (!check_only && deep) {
+    fprintf(stderr, "sif-exodus: --deep goes with --check\n");
     return 2;
-  }
-
-  const file_kind_t kind = !check_only ? FILE_KIND_LUA
-                           : io.format != FILE_KIND_AUTO
-                             ? io.format
-                             : inspect_detect(config_path);
-  if (kind != FILE_KIND_LUA &&
-      (overrides.checkpoint || overrides.no_checkpoint)) {
-    fprintf(stderr,
-      "sif-exodus: --checkpoint and --no-checkpoint go with a "
-      "configuration, and %s is %s\n",
-      config_path, inspect_kind_name(kind));
-    return 2;
-  }
-  if (kind != FILE_KIND_LUA && n_defines > 0) {
-    fprintf(stderr, "sif-exodus: -D goes with a configuration, and %s is %s\n",
-      config_path, inspect_kind_name(kind));
-    return 2;
-  }
-  if (kind != FILE_KIND_ASCII && ascii_options) {
-    fprintf(stderr,
-      "sif-exodus: --columns, --delimiter and --skip-header go with an ASCII "
-      "file, and %s is %s\n",
-      config_path, inspect_kind_name(kind));
-    return 2;
-  }
-
-  if (kind != FILE_KIND_LUA) {
-    /* The library's own log carries the problems; its chatter stays out of
-     * the report. */
-    sif_config_t check_lib = {.log_level = SIF_LOG_LEVEL_WARNING};
-    if (sif_system_init(&check_lib) != SIF_OK) {
-      fputs("sif-exodus: could not initialise the library\n", stderr);
-      return 1;
-    }
-    const int code = inspect_file(config_path, kind, &io);
-    sif_system_finalise();
-    return code;
   }
 
   exodus_config_t config;
-  if (config_load(config_path, defines, n_defines, &overrides, &config) != 0)
+  if (config_load(config_path, defines, n_defines, &overrides, &config) != 0) {
+    /* sif-exodus --check took data files until 0.5. */
+    const size_t n = strlen(config_path);
+    if (check_only && (n < 4 || strcmp(config_path + n - 4, ".lua") != 0))
+      fprintf(stderr,
+        "sif-exodus: %s: not a configuration? sif-inspect checks data files "
+        "and checkpoints\n",
+        config_path);
     return 2;
+  }
 
   if (check_only) {
     /* A survey's shape is only known once its files are read, which takes
      * the library, as does reading a box's input for --deep; its own log
      * stays quiet but for what goes wrong. */
-    const bool needs_lib = config.params.mode == EXODUS_MODE_SURVEY || io.deep;
+    const bool needs_lib = config.params.mode == EXODUS_MODE_SURVEY || deep;
     sif_omp_config_t check_omp = {.n_threads = config.run.n_threads};
     sif_config_t check_lib = {.omp_config = &check_omp,
       .log_level = config.run.log_level > SIF_LOG_LEVEL_WARNING
@@ -291,7 +209,7 @@ int main(int argc, char** argv) {
       config_free(&config);
       return 1;
     }
-    const int ok = config_check(&config, config_path, true, io.deep);
+    const int ok = config_check(&config, config_path, true, deep);
     if (needs_lib)
       sif_system_finalise();
     fputs(config.resolved, stdout);

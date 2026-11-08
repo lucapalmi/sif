@@ -80,13 +80,14 @@ for name in ("catalogue.fits", "catalogue.fits.gz"):
                                where="Z < 0.5")
     assert table.n_particles == 80, f"{name}: {table.n_particles} rows"
 
-# The program links every bundled library, so it does not start without
+# The programs link every bundled library, so they do not start without
 # them; --version is enough to find out.
-exodus = os.path.join(sysconfig.get_path("scripts"), "sif-exodus")
-out = subprocess.run([exodus, "--version"], capture_output=True, text=True)
-assert out.returncode == 0, f"sif-exodus --version failed:\n{out.stderr}"
-assert out.stdout.startswith("sif-exodus "), out.stdout
-assert "with FITS" in out.stdout, out.stdout
+for program in ("sif-inspect", "sif-exodus"):
+    exe = os.path.join(sysconfig.get_path("scripts"), program)
+    out = subprocess.run([exe, "--version"], capture_output=True, text=True)
+    assert out.returncode == 0, f"{program} --version failed:\n{out.stderr}"
+    assert out.stdout.startswith(program + " "), out.stdout
+    assert "with FITS" in out.stdout, out.stdout
 
 # The stubs, and the marker without which type checkers ignore them.
 package = os.path.dirname(pysif.__file__)

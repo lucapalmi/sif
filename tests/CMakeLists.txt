@@ -103,8 +103,12 @@ endforeach()
 if(SIF_BUILD_PROGRAMS)
   add_test(NAME test_sif_exodus
     COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/programs/test_sif_exodus.sh
-      $<TARGET_FILE:sif-exodus> ${CMAKE_CURRENT_SOURCE_DIR}/data)
-  set_tests_properties(test_sif_exodus PROPERTIES
+      $<TARGET_FILE:sif-exodus> ${CMAKE_CURRENT_SOURCE_DIR}/data
+      $<TARGET_FILE:sif-inspect>)
+  add_test(NAME test_sif_inspect
+    COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/programs/test_sif_inspect.sh
+      $<TARGET_FILE:sif-inspect> ${CMAKE_CURRENT_SOURCE_DIR}/data)
+  set_tests_properties(test_sif_exodus test_sif_inspect PROPERTIES
     ENVIRONMENT "HOME=${SIF_TEST_HOME};OMP_NUM_THREADS=4"
     TIMEOUT 600
   )

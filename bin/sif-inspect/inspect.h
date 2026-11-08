@@ -4,17 +4,17 @@
  * This file is part of sif. See COPYING for the full license text.
  */
 
-/* `sif-exodus --check FILE`: what kind of file FILE is, and the library's
- * check of it. */
+/* sif-inspect: what kind of file a file is, and the library's check of it. */
 
-#ifndef SIF_EXODUS_INSPECT_H
-#define SIF_EXODUS_INSPECT_H
+#ifndef SIF_INSPECT_INSPECT_H
+#define SIF_INSPECT_INSPECT_H
 
 #include <stdbool.h>
 #include <stdint.h>
 
 typedef enum {
   FILE_KIND_AUTO = 0,
+  /* A sif-exodus configuration, which sif-exodus --check checks. */
   FILE_KIND_LUA,
   FILE_KIND_ASCII,
   FILE_KIND_FITS,
@@ -52,4 +52,4 @@ file_kind_t inspect_detect(const char* path);
  * the exit status: 0 for a sound file, 2 for one with problems. */
 int inspect_file(const char* path, file_kind_t kind, const inspect_opts_t* o);
 
-#endif /* SIF_EXODUS_INSPECT_H */
+#endif /* SIF_INSPECT_INSPECT_H */

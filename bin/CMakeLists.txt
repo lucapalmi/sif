@@ -79,3 +79,4 @@ function(sif_add_program name)
 endfunction()
 
 add_subdirectory(sif-exodus)
+add_subdirectory(sif-inspect)

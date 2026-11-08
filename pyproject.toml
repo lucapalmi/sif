@@ -39,6 +39,7 @@ classifiers = [
 # execv, the program with it (see python/_pysif_cli/__init__.py).
 [project.scripts]
 sif-exodus = "_pysif_cli:exodus"
+sif-inspect = "_pysif_cli:inspect"
 
 [project.urls]
 Homepage = "https://github.com/lucapalmi/sif"

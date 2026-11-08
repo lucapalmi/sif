@@ -127,8 +127,9 @@ about:
     sif finds cosmic voids in simulations and galaxy surveys, and measures
     and models their statistics: size functions, density and velocity
     profiles, the one-point PDF and spectral moments of the density field.
-    pysif is its Python package, with the sif-exodus command-line finder.
-  # Lua is compiled into sif-exodus, from vendor/lua.
+    pysif is its Python package, with the sif-exodus command-line finder
+    and the sif-inspect file checker.
+  # Lua is compiled into the programs, from vendor/lua.
   license: GPL-3.0-or-later AND MIT
   license_file:
     - COPYING

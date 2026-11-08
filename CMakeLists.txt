@@ -94,8 +94,8 @@ else()
 endif()
 option(SIF_BUILD_PYTHON "Build the Python extension (pysif)" ${SIF_PYTHON_DEFAULT})
 
-# The command-line programs in bin/ (sif-exodus). On by default, pip included:
-# a wheel ships them inside pysif, with launchers on PATH.
+# The command-line programs in bin/ (sif-exodus, sif-inspect). On by default,
+# pip included: a wheel ships them inside pysif, with launchers on PATH.
 option(SIF_BUILD_PROGRAMS "Build the command-line programs in bin/" ON)
 
 # Offline data-generation programs. Not part of the library and not built by

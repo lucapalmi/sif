@@ -7,6 +7,11 @@ Current version: v0.5 release 0
 
 ### Changed
 
+- Data files and checkpoints are checked by the new `sif-inspect` program
+  (breaking): `sif-exodus --check` takes a configuration only, and its
+  `--format`, `--columns`, `--delimiter` and `--skip-header` move to
+  `sif-inspect`
+
 - Exodus settings are now independent of each other (breaking): `seeds="minima"`
   is the minima alone, and the old behaviour is `refine_centres="gaussian"`,
   `extend_reach=True` and `displace=True` on top of it

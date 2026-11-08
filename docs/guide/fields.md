@@ -553,17 +553,17 @@ input = {
 
 `inspect_gadget()` and `inspect_fits()` (`sif_gadget_inspect()` and
 `sif_fits_inspect()` in C) print the content of a snapshot or a FITS file.
-`sif-exodus --check` identifies any supported file, checks it without loading
-it and prints a summary; `--deep` also reads every value and reports the range
+The **sif-inspect** program identifies any supported file, checks it without
+loading it and prints a summary; `--deep` also reads every value and reports the range
 of each column. For ASCII tables, `--columns`, `--delimiter` and
 `--skip-header` check the file against a column format.
 
 ```bash
-sif-exodus --check snapdir_010/snap_010
+sif-inspect snapdir_010/snap_010
 ```
 
 ```bash
-sif-exodus --check --deep --columns "* x y z w" --delimiter , --skip-header 1 halos.csv
+sif-inspect --deep --columns "* x y z w" --delimiter , --skip-header 1 halos.csv
 ```
 
 ## Building a field from arrays

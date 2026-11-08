@@ -64,7 +64,7 @@ The library is compiled through CMake. These are the available options
 
 - **SIF_NATIVE_ARCH:** activates the `-march=native` compile flag in Release builds. If the compiled binary is going to be used on machines with different architectures, this option should be turned off. Options **(ON|OFF)**, default **ON**.
 
-- **SIF_BUILD_PROGRAMS:** builds the command-line programs (`sif-exodus`) into `build/bin/`; `cmake --install` puts them in the `bin/` directory of the install prefix. Options **(ON|OFF)**, default **ON**.
+- **SIF_BUILD_PROGRAMS:** builds the command-line programs (`sif-exodus`, `sif-inspect`) into `build/bin/`; `cmake --install` puts them in the `bin/` directory of the install prefix. Options **(ON|OFF)**, default **ON**.
 
 - **SIF_SANITIZE:** builds everything with the given sanitizers, passed to `-fsanitize=` (e.g. `thread`, or `address,undefined`); for development, not for production runs. ThreadSanitizer needs Clang with LLVM's OpenMP runtime, and, when the tests run, `OMP_TOOL_LIBRARIES` set to LLVM's `libarcher` and `TSAN_OPTIONS=ignore_noninstrumented_modules=1`. Default empty (off).
 

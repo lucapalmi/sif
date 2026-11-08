@@ -46,3 +46,7 @@ def _exec(name):
 
 def exodus():
     _exec("sif-exodus")
+
+
+def inspect():
+    _exec("sif-inspect")

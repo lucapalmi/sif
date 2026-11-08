@@ -202,6 +202,10 @@ SIF_DEFINE_QUICKSORT(
  */
 #define BATCH_MAX 4096u
 
+/* How many candidates a batch can hold: a window of new ones, on top of less
+ * than a window of those a displacement sent back to; see phase 0. */
+#define BATCH_ROOM (2u * BATCH_MAX)
+
 /* Below a few candidates per thread the parallel region stops paying for
  * itself, whatever the accept rate says. */
 #define BATCH_PER_THREAD 8u
@@ -257,6 +261,7 @@ typedef struct {
   /* Under SIF_FINDER_REFINE_HILL, a centre that moved: where it started,
    * and how far it ended from its node. */
   uint8_t moved;
+  uint8_t cached; /* taken from an earlier batch of the rung, see remember() */
   sif_real r_seed;
   sif_real sx, sy, sz;
   uint32_t six, siy, siz;
@@ -309,6 +314,14 @@ typedef struct {
 
   batch_result_t* batch_results;
   climb_order_t* batch_order; /* the climbs of a batch, largest first */
+
+  /* Under displacement, the results a batch that ended early never got to, for
+   * the batches after it: result_slot[k] is candidate k's entry in `results`
+   * plus one, or 0. See remember(). */
+  uint32_t* result_slot;
+  uint64_t result_slot_capacity;
+  batch_result_t* results;
+  uint64_t n_results, results_capacity;
   uint64_t* batch_indices;
 
   radial_scratch_t* scratch; /* one per thread */
@@ -397,6 +410,26 @@ static inline void candidate_centre(const exodus_ctx_t* ctx, uint64_t k,
  * The collision distance grows with r, so a rejection at the rung holds at
  * every radius the rescaling can return.
  */
+/*
+ * Keeps what a batch measured past the displacement that ended it. What a
+ * candidate measures -- its rescaling, its climb -- depends on the candidate
+ * alone, unlike the overlap tests around it, so a later batch of the rung takes
+ * these instead of measuring again, and the catalogue is the same either way.
+ */
+static int remember(exodus_ctx_t* ctx, uint64_t k, const batch_result_t* res) {
+  if (ctx->n_results == ctx->results_capacity) {
+    const uint64_t cap = ctx->results_capacity ? 2 * ctx->results_capacity : 1024;
+    batch_result_t* grown = realloc(ctx->results, cap * sizeof(*grown));
+    if (!grown)
+      return SIF_ERR_ALLOC;
+    ctx->results = grown;
+    ctx->results_capacity = cap;
+  }
+  ctx->results[ctx->n_results++] = *res;
+  ctx->result_slot[k] = (uint32_t)ctx->n_results;
+  return SIF_OK;
+}
+
 /* The same test for a centre that climbed `off` from the node it now has. */
 static inline int masked_overlap_at(const exodus_ctx_t* ctx, uint64_t flat,
   sif_real off, sif_real r, sif_real overlap_fraction) {
@@ -451,6 +484,8 @@ static void ctx_release(exodus_ctx_t* ctx, sif_grid_t* grid) {
 
   sif_free_aligned(ctx->batch_results);
   sif_free_aligned(ctx->batch_order);
+  free(ctx->result_slot);
+  free(ctx->results);
   sif_free_aligned(ctx->batch_indices);
   free(ctx->conflicts);
   sif__candidate_buffer_free(&ctx->candidates);
@@ -569,9 +604,9 @@ static int ctx_init(exodus_ctx_t* ctx, sif_grid_t* grid,
   if (!ctx->void_cll)
     return SIF_ERR_ALLOC;
 
-  ctx->batch_results = sif_malloc_aligned(BATCH_MAX * sizeof(batch_result_t));
-  ctx->batch_order = sif_malloc_aligned(BATCH_MAX * sizeof(climb_order_t));
-  ctx->batch_indices = sif_malloc_aligned(BATCH_MAX * sizeof(uint64_t));
+  ctx->batch_results = sif_malloc_aligned(BATCH_ROOM * sizeof(batch_result_t));
+  ctx->batch_order = sif_malloc_aligned(BATCH_ROOM * sizeof(climb_order_t));
+  ctx->batch_indices = sif_malloc_aligned(BATCH_ROOM * sizeof(uint64_t));
   if (!ctx->batch_results || !ctx->batch_indices || !ctx->batch_order)
     return SIF_ERR_ALLOC;
 
@@ -1860,11 +1895,31 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     if (batch_floor > BATCH_MAX)
       batch_floor = BATCH_MAX;
 
+    /* No candidate of this rung has been measured yet. */
+    if (ctx.displace && status == SIF_OK) {
+      if (n_candidates > ctx.result_slot_capacity) {
+        uint32_t* grown =
+          realloc(ctx.result_slot, n_candidates * sizeof(*grown));
+        if (!grown) {
+          status = SIF_ERR_ALLOC;
+          sif__exodus_template_free(&tpl);
+          sif__exodus_template_free(&rtpl);
+          sif__exodus_template_free(&otpl);
+          break;
+        }
+        ctx.result_slot = grown;
+        ctx.result_slot_capacity = n_candidates;
+      }
+      if (n_candidates)
+        memset(ctx.result_slot, 0, n_candidates * sizeof(*ctx.result_slot));
+      ctx.n_results = 0;
+    }
+
     /* Under the climb the window stays at the ceiling: a climb costs far more
-     * than the speculation it could waste, and an accept invalidates only the
-     * candidates the new void covers. A displacement ends the batch, so there
-     * the window is left to adapt. */
-    const int pin_batch = ctx.climb && !ctx.displace;
+     * than the speculation it could waste, an accept invalidates only the
+     * candidates the new void covers, and what a displacement cuts short is
+     * remembered. */
+    const int pin_batch = ctx.climb;
     uint64_t batch_cap = pin_batch ? BATCH_MAX : batch_floor;
 
     /* Re-learned per radius alongside the batch window: the annulus geometry,
@@ -1872,21 +1927,35 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     uint32_t resolve_window = RESOLVE_INITIAL;
 
     uint64_t k = 0;
+    uint64_t frontier = 0;
     while (k < n_candidates && status == SIF_OK) {
       uint64_t batch_count = 0;
+      uint64_t batch_new = 0;
+
+      /* A displacement sends k back behind `frontier`, over candidates already
+       * evaluated. With a window of them still ahead the batch takes only
+       * those, which is cheap; with less it reaches past the frontier for a
+       * whole window of new ones, so that the team has work however few
+       * candidates go by between two displacements. */
+      const int ahead = frontier >= k + batch_cap;
+      const uint64_t old_end = ahead ? k + batch_cap : frontier;
+      const uint64_t new_cap = ahead ? 0 : batch_cap;
 
       /* Phase 0: skip already-masked candidates sequentially. Doing this
        * outside the parallel region avoids paying thread sync for millions of
        * trivially dead candidates. */
-      while (k < n_candidates && batch_count < batch_cap) {
+      while (k < n_candidates && (k < old_end || batch_new < new_cap)) {
         if (masked_overlap(
               &ctx, k, radius, overlap_fraction, grid->cell_length)) {
           stats.rejected_masked++;
         } else {
+          batch_new += k >= frontier;
           ctx.batch_indices[batch_count++] = k;
         }
         k++;
       }
+      if (k > frontier)
+        frontier = k;
 
       if (batch_count == 0)
         break;
@@ -1911,6 +1980,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         res->ix = ix;
         res->iy = iy;
         res->iz = iz;
+        res->cached = 0;
 
         if (proxy_pole > 0 &&
             sif__overlap_quick(ctx.mask, grid->n_cells, grid->p2_mask, ix, iy,
@@ -1961,6 +2031,13 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
               continue;
             }
           }
+        }
+
+        /* Measured in a batch a displacement ended. */
+        if (ctx.displace && ctx.result_slot[cand]) {
+          *res = ctx.results[ctx.result_slot[cand] - 1];
+          res->cached = 1;
+          continue;
         }
 
         uint8_t reason = RESCALE_OK;
@@ -2015,7 +2092,8 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
       if (ctx.climb) {
         uint64_t n_climbs = 0;
         for (uint64_t b = 0; b < batch_count; b++)
-          if (ctx.batch_results[b].status == BATCH_ACCEPTED)
+          if (ctx.batch_results[b].status == BATCH_ACCEPTED &&
+              !ctx.batch_results[b].cached)
             ctx.batch_order[n_climbs++] =
               (climb_order_t){ctx.batch_results[b].r_seed, (uint32_t)b};
         sort_climbs(ctx.batch_order, n_climbs);
@@ -2099,6 +2177,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
        * batch). */
       const uint64_t accepted_before = stats.accepted;
       int displaced = 0;
+      uint64_t b_end = batch_count;
 
       for (uint64_t b = 0; b < batch_count && !displaced; b++) {
         const batch_result_t* res = &ctx.batch_results[b];
@@ -2191,6 +2270,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
             stats.rejected_masked -= (k - next) - (batch_count - b - 1);
             k = next;
             displaced = 1;
+            b_end = b + 1;
           }
           goto accept;
         }
@@ -2247,6 +2327,13 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
           ratio_max = ratio;
         if (ratio > MISMATCH_RATIO)
           n_mismatched++;
+      }
+
+      for (uint64_t b = b_end; b < batch_count && status == SIF_OK; b++) {
+        const batch_result_t* res = &ctx.batch_results[b];
+        if (!res->cached && (res->status == BATCH_ACCEPTED ||
+                              res->status == BATCH_REJECTED_RESCALE))
+          status = remember(&ctx, ctx.batch_indices[b], res);
       }
 
       t_commit += wall_s() - t_evaluated;

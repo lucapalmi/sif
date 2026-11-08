@@ -687,7 +687,7 @@ output = "voids.h5"
 
 ```bash
 # how far a stopped run got
-sif-exodus --check voids.h5.ckpt
+sif-inspect voids.h5.ckpt
 ```
 ::::
 
@@ -783,27 +783,28 @@ sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii,
 
 ## Checking files before a run
 
-`sif-exodus --check` takes a data file as well as a configuration. It tells
-what the file is from its contents, checks it without loading it, and prints
-a summary. Every problem it finds is listed, each with where it is: the line
-of an ASCII table, the record and byte offset of a GADGET file, the HDU of a
-FITS file. It exits with 0 for a sound file and 2 otherwise.
+**sif-inspect** checks a data file the way `sif-exodus --check` checks a
+configuration. It tells what the file is from its contents, checks it without
+loading it, and prints a summary. Every problem it finds is listed, each with
+where it is: the line of an ASCII table, the record and byte offset of a
+GADGET file, the HDU of a FITS file. It exits with 0 for a sound file and 2
+otherwise.
 
 ```bash
 # an ASCII table: every row has the same columns, and every field is a
 # number. The summary gives each column's range
-sif-exodus --check galaxies.txt
+sif-inspect galaxies.txt
 
 # the same table against the column format a configuration would read it
 # with, as the reader will: short rows, fields that are not numbers, NaNs
-sif-exodus --check --columns "x y z w" --delimiter , --skip-header 1 galaxies.csv
+sif-inspect --columns "x y z w" --delimiter , --skip-header 1 galaxies.csv
 
 # a GADGET snapshot, by its base name: every file opens, its records are
 # whole, and the files add up to the header's totals
-sif-exodus --check snapdir_010/snap_010
+sif-inspect snapdir_010/snap_010
 
 # a FITS or HDF5 file: its tables, or its tree of groups and datasets
-sif-exodus --check randoms.fits
+sif-inspect randoms.fits
 ```
 
 These checks read the structure of the file and not its values, so they are
@@ -812,16 +813,16 @@ the range of each column. A GADGET snapshot's positions have to lie inside
 the box, and an `.xfield` has to match its checksum:
 
 ```bash
-sif-exodus --check --deep snapdir_010/snap_010
+sif-inspect --deep snapdir_010/snap_010
 ```
 
 `--format` overrides the guess: `--format hdf5` lists an HDF5 GADGET
 snapshot as a plain HDF5 file, and `--format ascii` checks a file whose
 contents do not say what it is.
 
-On a configuration, `--deep` reads the inputs as the run would, before
-anything is computed. Every bad row of an ASCII input is listed, instead of
-the run stopping at the first. A simulation's input also gets its ranges
+On a configuration, `sif-exodus --check --deep` reads the inputs as the run
+would, before anything is computed. Every bad row of an ASCII input is
+listed, instead of the run stopping at the first. A simulation's input also gets its ranges
 reported, and positions that are not finite are flagged:
 
 ```bash
