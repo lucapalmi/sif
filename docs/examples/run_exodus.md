@@ -686,7 +686,7 @@ output = "voids.h5"
 ```
 
 ```bash
-# how far a stopped run got
+# how far a stopped run got: rungs_done, next_radius and the voids so far
 sif-inspect voids.h5.ckpt
 ```
 ::::
@@ -783,9 +783,10 @@ sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii,
 
 ## Checking files before a run
 
-**sif-inspect** checks a data file the way `sif-exodus --check` checks a
-configuration. It tells what the file is from its contents, checks it without
-loading it, and prints a summary. Every problem it finds is listed, each with
+`sif-inspect FILE` says what a data file holds -- its format, metadata,
+tables and columns -- and `sif-inspect --check FILE` checks it, the way
+`sif-exodus --check` checks a configuration. It tells what the file is from
+its contents, checks it without loading it, and prints a summary. Every problem it finds is listed, each with
 where it is: the line of an ASCII table, the record and byte offset of a
 GADGET file, the HDU of a FITS file. It exits with 0 for a sound file and 2
 otherwise.
@@ -793,18 +794,18 @@ otherwise.
 ```bash
 # an ASCII table: every row has the same columns, and every field is a
 # number. The summary gives each column's range
-sif-inspect galaxies.txt
+sif-inspect --check galaxies.txt
 
 # the same table against the column format a configuration would read it
 # with, as the reader will: short rows, fields that are not numbers, NaNs
-sif-inspect --columns "x y z w" --delimiter , --skip-header 1 galaxies.csv
+sif-inspect --check --columns "x y z w" --delimiter , --skip-header 1 galaxies.csv
 
 # a GADGET snapshot, by its base name: every file opens, its records are
 # whole, and the files add up to the header's totals
-sif-inspect snapdir_010/snap_010
+sif-inspect --check snapdir_010/snap_010
 
 # a FITS or HDF5 file: its tables, or its tree of groups and datasets
-sif-inspect randoms.fits
+sif-inspect --check randoms.fits
 ```
 
 These checks read the structure of the file and not its values, so they are
@@ -813,7 +814,7 @@ the range of each column. A GADGET snapshot's positions have to lie inside
 the box, and an `.xfield` has to match its checksum:
 
 ```bash
-sif-inspect --deep snapdir_010/snap_010
+sif-inspect --check --deep snapdir_010/snap_010
 ```
 
 `--format` overrides the guess: `--format hdf5` lists an HDF5 GADGET

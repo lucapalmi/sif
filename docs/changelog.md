@@ -10,7 +10,7 @@ Current version: v0.5 release 0
 - Data files and checkpoints are checked by the new `sif-inspect` program
   (breaking): `sif-exodus --check` takes a configuration only, and its
   `--format`, `--columns`, `--delimiter` and `--skip-header` move to
-  `sif-inspect`
+  `sif-inspect --check`
 
 - Exodus settings are now independent of each other (breaking): `seeds="minima"`
   is the minima alone, and the old behaviour is `refine_centres="gaussian"`,
@@ -26,6 +26,9 @@ Current version: v0.5 release 0
 
 ### Added
 
+- `sif_file_info_read()`: any file sif reads, described as metadata, tables
+  of typed columns and arrays, the same for every format; `sif-inspect FILE`
+  prints it
 - Exodus Lagrangian overlap: voids kept apart on R (1 + threshold)^(1/3), the
   catalogue keeping R. Variant `"lagrangian-overlap"`, `overlap_type=` in
   `exodus_raw()`, `SIF_FINDER_LAGRANGIAN_OVERLAP`

@@ -23,6 +23,7 @@ set(SIF_TESTS
   test_structures   # bitmask, catalogue, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
   test_io           # .xfield/.xgrid round trips, checksums, ASCII and raw binary
+  test_file_info    # every format described as metadata, tables and arrays
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count
   test_tessellation # sampled Voronoi volumes, and the profiles they give
@@ -78,6 +79,11 @@ foreach(test_name IN LISTS SIF_TESTS)
     target_compile_definitions(${test_name} PRIVATE SIF_HAVE_FITS)
     target_include_directories(${test_name} PRIVATE ${CFITSIO_INCLUDE})
     target_link_libraries(${test_name} PRIVATE ${CFITSIO_LIB})
+  endif()
+
+  # Whether sif reads FITS, for the tests that describe a FITS file.
+  if(SIF_WITH_FITS AND test_name STREQUAL "test_file_info")
+    target_compile_definitions(${test_name} PRIVATE SIF_HAVE_FITS)
   endif()
 
   # Fixture files that live in the source tree, read in place.

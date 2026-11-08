@@ -551,19 +551,57 @@ input = {
 
 ### Inspecting files
 
-`inspect_gadget()` and `inspect_fits()` (`sif_gadget_inspect()` and
-`sif_fits_inspect()` in C) print the content of a snapshot or a FITS file.
-The **sif-inspect** program identifies any supported file, checks it without
-loading it and prints a summary; `--deep` also reads every value and reports the range
-of each column. For ASCII tables, `--columns`, `--delimiter` and
-`--skip-header` check the file against a column format.
+`sif_file_info_read()` describes any file sif reads in the same terms,
+whatever its format: the file's **metadata** (key = value), its **tables**,
+each a number of rows of named, typed columns, and its **arrays**, the
+datasets that are not columns, such as a grid. Only what the file says about
+itself is read -- its headers and structure -- and nothing is checked.
+`sif_file_info_print()` lays the description out, and the **sif-inspect**
+program prints it:
 
 ```bash
 sif-inspect snapdir_010/snap_010
 ```
 
+```text
+file      snapdir_010/snap_010
+format    GADGET, SnapFormat 1, GADGET-2/3 header, single precision
+files     3
+size      1.41 GB
+
+metadata
+  BoxSize       1000
+  Time          1
+  Redshift      0
+  ...
+
+table PartType1, 134217728 rows, 3 columns
+  POS           float32[3]
+  VEL           float32[3]
+  ID            uint32
+  metadata
+    MassTable     0.0123
+```
+
+| Format | Tables | Metadata |
+|---|---|---|
+| ASCII | one, its columns named by a header line or the last comment | `#key=value` lines |
+| FITS | one per table HDU; images are arrays | header keywords |
+| HDF5 | one per group, of its datasets of one length | attributes |
+| GADGET | one per particle type present | the snapshot header |
+| .xfield | one: the particles | the header |
+| .xgrid | none; the cells are an array | the header |
+| checkpoint | one: the voids so far | the run's parameters |
+
+`sif-inspect --check` checks a file instead, without loading it, and lists
+every problem; `--deep` also reads every value and reports the range of each
+column. For ASCII tables, `--columns`, `--delimiter` and `--skip-header` check
+the file against a column format. In C these are `sif_field_check_ascii()`,
+`sif_fits_check()`, `sif_hdf5_check()`, `sif_gadget_check()` and
+`sif_field_check_xfield()`.
+
 ```bash
-sif-inspect --deep --columns "* x y z w" --delimiter , --skip-header 1 halos.csv
+sif-inspect --check --deep --columns "* x y z w" --delimiter , --skip-header 1 halos.csv
 ```
 
 ## Building a field from arrays

@@ -19,6 +19,7 @@
 
 #include "sif/io/hdf5_io.h"
 
+#include "io/file_info_internal.h"
 #include "io/hdf5_internal.h"
 #include "io/hdf5_util.h"
 #include "io/internal.h"
@@ -2222,3 +2223,312 @@ int sif_hdf5_check(const char* path, bool deep, FILE* report) {
 
 #undef CHECK_VALUES
 #undef CHECK_DEPTH
+
+/* --- the description --- */
+
+/* How deep a tree is described, and how many values of an attribute are
+ * written out before it is only counted. */
+#define DESCRIBE_DEPTH  32
+#define DESCRIBE_VALUES 8
+
+typedef struct {
+  sif_file_info_t* info;
+  sif_file_info_owner_t owner;
+  uint32_t index;
+  /* Put before each key: the group's path, for a group whose attributes go
+   * to the file. */
+  const char* prefix;
+} attr_target_t;
+
+/* One attribute as metadata: a number, a string, or a short list of numbers
+ * written out as text. */
+static herr_t describe_attr(
+  hid_t loc, const char* name, const H5A_info_t* ainfo, void* data) {
+  (void)ainfo;
+  const attr_target_t* at = data;
+
+  char key[512];
+  snprintf(key, sizeof(key), "%s%s", at->prefix, name);
+
+  hid_t attr = H5Aopen(loc, name, H5P_DEFAULT);
+  hid_t type = attr >= 0 ? H5Aget_type(attr) : H5I_INVALID_HID;
+  hid_t space = attr >= 0 ? H5Aget_space(attr) : H5I_INVALID_HID;
+  const hssize_t n = space >= 0 ? H5Sget_simple_extent_npoints(space) : -1;
+  const H5T_class_t cls = type >= 0 ? H5Tget_class(type) : H5T_NO_CLASS;
+
+  char text[512];
+  if (n == 1 && cls == H5T_INTEGER) {
+    int64_t v = 0;
+    if (H5Aread(attr, H5T_NATIVE_INT64, &v) >= 0)
+      sif__file_info_meta_int(at->info, at->owner, at->index, key, v);
+  } else if (n == 1 && cls == H5T_FLOAT) {
+    double v = 0.0;
+    if (H5Aread(attr, H5T_NATIVE_DOUBLE, &v) >= 0)
+      sif__file_info_meta_real(at->info, at->owner, at->index, key, v);
+  } else if (n == 1 && cls == H5T_STRING) {
+    if (attr_read_str(loc, name, text, sizeof(text)) != SIF_ERR_IO)
+      sif__file_info_meta_string(at->info, at->owner, at->index, key, text);
+  } else if (n > 1 && n <= DESCRIBE_VALUES &&
+             (cls == H5T_INTEGER || cls == H5T_FLOAT)) {
+    double v[DESCRIBE_VALUES];
+    if (H5Aread(attr, H5T_NATIVE_DOUBLE, v) >= 0) {
+      size_t used = 0;
+      for (hssize_t i = 0; i < n && used < sizeof(text); i++)
+        used += (size_t)snprintf(
+          text + used, sizeof(text) - used, "%s%.15g", i ? ", " : "", v[i]);
+      sif__file_info_meta_string(at->info, at->owner, at->index, key, text);
+    }
+  } else {
+    char t[32];
+    snprintf(text, sizeof(text), "(%lld %s values)", (long long)n,
+      type >= 0 ? type_text(type, t, sizeof(t)) : "?");
+    sif__file_info_meta_string(at->info, at->owner, at->index, key, text);
+  }
+
+  close_id(space);
+  close_id(type);
+  close_id(attr);
+  return 0;
+}
+
+static void attrs_add(hid_t obj, const attr_target_t* at) {
+  hsize_t idx = 0;
+  (void)H5Aiterate2(
+    obj, H5_INDEX_NAME, H5_ITER_INC, &idx, describe_attr, (void*)at);
+}
+
+/* A dataset, as far as the description needs it. */
+typedef struct {
+  char name[256];
+  char type[32];
+  int rank;
+  hsize_t dims[H5S_MAX_RANK];
+  char unit[64];
+} dataset_shape_t;
+
+static bool dataset_shape(hid_t group, const char* name, dataset_shape_t* d) {
+  memset(d, 0, sizeof(*d));
+  snprintf(d->name, sizeof(d->name), "%s", name);
+  hid_t ds = H5Dopen2(group, name, H5P_DEFAULT);
+  hid_t type = ds >= 0 ? H5Dget_type(ds) : H5I_INVALID_HID;
+  hid_t space = ds >= 0 ? H5Dget_space(ds) : H5I_INVALID_HID;
+  d->rank = space >= 0 ? H5Sget_simple_extent_ndims(space) : -1;
+  const bool ok = type >= 0 && d->rank >= 0 &&
+                  H5Sget_simple_extent_dims(space, d->dims, NULL) >= 0;
+  if (ok) {
+    type_text(type, d->type, sizeof(d->type));
+    /* A unit, where the writer left one. */
+    if (attr_read_str(ds, "units", d->unit, sizeof(d->unit)) == SIF_ERR_IO &&
+        attr_read_str(ds, "unit", d->unit, sizeof(d->unit)) == SIF_ERR_IO)
+      d->unit[0] = '\0';
+  }
+  close_id(space);
+  close_id(type);
+  close_id(ds);
+  return ok;
+}
+
+/* Values per row of a dataset that is a column: the product of all but its
+ * first dimension. */
+static uint64_t row_width(const dataset_shape_t* d) {
+  uint64_t w = 1;
+  for (int k = 1; k < d->rank; k++)
+    w *= d->dims[k];
+  return w;
+}
+
+typedef struct {
+  sif_file_info_t* info;
+  uint32_t n_unreadable;
+} describe_walk_t;
+
+/*
+ * One group: its datasets of rank 1 or 2 that share the most common length
+ * make its table, named by the group's path; the rest -- scalars, grids,
+ * datasets of another length -- are arrays. The group's attributes are the
+ * table's metadata, or the file's under the group's path when it has no
+ * table; the root's are always the file's.
+ */
+static void describe_group(
+  describe_walk_t* w, hid_t group, const char* at, int depth) {
+  H5G_info_t ginfo;
+  if (H5Gget_info(group, &ginfo) < 0) {
+    w->n_unreadable++;
+    return;
+  }
+
+  dataset_shape_t* sets =
+    ginfo.nlinks ? calloc((size_t)ginfo.nlinks, sizeof(*sets)) : NULL;
+  if (ginfo.nlinks && !sets) {
+    SIF_LOG_ERROR(TAG, "out of memory");
+    w->n_unreadable++;
+    return;
+  }
+  size_t n_sets = 0;
+  const bool root = strcmp(at, "/") == 0;
+
+  /* The datasets first, the subgroups after, depth first. */
+  for (int pass = 0; pass < 2; pass++) {
+    for (hsize_t i = 0; i < ginfo.nlinks; i++) {
+      char name[256];
+      if (H5Lget_name_by_idx(group, ".", H5_INDEX_NAME, H5_ITER_INC, i, name,
+            sizeof(name), H5P_DEFAULT) < 0) {
+        w->n_unreadable += pass == 0;
+        continue;
+      }
+      /* H5Iget_type of the open object, not H5Oget_info3: that only exists
+       * from HDF5 1.12. */
+      hid_t obj = H5Oopen(group, name, H5P_DEFAULT);
+      const H5I_type_t kind = obj >= 0 ? H5Iget_type(obj) : H5I_BADID;
+      if (obj >= 0)
+        H5Oclose(obj);
+      if (obj < 0) {
+        w->n_unreadable += pass == 0;
+        continue;
+      }
+      if (pass == 0 && kind == H5I_DATASET) {
+        if (dataset_shape(group, name, &sets[n_sets]))
+          n_sets++;
+        else
+          w->n_unreadable++;
+      } else if (pass == 1 && kind == H5I_GROUP) {
+        char path[1024];
+        snprintf(path, sizeof(path), "%s/%s", root ? "" : at, name);
+        hid_t sub = H5Gopen2(group, name, H5P_DEFAULT);
+        if (sub < 0) {
+          w->n_unreadable++;
+        } else if (depth + 1 < DESCRIBE_DEPTH) {
+          describe_group(w, sub, path, depth + 1);
+        }
+        close_id(sub);
+      }
+    }
+
+    if (pass == 1)
+      break;
+
+    /* The length most datasets of rank 1 or 2 share, ties to the first. */
+    hsize_t length = 0;
+    size_t best = 0;
+    for (size_t i = 0; i < n_sets; i++) {
+      if (sets[i].rank < 1 || sets[i].rank > 2)
+        continue;
+      size_t count = 0;
+      for (size_t j = 0; j < n_sets; j++)
+        count += (sets[j].rank == 1 || sets[j].rank == 2) &&
+                 sets[j].dims[0] == sets[i].dims[0];
+      if (count > best) {
+        best = count;
+        length = sets[i].dims[0];
+      }
+    }
+
+    /* Named as the group is, without the root's slash: "catalogue", and ""
+     * for the root's own table. */
+    uint32_t t = UINT32_MAX;
+    if (best > 0) {
+      t = sif__file_info_table(w->info, at + 1, (uint64_t)length);
+      for (size_t i = 0; i < n_sets; i++) {
+        if ((sets[i].rank == 1 || sets[i].rank == 2) &&
+            sets[i].dims[0] == length)
+          sif__file_info_column(w->info, t, sets[i].name, sets[i].type,
+            row_width(&sets[i]), sets[i].unit);
+      }
+    }
+    for (size_t i = 0; i < n_sets; i++) {
+      if (t != UINT32_MAX && (sets[i].rank == 1 || sets[i].rank == 2) &&
+          sets[i].dims[0] == length)
+        continue;
+      char path[1024];
+      snprintf(
+        path, sizeof(path), "%s%s%s", at + 1, root ? "" : "/", sets[i].name);
+      uint64_t dims[SIF_FILE_ARRAY_MAX_RANK];
+      const int rank = sets[i].rank < SIF_FILE_ARRAY_MAX_RANK
+                         ? sets[i].rank
+                         : SIF_FILE_ARRAY_MAX_RANK;
+      for (int k = 0; k < rank; k++)
+        dims[k] = sets[i].dims[k];
+      const uint32_t a =
+        sif__file_info_array(w->info, path, sets[i].type, (uint32_t)rank, dims);
+      hid_t ds = H5Dopen2(group, sets[i].name, H5P_DEFAULT);
+      if (ds >= 0) {
+        const attr_target_t target = {w->info, SIF__FILE_INFO_ARRAY, a, ""};
+        attrs_add(ds, &target);
+      }
+      close_id(ds);
+    }
+
+    char prefix[1024];
+    snprintf(prefix, sizeof(prefix), "%s/", at + 1);
+    const attr_target_t target =
+      (t != UINT32_MAX && !root)
+        ? (attr_target_t){w->info, SIF__FILE_INFO_TABLE, t, ""}
+        : (attr_target_t){w->info, SIF__FILE_INFO_FILE, 0, root ? "" : prefix};
+    attrs_add(group, &target);
+  }
+  free(sets);
+}
+
+int sif__file_info_hdf5(sif_file_info_t* info) {
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
+
+  hid_t file = sif__h5_open_read(TAG, info->path);
+  if (file < 0) {
+    sif__h5_quiet_end(&quiet);
+    return SIF_ERR_IO;
+  }
+
+  if (H5Aexists(file, "sif_format") > 0)
+    sif__file_info_detail(info, "a sif file");
+  else if (link_exists(file, "Header"))
+    sif__file_info_detail(info, "a GADGET snapshot");
+
+  describe_walk_t w = {info, 0};
+  describe_group(&w, file, "/", 0);
+  if (w.n_unreadable)
+    SIF_LOG_WARNING(TAG, "%s: %u object%s could not be read, and are left out",
+      info->path, w.n_unreadable, w.n_unreadable == 1 ? "" : "s");
+
+  H5Fclose(file);
+  sif__h5_quiet_end(&quiet);
+  return SIF_OK;
+}
+
+uint32_t sif__file_info_hdf5_columns(
+  sif_file_info_t* info, uint32_t table, const char* path, const char* group) {
+  uint32_t n = 0;
+  sif__h5_quiet_t quiet;
+  sif__h5_quiet_begin(&quiet);
+
+  hid_t file = sif__h5_open_read(TAG, path);
+  hid_t g = file >= 0 && link_exists(file, group)
+              ? H5Gopen2(file, group, H5P_DEFAULT)
+              : H5I_INVALID_HID;
+  H5G_info_t ginfo;
+  if (g >= 0 && H5Gget_info(g, &ginfo) >= 0) {
+    for (hsize_t i = 0; i < ginfo.nlinks; i++) {
+      char name[256];
+      if (H5Lget_name_by_idx(g, ".", H5_INDEX_NAME, H5_ITER_INC, i, name,
+            sizeof(name), H5P_DEFAULT) < 0)
+        continue;
+      hid_t obj = H5Oopen(g, name, H5P_DEFAULT);
+      const bool is_dataset = obj >= 0 && H5Iget_type(obj) == H5I_DATASET;
+      if (obj >= 0)
+        H5Oclose(obj);
+      dataset_shape_t d;
+      if (is_dataset && dataset_shape(g, name, &d) && d.rank >= 1) {
+        sif__file_info_column(
+          info, table, d.name, d.type, row_width(&d), d.unit);
+        n++;
+      }
+    }
+  }
+  close_id(g);
+  close_id(file);
+  sif__h5_quiet_end(&quiet);
+  return n;
+}
+
+#undef DESCRIBE_DEPTH
+#undef DESCRIBE_VALUES

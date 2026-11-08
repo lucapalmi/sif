@@ -817,10 +817,15 @@ if [ -n "${INSPECT:-}" ]; then
   "$INSPECT" blocked.txt.ckpt >out.txt 2>err.txt
   status=$?
   expect_status 0 "sif-inspect on a checkpoint"
-  grep -q '^progress      all 4 rungs done$' out.txt ||
+  grep -q '^  rungs_done  *4$' out.txt ||
     fail "sif-inspect on a checkpoint: $(cat out.txt)"
-  grep -q '^threshold     -0.7$' out.txt ||
+  grep -q '^  threshold  *-0.7$' out.txt ||
     fail "sif-inspect on a checkpoint: threshold"
+  "$INSPECT" --check blocked.txt.ckpt >out.txt 2>err.txt
+  status=$?
+  expect_status 0 "sif-inspect --check on a checkpoint"
+  grep -q '^progress      all 4 rungs done$' out.txt ||
+    fail "sif-inspect --check on a checkpoint: $(cat out.txt)"
 fi
 
 run -D out=blocked.txt --check holes.lua

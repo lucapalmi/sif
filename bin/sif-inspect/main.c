@@ -6,10 +6,11 @@
 
 /* sif-inspect: a look at a file sif reads or writes, without loading it.
  *
- *   sif-inspect [options] FILE    say what FILE is, check it and summarise it
+ *   sif-inspect [options] FILE           what FILE holds
+ *   sif-inspect --check [options] FILE   whether FILE is sound
  *
- * Exit status: 0 for a sound file, 1 when the library cannot start, 2 when
- * the command line is wrong or the file has problems.
+ * Exit status: 0 on success, 1 when the library cannot start, 2 when the
+ * command line is wrong, or the file cannot be read or has problems.
  */
 
 #include "inspect.h"
@@ -27,21 +28,24 @@ static void print_usage(FILE* out) {
   fputs(
     "usage: sif-inspect [options] FILE\n"
     "\n"
-    "Check FILE without loading it, and summarise it: a data file (ASCII,\n"
-    "FITS, HDF5, GADGET, .xfield) or an exodus checkpoint, its kind told\n"
-    "from its contents.\n"
+    "Describe FILE: its format, its metadata, and its tables and arrays,\n"
+    "the same way for every format sif reads -- ASCII, FITS, HDF5, GADGET,\n"
+    ".xfield, .xgrid and exodus checkpoints. Only what the file says about\n"
+    "itself is read, and nothing is checked.\n"
     "\n"
     "options:\n"
-    "  --deep         read every value as well, for each column's range\n"
-    "  --format KIND  the kind of FILE, instead of telling it from its\n"
-    "                 contents: ascii, fits, hdf5, gadget, xfield or\n"
-    "                 checkpoint\n"
-    "  --columns FMT  on an ASCII file, the column format to check it\n"
-    "                 against, as in a configuration: \"x y z w\"\n"
-    "  --delimiter C  on an ASCII file, the column delimiter (default a\n"
-    "                 blank; \"tab\" for a tab)\n"
+    "  --format KIND  the format of FILE, instead of telling it from its\n"
+    "                 contents: ascii, fits, hdf5, gadget, xfield, xgrid\n"
+    "                 or checkpoint\n"
+    "  --check        check FILE instead, for problems, without loading it\n"
+    "  --deep         with --check, read every value as well, for each\n"
+    "                 column's range\n"
+    "  --columns FMT  with --check on an ASCII file, the column format to\n"
+    "                 check it against, as in a configuration: \"x y z w\"\n"
+    "  --delimiter C  with --check on an ASCII file, the column delimiter\n"
+    "                 (default a blank; \"tab\" for a tab)\n"
     "  --skip-header N\n"
-    "                 on an ASCII file, lines to skip first\n"
+    "                 with --check on an ASCII file, lines to skip first\n"
     "  -h, --help     show this message and exit\n"
     "  -V, --version  show the version and exit\n",
     out);
@@ -57,7 +61,7 @@ static const char* option_value(int argc, char** argv, int* i) {
 
 int main(int argc, char** argv) {
   const char* path = NULL;
-  inspect_opts_t io = {FILE_KIND_AUTO, NULL, '\0', 0, false};
+  inspect_opts_t io = {SIF_FILE_FORMAT_UNKNOWN, false, NULL, '\0', 0, false};
   bool ascii_options = false;
 
   for (int i = 1; i < argc; i++) {
@@ -83,17 +87,18 @@ int main(int argc, char** argv) {
 #endif
       );
       return 0;
+    } else if (strcmp(arg, "--check") == 0) {
+      io.check = true;
     } else if (strcmp(arg, "--deep") == 0) {
       io.deep = true;
     } else if (strcmp(arg, "--format") == 0) {
       const char* v = option_value(argc, argv, &i);
       if (!v)
         return 2;
-      if (inspect_kind_parse(v, &io.format) != 0 ||
-          io.format == FILE_KIND_LUA) {
+      if (sif_file_format_parse(v, &io.format) != SIF_OK) {
         fprintf(stderr,
           "sif-inspect: --format %s: expected ascii, fits, hdf5, gadget, "
-          "xfield or checkpoint\n",
+          "xfield, xgrid or checkpoint\n",
           v);
         return 2;
       }
@@ -148,19 +153,30 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  const file_kind_t kind =
-    io.format != FILE_KIND_AUTO ? io.format : inspect_detect(path);
-  if (kind == FILE_KIND_LUA) {
+  if (!io.check && (io.deep || ascii_options)) {
+    fprintf(stderr, "sif-inspect: --deep, --columns, --delimiter and "
+                    "--skip-header go with --check\n");
+    return 2;
+  }
+
+  /* A configuration is sif-exodus's: the library knows nothing of it. */
+  const size_t len = strlen(path);
+  if (io.format == SIF_FILE_FORMAT_UNKNOWN && len >= 4 &&
+      strcmp(path + len - 4, ".lua") == 0) {
     fprintf(stderr,
       "sif-inspect: %s is a configuration: sif-exodus --check checks it\n",
       path);
     return 2;
   }
-  if (kind != FILE_KIND_ASCII && ascii_options) {
+
+  const sif_file_format_t format = io.format != SIF_FILE_FORMAT_UNKNOWN
+                                     ? io.format
+                                     : sif_file_format_detect(path);
+  if (format != SIF_FILE_FORMAT_ASCII && ascii_options) {
     fprintf(stderr,
       "sif-inspect: --columns, --delimiter and --skip-header go with an "
       "ASCII file, and %s is %s\n",
-      path, inspect_kind_name(kind));
+      path, sif_file_format_name(format));
     return 2;
   }
 
@@ -171,7 +187,8 @@ int main(int argc, char** argv) {
     fputs("sif-inspect: could not initialise the library\n", stderr);
     return 1;
   }
-  const int code = inspect_file(path, kind, &io);
+  const int code = io.check ? inspect_check(path, format, &io)
+                            : inspect_describe(path, format);
   sif_system_finalise();
   return code;
 }

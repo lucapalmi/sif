@@ -13,6 +13,7 @@
 
 #include "sif/io/fits_io.h"
 
+#include "io/file_info_internal.h"
 #include "io/fits_internal.h"
 #include "sif/utils/logger.h"
 
@@ -48,6 +49,8 @@ int sif_fits_print_summary(const char* path, FILE* stream) {
 }
 
 int sif_fits_inspect(const char* path) { return refuse(path); }
+
+int sif__file_info_fits(sif_file_info_t* info) { return refuse(info->path); }
 
 int sif_fits_check(const char* path, bool deep, FILE* report) {
   (void)deep;

@@ -41,6 +41,7 @@
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 
+#include "io/file_info_internal.h"
 #include "io/internal.h"
 #include "utils/logger_internal.h"
 
@@ -554,5 +555,120 @@ int sif_finder_exodus_checkpoint_check(const char* filepath, FILE* report) {
 
   sif_free_aligned(radii);
   sif_catalogue_free(cat);
+  return SIF_OK;
+}
+
+/* --- the description --- */
+
+/* A run parameter stored widened from a float, at the float's precision: so
+ * that -0.7 does not read as -0.69999999. */
+static double as_float(double v) {
+  char text[32];
+  snprintf(text, sizeof(text), "%.7g", v);
+  return strtod(text, NULL);
+}
+
+int sif__file_info_checkpoint(sif_file_info_t* info) {
+  const char* path = info->path;
+  FILE* file = fopen(path, "rb");
+  if (!file)
+    return sif__io_os_error(TAG, path, NULL, errno);
+
+  /* The header and the ladder, as written: no checksum, and not the voids,
+   * which are what the run has to read; sif_finder_exodus_checkpoint_check()
+   * reads it whole. */
+  sif_finder_exodus_checkpoint_t h;
+  int status = SIF_OK;
+  double r_hi = 0.0, r_lo = 0.0, r_next = 0.0;
+  if (fread(&h, sizeof(h), 1, file) != 1 ||
+      memcmp(h.magic, SIF_FINDER_CHECKPOINT_MAGIC, 4) != 0) {
+    status = read_failed(path, "not an exodus checkpoint (no %s header)",
+      SIF_FINDER_CHECKPOINT_MAGIC);
+  } else if (h.byte_order != BYTE_ORDER_MARK) {
+    status = read_failed(path, "written on a machine of the other byte order");
+  } else {
+    sif__finder_checkpoint_upgrade(&h);
+    const size_t size = h.is_double ? 8 : 4;
+    for (uint32_t i = 0; i < h.n_radii; i++) {
+      unsigned char v[8];
+      if (fread(v, size, 1, file) != 1)
+        break;
+      double r;
+      if (h.is_double) {
+        memcpy(&r, v, 8);
+      } else {
+        float f;
+        memcpy(&f, v, 4);
+        r = f;
+      }
+      r = h.is_double ? r : as_float(r);
+      if (i == 0)
+        r_hi = r;
+      r_lo = r;
+      if (i == h.next_rung)
+        r_next = r;
+    }
+  }
+  fclose(file);
+  if (status != SIF_OK)
+    return status;
+
+  sif__file_info_detail(info, "version %u, %s precision", h.version,
+    h.is_double ? "double" : "single");
+
+  const sif_file_info_owner_t f = SIF__FILE_INFO_FILE;
+  sif__file_info_meta_string(info, f, 0, "run", h.is_survey ? "survey" : "box");
+  sif__file_info_meta_int(info, f, 0, "weighted", h.is_weighted);
+  sif__file_info_meta_int(info, f, 0, "n_radii", h.n_radii);
+  sif__file_info_meta_real(info, f, 0, "radius_max", r_hi);
+  sif__file_info_meta_real(info, f, 0, "radius_min", r_lo);
+  sif__file_info_meta_int(info, f, 0, "rungs_done", h.next_rung);
+  if (h.next_rung < h.n_radii)
+    sif__file_info_meta_real(info, f, 0, "next_radius", r_next);
+  sif__file_info_meta_real(info, f, 0, "threshold", as_float(h.threshold));
+  sif__file_info_meta_real(
+    info, f, 0, "overlap_fraction", as_float(h.overlap_fraction));
+  sif__file_info_meta_real(
+    info, f, 0, "search_factor", (double)sif__finder_search_factor(h.options));
+  sif__file_info_meta_string(info, f, 0, "centres", centres_label(h.options));
+  sif__file_info_meta_int(
+    info, f, 0, "extend_reach", (h.options & SIF_FINDER_EXTEND_REACH) != 0);
+  sif__file_info_meta_int(
+    info, f, 0, "displace", (h.options & SIF_FINDER_DISPLACE) != 0);
+  sif__file_info_meta_string(info, f, 0, "overlap_type",
+    (h.options & SIF_FINDER_LAGRANGIAN_OVERLAP) ? "lagrangian" : "eulerian");
+  sif__file_info_meta_string(info, f, 0, "deconvolution",
+    (h.options & SIF_FINDER_KEEP_CIC_WINDOW)   ? "none"
+    : (h.options & SIF_FINDER_ALIASING_WINDOW) ? "aliasing"
+                                               : "full");
+  sif__file_info_meta_int(info, f, 0, "grid_n_cells", h.grid_n_cells);
+  sif__file_info_meta_real(info, f, 0, "box_length", h.box_length);
+  /* As grid.assignment names them, and the .xgrid description. */
+  static const char* const schemes[] = {"unknown", "ngp", "cic", "tsc", "pcs"};
+  const uint32_t scheme = h.assignment & 0xffu;
+  sif__file_info_meta_string(
+    info, f, 0, "assignment", scheme < 5 ? schemes[scheme] : "unknown");
+  sif__file_info_meta_int(info, f, 0, "interlaced", (h.assignment >> 8) & 1u);
+  sif__file_info_meta_int(info, f, 0, "n_particles", (int64_t)h.n_particles);
+  sif__file_info_meta_real(info, f, 0, "total_weight", h.total_weight);
+  if (h.is_survey) {
+    char offset[96];
+    snprintf(offset, sizeof(offset), "%.8g, %.8g, %.8g", h.offset[0],
+      h.offset[1], h.offset[2]);
+    sif__file_info_meta_int(
+      info, f, 0, "random_n_particles", (int64_t)h.random_n_particles);
+    sif__file_info_meta_real(
+      info, f, 0, "random_total_weight", h.random_total_weight);
+    sif__file_info_meta_string(info, f, 0, "offset", offset);
+  }
+  sif__file_info_meta_int(info, f, 0, "n_prior", (int64_t)h.n_prior);
+
+  const char* type = h.is_double ? "float64" : "float32";
+  const uint32_t t = sif__file_info_table(info, "voids", h.n_voids);
+  static const char* const cols[] = {"cx", "cy", "cz", "r"};
+  for (int k = 0; k < 4; k++)
+    sif__file_info_column(info, t, cols[k], type, 1, NULL);
+  const uint64_t n = h.n_radii;
+  sif__file_info_array(info, "radii", type, 1, &n);
   return SIF_OK;
 }

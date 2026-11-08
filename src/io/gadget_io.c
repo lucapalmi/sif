@@ -18,11 +18,12 @@
 
 #include "sif/io/gadget_io.h"
 
+#include "io/file_info_internal.h"
 #include "io/gadget_internal.h"
 #include "io/internal.h"
-#include "structures/field_internal.h"
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
+#include "structures/field_internal.h"
 #include "utils/logger_internal.h"
 
 #include <ctype.h>
@@ -137,7 +138,8 @@ typedef struct {
   const char* path;
   uint64_t file_bytes;
   bool swapped;
-  block_t head, pos, vel, mass;
+  /* The IDs are never read; where they are is for the description. */
+  block_t head, pos, vel, id, mass;
   /* Bytes per component in each block, 4 or 8, fixed at open. */
   uint32_t pos_elem, vel_elem, mass_elem;
 } bin_file_t;
@@ -478,6 +480,8 @@ static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
         bf->pos = data;
       else if (strcmp(name, "VEL") == 0)
         bf->vel = data;
+      else if (strcmp(name, "ID") == 0)
+        bf->id = data;
       else if (strcmp(name, "MASS") == 0)
         bf->mass = data;
     }
@@ -513,6 +517,8 @@ static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
   if (format == SIF_GADGET_FORMAT_1) {
     if (n_records > 2)
       bf->vel = f1_records[2];
+    if (n_records > 3)
+      bf->id = f1_records[3];
     /* Record 4 is the mass block only if some particle carries a mass;
      * otherwise it is whatever comes next, internal energy for gas. */
     if (n_records > 4 && n_mass > 0)
@@ -988,6 +994,134 @@ int sif_gadget_inspect(const char* path) {
   printf("%s\n", path);
   sif_gadget_print_header(&h, stdout);
   fflush(stdout);
+  return SIF_OK;
+}
+
+/* ------------------------------------------------------------------------ */
+/* the description                                                           */
+/* ------------------------------------------------------------------------ */
+
+/* "float32" or "float64" for 4 or 8 bytes a value; "uint32" or "uint64" for
+ * the IDs. */
+static const char* elem_type(uint32_t bytes, bool integer) {
+  if (integer)
+    return bytes == 8 ? "uint64" : "uint32";
+  return bytes == 8 ? "float64" : "float32";
+}
+
+/* The binary blocks a particle type has, under their SnapFormat 2 labels:
+ * positions, velocities and IDs for every type, masses for a type with no
+ * MassTable entry. */
+static void binary_columns(
+  sif_file_info_t* info, uint32_t table, const snap_file_t* sf, uint32_t t) {
+  const bin_file_t* bf = &sf->bin;
+  const sif_gadget_header_t* h = &sf->header;
+  const uint64_t n = n_part_sum(h);
+  if (bf->pos.present)
+    sif__file_info_column(
+      info, table, "POS", elem_type(bf->pos_elem, false), 3, NULL);
+  if (bf->vel.present)
+    sif__file_info_column(
+      info, table, "VEL", elem_type(bf->vel_elem, false), 3, NULL);
+  if (bf->id.present)
+    sif__file_info_column(
+      info, table, "ID", elem_type(elem_size(&bf->id, n, 1), true), 1, NULL);
+  if (bf->mass.present && h->mass_table[t] == 0)
+    sif__file_info_column(
+      info, table, "MASS", elem_type(bf->mass_elem, false), 1, NULL);
+}
+
+int sif__file_info_gadget(sif_file_info_t* info) {
+  snap_path_t sp;
+  int status = path_resolve(info->path, &sp);
+  if (status != SIF_OK)
+    return status;
+
+  snap_file_t sf;
+  status = snap_open(sp.first, SIF_GADGET_FORMAT_AUTO, &sf);
+  if (status != SIF_OK)
+    return status;
+  const sif_gadget_header_t* h = &sf.header;
+
+  /* The files the header says there are, as far as they are there: a
+   * missing one is the check's to report. */
+  const uint32_t n_files = h->n_files ? h->n_files : 1;
+  uint64_t bytes = 0;
+  for (uint32_t i = 0; i < n_files && (n_files == 1 || sp.numbered); i++) {
+    char file[PATH_CAP];
+    struct stat st;
+    if (path_file(&sp, n_files, i, file) == SIF_OK && stat(file, &st) == 0)
+      bytes += (uint64_t)st.st_size;
+  }
+  info->n_files = n_files;
+  info->size_bytes = bytes;
+
+  /* An HDF5 snapshot's precision is its datasets', in their columns. */
+  if (h->format == SIF_GADGET_FORMAT_HDF5)
+    sif__file_info_detail(info, "HDF5");
+  else
+    sif__file_info_detail(info, "%s, %s header%s, %s precision",
+      format_name(h->format), h->is_legacy_header ? "GADGET-2/3" : "GADGET-4",
+      h->is_swapped ? ", other byte order" : "",
+      h->precision == 8 ? "double" : "single");
+
+  const sif_file_info_owner_t file = SIF__FILE_INFO_FILE;
+  sif__file_info_meta_real(info, file, 0, "BoxSize", h->box_size);
+  sif__file_info_meta_real(info, file, 0, "Time", h->time);
+  sif__file_info_meta_real(info, file, 0, "Redshift", h->redshift);
+  if (h->has_cosmology) {
+    sif__file_info_meta_real(info, file, 0, "Omega0", h->omega0);
+    sif__file_info_meta_real(info, file, 0, "OmegaLambda", h->omega_lambda);
+    sif__file_info_meta_real(info, file, 0, "HubbleParam", h->hubble_param);
+  }
+  if (h->unit_length_in_cm > 0)
+    sif__file_info_meta_real(
+      info, file, 0, "UnitLength_in_cm", h->unit_length_in_cm);
+  if (h->format == SIF_GADGET_FORMAT_2 && h->n_blocks > 0) {
+    char list[SIF_GADGET_MAX_BLOCKS * 8] = "";
+    size_t used = 0;
+    const uint32_t shown =
+      h->n_blocks < SIF_GADGET_MAX_BLOCKS ? h->n_blocks : SIF_GADGET_MAX_BLOCKS;
+    for (uint32_t b = 0; b < shown && used < sizeof(list); b++)
+      used += (size_t)snprintf(
+        list + used, sizeof(list) - used, "%s%s", b ? " " : "", h->blocks[b]);
+    sif__file_info_meta_string(info, file, 0, "blocks", list);
+  }
+
+  for (uint32_t t = 0; t < h->n_types; t++) {
+    if (h->n_part_total[t] == 0)
+      continue;
+    char name[32];
+    snprintf(name, sizeof(name), "PartType%u", t);
+    const uint32_t table = sif__file_info_table(info, name, h->n_part_total[t]);
+    if (h->mass_table[t] > 0)
+      sif__file_info_meta_real(
+        info, SIF__FILE_INFO_TABLE, table, "MassTable", h->mass_table[t]);
+    if (h->format != SIF_GADGET_FORMAT_HDF5) {
+      binary_columns(info, table, &sf, t);
+      continue;
+    }
+    /* An HDF5 snapshot names its datasets, in PartTypeN or, in older
+     * files, ParticleTypeN, of the first file that has particles of the
+     * type. */
+    bool found = false;
+    for (uint32_t i = 0; i < n_files && !found; i++) {
+      char file[PATH_CAP];
+      if ((n_files > 1 && !sp.numbered) ||
+          path_file(&sp, n_files, i, file) != SIF_OK)
+        break;
+      for (int legacy = 0; legacy < 2 && !found; legacy++) {
+        char group[32];
+        snprintf(group, sizeof(group), "%s%u",
+          legacy ? "ParticleType" : "PartType", t);
+        found = sif__file_info_hdf5_columns(info, table, file, group) > 0;
+        if (found && legacy)
+          sif__file_info_table_rename(info, table, group);
+      }
+    }
+  }
+
+  snap_close(&sf);
   return SIF_OK;
 }
 

@@ -22,6 +22,7 @@
 
 #include "sif/io/fits_io.h"
 
+#include "io/file_info_internal.h"
 #include "io/fits_internal.h"
 #include "io/internal.h"
 #include "measure/profiles_internal.h"
@@ -976,6 +977,214 @@ int sif_fits_print_summary(const char* path, FILE* stream) {
 
 int sif_fits_inspect(const char* path) {
   return sif_fits_print_summary(path, stdout);
+}
+
+/* --- the description --- */
+
+/* The keywords that lay out an HDU, which its description already says in
+ * its own terms: the shape, the columns, the name. The rest are the file's
+ * metadata. */
+static bool is_structural(const char* key) {
+  static const char* const exact[] = {"SIMPLE", "BITPIX", "EXTEND", "XTENSION",
+    "PCOUNT", "GCOUNT", "TFIELDS", "THEAP", "EXTNAME", "END", "COMMENT",
+    "HISTORY", "CHECKSUM", "DATASUM", "BSCALE", "BZERO", ""};
+  /* Column keywords, numbered: TTYPE1, TFORM2, ... */
+  static const char* const numbered[] = {"NAXIS", "TTYPE", "TFORM", "TUNIT",
+    "TDIM", "TNULL", "TSCAL", "TZERO", "TDISP", "TBCOL", "TLMIN", "TLMAX",
+    "TDMIN", "TDMAX"};
+  for (size_t i = 0; i < sizeof(exact) / sizeof(exact[0]); i++)
+    if (strcmp(key, exact[i]) == 0)
+      return true;
+  for (size_t i = 0; i < sizeof(numbered) / sizeof(numbered[0]); i++) {
+    const size_t n = strlen(numbered[i]);
+    if (strncmp(key, numbered[i], n) != 0)
+      continue;
+    const char* d = key + n;
+    while (isdigit((unsigned char)*d))
+      d++;
+    if (*d == '\0')
+      return true;
+  }
+  return false;
+}
+
+/* The current HDU's own keywords, as metadata of @p owner. */
+static int keywords_add(fitsfile* f, sif_file_info_t* info,
+  sif_file_info_owner_t owner, uint32_t index) {
+  int fstatus = 0, n_keys = 0;
+  fits_get_hdrspace(f, &n_keys, NULL, &fstatus);
+  for (int k = 1; fstatus == 0 && k <= n_keys; k++) {
+    char key[FLEN_KEYWORD], value[FLEN_VALUE];
+    fits_read_keyn(f, k, key, value, NULL, &fstatus);
+    if (fstatus == 0 && !is_structural(key) && value[0])
+      sif__file_info_meta_parse(info, owner, index, key, value);
+  }
+  return fstatus;
+}
+
+/* A column's type as sif_file_column_t names it, from cfitsio's code for
+ * what it reads as -- which counts TZERO, so the unsigned columns FITS stores
+ * offset come out unsigned. */
+static const char* column_type(int type) {
+  switch (type < 0 ? -type : type) {
+  case TBIT:
+    return "bit";
+  case TBYTE:
+    return "uint8";
+  case TSBYTE:
+    return "int8";
+  case TLOGICAL:
+    return "bool";
+  case TSTRING:
+    return "string";
+  case TSHORT:
+    return "int16";
+  case TUSHORT:
+    return "uint16";
+  case TINT:
+  case TLONG:
+    return "int32";
+  case TUINT:
+  case TULONG:
+    return "uint32";
+  case TLONGLONG:
+    return "int64";
+  case TULONGLONG:
+    return "uint64";
+  case TFLOAT:
+    return "float32";
+  case TDOUBLE:
+    return "float64";
+  case TCOMPLEX:
+    return "complex64";
+  case TDBLCOMPLEX:
+    return "complex128";
+  default:
+    return "other";
+  }
+}
+
+static const char* image_type(int bitpix) {
+  switch (bitpix) {
+  case BYTE_IMG:
+    return "uint8";
+  case SHORT_IMG:
+    return "int16";
+  case LONG_IMG:
+    return "int32";
+  case LONGLONG_IMG:
+    return "int64";
+  case FLOAT_IMG:
+    return "float32";
+  case DOUBLE_IMG:
+    return "float64";
+  default:
+    return "other";
+  }
+}
+
+static int describe_table(
+  fitsfile* f, sif_file_info_t* info, const char* name) {
+  int fstatus = 0, n_cols = 0;
+  LONGLONG n_rows = 0;
+  fits_get_num_rowsll(f, &n_rows, &fstatus);
+  fits_get_num_cols(f, &n_cols, &fstatus);
+  if (fstatus)
+    return fstatus;
+
+  const uint32_t t = sif__file_info_table(info, name, (uint64_t)n_rows);
+  for (int c = 1; c <= n_cols; c++) {
+    char key[FLEN_KEYWORD], col[FLEN_VALUE], unit[FLEN_VALUE];
+    fits_make_keyn("TTYPE", c, key, &fstatus);
+    key_string(f, key, col);
+    fits_make_keyn("TUNIT", c, key, &fstatus);
+    key_string(f, key, unit);
+    int type = 0;
+    LONGLONG repeat = 0, width = 0;
+    fits_get_eqcoltypell(f, c, &type, &repeat, &width, &fstatus);
+    if (fstatus)
+      return fstatus;
+    /* A string's repeat is its length, not a count of values. */
+    const bool text = type == TSTRING || type == -TSTRING;
+    char number[16];
+    snprintf(number, sizeof(number), "%d", c);
+    sif__file_info_column(info, t, col[0] ? col : number, column_type(type),
+      text || repeat < 1 ? 1 : (uint64_t)repeat, unit);
+  }
+  return keywords_add(f, info, SIF__FILE_INFO_TABLE, t);
+}
+
+static int describe_image(
+  fitsfile* f, sif_file_info_t* info, const char* name, bool primary) {
+  int fstatus = 0, naxis = 0, bitpix = 0;
+  long naxes[SIF_FILE_ARRAY_MAX_RANK] = {0};
+  fits_get_img_equivtype(f, &bitpix, &fstatus);
+  fits_get_img_dim(f, &naxis, &fstatus);
+  if (naxis > SIF_FILE_ARRAY_MAX_RANK)
+    naxis = SIF_FILE_ARRAY_MAX_RANK;
+  fits_get_img_size(f, naxis, naxes, &fstatus);
+  if (fstatus)
+    return fstatus;
+
+  /* An empty primary HDU, the usual one in front of the tables, holds no
+   * data: its keywords are the file's. */
+  if (naxis == 0 && primary)
+    return keywords_add(f, info, SIF__FILE_INFO_FILE, 0);
+
+  /* FITS lists the fastest axis first; C and numpy the slowest. */
+  uint64_t dims[SIF_FILE_ARRAY_MAX_RANK];
+  for (int a = 0; a < naxis; a++)
+    dims[a] = (uint64_t)naxes[naxis - 1 - a];
+  const uint32_t i =
+    sif__file_info_array(info, name, image_type(bitpix), (uint32_t)naxis, dims);
+  return keywords_add(f, info, SIF__FILE_INFO_ARRAY, i);
+}
+
+int sif__file_info_fits(sif_file_info_t* info) {
+  const char* path = info->path;
+  fitsfile* f = NULL;
+  if (open_file(path, READONLY, &f) != SIF_OK)
+    return SIF_ERR_IO;
+
+  int fstatus = 0, n_hdus = 0;
+  fits_get_num_hdus(f, &n_hdus, &fstatus);
+  if (fstatus == 0)
+    sif__file_info_detail(info, "%d HDU%s", n_hdus, n_hdus == 1 ? "" : "s");
+
+  int i = 1;
+  for (; fstatus == 0 && i <= n_hdus; i++) {
+    int hdutype = 0;
+    fits_movabs_hdu(f, i, &hdutype, &fstatus);
+    if (fstatus)
+      break;
+    char name[FLEN_VALUE];
+    key_string(f, "EXTNAME", name);
+    if (!name[0])
+      snprintf(name, sizeof(name), "HDU %d", i - 1);
+    fstatus = is_table(hdutype) ? describe_table(f, info, name)
+                                : describe_image(f, info, name, i == 1);
+  }
+
+  int close_status = 0;
+  fits_close_file(f, &close_status);
+
+  /* Described as far as it could be read; whether the file is whole is
+   * sif_fits_check()'s question. */
+  if (fstatus) {
+    uint64_t bytes = 0;
+    if (is_truncated(path, &bytes))
+      SIF_LOG_WARNING(TAG,
+        "%s: described up to HDU %d: the file is cut short at %" PRIu64
+        " bytes",
+        path, i - 1, bytes);
+    else {
+      char text[FLEN_STATUS];
+      fits_get_errstatus(fstatus, text);
+      SIF_LOG_WARNING(TAG, "%s: described up to HDU %d: %s", path, i - 1, text);
+    }
+    fits_clear_errmsg();
+  }
+  return SIF_OK;
 }
 
 /* The range of every numeric column of the current table, a block of rows at
