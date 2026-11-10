@@ -14,15 +14,18 @@
  * **arrays**, the datasets that are not columns of a table, such as a grid
  * of cells. Each format maps onto it:
  *
- * | format     | tables                                | metadata             |
- * |------------|---------------------------------------|----------------------|
- * | ASCII      | one, columns named by a header line   | `#key=value` lines   |
- * | FITS       | one per table HDU; images are arrays  | header keywords      |
- * | HDF5       | one per group, of its datasets of one length | attributes    |
- * | GADGET     | one per particle type present         | the snapshot header  |
- * | .xfield    | one: the particles                    | the header           |
- * | .xgrid     | none; the cells are an array          | the header           |
- * | checkpoint | one: the voids so far                 | the run's parameters |
+ * ==========  ==========================================  ====================
+ * format      tables                                      metadata
+ * ==========  ==========================================  ====================
+ * ASCII       one, columns named by a header line         ``#key=value`` lines
+ * FITS        one per table HDU; images are arrays        header keywords
+ * HDF5        one per group, of its datasets of one       attributes
+ *             length
+ * GADGET      one per particle type present               the snapshot header
+ * .xfield     one: the particles                          the header
+ * .xgrid      none; the cells are an array                the header
+ * checkpoint  one: the voids so far                       the run's parameters
+ * ==========  ==========================================  ====================
  *
  * A description reads what a file says about itself -- its headers, its
  * structure -- and no values, except that an ASCII file has no header and
