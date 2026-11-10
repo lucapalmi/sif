@@ -13,6 +13,7 @@
 
 #include "sif/io/fits_io.h"
 
+#include "io/file_check_internal.h"
 #include "io/file_info_internal.h"
 #include "io/fits_internal.h"
 #include "sif/utils/logger.h"
@@ -52,10 +53,9 @@ int sif_fits_inspect(const char* path) { return refuse(path); }
 
 int sif__file_info_fits(sif_file_info_t* info) { return refuse(info->path); }
 
-int sif_fits_check(const char* path, bool deep, FILE* report) {
-  (void)deep;
-  (void)report;
-  return refuse(path);
+int sif__file_check_fits(sif_file_check_t* check) {
+  (void)check;
+  return SIF_OK; /* never reached: the description refused */
 }
 
 int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalogue) {

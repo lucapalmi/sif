@@ -18,6 +18,7 @@
 
 #include "sif/io/gadget_io.h"
 
+#include "io/file_check_internal.h"
 #include "io/file_info_internal.h"
 #include "io/gadget_internal.h"
 #include "io/internal.h"
@@ -141,7 +142,7 @@ typedef struct {
   /* The IDs are never read; where they are is for the description. */
   block_t head, pos, vel, id, mass;
   /* Bytes per component in each block, 4 or 8, fixed at open. */
-  uint32_t pos_elem, vel_elem, mass_elem;
+  uint32_t pos_elem, vel_elem, id_elem, mass_elem;
 } bin_file_t;
 
 /* Why a record's framing is broken, for the message. */
@@ -527,6 +528,8 @@ static int bin_open(const char* path, sif_gadget_format_t format, bool sw,
 
   bf->pos_elem = elem_size(&bf->pos, n, 3);
   h->precision = bf->pos_elem;
+  if (bf->id.present)
+    bf->id_elem = elem_size(&bf->id, n, 1);
 
   if (bf->vel.present) {
     bf->vel_elem = elem_size(&bf->vel, n, 3);
@@ -572,6 +575,12 @@ static int bin_read(bin_file_t* bf, const sif_gadget_header_t* h,
     for (uint32_t t = 0; t < ptype; t++)
       if (h->mass_table[t] == 0)
         type_off += h->n_part_file[t];
+  } else if (block == SIF__GADGET_BLOCK_ID) {
+    b = &bf->id;
+    elem = bf->id_elem;
+    comps = 1;
+    for (uint32_t t = 0; t < ptype; t++)
+      type_off += h->n_part_file[t];
   } else {
     b = block == SIF__GADGET_BLOCK_POS ? &bf->pos : &bf->vel;
     elem = block == SIF__GADGET_BLOCK_POS ? bf->pos_elem : bf->vel_elem;
@@ -582,6 +591,7 @@ static int bin_read(bin_file_t* bf, const sif_gadget_header_t* h,
 
   const char* name = block == SIF__GADGET_BLOCK_POS   ? "POS"
                      : block == SIF__GADGET_BLOCK_VEL ? "VEL"
+                     : block == SIF__GADGET_BLOCK_ID  ? "ID"
                                                       : "MASS";
   if (!b->present || elem == 0) {
     SIF_LOG_ERROR(TAG, "%s: no %s block", bf->path, name);
@@ -603,7 +613,11 @@ static int bin_read(bin_file_t* bf, const sif_gadget_header_t* h,
     return SIF_ERR_IO;
   }
 
-  if (elem == 4) {
+  if (block == SIF__GADGET_BLOCK_ID) {
+    for (uint64_t i = 0; i < n_vals; i++)
+      out[i] = elem == 4 ? (double)get_u32(scratch + 4 * i, bf->swapped)
+                         : (double)get_u64(scratch + 8 * i, bf->swapped);
+  } else if (elem == 4) {
     for (uint64_t i = 0; i < n_vals; i++) {
       const uint32_t u = get_u32(scratch + 4 * i, bf->swapped);
       float v;
@@ -1016,7 +1030,6 @@ static void binary_columns(
   sif_file_info_t* info, uint32_t table, const snap_file_t* sf, uint32_t t) {
   const bin_file_t* bf = &sf->bin;
   const sif_gadget_header_t* h = &sf->header;
-  const uint64_t n = n_part_sum(h);
   if (bf->pos.present)
     sif__file_info_column(
       info, table, "POS", elem_type(bf->pos_elem, false), 3, NULL);
@@ -1025,7 +1038,7 @@ static void binary_columns(
       info, table, "VEL", elem_type(bf->vel_elem, false), 3, NULL);
   if (bf->id.present)
     sif__file_info_column(
-      info, table, "ID", elem_type(elem_size(&bf->id, n, 1), true), 1, NULL);
+      info, table, "ID", elem_type(bf->id_elem, true), 1, NULL);
   if (bf->mass.present && h->mass_table[t] == 0)
     sif__file_info_column(
       info, table, "MASS", elem_type(bf->mass_elem, false), 1, NULL);
@@ -1126,177 +1139,160 @@ int sif__file_info_gadget(sif_file_info_t* info) {
 }
 
 /* ------------------------------------------------------------------------ */
-/* the check                                                                 */
+/* the file check                                                            */
 /* ------------------------------------------------------------------------ */
 
-/* The ranges a deep check keeps for one particle type. */
-typedef struct {
-  sif__io_stats_t pos[3], mass;
-  uint64_t outside, negative;
-} type_stats_t;
+/* The table the description gave particle type @p t, or UINT32_MAX. */
+static uint32_t type_table(const sif_file_check_t* c, uint32_t t) {
+  char a[32], b[32];
+  snprintf(a, sizeof(a), "PartType%u", t);
+  snprintf(b, sizeof(b), "ParticleType%u", t);
+  for (uint32_t k = 0; k < c->info->n_tables; k++)
+    if (strcmp(c->info->tables[k].name, a) == 0 ||
+        strcmp(c->info->tables[k].name, b) == 0)
+      return k;
+  return UINT32_MAX;
+}
 
-/* Every position, and every mass a particle carries, of one file. */
-static int check_file_values(snap_file_t* sf, double box, type_stats_t* ts,
-  double* pos, double* mass, unsigned char* scratch) {
+/* What the check counts of one particle type, over every file. */
+typedef struct {
+  uint64_t outside, negative;
+} type_counts_t;
+
+/* The four blocks the reader reads, by the name each format gives them. */
+static const sif_gadget_block_t BLOCKS[4] = {SIF__GADGET_BLOCK_POS,
+  SIF__GADGET_BLOCK_VEL, SIF__GADGET_BLOCK_ID, SIF__GADGET_BLOCK_MASS};
+static const char* const BINARY_NAMES[5] = {"POS", "VEL", "ID", "MASS", NULL};
+static const char* const HDF5_NAMES[5] = {
+  "Coordinates", "Velocities", "ParticleIDs", "Masses", NULL};
+
+/* Every block of every particle type of one file, into the columns of the
+ * type's table. A block that cannot be read has said why, and the rest of
+ * the type is still read. */
+static int check_file_blocks(sif_file_check_t* c, snap_file_t* sf,
+  const char* file, double box, type_counts_t* counts, double* buf,
+  unsigned char* scratch) {
   const sif_gadget_header_t* h = &sf->header;
+  const char* const* names = sf->is_hdf5 ? HDF5_NAMES : BINARY_NAMES;
   for (uint32_t t = 0; t < h->n_types; t++) {
     const uint64_t n = h->n_part_file[t];
-    const bool masses = h->mass_table[t] == 0;
-    for (uint64_t start = 0; start < n; start += CHUNK) {
-      const uint64_t c = (n - start < CHUNK) ? n - start : CHUNK;
-      int status =
-        snap_read(sf, t, SIF__GADGET_BLOCK_POS, start, c, pos, scratch);
-      if (status == SIF_OK && masses)
-        status =
-          snap_read(sf, t, SIF__GADGET_BLOCK_MASS, start, c, mass, scratch);
-      if (status != SIF_OK)
-        return status;
-
-      for (uint64_t j = 0; j < c; j++) {
-        bool out = false;
-        for (int k = 0; k < 3; k++) {
-          const double v = pos[3 * j + k];
-          sif__io_stats_add(&ts[t].pos[k], v);
-          out |= box > 0 && !sif__box_accepts(v, box);
-        }
-        ts[t].outside += out;
-        if (masses) {
-          sif__io_stats_add(&ts[t].mass, mass[j]);
-          ts[t].negative += mass[j] < 0;
+    const uint32_t table = type_table(c, t);
+    if (n == 0 || table == UINT32_MAX)
+      continue;
+    for (int b = 0; b < 4; b++) {
+      const uint32_t col = sif__file_check_column_index(c, table, names[b]);
+      if (col == UINT32_MAX ||
+          (BLOCKS[b] == SIF__GADGET_BLOCK_MASS && h->mass_table[t] > 0))
+        continue;
+      sif_file_stats_t* st = sif__file_check_column(c, table, col);
+      const int comps = b < 2 ? 3 : 1;
+      for (uint64_t start = 0; start < n; start += CHUNK) {
+        const uint64_t m = n - start < CHUNK ? n - start : CHUNK;
+        if (snap_read(sf, t, BLOCKS[b], start, m, buf, scratch) != SIF_OK)
+          break;
+        for (uint64_t j = 0; j < m; j++) {
+          if (BLOCKS[b] == SIF__GADGET_BLOCK_POS) {
+            bool out = false;
+            for (int k = 0; k < 3; k++)
+              out |= box > 0 && !sif__box_accepts(buf[3 * j + k], box);
+            counts[t].outside += out;
+          } else if (BLOCKS[b] == SIF__GADGET_BLOCK_MASS) {
+            counts[t].negative += buf[j] < 0;
+          }
+          for (int k = 0; k < comps; k++)
+            sif__file_stats_add(st, buf[comps * j + k]);
         }
       }
+    }
+    /* What else an HDF5 file keeps of the type: the gas's energies and
+     * densities, a run's extra fields. */
+    if (sf->is_hdf5) {
+      const int status = sif__file_check_hdf5_group(
+        c, table, file, c->info->tables[table].name, HDF5_NAMES);
+      if (status != SIF_OK)
+        return status;
     }
   }
   return SIF_OK;
 }
 
-int sif_gadget_check(
-  const char* path, sif_gadget_format_t format, bool deep, FILE* report) {
-  if (!path) {
-    SIF_LOG_ERROR(TAG, "sif_gadget_check: NULL path");
-    return SIF_ERR_INVALID;
-  }
-  if (!slot_ok((int)format, SIF_GADGET_FORMAT_AUTO, 4, "format"))
-    return SIF_ERR_INVALID;
-
+/*
+ * Every file of the snapshot opens and is whole -- opening a binary file
+ * walks its records -- and belongs to the same snapshot as the first; the
+ * files' counts add up to the header's totals; every block is read through.
+ * Of the contents: positions inside [0, BoxSize), masses not negative.
+ */
+int sif__file_check_gadget(sif_file_check_t* c) {
+  sif__file_check_content(c, "GADGET snapshot");
   snap_path_t sp;
-  int status = path_resolve(path, &sp);
-  if (status != SIF_OK)
-    return status;
-
+  if (path_resolve(c->info->path, &sp) != SIF_OK)
+    return SIF_OK;
   snap_file_t sf;
-  status = snap_open(sp.first, format, &sf);
-  if (status != SIF_OK)
-    return status;
+  if (snap_open(sp.first, SIF_GADGET_FORMAT_AUTO, &sf) != SIF_OK)
+    return SIF_OK;
   const sif_gadget_header_t h0 = sf.header;
   snap_close(&sf);
 
-  if (report) {
-    fprintf(report, "%s\n", sp.first);
-    sif_gadget_print_header(&h0, report);
-    fflush(report);
+  double* buf = malloc(3 * CHUNK * sizeof(double));
+  unsigned char* scratch = malloc(3 * CHUNK * 8);
+  if (!buf || !scratch) {
+    free(buf);
+    free(scratch);
+    SIF_LOG_ERROR(TAG, "out of memory: read buffers");
+    return SIF_ERR_ALLOC;
   }
 
-  sif__io_problems_t pr = {TAG, 0};
-  type_stats_t ts[SIF_GADGET_MAX_TYPES];
-  memset(ts, 0, sizeof(ts));
+  type_counts_t counts[SIF_GADGET_MAX_TYPES];
+  memset(counts, 0, sizeof(counts));
   uint64_t sums[SIF_GADGET_MAX_TYPES] = {0};
-
-  double* pos = NULL;
-  double* mass = NULL;
-  unsigned char* scratch = NULL;
-  if (deep) {
-    pos = malloc(3 * CHUNK * sizeof(double));
-    mass = malloc(CHUNK * sizeof(double));
-    scratch = malloc(3 * CHUNK * 8);
-    if (!pos || !mass || !scratch) {
-      free(pos);
-      free(mass);
-      free(scratch);
-      SIF_LOG_ERROR(TAG, "out of memory: read buffers");
-      return SIF_ERR_ALLOC;
-    }
-  }
-
-  /* Every file, whatever is wrong with an earlier one: a check lists what it
-   * finds rather than stopping at it. A file that cannot be opened has said
-   * why already, and is counted. */
-  char file[PATH_CAP];
   uint32_t n_open = 0;
-  for (uint32_t i = 0; i < h0.n_files; i++) {
-    if (path_file(&sp, h0.n_files, i, file) != SIF_OK) {
-      pr.n++;
+  int status = SIF_OK;
+  const uint32_t n_files = h0.n_files ? h0.n_files : 1;
+  for (uint32_t i = 0; i < n_files && status == SIF_OK; i++) {
+    char file[PATH_CAP];
+    if (path_file(&sp, n_files, i, file) != SIF_OK)
       break;
-    }
-    if (snap_open(file, h0.format, &sf) != SIF_OK) {
-      pr.n++;
+    if (snap_open(file, h0.format, &sf) != SIF_OK)
       continue;
-    }
     n_open++;
-
     const sif_gadget_header_t* hi = &sf.header;
     if (hi->n_types != h0.n_types || hi->n_files != h0.n_files) {
-      sif__io_problem(&pr,
-        "%s: %u types, %u files; %s: %u types, %u files (not the same "
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: %u types, %u files (expected %u and %u, as %s: not the same "
         "snapshot)",
-        file, hi->n_types, hi->n_files, sp.first, h0.n_types, h0.n_files);
+        file, hi->n_types, hi->n_files, h0.n_types, h0.n_files, sp.first);
     } else {
       for (uint32_t t = 0; t < h0.n_types; t++)
         sums[t] += hi->n_part_file[t];
-      if (deep &&
-          check_file_values(&sf, h0.box_size, ts, pos, mass, scratch) != SIF_OK)
-        pr.n++;
+      status =
+        check_file_blocks(c, &sf, file, h0.box_size, counts, buf, scratch);
     }
     snap_close(&sf);
   }
-
-  free(pos);
-  free(mass);
+  free(buf);
   free(scratch);
+  if (status != SIF_OK)
+    return status;
 
-  if (n_open == h0.n_files) {
+  if (n_open == n_files)
     for (uint32_t t = 0; t < h0.n_types; t++)
       if (sums[t] != h0.n_part_total[t])
-        sif__io_problem(&pr,
-          "%s: type %u: %u files hold %" PRIu64 ", NumPart_Total %" PRIu64,
-          sp.first, t, h0.n_files, sums[t], h0.n_part_total[t]);
+        sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+          "%s: type %u: %u files hold %" PRIu64
+          " (expected NumPart_Total, %" PRIu64 ")",
+          sp.first, t, n_files, sums[t], h0.n_part_total[t]);
+  for (uint32_t t = 0; t < h0.n_types; t++) {
+    if (counts[t].outside)
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: type %u: %" PRIu64 " positions outside [0, %g) or not finite "
+        "(expected inside the box)",
+        sp.first, t, counts[t].outside, h0.box_size);
+    if (counts[t].negative)
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: type %u: %" PRIu64 " negative masses (expected >= 0)", sp.first, t,
+        counts[t].negative);
   }
-
-  if (deep) {
-    for (uint32_t t = 0; t < h0.n_types; t++) {
-      if (ts[t].outside)
-        sif__io_problem(&pr,
-          "%s: type %u: %" PRIu64 " of %" PRIu64
-          " positions outside [0, %g) or not finite",
-          sp.first, t, ts[t].outside, ts[t].pos[0].n, h0.box_size);
-      if (ts[t].negative)
-        sif__io_problem(&pr, "%s: type %u: %" PRIu64 " negative masses",
-          sp.first, t, ts[t].negative);
-    }
-  }
-
-  if (report) {
-    fprintf(report, "files read    %u of %u\n", n_open, h0.n_files);
-    if (deep) {
-      sif__io_stats_header(report, 10);
-      static const char* const axis[3] = {"x", "y", "z"};
-      for (uint32_t t = 0; t < h0.n_types; t++) {
-        char name[16];
-        for (int k = 0; k < 3; k++) {
-          if (ts[t].pos[k].n == 0)
-            continue;
-          snprintf(name, sizeof(name), "%u %s", t, axis[k]);
-          sif__io_stats_print(report, name, 10, &ts[t].pos[k]);
-        }
-        if (ts[t].mass.n > 0) {
-          snprintf(name, sizeof(name), "%u mass", t);
-          sif__io_stats_print(report, name, 10, &ts[t].mass);
-        }
-      }
-    }
-  }
-
-  return sif__io_problems_end(&pr, report);
+  return SIF_OK;
 }
 
 /* ------------------------------------------------------------------------ */

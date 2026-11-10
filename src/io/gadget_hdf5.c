@@ -296,8 +296,10 @@ int sif__gadget_h5_read(sif_gadget_h5_file_t* f, uint32_t ptype,
 
   const char* dataset = block == SIF__GADGET_BLOCK_POS   ? "Coordinates"
                         : block == SIF__GADGET_BLOCK_VEL ? "Velocities"
+                        : block == SIF__GADGET_BLOCK_ID  ? "ParticleIDs"
                                                          : "Masses";
-  const int comps = block == SIF__GADGET_BLOCK_MASS ? 1 : 3;
+  const int comps =
+    block == SIF__GADGET_BLOCK_MASS || block == SIF__GADGET_BLOCK_ID ? 1 : 3;
 
   char name[64];
   char gname[32];

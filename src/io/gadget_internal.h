@@ -17,6 +17,7 @@
 #ifndef SIF__IO_GADGET_INTERNAL_H
 #define SIF__IO_GADGET_INTERNAL_H
 
+#include "sif/io/file_check.h"
 #include "sif/io/gadget_io.h"
 
 #include <stdbool.h>
@@ -26,7 +27,9 @@
 typedef enum {
   SIF__GADGET_BLOCK_POS,
   SIF__GADGET_BLOCK_VEL,
-  SIF__GADGET_BLOCK_MASS
+  SIF__GADGET_BLOCK_MASS,
+  /* Read only by the check, as doubles: exact up to 2^53. */
+  SIF__GADGET_BLOCK_ID
 } sif_gadget_block_t;
 
 /** @brief An open HDF5 snapshot file. */
@@ -55,6 +58,15 @@ int sif__gadget_h5_open(const char* path, sif_gadget_h5_file_t** out_file,
  */
 int sif__gadget_h5_read(sif_gadget_h5_file_t* file, uint32_t ptype,
   sif_gadget_block_t block, uint64_t start, uint64_t count, double* out);
+
+/**
+ * @brief The datasets of group @p group of @p path, read through into the
+ * columns of table @p table of a check, by name, except those named in
+ * @p skip (NULL-terminated): what of an HDF5 snapshot the GADGET reader does
+ * not read itself. Defined with the HDF5 check.
+ */
+int sif__file_check_hdf5_group(sif_file_check_t* check, uint32_t table,
+  const char* path, const char* group, const char* const* skip);
 
 /** @brief Close a file. NULL is accepted. */
 void sif__gadget_h5_close(sif_gadget_h5_file_t* file);

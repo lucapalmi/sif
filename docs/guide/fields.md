@@ -593,15 +593,15 @@ table PartType1, 134217728 rows, 3 columns
 | .xgrid | none; the cells are an array | the header |
 | checkpoint | one: the voids so far | the run's parameters |
 
-`sif-inspect --check` checks a file instead, without loading it, and lists
-every problem; `--deep` also reads every value and reports the range of each
-column. For ASCII tables, `--columns`, `--delimiter` and `--skip-header` check
-the file against a column format. In C these are `sif_field_check_ascii()`,
-`sif_fits_check()`, `sif_hdf5_check()`, `sif_gadget_check()` and
-`sif_field_check_xfield()`.
+`sif_file_check()`, and `sif-inspect --check`, reads all of a file instead:
+that it is whole (sizes, record framing, checksums, every file of a
+snapshot), that every value reads, and that its contents make sense for what
+it holds -- positions inside a snapshot's box, a catalogue's radii positive.
+The report is the description with each column's range beside it, then
+every problem, each an error or a warning:
 
 ```bash
-sif-inspect --check --deep --columns "* x y z w" --delimiter , --skip-header 1 halos.csv
+sif-inspect --check halos.csv
 ```
 
 ## Building a field from arrays

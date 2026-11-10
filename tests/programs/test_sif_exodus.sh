@@ -824,8 +824,17 @@ if [ -n "${INSPECT:-}" ]; then
   "$INSPECT" --check blocked.txt.ckpt >out.txt 2>err.txt
   status=$?
   expect_status 0 "sif-inspect --check on a checkpoint"
-  grep -q '^progress      all 4 rungs done$' out.txt ||
+  grep -q '^result    sound$' out.txt ||
     fail "sif-inspect --check on a checkpoint: $(cat out.txt)"
+  # A flipped bit in the voids: the checksum a resume would refuse.
+  cp blocked.txt.ckpt flipped.ckpt
+  size=$(wc -c <flipped.ckpt)
+  printf '\377' | dd of=flipped.ckpt bs=1 seek=$((size - 2)) conv=notrunc 2>/dev/null
+  "$INSPECT" --check flipped.ckpt >out.txt 2>err.txt
+  status=$?
+  expect_status 2 "sif-inspect --check on a damaged checkpoint"
+  grep -q 'corrupt: checksum' out.txt ||
+    fail "sif-inspect --check on a damaged checkpoint: $(cat out.txt)"
 fi
 
 run -D out=blocked.txt --check holes.lua

@@ -785,41 +785,37 @@ sif_catalogue_t* voids = sif_finder_exodus(grid, mesh, radii, n_radii,
 
 `sif-inspect FILE` says what a data file holds -- its format, metadata,
 tables and columns -- and `sif-inspect --check FILE` checks it, the way
-`sif-exodus --check` checks a configuration. It tells what the file is from
-its contents, checks it without loading it, and prints a summary. Every problem it finds is listed, each with
-where it is: the line of an ASCII table, the record and byte offset of a
-GADGET file, the HDU of a FITS file. It exits with 0 for a sound file and 2
-otherwise.
+`sif-exodus --check` checks a configuration, reading all of it. It tells
+what the file is from its contents, and checks three things:
+
+1. the file is whole: sizes agree with the headers, record framing is
+   intact, checksums match where the format keeps them, every file of a
+   multi-file snapshot is there and the counts add up;
+2. every value reads: each column is read through and its range given, and
+   every field of an ASCII table is of its column's type;
+3. the contents make sense: a snapshot's positions inside its box and its
+   masses not negative, a catalogue's radii positive and its count what its
+   header says, a checkpoint one a run could resume from.
+
+Every problem is listed with where it is -- the line of an ASCII table, the
+record and byte offset of a GADGET file, the HDU of a FITS file -- as an
+error, or a warning for a file that is readable but not as it should be. It
+exits with 0 when there is no error and 2 otherwise.
 
 ```bash
-# an ASCII table: every row has the same columns, and every field is a
-# number. The summary gives each column's range
+# an ASCII table: every row has the fields of the first, every number parses
 sif-inspect --check galaxies.txt
 
-# the same table against the column format a configuration would read it
-# with, as the reader will: short rows, fields that are not numbers, NaNs
-sif-inspect --check --columns "x y z w" --delimiter , --skip-header 1 galaxies.csv
-
-# a GADGET snapshot, by its base name: every file opens, its records are
-# whole, and the files add up to the header's totals
+# a GADGET snapshot, by its base name: every file, every block
 sif-inspect --check snapdir_010/snap_010
 
-# a FITS or HDF5 file: its tables, or its tree of groups and datasets
+# a FITS or HDF5 file: every table and dataset
 sif-inspect --check randoms.fits
 ```
 
-These checks read the structure of the file and not its values, so they are
-quick even for a large snapshot. `--deep` reads every value too, and gives
-the range of each column. A GADGET snapshot's positions have to lie inside
-the box, and an `.xfield` has to match its checksum:
-
-```bash
-sif-inspect --check --deep snapdir_010/snap_010
-```
-
-`--format` overrides the guess: `--format hdf5` lists an HDF5 GADGET
-snapshot as a plain HDF5 file, and `--format ascii` checks a file whose
-contents do not say what it is.
+It reads the whole file, so it takes as long as reading it. `--format`
+overrides the guess: `--format hdf5` checks an HDF5 GADGET snapshot as a
+plain HDF5 file.
 
 On a configuration, `sif-exodus --check --deep` reads the inputs as the run
 would, before anything is computed. Every bad row of an ASCII input is

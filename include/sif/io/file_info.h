@@ -28,8 +28,8 @@
  * structure -- and no values, except that an ASCII file has no header and
  * is scanned for its row count. It checks nothing either: a file is
  * described as far as it can be read, and only one that cannot be read at
- * all is refused. The format's own check (sif_field_check_ascii(),
- * sif_fits_check(), ...) is what says whether a file is sound.
+ * all is refused. sif_file_check() (file_check.h) is what says whether a
+ * file is sound.
  */
 
 #ifndef SIF_IO_FILE_INFO_H

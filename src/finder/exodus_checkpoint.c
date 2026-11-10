@@ -41,6 +41,7 @@
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 
+#include "io/file_check_internal.h"
 #include "io/file_info_internal.h"
 #include "io/internal.h"
 #include "utils/logger_internal.h"
@@ -484,80 +485,6 @@ sif_catalogue_t* sif_finder_exodus_checkpoint_read(
   return cat;
 }
 
-int sif_finder_exodus_checkpoint_check(const char* filepath, FILE* report) {
-  if (!filepath) {
-    SIF_LOG_ERROR(TAG, "filepath: NULL");
-    return SIF_ERR_INVALID;
-  }
-
-  sif_finder_exodus_checkpoint_t h;
-  sif_real* radii = NULL;
-  sif_catalogue_t* cat = NULL;
-  const int status = sif__exodus_checkpoint_load(filepath, &h, &radii, &cat);
-  if (status != SIF_OK)
-    return status;
-
-  if (report) {
-    const sif_real r_hi = radii[0], r_lo = radii[h.n_radii - 1];
-    sif_real v_lo = 0.0f, v_hi = 0.0f;
-    for (uint64_t i = 0; i < cat->n_voids; i++) {
-      v_lo = i ? SIF_REAL_MIN(v_lo, cat->radii[i]) : cat->radii[i];
-      v_hi = i ? SIF_REAL_MAX(v_hi, cat->radii[i]) : cat->radii[i];
-    }
-
-    fprintf(report, "%s\n", filepath);
-    fprintf(report,
-      "format        exodus checkpoint version %u, %s precision\n", h.version,
-      h.is_double ? "double" : "single");
-    fprintf(report, "run           %s, %s\n", h.is_survey ? "survey" : "box",
-      h.is_weighted ? "weighted" : "unweighted");
-    fprintf(report, "ladder        %u radii, %g down to %g\n", h.n_radii,
-      (double)r_hi, (double)r_lo);
-    if (h.next_rung < h.n_radii)
-      fprintf(report, "progress      %u of %u rungs done, next at %g\n",
-        h.next_rung, h.n_radii, (double)radii[h.next_rung]);
-    else
-      fprintf(report, "progress      all %u rungs done\n", h.n_radii);
-    fprintf(report, "voids         %" PRIu64, h.n_voids);
-    if (h.n_voids)
-      fprintf(report, ", radii %g to %g", (double)v_lo, (double)v_hi);
-    if (h.n_prior)
-      fprintf(report, " (%" PRIu64 " from a prior catalogue)", h.n_prior);
-    fputc('\n', report);
-    /* Stored widened from a float: printed at the float's precision, so a
-     * threshold of -0.7 does not read as -0.69999999. */
-    fprintf(report, "threshold     %.7g\n", h.threshold);
-    fprintf(report, "overlap       %.7g\n", h.overlap_fraction);
-    fprintf(report, "search factor %g\n",
-      (double)sif__finder_search_factor(h.options));
-    fprintf(report, "CIC window    %s\n",
-      (h.options & SIF_FINDER_KEEP_CIC_WINDOW) ? "kept" : "deconvolved");
-    fprintf(report, "centres       %s\n", centres_label(h.options));
-    fprintf(report, "reach         %s\n",
-      (h.options & SIF_FINDER_EXTEND_REACH) ? "extended" : "fixed");
-    fprintf(report, "displacement  %s\n",
-      (h.options & SIF_FINDER_DISPLACE) ? "on" : "off");
-    fprintf(report, "grid          %u^3 cells over %.8g, %s%s\n",
-      h.grid_n_cells, h.box_length, scheme_label(h.assignment),
-      (h.assignment >> 8) ? " interlaced" : "");
-    fprintf(report, "window        deconvolved %s\n",
-      (h.options & SIF_FINDER_ALIASING_WINDOW) ? "allowing for aliasing"
-                                               : "in full");
-    fprintf(report, "tracers       %" PRIu64 ", total weight %.10g\n",
-      h.n_particles, h.total_weight);
-    if (h.is_survey) {
-      fprintf(report, "randoms       %" PRIu64 ", total weight %.10g\n",
-        h.random_n_particles, h.random_total_weight);
-      fprintf(report, "offset        (%.8g, %.8g, %.8g)\n", h.offset[0],
-        h.offset[1], h.offset[2]);
-    }
-  }
-
-  sif_free_aligned(radii);
-  sif_catalogue_free(cat);
-  return SIF_OK;
-}
-
 /* --- the description --- */
 
 /* A run parameter stored widened from a float, at the float's precision: so
@@ -575,8 +502,7 @@ int sif__file_info_checkpoint(sif_file_info_t* info) {
     return sif__io_os_error(TAG, path, NULL, errno);
 
   /* The header and the ladder, as written: no checksum, and not the voids,
-   * which are what the run has to read; sif_finder_exodus_checkpoint_check()
-   * reads it whole. */
+   * which are what the run has to read; the check (below) reads it whole. */
   sif_finder_exodus_checkpoint_t h;
   int status = SIF_OK;
   double r_hi = 0.0, r_lo = 0.0, r_next = 0.0;
@@ -670,5 +596,74 @@ int sif__file_info_checkpoint(sif_file_info_t* info) {
     sif__file_info_column(info, t, cols[k], type, 1, NULL);
   const uint64_t n = h.n_radii;
   sif__file_info_array(info, "radii", type, 1, &n);
+  return SIF_OK;
+}
+
+/* --- the check --- */
+
+/*
+ * Loaded as a resume would load it -- the size against the header, the
+ * checksum -- then the ladder and the voids: radii positive and the ladder
+ * strictly decreasing, every centre finite, a box's voids inside the box.
+ */
+int sif__file_check_checkpoint(sif_file_check_t* c) {
+  const char* path = c->info->path;
+  sif__file_check_content(c, "exodus checkpoint");
+
+  sif_finder_exodus_checkpoint_t h;
+  sif_real* radii = NULL;
+  sif_catalogue_t* cat = NULL;
+  const int status = sif__exodus_checkpoint_load(path, &h, &radii, &cat);
+  if (status == SIF_ERR_ALLOC)
+    return status;
+  if (status != SIF_OK)
+    return SIF_OK; /* the loader said why */
+
+  sif_file_stats_t* ladder = sif__file_check_array(c, 0);
+  for (uint32_t i = 0; ladder && i < h.n_radii; i++)
+    sif__file_stats_add(ladder, (double)radii[i]);
+  for (uint32_t i = 1; i < h.n_radii; i++) {
+    if (!(radii[i] < radii[i - 1])) {
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: radii: rung %u is %g after %g (expected the ladder to decrease)",
+        path, i, (double)radii[i], (double)radii[i - 1]);
+      break;
+    }
+  }
+  if (ladder && ladder->n > ladder->n_nonfinite && ladder->min <= 0.0)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: radii: smallest %g (expected every radius > 0)", path, ladder->min);
+
+  const sif_real* cols[4] = {cat->cx, cat->cy, cat->cz, cat->radii};
+  uint64_t outside = 0;
+  for (int k = 0; k < 4; k++) {
+    sif_file_stats_t* st = sif__file_check_column(c, 0, (uint32_t)k);
+    for (uint64_t i = 0; st && i < cat->n_voids; i++) {
+      const double v = (double)cols[k][i];
+      sif__file_stats_add(st, v);
+      /* The voids are where the finder works: the box, or the survey's. */
+      if (k < 3 && (v < 0.0 || v > h.box_length))
+        outside++;
+    }
+  }
+  sif_file_stats_t* r = sif__file_check_column(c, 0, 3);
+  for (int k = 0; k < 4; k++) {
+    const sif_file_stats_t* st = sif__file_check_column(c, 0, (uint32_t)k);
+    if (st && st->n_nonfinite)
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: %s: %" PRIu64 " not finite", path,
+        c->info->tables[0].columns[k].name, st->n_nonfinite);
+  }
+  if (r && r->n > r->n_nonfinite && r->min <= 0.0)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: r: smallest %g (expected every radius > 0)", path, r->min);
+  if (outside)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_WARNING,
+      "%s: %" PRIu64 " centre coordinates outside [0, %g] (expected inside "
+      "the box the finder searched)",
+      path, outside, h.box_length);
+
+  sif_free_aligned(radii);
+  sif_catalogue_free(cat);
   return SIF_OK;
 }

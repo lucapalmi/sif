@@ -79,6 +79,18 @@ typedef struct {
 
 static SIF_THREAD_LOCAL error_record_t record;
 
+/* The capture in force on this thread, if any. */
+static SIF_THREAD_LOCAL sif__log_capture_t capture;
+
+void sif__log_capture_begin(
+  sif__log_sink_t sink, void* ctx, sif__log_capture_t* saved) {
+  *saved = capture;
+  capture.sink = sink;
+  capture.ctx = ctx;
+}
+
+void sif__log_capture_end(const sif__log_capture_t* saved) { capture = *saved; }
+
 static void record_v(const char* fmt, va_list args) {
   if (record.set) {
     record.latest = false;
@@ -130,6 +142,16 @@ void sif__log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
     va_start(args, fmt);
     record_v(fmt, args);
     va_end(args);
+  }
+
+  if (capture.sink && level >= SIF_LOG_LEVEL_WARNING) {
+    char message[RECORD_CAP];
+    va_list args;
+    va_start(args, fmt);
+    vsnprintf(message, sizeof(message), fmt, args);
+    va_end(args);
+    capture.sink(capture.ctx, level, tag, message);
+    return;
   }
 
   /* Clamped, not asserted: this function backs the SIF_LOG_* macros and is

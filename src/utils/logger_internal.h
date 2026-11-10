@@ -36,4 +36,32 @@ void sif__error_status_set(int status);
  */
 #define SIF__GIB(bytes) ((double)(bytes) / (1024.0 * 1024.0 * 1024.0))
 
+/**
+ * @brief Where captured messages go: the level, the tag, and the message
+ * without either.
+ */
+typedef void (*sif__log_sink_t)(
+  void* ctx, int level, const char* tag, const char* message);
+
+/** @brief A capture in force, saved by sif__log_capture_begin(). */
+typedef struct {
+  sif__log_sink_t sink;
+  void* ctx;
+} sif__log_capture_t;
+
+/**
+ * @brief Send this thread's WARNINGs and ERRORs to @p sink instead of the
+ * log, until sif__log_capture_end().
+ *
+ * For a file check, whose findings are the readers' own messages: they go
+ * into its list of problems, not to stderr. An ERROR is still recorded for
+ * sif_error_message(). Captures nest: the one in force is saved in
+ * @p saved and restored at the end. Per thread, as the error record is.
+ */
+void sif__log_capture_begin(
+  sif__log_sink_t sink, void* ctx, sif__log_capture_t* saved);
+
+/** @brief Restore the capture sif__log_capture_begin() replaced. */
+void sif__log_capture_end(const sif__log_capture_t* saved);
+
 #endif /* SIF__UTILS_LOGGER_INTERNAL_H */

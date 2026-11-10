@@ -76,18 +76,13 @@ run a.txt b.txt
 expect_status 2 "two files"
 expect_error "one FILE only" "two files"
 
-run --skip-header -1 a.txt
-expect_status 2 "a negative --skip-header"
-
-run --delimiter ab a.txt
-expect_status 2 "a --delimiter of two characters"
-
 run --format lua a.txt
 expect_status 2 "--format lua"
 
-run --deep a.txt
-expect_status 2 "--deep without --check"
-expect_error "go with --check" "--deep without --check"
+# A check reads everything: there is no shallower one to deepen.
+run --check --deep a.txt
+expect_status 2 "--deep"
+expect_error "unknown option '--deep'" "--deep"
 
 # A configuration is sif-exodus's to check.
 echo 'mode = "box"' >run.lua
@@ -95,7 +90,7 @@ run run.lua
 expect_status 2 "a configuration"
 expect_error "sif-exodus --check checks it" "a configuration"
 
-# A one-particle .xfield, which is all the check reads of it without --deep:
+# A one-particle .xfield, which is all a description reads of it:
 # the 64-byte header (magic, version 2, one particle, a box of 1000, no
 # weights or velocities, the precision, no checksum, padding), then
 # x, y, z = 0.5 in little-endian order.
@@ -182,97 +177,90 @@ expect_error "not a format sif reads" "describe binary data"
 
 # --- --check: each kind of file ---------------------------------------------
 
-# ASCII: told from its contents, checked row by row, every problem listed.
+# The report is the description with each column's range, then the
+# problems, then the result; the exit status is 2 for any error.
+expect_result() {
+  grep -q "^result    $1" out.txt || { fail "$2: no \"result    $1\" in"; cat out.txt; }
+}
+
+# ASCII: every row by the layout of the first, every problem with its line.
 printf '# x y z w\n1 2 3 1\n4 5 6 1\n7 8 9 1\n' >good.txt
 run --check good.txt
 expect_status 0 "an ASCII file"
-expect_out "rows          3" "an ASCII file"
-expect_error "good.txt: OK" "an ASCII file"
+expect_result "sound" "an ASCII file"
+grep -q '^  y  *number  *3  *0  *2  *8$' out.txt ||
+  fail "an ASCII file: y not ranged: $(cat out.txt)"
 
 printf 'x y z\n1 2 3\n4 5\n7 8 abc\n1,2,3\n' >bad.txt
 run --check bad.txt
 expect_status 2 "a malformed ASCII file"
-expect_error "bad.txt:1: no number in the row (a header? skip 1 line)" "a header"
-expect_error "bad.txt:3: 2 columns, line 1 has 3" "a short row"
-expect_error "bad.txt:4: column 3: 'abc' is not a number" "not a number"
-expect_error "(comma-separated? pass the delimiter ',')" "the delimiter hint"
-expect_out "problems      5" "the problem count"
+expect_out "bad.txt:3: 2 fields (expected 3, as the first row)" "a short row"
+expect_out "bad.txt:4: column 3 (z): 'abc' (expected a number)" "not a number"
+expect_out "(comma-separated in places?)" "the delimiter hint"
+expect_result "4 errors, 0 warnings" "the problem count"
 
-run --check --skip-header 1 --columns "x y z" bad.txt
-expect_status 2 "against a format"
-expect_error "bad.txt:3: 2 columns, format 'x y z' needs 3" "against a format"
-run --check --skip-header 1 --columns "x y z" --delimiter , bad.txt
-expect_status 2 "with a delimiter"
-expect_error "'1 2 3' is not a number" "with a delimiter"
+# A catalogue: checked as one, and its radii have to be positive.
+printf '#n=2\n#cx cy cz r\n1 2 3 4\n5 6 7 -1\n' >cat.txt
+run --check cat.txt
+expect_status 2 "a catalogue with a negative radius"
+expect_out "checked as sif catalogue" "a catalogue with a negative radius"
+expect_out "expected every radius > 0" "a catalogue with a negative radius"
 
 run --check missing.txt
 expect_status 2 "a missing file"
-expect_error "missing.txt: No such file or directory" "a missing file"
+expect_out "missing.txt: No such file or directory" "a missing file"
 
-# GADGET, binary and multi-file, by its base name.
+# GADGET, binary and multi-file, by its base name: every block read.
 run --check "$DATA/gadget/f1_legacy/snap_005"
 expect_status 0 "a snapshot"
-expect_out "files read    3 of 3" "a snapshot"
-run --check --deep "$DATA/gadget/f1_legacy/snap_005"
-expect_status 0 "--deep a snapshot"
-expect_out "1 x" "--deep a snapshot"
+expect_result "sound" "a snapshot"
+expect_out "checked as GADGET snapshot" "a snapshot"
+grep -q '^  ID  *uint32  *100  *0  *1000000  *1000099$' out.txt ||
+  fail "a snapshot: PartType1 IDs not ranged: $(cat out.txt)"
 
-mkdir -p cut
-for i in 0 1 2; do cp "$DATA/gadget/f1_legacy/snap_005.$i" cut/; done
-head -c 2000 "$DATA/gadget/f1_legacy/snap_005.1" >cut/snap_005.1
 run --check cut/snap_005
 expect_status 2 "a truncated snapshot"
-expect_error "cut/snap_005.1: record" "a truncated snapshot"
-expect_out "files read    2 of 3" "a truncated snapshot"
+expect_out "cut/snap_005.1: record" "a truncated snapshot"
 
-# .xfield: the header, and with --deep every value.
+# .xfield: the header says it carries a checksum of zero, which reading every
+# value disproves.
 run --check tracers.xfield
-expect_status 0 "an .xfield"
-expect_out "particles     1" "an .xfield"
-# Its header carries no checksum, which only reading every value finds.
-run --check --deep tracers.xfield
-expect_status 2 "--deep an .xfield"
-expect_error "header says 00000000 (corrupt)" "--deep an .xfield"
+expect_status 2 "an .xfield without its checksum"
+expect_out "(expected 00000000, from the header: corrupt)" "an .xfield"
 head -c 70 tracers.xfield >short.xfield
 run --check short.xfield
 expect_status 2 "a truncated .xfield"
-expect_error "(truncated)" "a truncated .xfield"
+expect_out "truncated" "a truncated .xfield"
 
 if [ "$HDF5" -eq 1 ]; then
   H5="$DATA/gadget/hdf5_legacy/snap_005.hdf5"
   run --check "$H5"
   expect_status 0 "an HDF5 snapshot"
-  expect_out "type         in file" "an HDF5 snapshot is checked as one"
+  expect_out "checked as GADGET snapshot" "an HDF5 snapshot"
   run --check --format hdf5 "$H5"
-  expect_status 0 "--format hdf5"
-  expect_out "/ParticleType1/Coordinates" "--format hdf5 lists the tree"
-  expect_out "GADGET snapshot" "--format hdf5 says what it is"
-  run --check --deep --format hdf5 "$H5"
-  expect_status 0 "--deep --format hdf5"
+  expect_status 0 "an HDF5 snapshot as HDF5"
+  expect_result "sound" "an HDF5 snapshot as HDF5"
   head -c 5000 "$H5" >cut.hdf5
   run --check cut.hdf5
   expect_status 2 "a truncated HDF5 file"
-  expect_error "(truncated)" "a truncated HDF5 file"
+  expect_out "(truncated)" "a truncated HDF5 file"
 fi
 
 if [ "$FITS" -eq 1 ]; then
-  run --check --deep "$DATA/fits/catalogue.fits"
-  expect_status 0 "--deep a FITS file"
-  expect_out "GALAXIES" "a FITS file"
-  expect_out "ZNULL" "--deep ranges the columns"
+  run --check "$DATA/fits/catalogue.fits"
+  expect_status 0 "a FITS file"
+  grep -q '^  ZNULL  *float64  *100  *10 ' out.txt ||
+    fail "a FITS file: ZNULL's undefined values not counted: $(cat out.txt)"
   head -c 10000 "$DATA/fits/catalogue.fits" >cut.fits
   run --check cut.fits
   expect_status 2 "a truncated FITS file"
-  expect_error "(truncated)" "a truncated FITS file"
+  expect_out "(truncated)" "a truncated FITS file"
 fi
 
 run --check --format xfield good.txt
 expect_status 2 "--format that is not what the file is"
-expect_error "not an .xfield file" "--format that is not what the file is"
+expect_out "not an .xfield file" "--format that is not what the file is"
 
-run --check --columns "x y z" tracers.xfield
-expect_status 2 "--columns on a file that is not ASCII"
-expect_error "go with an ASCII file" "--columns on a file that is not ASCII"
 run --format nonsense good.txt
 expect_status 2 "an unknown --format"
 

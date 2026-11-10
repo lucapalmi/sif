@@ -547,21 +547,6 @@ SIF_NODISCARD sif_catalogue_t* sif_finder_exodus_checkpoint_read(
   const char* filepath, sif_finder_exodus_checkpoint_t* header);
 
 /**
- * @brief Check an exodus checkpoint, and summarise the run it holds.
- *
- * Reads it whole, as a resume would -- header, size and checksum -- and
- * writes what it says: the run's parameters, how many rungs are done and
- * which comes next, and the voids so far.
- *
- * @param report Where the summary goes, or NULL for none.
- * @return SIF_OK for a checkpoint that a run could resume from; otherwise
- * the reason, logged as an ERROR, and SIF_ERR_IO, SIF_ERR_ALLOC, or
- * SIF_ERR_INVALID for a NULL path.
- */
-SIF_NODISCARD int sif_finder_exodus_checkpoint_check(
-  const char* filepath, FILE* report);
-
-/**
  * @brief The box a survey has to be searched in, and the offset that moves it
  * there.
  *

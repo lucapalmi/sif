@@ -24,6 +24,7 @@
 #include "sif/io/catalogue_io.h"
 #include "sif/io/hdf5_io.h"
 
+#include "io/file_check_internal.h"
 #include "io/file_info_internal.h"
 #include "io/gadget_internal.h"
 #include "io/hdf5_internal.h"
@@ -399,13 +400,6 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   return NULL;
 }
 
-int sif_hdf5_check(const char* path, bool deep, FILE* report) {
-  (void)deep;
-  (void)report;
-  refuse(path);
-  return SIF_ERR_UNSUPPORTED;
-}
-
 int sif__file_info_hdf5(sif_file_info_t* info) {
   SIF_LOG_ERROR(TAG,
     "%s: HDF5 support not built (rebuild with "
@@ -421,4 +415,19 @@ uint32_t sif__file_info_hdf5_columns(
   (void)path;
   (void)group;
   return 0;
+}
+
+int sif__file_check_hdf5(sif_file_check_t* check) {
+  (void)check;
+  return SIF_OK; /* never reached: the description refused */
+}
+
+int sif__file_check_hdf5_group(sif_file_check_t* check, uint32_t table,
+  const char* path, const char* group, const char* const* skip) {
+  (void)check;
+  (void)table;
+  (void)path;
+  (void)group;
+  (void)skip;
+  return SIF_OK;
 }

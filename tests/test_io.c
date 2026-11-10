@@ -1521,50 +1521,6 @@ static void test_ascii_check(void) {
     "a malformed format should be refused");
 }
 
-static void test_xfield_check(void) {
-  printf("xfield check\n");
-
-  /* make_field() runs past the box on purpose; the deep check would say so. */
-  sif_field_t* f = make_field();
-  if (!f)
-    return;
-  for (uint64_t i = 0; i < N_P; i++) {
-    f->x[i] = SIF_REAL_FMOD(f->x[i], BOX);
-    f->y[i] = SIF_REAL_FMOD(f->y[i], BOX);
-    f->z[i] = SIF_REAL_FMOD(f->z[i], BOX);
-  }
-  CHECK(sif_field_write(FIELD_PATH, f, (double)BOX) == SIF_OK, "write failed");
-  sif_field_free(f);
-
-  sif_error_clear();
-  FILE* report = tmpfile();
-  CHECK(sif_field_check_xfield(FIELD_PATH, true, report) == SIF_OK &&
-          report_problems(report) == 0,
-    "a sound file: '%s'", sif_error_message());
-  fclose(report);
-
-  /* A flipped bit only the deep check can see. */
-  corrupt_payload(FIELD_PATH, 40);
-  CHECK(sif_field_check_xfield(FIELD_PATH, false, NULL) == SIF_OK,
-    "the shallow check reads no values");
-  sif_error_clear();
-  CHECK(sif_field_check_xfield(FIELD_PATH, true, NULL) == SIF_ERR_IO &&
-          error_has("(corrupt)"),
-    "a corrupt payload: '%s'", sif_error_message());
-
-  CHECK(truncate(FIELD_PATH, 1000) == 0, "truncate failed");
-  sif_error_clear();
-  CHECK(sif_field_check_xfield(FIELD_PATH, false, NULL) == SIF_ERR_IO &&
-          error_has("1000 bytes, header says") && error_has("(truncated)"),
-    "a truncated file: '%s'", sif_error_message());
-
-  write_text("1 2 3\n");
-  sif_error_clear();
-  CHECK(sif_field_check_xfield(ASCII_PATH, false, NULL) == SIF_ERR_IO &&
-          error_has("not an .xfield file"),
-    "a text file: '%s'", sif_error_message());
-}
-
 int main(void) {
   if (sif_system_init(SIF_CONFIG_QUIET) != SIF_OK) {
     printf("FAIL: sif_system_init\n");
@@ -1584,7 +1540,6 @@ int main(void) {
   test_ascii_field_rejections();
   test_ascii_field_reasons();
   test_ascii_check();
-  test_xfield_check();
   test_error_record();
   test_catalogue_reasons();
   test_column_formats();

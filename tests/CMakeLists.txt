@@ -24,6 +24,7 @@ set(SIF_TESTS
   test_field_grid   # morton ordering, require_* helpers, CIC
   test_io           # .xfield/.xgrid round trips, checksums, ASCII and raw binary
   test_file_info    # every format described as metadata, tables and arrays
+  test_file_check   # every format read whole, sound and damaged
   test_fft          # transform round-trip, filters, buffer ownership
   test_profiles     # radial profiles vs a brute-force particle count
   test_tessellation # sampled Voronoi volumes, and the profiles they give
@@ -82,7 +83,7 @@ foreach(test_name IN LISTS SIF_TESTS)
   endif()
 
   # Whether sif reads FITS, for the tests that describe a FITS file.
-  if(SIF_WITH_FITS AND test_name STREQUAL "test_file_info")
+  if(SIF_WITH_FITS AND test_name MATCHES "^test_file_(info|check)$")
     target_compile_definitions(${test_name} PRIVATE SIF_HAVE_FITS)
   endif()
 

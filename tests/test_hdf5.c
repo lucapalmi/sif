@@ -18,6 +18,7 @@
  */
 #include "sif/core/system.h"
 #include "sif/io/catalogue_io.h"
+#include "sif/io/file_check.h"
 #include "sif/io/hdf5_io.h"
 #include "sif/measure/profiles.h"
 #include "sif/structures/catalogue.h"
@@ -548,50 +549,26 @@ static void break_dataset(const char* path, const char* name, hsize_t n) {
   H5Fclose(f);
 }
 
-/* The check: the tree, what the file is, and with deep every value. */
-static void test_check(void) {
-  printf("check\n");
+/* What the reader says when it refuses: the reason, not only the status. */
+/* A sif file of a layout newer than this build reads: a check's error. */
+static void test_check_version(void) {
+  printf("check of a newer layout\n");
   sif_catalogue_t* cat = make_catalogue(4, 0);
-
   remove_all();
   CHECK(
     sif_catalogue_write_hdf5(PATH, cat) == SIF_OK, "catalogue write failed");
-  FILE* report = tmpfile();
-  sif_error_clear();
-  CHECK(sif_hdf5_check(PATH, true, report) == SIF_OK, "a sif file: '%s'",
-    sif_error_message());
-  char line[256];
-  bool said = false, listed = false, ranged = false;
-  rewind(report);
-  while (fgets(line, sizeof(line), report)) {
-    said |= strstr(line, "HDF5, sif file") != NULL;
-    listed |= strstr(line, "/catalogue/radii") && strstr(line, "(4)");
-    ranged |= strncmp(line, "/catalogue/radii ", 17) == 0 &&
-              strstr(line, "(4)") == NULL;
-  }
-  CHECK(said && listed && ranged, "the report: kind %d, tree %d, ranges %d",
-    said, listed, ranged);
-  fclose(report);
-
-  /* A sif file this build could not read is a problem with it. */
   set_format_version(PATH, 99);
-  sif_error_clear();
-  CHECK(sif_hdf5_check(PATH, false, NULL) == SIF_ERR_IO &&
-          error_has("version 99, this build reads up to"),
-    "a newer layout: '%s'", sif_error_message());
-
-  /* Cut short: HDF5's own diagnosis. */
-  CHECK(truncate(PATH, 1000) == 0, "truncate failed");
-  sif_error_clear();
-  CHECK(
-    sif_hdf5_check(PATH, false, NULL) == SIF_ERR_IO && error_has("(truncated)"),
-    "a truncated file: '%s'", sif_error_message());
-
+  sif_file_check_t* c = sif_file_check(PATH, SIF_FILE_FORMAT_UNKNOWN);
+  bool said = false;
+  for (uint32_t i = 0; c && i < c->n_problems; i++)
+    said |= strstr(c->problems[i].message, "version 99, this build reads up "
+                                           "to") != NULL;
+  CHECK(c && c->n_errors > 0 && said, "a newer layout: no error saying so");
+  sif_file_check_free(c);
   sif_catalogue_free(cat);
   remove_all();
 }
 
-/* What the reader says when it refuses: the reason, not only the status. */
 static void test_reasons(void) {
   printf("reasons for a refusal\n");
   sif_catalogue_t* cat = make_catalogue(4, 0);
@@ -860,7 +837,7 @@ int main(void) {
   test_groups();
   test_foreign_files();
   test_reasons();
-  test_check();
+  test_check_version();
   test_metadata();
   test_particles();
 #else

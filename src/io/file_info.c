@@ -13,12 +13,16 @@
 #include "sif/structures/grid.h"
 #include "sif/utils/logger.h"
 
+#include "io/file_check_internal.h"
 #include "io/file_info_internal.h"
 #include "io/internal.h"
+#include "sif/utils/crc32.h"
+#include "structures/field_internal.h"
 
 #include <ctype.h>
 #include <errno.h>
 #include <inttypes.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -119,6 +123,9 @@ sif_file_format_t sif_file_format_detect(const char* path) {
 typedef struct {
   sif_file_info_t info;
   bool failed;
+  /* ASCII: the layout the description found, which the check reads by. */
+  char ascii_delimiter;
+  bool ascii_header;
 } info_box_t;
 
 static void fail(sif_file_info_t* info) { ((info_box_t*)info)->failed = true; }
@@ -525,6 +532,8 @@ static int describe_ascii(sif_file_info_t* info) {
   fclose(f);
 
   if (status == SIF_OK) {
+    ((info_box_t*)info)->ascii_delimiter = delimiter;
+    ((info_box_t*)info)->ascii_header = names_line != NULL;
     sif__file_info_detail(info, "%s%s",
       delimiter == ','   ? "comma-separated"
       : delimiter == ';' ? "semicolon-separated"
@@ -576,6 +585,92 @@ static int describe_ascii(sif_file_info_t* info) {
   return status;
 }
 
+/* A hint for a field that is not a number, when it looks like two joined by
+ * a delimiter other than the file's. */
+static const char* delimiter_hint(const char* field, char delimiter) {
+  if (delimiter != ',' && strchr(field, ','))
+    return " (comma-separated in places?)";
+  if (delimiter != ';' && strchr(field, ';'))
+    return " (semicolon-separated in places?)";
+  return "";
+}
+
+/*
+ * Every row, by the layout the description found: as many fields as the
+ * first row, and a number in every column the first row had one in. The
+ * numbers are ranged; a text column is counted.
+ */
+int sif__file_check_ascii(sif_file_check_t* c) {
+  const sif_file_info_t* info = c->info;
+  const info_box_t* box = (const info_box_t*)info;
+  const char* path = info->path;
+  if (info->n_tables != 1)
+    return SIF_OK;
+  const sif_file_table_t* tb = &info->tables[0];
+  const char delimiter = box->ascii_delimiter ? box->ascii_delimiter : ' ';
+
+  FILE* f = fopen(path, "r");
+  if (!f) {
+    sif__io_os_error(TAG, path, NULL, errno);
+    return SIF_OK;
+  }
+
+  char* fields[ASCII_MAX_COLS];
+  char* line = NULL;
+  size_t cap = 0;
+  uint64_t lineno = 0, rows = 0;
+  bool header = box->ascii_header;
+  while (getline(&line, &cap, f) >= 0) {
+    lineno++;
+    if (comment_text(line))
+      continue;
+    const char* p = line;
+    while (is_blank(*p))
+      p++;
+    if (is_line_end(*p))
+      continue;
+    if (header) {
+      header = false;
+      continue;
+    }
+
+    rows++;
+    const int n = split(line, delimiter, fields, ASCII_MAX_COLS);
+    if ((uint32_t)n != tb->n_columns)
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s:%" PRIu64 ": %d field%s (expected %u, as the first row)", path,
+        lineno, n, n == 1 ? "" : "s", tb->n_columns);
+    for (int k = 0; k < n && k < ASCII_MAX_COLS && (uint32_t)k < tb->n_columns;
+      k++) {
+      const sif_file_column_t* col = &tb->columns[k];
+      sif_file_stats_t* st = &c->column_stats[0][k];
+      if (strcmp(col->type, "number") != 0) {
+        st->n++;
+        continue;
+      }
+      if (is_number(fields[k])) {
+        sif__file_stats_add(st, strtod(fields[k], NULL));
+      } else {
+        sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+          "%s:%" PRIu64 ": column %d (%s): '%s' (expected a number)%s", path,
+          lineno, k + 1, col->name, fields[k],
+          delimiter_hint(fields[k], delimiter));
+      }
+    }
+  }
+  free(line);
+  if (ferror(f))
+    sif__io_os_error(TAG, path, "read", errno);
+  fclose(f);
+
+  if (rows != tb->n_rows)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: %" PRIu64 " rows read (expected %" PRIu64
+      "; the file changed while it was checked?)",
+      path, rows, tb->n_rows);
+  return SIF_OK;
+}
+
 #undef ASCII_MAX_COLS
 
 /* ------------------------------------------------------------------------ */
@@ -619,10 +714,11 @@ static int describe_xfield(sif_file_info_t* info) {
     sif__file_info_meta_string(
       info, SIF__FILE_INFO_FILE, 0, "checksum", h.crc32 ? "crc32" : "none");
 
+  /* In the order of the blocks in the file. */
   const uint32_t t = sif__file_info_table(info, "particles", h.n_particles);
-  static const char* const cols[] = {"x", "y", "z", "w", "vx", "vy", "vz"};
+  static const char* const cols[] = {"x", "y", "z", "vx", "vy", "vz", "w"};
   for (int k = 0; k < 7; k++) {
-    if ((k == 3 && !h.has_weights) || (k > 3 && !h.has_velocities))
+    if ((k >= 3 && k < 6 && !h.has_velocities) || (k == 6 && !h.has_weights))
       continue;
     sif__file_info_column(info, t, cols[k], type, 1, NULL);
   }
@@ -661,6 +757,230 @@ static int describe_xgrid(sif_file_info_t* info) {
     info, "cells", h.is_double ? "float64" : "float32", 3, dims);
   return SIF_OK;
 }
+
+/* Values read at a time by the checks of the binary formats. */
+#define CHECK_CHUNK ((size_t)1 << 20)
+
+/* One value of @p elem bytes, either precision. */
+static double value_at(const unsigned char* p, size_t elem) {
+  if (elem == 8) {
+    double v;
+    memcpy(&v, p, 8);
+    return v;
+  }
+  float v;
+  memcpy(&v, p, 4);
+  return v;
+}
+
+/*
+ * The size the header implies, the checksum over every block, every value;
+ * and of the contents, positions inside the box and weights not negative.
+ * Either precision is read: a file this build could not load is still
+ * checked whole, and the mismatch is a warning.
+ */
+int sif__file_check_xfield(sif_file_check_t* c) {
+  const sif_file_info_t* info = c->info;
+  const char* path = info->path;
+  sif__file_check_content(c, "sif field");
+
+  FILE* f = fopen(path, "rb");
+  if (!f) {
+    sif__io_os_error(TAG, path, NULL, errno);
+    return SIF_OK;
+  }
+  sif_xfield_header_t h;
+  if (fread(&h, sizeof(h), 1, f) != 1) {
+    fclose(f);
+    return SIF_OK; /* the description said why */
+  }
+
+  const size_t elem = h.is_double ? 8 : 4;
+  const int n_blocks = 3 + (h.has_velocities ? 3 : 0) + (h.has_weights ? 1 : 0);
+  const uint64_t expect =
+    sizeof(h) + (uint64_t)n_blocks * h.n_particles * (uint64_t)elem;
+
+  if (h.version > SIF_XFIELD_VERSION)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: version %u (this build reads up to %u)", path, h.version,
+      (unsigned)SIF_XFIELD_VERSION);
+  if ((h.is_double != 0) != (sizeof(sif_real) == 8))
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_WARNING,
+      "%s: %s precision (this build reads %s)", path,
+      h.is_double ? "double" : "single",
+      sizeof(sif_real) == 8 ? "double" : "single");
+  if (info->size_bytes != expect) {
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: %" PRIu64 " bytes (expected %" PRIu64 ", from the header: %s)", path,
+      info->size_bytes, expect,
+      info->size_bytes < expect ? "truncated" : "trailing bytes");
+  }
+  if (info->size_bytes < expect || h.version > SIF_XFIELD_VERSION) {
+    fclose(f);
+    return SIF_OK;
+  }
+
+  unsigned char* buf = malloc(CHECK_CHUNK * elem);
+  if (!buf) {
+    fclose(f);
+    SIF_LOG_ERROR(
+      TAG, "out of memory: %zu-byte read buffer", CHECK_CHUNK * elem);
+    return SIF_ERR_ALLOC;
+  }
+
+  /* The blocks in file order, which is the columns' order. */
+  uint32_t crc = SIF_CRC32_INIT;
+  uint64_t outside[3] = {0, 0, 0}, negative = 0;
+  bool read_ok = true;
+  for (int b = 0; b < n_blocks && read_ok; b++) {
+    sif_file_stats_t* st = sif__file_check_column(c, 0, (uint32_t)b);
+    const bool weight = h.has_weights && b == n_blocks - 1;
+    for (uint64_t done = 0; done < h.n_particles;) {
+      const size_t n =
+        (size_t)(h.n_particles - done < CHECK_CHUNK ? h.n_particles - done
+                                                    : CHECK_CHUNK);
+      if (fread(buf, elem, n, f) != n) {
+        sif__io_os_error(TAG, path, info->tables[0].columns[b].name, errno);
+        read_ok = false;
+        break;
+      }
+      crc = sif_crc32_update(crc, buf, n * elem);
+      for (size_t i = 0; i < n; i++) {
+        const double v = value_at(buf + elem * i, elem);
+        if (st)
+          sif__file_stats_add(st, v);
+        if (b < 3 && !sif__box_accepts(v, h.box_length))
+          outside[b]++;
+        if (weight && v < 0.0)
+          negative++;
+      }
+      done += n;
+    }
+  }
+  free(buf);
+  fclose(f);
+  if (!read_ok)
+    return SIF_OK;
+
+  if (h.version >= 2 && sif_crc32_final(crc) != h.crc32)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: checksum %08x (expected %08x, from the header: corrupt)", path,
+      sif_crc32_final(crc), h.crc32);
+  if (h.version < 2)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_WARNING,
+      "%s: version 1, without a checksum: the values cannot be verified", path);
+  static const char* const axes[3] = {"x", "y", "z"};
+  for (int k = 0; k < 3; k++)
+    if (outside[k])
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: %s: %" PRIu64 " of %" PRIu64
+        " outside [0, %g) or not finite (expected inside the box)",
+        path, axes[k], outside[k], h.n_particles, h.box_length);
+  if (negative)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: w: %" PRIu64 " negative (expected weights >= 0)", path, negative);
+  return SIF_OK;
+}
+
+/*
+ * The size, the checksum, every cell; and of the contents, a density not
+ * negative and a density contrast not below -1.
+ */
+int sif__file_check_xgrid(sif_file_check_t* c) {
+  const sif_file_info_t* info = c->info;
+  const char* path = info->path;
+  sif__file_check_content(c, "sif grid");
+
+  FILE* f = fopen(path, "rb");
+  if (!f) {
+    sif__io_os_error(TAG, path, NULL, errno);
+    return SIF_OK;
+  }
+  sif_xgrid_header_t h;
+  if (fread(&h, sizeof(h), 1, f) != 1) {
+    fclose(f);
+    return SIF_OK;
+  }
+
+  const size_t elem = h.is_double ? 8 : 4;
+  const uint64_t n3 = (uint64_t)h.n_cells * h.n_cells * h.n_cells;
+  const uint64_t expect = sizeof(h) + h.total_cells * (uint64_t)elem;
+  if (h.version > SIF_XGRID_VERSION)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: version %u (this build reads up to %u)", path, h.version,
+      (unsigned)SIF_XGRID_VERSION);
+  if ((h.is_double != 0) != (sizeof(sif_real) == 8))
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_WARNING,
+      "%s: %s precision (this build reads %s)", path,
+      h.is_double ? "double" : "single",
+      sizeof(sif_real) == 8 ? "double" : "single");
+  if (h.total_cells != n3)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: %" PRIu64 " cells (expected %u^3 = %" PRIu64 ")", path,
+      h.total_cells, h.n_cells, n3);
+  if (info->size_bytes != expect)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: %" PRIu64 " bytes (expected %" PRIu64 ", from the header: %s)", path,
+      info->size_bytes, expect,
+      info->size_bytes < expect ? "truncated" : "trailing bytes");
+  if (info->size_bytes < expect || h.version > SIF_XGRID_VERSION) {
+    fclose(f);
+    return SIF_OK;
+  }
+
+  unsigned char* buf = malloc(CHECK_CHUNK * elem);
+  if (!buf) {
+    fclose(f);
+    SIF_LOG_ERROR(
+      TAG, "out of memory: %zu-byte read buffer", CHECK_CHUNK * elem);
+    return SIF_ERR_ALLOC;
+  }
+  sif_file_stats_t* st = sif__file_check_array(c, 0);
+  uint32_t crc = SIF_CRC32_INIT;
+  bool read_ok = true;
+  for (uint64_t done = 0; done < h.total_cells;) {
+    const size_t n =
+      (size_t)(h.total_cells - done < CHECK_CHUNK ? h.total_cells - done
+                                                  : CHECK_CHUNK);
+    if (fread(buf, elem, n, f) != n) {
+      sif__io_os_error(TAG, path, "cells", errno);
+      read_ok = false;
+      break;
+    }
+    crc = sif_crc32_update(crc, buf, n * elem);
+    for (size_t i = 0; st && i < n; i++)
+      sif__file_stats_add(st, value_at(buf + elem * i, elem));
+    done += n;
+  }
+  free(buf);
+  fclose(f);
+  if (!read_ok)
+    return SIF_OK;
+
+  if (h.version >= 2 && sif_crc32_final(crc) != h.crc32)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: checksum %08x (expected %08x, from the header: corrupt)", path,
+      sif_crc32_final(crc), h.crc32);
+  if (h.version < 2)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_WARNING,
+      "%s: version 1, without a checksum: the values cannot be verified", path);
+  if (st && st->n_nonfinite)
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: cells: %" PRIu64 " not finite", path, st->n_nonfinite);
+  /* Rounding brings an empty cell's contrast a little under -1. */
+  if (st && st->n > st->n_nonfinite) {
+    if (h.content == SIF_GRID_DENSITY && st->min < 0.0)
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: cells: smallest density %g (expected >= 0)", path, st->min);
+    if (h.content == SIF_GRID_DENSITY_CONTRAST && st->min < -1.0 - 1e-5)
+      sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+        "%s: cells: smallest density contrast %g (expected >= -1)", path,
+        st->min);
+  }
+  return SIF_OK;
+}
+
+#undef CHECK_CHUNK
 
 /* ------------------------------------------------------------------------ */
 /* reading                                                                   */
@@ -796,12 +1116,38 @@ static void print_meta(
 
 static const char* plural(uint64_t n) { return n == 1 ? "" : "s"; }
 
+/* A value of a check's statistics: "-" when there is none. */
+static void stat_text(char* buf, size_t len, double v) {
+  if (isnan(v))
+    snprintf(buf, len, "-");
+  else
+    snprintf(buf, len, "%.8g", v);
+}
+
+static void print_stats_header(int width, bool units, FILE* s) {
+  fprintf(s, "  %-*s  %-14s  %s%12s  %10s  %15s  %15s\n", width, "column",
+    "type", units ? "unit          " : "", "read", "non-finite", "min", "max");
+}
+
+static void print_stats(const sif_file_stats_t* st, FILE* s) {
+  char lo[32], hi[32];
+  stat_text(lo, sizeof(lo), st->min);
+  stat_text(hi, sizeof(hi), st->max);
+  fprintf(s, "%12" PRIu64 "  %10" PRIu64 "  %15s  %15s\n", st->n,
+    st->n_nonfinite, lo, hi);
+}
+
 int sif_file_info_print(const sif_file_info_t* info, FILE* s) {
   if (!info || !s) {
     SIF_LOG_ERROR(TAG, "sif_file_info_print: NULL argument");
     return SIF_ERR_INVALID;
   }
+  return sif__file_info_print_stats(info, NULL, NULL, s);
+}
 
+int sif__file_info_print_stats(const sif_file_info_t* info,
+  sif_file_stats_t* const* column_stats, const sif_file_stats_t* array_stats,
+  FILE* s) {
   char size[32];
   human_size(size, sizeof(size), info->size_bytes);
   fprintf(s, "file      %s\n", info->path);
@@ -824,11 +1170,15 @@ int sif_file_info_print(const sif_file_info_t* info, FILE* s) {
       tb->n_columns, plural(tb->n_columns));
 
     int width = 12;
+    bool units = false;
     for (uint32_t c = 0; c < tb->n_columns; c++) {
       const int len = (int)strlen(tb->columns[c].name);
       if (len > width)
         width = len;
+      units |= tb->columns[c].unit != NULL;
     }
+    if (column_stats && tb->n_columns)
+      print_stats_header(width, units, s);
     for (uint32_t c = 0; c < tb->n_columns; c++) {
       const sif_file_column_t* col = &tb->columns[c];
       char type[48];
@@ -836,10 +1186,16 @@ int sif_file_info_print(const sif_file_info_t* info, FILE* s) {
         snprintf(type, sizeof(type), "%s[%" PRIu64 "]", col->type, col->width);
       else
         snprintf(type, sizeof(type), "%s", col->type);
-      if (col->unit)
+      if (column_stats) {
+        fprintf(s, "  %-*s  %-14s  ", width, col->name, type);
+        if (units)
+          fprintf(s, "%-14s", col->unit ? col->unit : "");
+        print_stats(&column_stats[t][c], s);
+      } else if (col->unit) {
         fprintf(s, "  %-*s  %-12s  %s\n", width, col->name, type, col->unit);
-      else
+      } else {
         fprintf(s, "  %-*s  %s\n", width, col->name, type);
+      }
     }
     if (tb->n_meta) {
       fputs("  metadata\n", s);
@@ -856,6 +1212,12 @@ int sif_file_info_print(const sif_file_info_t* info, FILE* s) {
       fprintf(s, "%s%" PRIu64 "%s", k ? ", " : "(", a->dims[k],
         k + 1 == a->rank ? ")" : "");
     fputc('\n', s);
+    if (array_stats) {
+      fprintf(
+        s, "  %12s  %10s  %15s  %15s\n", "read", "non-finite", "min", "max");
+      fputs("  ", s);
+      print_stats(&array_stats[i], s);
+    }
     if (a->n_meta) {
       fputs("  metadata\n", s);
       print_meta(a->meta, a->n_meta, "    ", s);

@@ -22,6 +22,7 @@
 
 #include "sif/io/fits_io.h"
 
+#include "io/file_check_internal.h"
 #include "io/file_info_internal.h"
 #include "io/fits_internal.h"
 #include "io/internal.h"
@@ -1169,7 +1170,7 @@ int sif__file_info_fits(sif_file_info_t* info) {
   fits_close_file(f, &close_status);
 
   /* Described as far as it could be read; whether the file is whole is
-   * sif_fits_check()'s question. */
+   * sif_file_check()'s question. */
   if (fstatus) {
     uint64_t bytes = 0;
     if (is_truncated(path, &bytes))
@@ -1187,141 +1188,209 @@ int sif__file_info_fits(sif_file_info_t* info) {
   return SIF_OK;
 }
 
-/* The range of every numeric column of the current table, a block of rows at
- * a time. A vector column is ranged over all its elements; an undefined
- * value counts as not finite. */
-static int check_table_values(
-  fitsfile* f, const char* path, int hdu, FILE* report) {
-  int fstatus = 0, n_cols = 0;
-  LONGLONG n_rows = 0;
+/* --- the check --- */
+
+/* Every value of one column of the current table, a block of rows at a
+ * time: a number ranged, a vector over all its elements, an undefined value
+ * not finite; a string or a logical read through and counted. SIF_ERR_IO,
+ * logged, for a column that does not read; SIF_ERR_ALLOC. */
+static int check_column(fitsfile* f, const char* path, const char* hdu, int col,
+  const char* name, sif_file_stats_t* st, double** buf, size_t* buf_len) {
+  int fstatus = 0, type = 0;
+  LONGLONG n_rows = 0, repeat = 0, width = 0;
   long block = 0;
   fits_get_num_rowsll(f, &n_rows, &fstatus);
-  fits_get_num_cols(f, &n_cols, &fstatus);
   fits_get_rowsize(f, &block, &fstatus);
+  fits_get_eqcoltypell(f, col, &type, &repeat, &width, &fstatus);
   if (fstatus) {
-    log_fits(fstatus, "%s: HDU %d", path, hdu);
+    log_fits(fstatus, "%s: %s: column %s", path, hdu, name);
     return SIF_ERR_IO;
   }
   if (block < 1)
     block = 1;
   if (block > CHUNK)
     block = CHUNK;
+  if (type < 0)
+    type = -type; /* a variable-length array, read as its elements */
+  if (type == TBIT || type == TCOMPLEX || type == TDBLCOMPLEX || repeat < 1)
+    return SIF_OK;
 
-  if (report) {
-    char name[FLEN_VALUE];
-    key_string(f, "EXTNAME", name);
-    fprintf(report, "[%d] %s\n", hdu, name);
-    sif__io_stats_header(report, 20);
+  const bool text = type == TSTRING;
+  const size_t per_row = text ? (size_t)repeat + 1 : (size_t)repeat;
+  const size_t need = (size_t)block * per_row;
+  if (need > *buf_len) {
+    double* grown = realloc(*buf, need * sizeof(double));
+    if (!grown) {
+      SIF_LOG_ERROR(TAG, "out of memory: %zu-value read buffer", need);
+      return SIF_ERR_ALLOC;
+    }
+    *buf = grown;
+    *buf_len = need;
   }
 
-  int status = SIF_OK;
-  double* buf = NULL;
-  size_t buf_len = 0;
-  for (int c = 1; c <= n_cols && status == SIF_OK; c++) {
-    int type = 0;
-    LONGLONG repeat = 0, width = 0;
-    char key[FLEN_KEYWORD], name[FLEN_VALUE];
-    fits_get_eqcoltypell(f, c, &type, &repeat, &width, &fstatus);
-    fits_make_keyn("TTYPE", c, key, &fstatus);
-    key_string(f, key, name);
-    if (fstatus) {
-      log_fits(fstatus, "%s: HDU %d, column %d", path, hdu, c);
-      status = SIF_ERR_IO;
-      break;
-    }
-    if (type < 0 || !type_is_numeric(type) || repeat < 1)
-      continue;
-
-    const size_t need = (size_t)block * (size_t)repeat;
-    if (need > buf_len) {
-      double* grown = realloc(buf, need * sizeof(double));
-      if (!grown) {
-        SIF_LOG_ERROR(TAG, "out of memory: %zu-value read buffer", need);
-        status = SIF_ERR_ALLOC;
-        break;
+  for (LONGLONG row = 1; row <= n_rows; row += block) {
+    const LONGLONG rows = n_rows - row + 1 < block ? n_rows - row + 1 : block;
+    int anynul = 0;
+    if (text) {
+      /* The strings land in the same buffer, one pointer per row into it. */
+      char** ptrs = malloc((size_t)rows * sizeof(char*));
+      if (!ptrs) {
+        SIF_LOG_ERROR(TAG, "out of memory: string pointers");
+        return SIF_ERR_ALLOC;
       }
-      buf = grown;
-      buf_len = need;
-    }
-
-    sif__io_stats_t s = {0};
-    for (LONGLONG row = 1; row <= n_rows; row += block) {
-      const LONGLONG rows = n_rows - row + 1 < block ? n_rows - row + 1 : block;
+      char* chars = (char*)*buf;
+      for (LONGLONG i = 0; i < rows; i++)
+        ptrs[i] = chars + i * (LONGLONG)per_row;
+      fits_read_col_str(f, col, row, 1, rows, "", ptrs, &anynul, &fstatus);
+      free(ptrs);
+      if (!fstatus)
+        st->n += (uint64_t)rows;
+    } else if (type == TLOGICAL) {
       const LONGLONG n = rows * repeat;
-      int anynul = 0;
+      char nul = 0;
+      fits_read_col(
+        f, TLOGICAL, col, row, 1, n, &nul, (char*)*buf, &anynul, &fstatus);
+      if (!fstatus)
+        st->n += (uint64_t)n;
+    } else {
+      const LONGLONG n = rows * repeat;
       double nulval = NAN;
-      fits_read_col(f, TDOUBLE, c, row, 1, n, &nulval, buf, &anynul, &fstatus);
-      if (fstatus) {
-        log_fits(fstatus, "%s: HDU %d, column %s, rows %lld-%lld", path, hdu,
-          name, (long long)row, (long long)(row + rows - 1));
-        status = SIF_ERR_IO;
-        break;
-      }
-      for (LONGLONG i = 0; i < n; i++)
-        sif__io_stats_add(&s, buf[i]);
+      fits_read_col(
+        f, TDOUBLE, col, row, 1, n, &nulval, *buf, &anynul, &fstatus);
+      for (LONGLONG i = 0; !fstatus && i < n; i++)
+        sif__file_stats_add(st, (*buf)[i]);
     }
-    if (status == SIF_OK && report && s.n > 0)
-      sif__io_stats_print(report, name, 20, &s);
+    if (fstatus) {
+      log_fits(fstatus, "%s: %s: column %s, rows %lld-%lld", path, hdu, name,
+        (long long)row, (long long)(row + rows - 1));
+      return SIF_ERR_IO;
+    }
   }
-  free(buf);
-  return status;
+  return SIF_OK;
 }
 
-int sif_fits_check(const char* path, bool deep, FILE* report) {
-  if (!path) {
-    SIF_LOG_ERROR(TAG, "sif_fits_check: NULL path");
-    return SIF_ERR_INVALID;
+/* Every pixel of the current image, as doubles. */
+static int check_image(fitsfile* f, const char* path, const char* hdu,
+  sif_file_stats_t* st, double** buf, size_t* buf_len) {
+  int fstatus = 0, naxis = 0;
+  long naxes[SIF_FILE_ARRAY_MAX_RANK] = {0};
+  fits_get_img_dim(f, &naxis, &fstatus);
+  if (naxis > SIF_FILE_ARRAY_MAX_RANK)
+    naxis = SIF_FILE_ARRAY_MAX_RANK;
+  fits_get_img_size(f, naxis, naxes, &fstatus);
+  if (fstatus) {
+    log_fits(fstatus, "%s: %s", path, hdu);
+    return SIF_OK;
   }
+  LONGLONG total = naxis > 0 ? 1 : 0;
+  for (int a = 0; a < naxis; a++)
+    total *= naxes[a];
 
-  /* The summary opens the file and walks every HDU's header, which is where
-   * cfitsio finds a broken structure. */
-  FILE* sink = report ? report : tmpfile();
-  int status = sink ? sif_fits_print_summary(path, sink) : SIF_ERR_IO;
-  if (sink && sink != report)
-    fclose(sink);
-  if (status != SIF_OK)
-    return status;
+  const size_t block = (size_t)CHUNK;
+  if (block > *buf_len) {
+    double* grown = realloc(*buf, block * sizeof(double));
+    if (!grown) {
+      SIF_LOG_ERROR(TAG, "out of memory: %zu-value read buffer", block);
+      return SIF_ERR_ALLOC;
+    }
+    *buf = grown;
+    *buf_len = block;
+  }
+  for (LONGLONG first = 1; first <= total; first += (LONGLONG)block) {
+    const LONGLONG n =
+      total - first + 1 < (LONGLONG)block ? total - first + 1 : (LONGLONG)block;
+    int anynul = 0;
+    double nulval = NAN;
+    fits_read_img(f, TDOUBLE, first, n, &nulval, *buf, &anynul, &fstatus);
+    if (fstatus) {
+      log_fits(fstatus, "%s: %s: pixels %lld-%lld", path, hdu, (long long)first,
+        (long long)(first + n - 1));
+      return SIF_OK;
+    }
+    for (LONGLONG i = 0; i < n; i++)
+      sif__file_stats_add(st, (*buf)[i]);
+  }
+  return SIF_OK;
+}
 
-  sif__io_problems_t pr = {TAG, 0};
-
-  /* The last HDU's data is past every header, so a file cut short inside it
-   * passes the walk above. */
+/*
+ * Every HDU in turn, in the order the description gave its tables and
+ * arrays: the checksums where the file keeps them, then every value. A file
+ * cut short inside the last HDU's data passes cfitsio's walk of the headers,
+ * so the length is checked first.
+ */
+int sif__file_check_fits(sif_file_check_t* c) {
+  const char* path = c->info->path;
   uint64_t bytes = 0;
   if (is_truncated(path, &bytes))
-    sif__io_problem(&pr,
-      "%s: %" PRIu64 " bytes, not a multiple of 2880 "
-      "(truncated)",
-      path, bytes);
+    sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+      "%s: %" PRIu64 " bytes, not a multiple of 2880 (truncated)", path, bytes);
 
-  if (deep && pr.n == 0) {
-    fitsfile* f = NULL;
-    int fstatus = 0, n_hdus = 0;
-    if (open_file(path, READONLY, &f) != SIF_OK)
-      return SIF_ERR_IO;
-    fits_get_num_hdus(f, &n_hdus, &fstatus);
-    for (int i = 1; fstatus == 0 && i <= n_hdus; i++) {
-      int hdutype = 0;
-      fits_movabs_hdu(f, i, &hdutype, &fstatus);
-      if (fstatus) {
-        log_fits(fstatus, "%s: HDU %d", path, i - 1);
-        pr.n++;
-        break;
-      }
-      if (!is_table(hdutype))
-        continue;
-      const int st = check_table_values(f, path, i - 1, report);
-      if (st == SIF_ERR_ALLOC) {
-        fits_close_file(f, &fstatus);
-        return st;
-      }
-      if (st != SIF_OK)
-        pr.n++;
+  fitsfile* f = NULL;
+  if (open_file(path, READONLY, &f) != SIF_OK)
+    return SIF_OK;
+
+  int fstatus = 0, n_hdus = 0;
+  fits_get_num_hdus(f, &n_hdus, &fstatus);
+  double* buf = NULL;
+  size_t buf_len = 0;
+  uint32_t table = 0, array = 0;
+  int status = SIF_OK;
+  for (int i = 1; fstatus == 0 && i <= n_hdus && status == SIF_OK; i++) {
+    int hdutype = 0;
+    fits_movabs_hdu(f, i, &hdutype, &fstatus);
+    if (fstatus) {
+      log_fits(fstatus, "%s: HDU %d", path, i - 1);
+      fstatus = 0;
+      break;
     }
-    int close_status = 0;
-    fits_close_file(f, &close_status);
-  }
+    char hdu[FLEN_VALUE + 16], name[FLEN_VALUE];
+    key_string(f, "EXTNAME", name);
+    snprintf(hdu, sizeof(hdu), "HDU %d%s%s%s", i - 1, name[0] ? " (" : "", name,
+      name[0] ? ")" : "");
 
-  return sif__io_problems_end(&pr, report);
+    /* 1 for a match, 0 for no keyword, -1 for a mismatch. */
+    int data_ok = 0, hdu_ok = 0, vstatus = 0;
+    fits_verify_chksum(f, &data_ok, &hdu_ok, &vstatus);
+    if (vstatus) {
+      log_fits(vstatus, "%s: %s: checksum", path, hdu);
+    } else {
+      if (data_ok < 0)
+        sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+          "%s: %s: DATASUM does not match the data (corrupt)", path, hdu);
+      if (hdu_ok < 0)
+        sif__file_check_problem(c, SIF_FILE_PROBLEM_ERROR,
+          "%s: %s: CHECKSUM does not match the HDU (corrupt)", path, hdu);
+    }
+
+    if (is_table(hdutype)) {
+      /* The first column that does not read says why; the rest of the HDU
+       * would only say it again. */
+      const uint32_t t = table++;
+      const sif_file_table_t* tb =
+        t < c->info->n_tables ? &c->info->tables[t] : NULL;
+      for (uint32_t col = 0; tb && col < tb->n_columns && status == SIF_OK;
+        col++)
+        status = check_column(f, path, hdu, (int)col + 1, tb->columns[col].name,
+          sif__file_check_column(c, t, col), &buf, &buf_len);
+      if (status == SIF_ERR_IO)
+        status = SIF_OK;
+    } else {
+      int naxis = 0, istatus = 0;
+      fits_get_img_dim(f, &naxis, &istatus);
+      if (istatus || (naxis == 0 && i == 1))
+        continue;
+      sif_file_stats_t* st = sif__file_check_array(c, array++);
+      if (st)
+        status = check_image(f, path, hdu, st, &buf, &buf_len);
+    }
+  }
+  free(buf);
+
+  int close_status = 0;
+  fits_close_file(f, &close_status);
+  fits_clear_errmsg();
+  return status;
 }
 
 /* ------------------------------------------------------------------------ */

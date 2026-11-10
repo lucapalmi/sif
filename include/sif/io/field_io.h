@@ -98,23 +98,6 @@ SIF_NODISCARD sif_field_t* sif_field_read(
 int sif_field_read_into(sif_field_t* field, const char* filepath);
 
 /**
- * @brief Check an .xfield file without loading it: its header, and that its
- * size is the one the header implies.
- *
- * With @p deep, every value is read as well, a block at a time: the
- * checksum is recomputed, the positions have to be finite and inside the
- * box, and the weights non-negative. A file in the other precision is
- * checked as fully, though this build could not load it (which is itself
- * reported).
- *
- * @param report Where the summary goes, or NULL for none.
- * @return SIF_OK for a sound file; SIF_ERR_IO for one with problems, each
- * logged as an ERROR, or one that cannot be read; SIF_ERR_ALLOC;
- * SIF_ERR_INVALID for a NULL path.
- */
-int sif_field_check_xfield(const char* filepath, bool deep, FILE* report);
-
-/**
  * @brief Write a field to a .xfield file.
  *
  * Weight and velocity blocks are written only if the field carries them, and

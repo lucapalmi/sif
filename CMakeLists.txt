@@ -321,6 +321,7 @@ set(SOURCES
   # io -- the HDF5 half is added below, one file or the other
     src/io/core_io.c
     src/io/file_info.c
+    src/io/file_check.c
     src/io/scratch.c
     src/io/catalogue_io.c
     src/io/profiles_io.c
