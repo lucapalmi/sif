@@ -33,6 +33,8 @@ Current version: v0.5 release 0
 - `sif_file_check()`: a file read whole -- intact, every value read, its
   contents sound for what it holds -- with each column's range and every
   problem as data; `sif-inspect --check FILE` prints it
+- `pysif.io.describe()`, `check()` and `inspect()`: the description and the
+  check as dicts, or printed as sif-inspect prints them
 - Exodus Lagrangian overlap: voids kept apart on R (1 + threshold)^(1/3), the
   catalogue keeping R. Variant `"lagrangian-overlap"`, `overlap_type=` in
   `exodus_raw()`, `SIF_FINDER_LAGRANGIAN_OVERLAP`

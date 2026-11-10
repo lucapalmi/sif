@@ -33,6 +33,57 @@ _Path = str | bytes | PathLike[str] | PathLike[bytes]
 _GadgetFormat = Literal["auto", "hdf5", 1, 2]
 _Value = int | float | str
 
+_FileFormat = Literal["ascii", "fits", "hdf5", "gadget", "xfield", "xgrid",
+                      "checkpoint"]
+
+class _FileStats(TypedDict):
+    n: int
+    n_nonfinite: int
+    min: float | None
+    max: float | None
+
+class _FileColumn(TypedDict, total=False):
+    name: str
+    type: str
+    width: int
+    unit: str | None
+    stats: _FileStats
+
+class _FileTable(TypedDict):
+    name: str
+    n_rows: int
+    columns: list[_FileColumn]
+    meta: dict[str, _Value]
+
+class _FileArray(TypedDict, total=False):
+    name: str
+    type: str
+    shape: tuple[int, ...]
+    meta: dict[str, _Value]
+    stats: _FileStats
+
+class _FileInfo(TypedDict):
+    path: str
+    format: str
+    detail: str
+    n_files: int
+    size_bytes: int
+    meta: dict[str, _Value]
+    tables: list[_FileTable]
+    arrays: list[_FileArray]
+
+class _FileProblem(TypedDict):
+    severity: Literal["error", "warning"]
+    message: str
+
+class _FileCheck(TypedDict):
+    info: _FileInfo | None
+    content: str
+    n_errors: int
+    n_warnings: int
+    problems: list[_FileProblem]
+    ok: bool
+
 class _FieldHeader(TypedDict):
     n_particles: int
     box_length: float
@@ -729,3 +780,68 @@ def get_hdf5_attrs(filepath: _Path,
         OSError: If the file or the group is missing.
         RuntimeError: If pysif was built without HDF5.
     """
+
+def describe(path: _Path, format: _FileFormat | None = None) -> _FileInfo:
+    """What a file holds, described the same way for every format sif reads:
+    its metadata, its tables of named, typed columns, and its arrays.
+
+    Only what the file says about itself is read -- its headers and
+    structure -- and nothing is checked; check() does that. An ASCII
+    table, which has no header, is scanned for its row count.
+
+    Args:
+        path: The file, or a multi-file snapshot's base name.
+        format: 'ascii', 'fits', 'hdf5', 'gadget', 'xfield', 'xgrid' or
+            'checkpoint'; None tells it from the file's contents.
+
+    Returns:
+        dict: path, format, detail (the variant: 'SnapFormat 2, single
+        precision'), n_files, size_bytes, meta (key -> int, float or
+        str), tables (each a dict: name, n_rows, columns -- each name,
+        type, width, unit -- and meta) and arrays (each name, type, shape
+        and meta).
+
+    Raises:
+        OSError: For a file that is missing, or cannot be read as
+            `format` or as any format sif knows.
+        ValueError: For an unknown format.
+        RuntimeError: For HDF5 or FITS when pysif was built without it.
+    """
+
+def check(path: _Path, format: _FileFormat | None = None) -> _FileCheck:
+    """Whether a file is sound, reading all of it: that it is whole (sizes,
+    record framing, checksums, every file of a snapshot), that every
+    value reads, and that its contents make sense for what it holds --
+    positions inside a snapshot's box, masses not negative, a sif
+    catalogue's radii positive and its count what its header says.
+
+    Takes as long as reading the file. A file that cannot be read is not
+    an exception: the check says so.
+
+    Args:
+        path: The file, or a multi-file snapshot's base name.
+        format: As for describe().
+
+    Returns:
+        dict: info (as describe() gives it, each column and array with
+        'stats' -- n values read, n_nonfinite, min and max, None where
+        there are none -- or None for a file that could not be read),
+        content (what the contents were checked as: 'sif catalogue',
+        'GADGET snapshot', ..., or ''), n_errors, n_warnings, problems
+        (the first 100, each severity 'error' or 'warning' and message),
+        ok (True when there is no error).
+
+    Raises:
+        ValueError: For an unknown format.
+    """
+
+def inspect(path: _Path, format: _FileFormat | None = None, *,
+            check: bool = False) -> None:
+    """Print describe(), or with check=True check(), laid out as sif-inspect
+    prints them: the file, its metadata, then each table and array, and
+    for a check each column's range, the problems and the result.
+
+    Raises:
+        As describe(); with check=True, only for an unknown format.
+    """
+

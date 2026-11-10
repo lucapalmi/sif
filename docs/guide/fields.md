@@ -557,7 +557,8 @@ each a number of rows of named, typed columns, and its **arrays**, the
 datasets that are not columns, such as a grid. Only what the file says about
 itself is read -- its headers and structure -- and nothing is checked.
 `sif_file_info_print()` lays the description out, and the **sif-inspect**
-program prints it:
+program prints it; in Python, `pysif.io.describe()` returns it as a dict and
+`pysif.io.inspect()` prints it:
 
 ```bash
 sif-inspect snapdir_010/snap_010
@@ -602,6 +603,13 @@ every problem, each an error or a warning:
 
 ```bash
 sif-inspect --check halos.csv
+```
+
+```python
+check = pysif.io.check("halos.csv")
+if not check["ok"]:
+    for p in check["problems"]:
+        print(p["severity"], p["message"])
 ```
 
 ## Building a field from arrays

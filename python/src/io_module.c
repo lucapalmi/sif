@@ -639,6 +639,63 @@ static PyMethodDef io_methods[] = {
     "    OSError: If the file or the group is missing.\n"
     "    RuntimeError: If pysif was built without HDF5."},
 
+  {"describe", (PyCFunction)pysif_describe, METH_VARARGS | METH_KEYWORDS,
+    "describe(path, format=None)\n"
+    "--\n\n"
+    "What a file holds, described the same way for every format sif reads:\n"
+    "its metadata, its tables of named, typed columns, and its arrays.\n\n"
+    "Only what the file says about itself is read -- its headers and\n"
+    "structure -- and nothing is checked; check() does that. An ASCII\n"
+    "table, which has no header, is scanned for its row count.\n\n"
+    "Args:\n"
+    "    path: The file, or a multi-file snapshot's base name.\n"
+    "    format: 'ascii', 'fits', 'hdf5', 'gadget', 'xfield', 'xgrid' or\n"
+    "        'checkpoint'; None tells it from the file's contents.\n\n"
+    "Returns:\n"
+    "    dict: path, format, detail (the variant: 'SnapFormat 2, single\n"
+    "    precision'), n_files, size_bytes, meta (key -> int, float or\n"
+    "    str), tables (each a dict: name, n_rows, columns -- each name,\n"
+    "    type, width, unit -- and meta) and arrays (each name, type, shape\n"
+    "    and meta).\n\n"
+    "Raises:\n"
+    "    OSError: For a file that is missing, or cannot be read as\n"
+    "        `format` or as any format sif knows.\n"
+    "    ValueError: For an unknown format.\n"
+    "    RuntimeError: For HDF5 or FITS when pysif was built without it."},
+
+  {"check", (PyCFunction)pysif_check, METH_VARARGS | METH_KEYWORDS,
+    "check(path, format=None)\n"
+    "--\n\n"
+    "Whether a file is sound, reading all of it: that it is whole (sizes,\n"
+    "record framing, checksums, every file of a snapshot), that every\n"
+    "value reads, and that its contents make sense for what it holds --\n"
+    "positions inside a snapshot's box, masses not negative, a sif\n"
+    "catalogue's radii positive and its count what its header says.\n\n"
+    "Takes as long as reading the file. A file that cannot be read is not\n"
+    "an exception: the check says so.\n\n"
+    "Args:\n"
+    "    path: The file, or a multi-file snapshot's base name.\n"
+    "    format: As for describe().\n\n"
+    "Returns:\n"
+    "    dict: info (as describe() gives it, each column and array with\n"
+    "    'stats' -- n values read, n_nonfinite, min and max, None where\n"
+    "    there are none -- or None for a file that could not be read),\n"
+    "    content (what the contents were checked as: 'sif catalogue',\n"
+    "    'GADGET snapshot', ..., or ''), n_errors, n_warnings, problems\n"
+    "    (the first 100, each severity 'error' or 'warning' and message),\n"
+    "    ok (True when there is no error).\n\n"
+    "Raises:\n"
+    "    ValueError: For an unknown format."},
+
+  {"inspect", (PyCFunction)pysif_inspect, METH_VARARGS | METH_KEYWORDS,
+    "inspect(path, format=None, *, check=False)\n"
+    "--\n\n"
+    "Print describe(), or with check=True check(), laid out as sif-inspect\n"
+    "prints them: the file, its metadata, then each table and array, and\n"
+    "for a check each column's range, the problems and the result.\n\n"
+    "Raises:\n"
+    "    As describe(); with check=True, only for an unknown format."},
+
   {NULL, NULL, 0, NULL}};
 
 static struct PyModuleDef io_module = {PyModuleDef_HEAD_INIT,

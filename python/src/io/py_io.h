@@ -69,6 +69,11 @@ PyObject* pysif_write_size_function_fits(
 PyObject* pysif_read_size_function_fits(
   PyObject* self, PyObject* args, PyObject* kwds);
 
+/* Any file sif reads, described and checked (py_file_info.c) */
+PyObject* pysif_describe(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_check(PyObject* self, PyObject* args, PyObject* kwds);
+PyObject* pysif_inspect(PyObject* self, PyObject* args, PyObject* kwds);
+
 /* Particles from any HDF5 file (py_hdf5.c) */
 PyObject* pysif_read_hdf5(PyObject* self, PyObject* args, PyObject* kwds);
 

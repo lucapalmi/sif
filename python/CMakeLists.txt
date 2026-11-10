@@ -37,6 +37,7 @@ set(PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_hdf5.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_gadget.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_fits.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/io/py_file_info.c
 
     # Structures Submodule
     ${CMAKE_CURRENT_SOURCE_DIR}/src/structures/py_catalogue.c
