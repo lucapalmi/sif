@@ -19,6 +19,9 @@ Current version: v0.5 release 0
 - Exodus `refine_centres` takes a mode, `"none"`, `"gaussian"`, `"tracers"` or
   `"hill"`, instead of a bool; `SIF_FINDER_REFINE_CENTRES` is now
   `SIF_FINDER_REFINE_*` (breaking; older checkpoints still resume)
+- Exodus `refine_centres="hill"` keeps a centre where it was when the climb
+  would move it more than half its radius, onto a neighbouring void; on dense
+  fields this restores most of the small voids hill used to lose
 - EVM size function: the barrier is the maximum a posteriori of the 100000-step
   calibration chain (final cosmology: h = 0.67, no massive neutrinos, n_s =
   0.96) and the five mapping constants are refitted with it, so

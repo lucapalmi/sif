@@ -1841,10 +1841,33 @@ static int opt_probe(const exodus_climb_t* oc, radial_scratch_t* s,
   return found;
 }
 
+/* How far a centre may end from where it started, as a fraction of the radius
+ * measured there; a centre that ends further away is put back, with that
+ * radius. R(x) rises towards every larger void around a small one, so a climb
+ * from a small void's minimum can run up the side of its neighbour, which is
+ * already in the catalogue and refuses it -- and the candidate's own void is
+ * then never tried. On the L0700 box at delta -0.55 most climbs ended past a
+ * whole radius and only 40% of the voids gaussian placement finds were left;
+ * any cap from 0.25 to 1 brought the count back to within 3% of it, and on
+ * L2800, where climbs rarely run, it changed almost nothing. */
+#define OPT_CLIMB_CAP 0.50f
+
+/* Squared distance from a to b on the periodic box. */
+static sif_real opt_dist2(const sif_real a[3], const sif_real b[3], sif_real box) {
+  sif_real d2 = 0.0f;
+  for (int k = 0; k < 3; k++) {
+    sif_real d = a[k] - b[k];
+    d -= box * SIF_REAL_FLOOR(d / box + 0.5f);
+    d2 += d * d;
+  }
+  return d2;
+}
+
 sif_real sif__exodus_hill(const exodus_climb_t* oc, sif_real c[3],
   sif_real r0, radial_scratch_t* s) {
 
   const sif_real box = oc->mesh->box_length;
+  const sif_real c0[3] = {c[0], c[1], c[2]};
   sif_real best = climb_centre(oc, c, r0, s);
   if (best < 0.0f)
     return best;
@@ -1871,6 +1894,14 @@ sif_real sif__exodus_hill(const exodus_climb_t* oc, sif_real c[3],
     c[1] = at[1];
     c[2] = at[2];
     best = r;
+  }
+
+  const sif_real cap = OPT_CLIMB_CAP * r0;
+  if (opt_dist2(c, c0, box) > cap * cap) {
+    c[0] = c0[0];
+    c[1] = c0[1];
+    c[2] = c0[2];
+    return r0;
   }
   return best;
 }

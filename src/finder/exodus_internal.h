@@ -222,8 +222,9 @@ typedef struct exodus_climb {
 /**
  * @brief SIF_FINDER_REFINE_HILL: moves c to the point near it where the
  * crossing radius is largest, from the radius r0 measured there, and returns
- * the radius at that point. c stays where it is if nothing beats r0. -1 if the
- * climb reaches a crossing past every reach it has.
+ * the radius at that point. c stays where it is, with r0, if nothing beats r0
+ * or the point lies further than OPT_CLIMB_CAP r0 away (exodus_rescale.c). -1
+ * if the climb reaches a crossing past every reach it has.
  */
 sif_real sif__exodus_hill(const exodus_climb_t* oc, sif_real c[3],
   sif_real r0, radial_scratch_t* s);

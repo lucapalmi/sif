@@ -172,7 +172,9 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
             dropped if the field there is above the threshold. 'hill':
             as 'gaussian', then each centre moves to the point near it where
             the void's radius is largest: a climb on the tracers, and a search
-            around its end for a higher peak. Radii grow by a few percent, but
+            around its end for a higher peak; a centre that would end more
+            than half its radius away stays where it was, as a climb that
+            far has run onto a neighbouring void. Radii grow by a few percent, but
             centres vary more between grids; slow with seeds='cells', and
             unweighted tracers only, for now.
         extend_reach: Measure a crossing past a rung's reach with the reach
