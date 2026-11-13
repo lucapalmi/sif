@@ -128,12 +128,12 @@ def svdw_multiplicity_function(sigma: ArrayLike, delta_v: float,
     """
 
 def size_function_svdw(k: ArrayLike, pk: ArrayLike, radii: ArrayLike,
-                       delta_v: float, delta_c: float, units: _Units = "ln_r",
+                       delta_nl: float, delta_c: float, units: _Units = "ln_r",
                        method: _Method = "b94",
                        omega_m: float | None = None) -> SizeFunction:
     """Sheth & van de Weygaert void size function, as a SizeFunction over the given Eulerian radii.
     Number-conserving, so its void volume fraction exceeds one at large radii; present as the reference rather than the recommendation.
-    The expansion factor is not an argument: delta_v already fixes it. Use method='b94' (default), 'eds' or 'lcdm' (with omega_m) to choose how, as in spherical_map_nonlinear.
+    delta_nl is the non-linear density contrast the voids are defined by (the finder's threshold), strictly between -1 and 0; the linear barrier is derived from it inside, and so is the expansion factor. Use method='b94' (default), 'eds' or 'lcdm' (with omega_m) to choose how, as in spherical_map_nonlinear.
     """
 
 def delta_covariance_pk(
@@ -321,7 +321,7 @@ def ep_multiplicity_function_emu(walk: Walk, barrier: ArrayLike,
     ...
 
 def size_function_vdn(k: ArrayLike, pk: ArrayLike, radii: ArrayLike,
-                      delta_v: float, delta_c: float, units: _Units = "ln_r",
+                      delta_nl: float, delta_c: float, units: _Units = "ln_r",
                       method: _Method = "b94",
                       omega_m: float | None = None) -> SizeFunction:
     """Volume-conserving (Vdn) void size function, as a SizeFunction over the given Eulerian radii.
@@ -329,16 +329,16 @@ def size_function_vdn(k: ArrayLike, pk: ArrayLike, radii: ArrayLike,
     """
 
 def size_function_evm(k: ArrayLike, pk: ArrayLike, radii: ArrayLike,
-                      delta_v: float, h: float, units: _Units = "ln_r",
+                      delta_nl: float, h: float, units: _Units = "ln_r",
                       method: _Method = "b94",
                       omega_m: float | None = None) -> SizeFunction:
     """The EVM void size function, as a SizeFunction over the given Eulerian radii: the moving barrier calibrated at z = 99, its emulated first crossing, and a fitted volume-conserving mapping.
-    pk is the linear P(k) at the epoch wanted, and no redshift is passed: the epoch is seen through sigma12, for which h places 12 Mpc on radii in Mpc/h. delta_v is the linear barrier, as for size_function_svdw; spherical_map_linear converts a threshold quoted as an observed underdensity. Calibrated on one cosmology for sigma12 from 0.39 to 1 and a magnitude of delta_v at z = 99 (scaled by sigma12(z=99) / sigma12) from 0.003 to 0.045; outside them a warning is logged. Radii past the emulated first crossing give 0.
+    pk is the linear P(k) at the epoch wanted, and no redshift is passed: the epoch is seen through sigma12, for which h places 12 Mpc on radii in Mpc/h. delta_nl is the non-linear threshold, as for size_function_svdw, converted to the linear barrier inside. Calibrated on one cosmology for sigma12 from 0.39 to 1 and a magnitude of the linear barrier at z = 99 (scaled by sigma12(z=99) / sigma12) from 0.003 to 0.045; outside them a warning is logged. Radii past the emulated first crossing give 0.
     Builds a VarianceKernel on every call, a good part of a second; size_function_evm_kernel takes one built beforehand.
     """
 
 def size_function_evm_kernel(kernel: VarianceKernel, pk: ArrayLike,
-                             radii: ArrayLike, delta_v: float, h: float,
+                             radii: ArrayLike, delta_nl: float, h: float,
                              units: _Units = "ln_r",
                              method: _Method = "b94",
                              omega_m: float | None = None) -> SizeFunction:
@@ -346,10 +346,10 @@ def size_function_evm_kernel(kernel: VarianceKernel, pk: ArrayLike,
     The kernel must have a top-hat window and a lattice holding 12 Mpc and radii, reaching in to the Lagrangian radii and out to where the barrier is ~3.5 sigma: VarianceKernel(r_min=0.3, r_max=1000.0) is what the model was calibrated with. Other arguments as size_function_evm.
     """
 
-def size_function_evm_walk(walk: Walk, radii: ArrayLike, delta_v: float,
+def size_function_evm_walk(walk: Walk, radii: ArrayLike, delta_nl: float,
                            h: float, units: _Units = "ln_r",
                            method: _Method = "b94",
                            omega_m: float | None = None) -> SizeFunction:
-    """size_function_evm_kernel on a Walk built beforehand, for several thresholds of one spectrum: walk = kernel(pk), then one call per delta_v.
+    """size_function_evm_kernel on a Walk built beforehand, for several thresholds of one spectrum: walk = kernel(pk), then one call per delta_nl.
     The walk comes from a kernel as size_function_evm_kernel requires. Other arguments as size_function_evm.
     """

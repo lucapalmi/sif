@@ -194,7 +194,7 @@ def test_variant_checkpoints(grid, mesh, tmp_path):
     # still the caller's.
     path = tmp_path / "run.ckpt"
     ref = run(grid, mesh, checkpoint=False, seeds="minima",
-              refine_centres="gaussian", extend_reach=True, displace=True,
+              refine_centres="none", extend_reach=True, displace=True,
               overlap_fraction=1)
     cat = pysif.finders.exodus(grid(), mesh, RADII, THRESHOLD,
                                variant="excursion-peak", checkpoint=path,

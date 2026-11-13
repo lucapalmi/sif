@@ -51,17 +51,17 @@ static PyObject* size_function(
   PyObject* k_obj;
   PyObject* pk_obj;
   PyObject* radii_obj;
-  double delta_v = -2.7;
+  double delta_nl = -0.8;
   double delta_c = 1.686;
   const char* units = NULL;
   const char* method = NULL;
   PyObject* omega_m_obj = Py_None;
 
-  static char* kwlist[] = {"k", "pk", "radii", "delta_v", "delta_c", "units",
+  static char* kwlist[] = {"k", "pk", "radii", "delta_nl", "delta_c", "units",
     "method", "omega_m", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|ddzzO", kwlist, &k_obj,
-        &pk_obj, &radii_obj, &delta_v, &delta_c, &units, &method,
+        &pk_obj, &radii_obj, &delta_nl, &delta_c, &units, &method,
         &omega_m_obj)) {
     return NULL;
   }
@@ -71,8 +71,9 @@ static PyObject* size_function(
   if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0)
     return NULL;
 
-  if (!(delta_v < 0.0)) {
-    PyErr_SetString(PyExc_ValueError, "delta_v must be strictly negative");
+  if (!(delta_nl > -1.0 && delta_nl < 0.0)) {
+    PyErr_SetString(
+      PyExc_ValueError, "delta_nl must lie strictly between -1 and 0");
     return NULL;
   }
   if (!(delta_c > 0.0)) {
@@ -113,7 +114,7 @@ static PyObject* size_function(
   Py_BEGIN_ALLOW_THREADS vsf = compute((const sif_real*)PyArray_DATA(k_arr),
     (const sif_real*)PyArray_DATA(pk_arr), (uint32_t)n_points,
     (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
-    (sif_real)delta_v, (sif_real)delta_c, (sif_real)omega_m, options);
+    (sif_real)delta_nl, (sif_real)delta_c, (sif_real)omega_m, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
@@ -140,9 +141,10 @@ PyObject* py_sif_size_function_vdn(
 }
 
 /* The checks both EVM entry points make on their common arguments. */
-static int evm_check_scalars(double delta_v, double h) {
-  if (!(delta_v < 0.0)) {
-    PyErr_SetString(PyExc_ValueError, "delta_v must be strictly negative");
+static int evm_check_scalars(double delta_nl, double h) {
+  if (!(delta_nl > -1.0 && delta_nl < 0.0)) {
+    PyErr_SetString(
+      PyExc_ValueError, "delta_nl must lie strictly between -1 and 0");
     return -1;
   }
   if (!(h > 0.0)) {
@@ -157,24 +159,24 @@ PyObject* py_sif_size_function_evm(
   PyObject* k_obj;
   PyObject* pk_obj;
   PyObject* radii_obj;
-  double delta_v;
+  double delta_nl;
   double h;
   const char* units = NULL;
   const char* method = NULL;
   PyObject* omega_m_obj = Py_None;
 
   static char* kwlist[] = {
-    "k", "pk", "radii", "delta_v", "h", "units", "method", "omega_m", NULL};
+    "k", "pk", "radii", "delta_nl", "h", "units", "method", "omega_m", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOdd|zzO", kwlist, &k_obj,
-        &pk_obj, &radii_obj, &delta_v, &h, &units, &method, &omega_m_obj)) {
+        &pk_obj, &radii_obj, &delta_nl, &h, &units, &method, &omega_m_obj)) {
     return NULL;
   }
 
   sif_option options;
   double omega_m;
   if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0 ||
-      evm_check_scalars(delta_v, h) != 0) {
+      evm_check_scalars(delta_nl, h) != 0) {
     return NULL;
   }
 
@@ -212,7 +214,7 @@ PyObject* py_sif_size_function_evm(
   Py_BEGIN_ALLOW_THREADS vsf = sif_size_function_evm(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
-    (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, (sif_real)omega_m,
+    (uint32_t)n_radii, (sif_real)delta_nl, (sif_real)h, (sif_real)omega_m,
     options);
   Py_END_ALLOW_THREADS
 
@@ -231,17 +233,17 @@ PyObject* py_sif_size_function_evm_kernel(
   PyObject* kernel_obj;
   PyObject* pk_obj;
   PyObject* radii_obj;
-  double delta_v;
+  double delta_nl;
   double h;
   const char* units = NULL;
   const char* method = NULL;
   PyObject* omega_m_obj = Py_None;
 
-  static char* kwlist[] = {"kernel", "pk", "radii", "delta_v", "h", "units",
+  static char* kwlist[] = {"kernel", "pk", "radii", "delta_nl", "h", "units",
     "method", "omega_m", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OOdd|zzO", kwlist,
-        &sifVarianceKernelType, &kernel_obj, &pk_obj, &radii_obj, &delta_v, &h,
+        &sifVarianceKernelType, &kernel_obj, &pk_obj, &radii_obj, &delta_nl, &h,
         &units, &method, &omega_m_obj)) {
     return NULL;
   }
@@ -256,7 +258,7 @@ PyObject* py_sif_size_function_evm_kernel(
   sif_option options;
   double omega_m;
   if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0 ||
-      evm_check_scalars(delta_v, h) != 0) {
+      evm_check_scalars(delta_nl, h) != 0) {
     return NULL;
   }
 
@@ -285,7 +287,7 @@ PyObject* py_sif_size_function_evm_kernel(
   Py_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_evm_kernel(kernel, (const sif_real*)PyArray_DATA(pk_arr),
       (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
-      (sif_real)delta_v, (sif_real)h, (sif_real)omega_m, options);
+      (sif_real)delta_nl, (sif_real)h, (sif_real)omega_m, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(pk_arr);
@@ -301,17 +303,17 @@ PyObject* py_sif_size_function_evm_walk(
   PyObject* self, PyObject* args, PyObject* kwds) {
   PyObject* walk_obj;
   PyObject* radii_obj;
-  double delta_v;
+  double delta_nl;
   double h;
   const char* units = NULL;
   const char* method = NULL;
   PyObject* omega_m_obj = Py_None;
 
   static char* kwlist[] = {
-    "walk", "radii", "delta_v", "h", "units", "method", "omega_m", NULL};
+    "walk", "radii", "delta_nl", "h", "units", "method", "omega_m", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Odd|zzO", kwlist,
-        &sifWalkType, &walk_obj, &radii_obj, &delta_v, &h, &units, &method,
+        &sifWalkType, &walk_obj, &radii_obj, &delta_nl, &h, &units, &method,
         &omega_m_obj)) {
     return NULL;
   }
@@ -325,7 +327,7 @@ PyObject* py_sif_size_function_evm_walk(
   sif_option options;
   double omega_m;
   if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0 ||
-      evm_check_scalars(delta_v, h) != 0) {
+      evm_check_scalars(delta_nl, h) != 0) {
     return NULL;
   }
 
@@ -340,7 +342,7 @@ PyObject* py_sif_size_function_evm_walk(
   sif_error_clear();
   Py_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_evm_walk(walk, (const sif_real*)PyArray_DATA(radii_arr),
-      (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, (sif_real)omega_m,
+      (uint32_t)n_radii, (sif_real)delta_nl, (sif_real)h, (sif_real)omega_m,
       options);
   Py_END_ALLOW_THREADS
 

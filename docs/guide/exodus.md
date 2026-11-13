@@ -29,7 +29,7 @@ algorithm that follow different definitions of void:
 | Variant | Candidates | Centre | Overlap |
 |---|---|---|---|
 | `"excursion-set"` (default) | every cell below the threshold | its grid node | 0 | 
-| `"excursion-peak"` | local minima of the rung's field, smoothed by 0.15 R | refined between the nodes | 1 |
+| `"excursion-peak"` | local minima of the rung's field | their grid node | 1 |
 | `"lagrangian-overlap"` | every cell below the threshold | its grid node | 0, on the Lagrangian radii |
 
 With `"excursion-set"`, each cell below threshold is a candidate, and voids 
@@ -131,8 +131,10 @@ there were never compared with the larger ones the ladder does not reach.
 The void size function slightly depends on the grid resolution. Given a grid with 
 cell size $\Delta x$:
 
-- `"excursion-peak"` is stable for scales $R > 6\,\Delta x$
 - `"excursion-set"` is stable for scales $R > 10\,\Delta x$
+- `"excursion-peak"` puts its centres on nodes, like `"excursion-set"`; set
+  `refine_centres = "gaussian"` to place them between the nodes, which
+  makes it stable from $R \approx 6\,\Delta x$
 
 Finally, the algorithm causes a "loss of voids" at the scales close to the smallest 
 radius. Run the finder slightly below the minimum scale you want to consider, 

@@ -79,8 +79,7 @@ static int failures = 0;
 
 /* What excursion-peak sets, the overlap apart. */
 #define PEAK_OPTIONS                                                           \
-  (SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_GAUSSIAN |                      \
-    SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE)
+  (SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE)
 
 #define CHECK(cond, msg, ...)                                                  \
   do {                                                                         \

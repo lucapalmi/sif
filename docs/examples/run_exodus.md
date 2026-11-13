@@ -84,10 +84,10 @@ mesh = pysif.ChainMesh(
 
 # now we can finally run exodus
 # variant="excursion-peak" centres every void on a minimum of the density
-# smoothed at its own radius, which makes the catalogue nearly independent
-# of the grid, as long as the voids you report span at least ~6 cells and
-# the ladder starts about 1.5x below the smallest radius you report (see
-# the exodus guide). The default, "excursion-set", is the finder of 0.4
+# at its own radius (on a node; refine_centres="gaussian" places it between
+# the nodes, which makes the catalogue nearly independent of the grid for
+# voids that span at least ~6 cells). The ladder starts about 1.5x below
+# the smallest radius you report (see the exodus guide). The default, "excursion-set", is the finder of 0.4
 threshold = -0.7
 catalogue = pysif.finders.exodus(
     grid=grid,

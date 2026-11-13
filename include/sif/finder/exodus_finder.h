@@ -110,9 +110,10 @@ typedef struct {
  *
  * Excursion-set voids are spheres grown from every cell below the threshold,
  * with no overlap allowed: the voids the excursion-set models of the void
- * size function describe. Excursion-peak voids are spheres centred on minima
- * of the density smoothed at their rung's scale, with full overlap allowed, so that a void is refused only when its centre
- * falls inside a larger one. Lagrangian-overlap voids are excursion-set voids
+ * size function describe. Excursion-peak voids are spheres centred on the
+ * minima of the density at their rung's scale, on their nodes, with full
+ * overlap allowed, so that a void is refused only when its centre falls
+ * inside a larger one. Lagrangian-overlap voids are excursion-set voids
  * kept apart on their Lagrangian radii (SIF_FINDER_LAGRANGIAN_OVERLAP) instead
  * of their measured ones, which stay the radii of the catalogue.
  *

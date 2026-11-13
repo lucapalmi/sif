@@ -216,7 +216,7 @@ def test_evm_is_the_separate_pipeline(evm_kernel, delta_nl, growth):
     radii = np.geomspace(6.0, 60.0, 24)
     expected = evm_pipeline(evm_kernel, pk, radii, delta_nl)
     got = M.size_function_evm_kernel(
-        evm_kernel, pk, radii, M.spherical_map_linear(delta_nl), H)
+        evm_kernel, pk, radii, delta_nl, H)
     # the barrier constants above are rounded to the quoted six figures
     np.testing.assert_allclose(got.vsf, expected, rtol=2e-3)
 
@@ -224,7 +224,7 @@ def test_evm_is_the_separate_pipeline(evm_kernel, delta_nl, growth):
 def test_evm_wrapper_is_the_kernel_version(evm_kernel):
     pk = cdm(evm_kernel.k)
     radii = np.geomspace(6.0, 60.0, 12)
-    delta_v = M.spherical_map_linear(-0.5)
+    delta_v = -0.5  # the non-linear threshold
     wrapped = M.size_function_evm(evm_kernel.k, pk, radii, delta_v, H)
     direct = M.size_function_evm_kernel(evm_kernel, pk, radii, delta_v, H)
     np.testing.assert_array_equal(wrapped.vsf, direct.vsf)
@@ -236,7 +236,7 @@ def test_evm_walk_is_the_kernel_version(evm_kernel):
     walk = evm_kernel(pk)
     radii = np.geomspace(6.0, 60.0, 12)
     for delta_nl in (-0.3, -0.5, -0.7):
-        delta_v = M.spherical_map_linear(delta_nl)
+        delta_v = delta_nl  # the non-linear threshold
         shared = M.size_function_evm_walk(walk, radii, delta_v, H, units="r")
         direct = M.size_function_evm_kernel(
             evm_kernel, pk, radii, delta_v, H, units="r")
@@ -246,7 +246,7 @@ def test_evm_walk_is_the_kernel_version(evm_kernel):
 def test_evm_arguments_reach_the_c_side(evm_kernel):
     pk = cdm(evm_kernel.k)
     radii = np.geomspace(6.0, 60.0, 12)
-    delta_v = M.spherical_map_linear(-0.5)
+    delta_v = -0.5  # the non-linear threshold
     per_ln_r = M.size_function_evm_kernel(evm_kernel, pk, radii, delta_v, H)
     per_r = M.size_function_evm_kernel(
         evm_kernel, pk, radii, delta_v, H, units="r")
@@ -264,7 +264,7 @@ def test_evm_tail_is_zero_not_nan(evm_kernel):
     radii = np.geomspace(6.0, 900.0, 60)
     vsf = M.size_function_evm_kernel(
         evm_kernel, cdm(evm_kernel.k), radii,
-        M.spherical_map_linear(-0.5), H).vsf
+        -0.5, H).vsf
     assert np.isfinite(vsf).all()
     assert vsf[-1] == 0.0 and vsf[0] > 0.0
 
@@ -272,8 +272,10 @@ def test_evm_tail_is_zero_not_nan(evm_kernel):
 def test_evm_refusals(evm_kernel):
     pk = cdm(evm_kernel.k)
     radii = np.geomspace(6.0, 60.0, 6)
-    with pytest.raises(ValueError, match="delta_v"):
+    with pytest.raises(ValueError, match="delta_nl"):
         M.size_function_evm_kernel(evm_kernel, pk, radii, 0.5, H)
+    with pytest.raises(ValueError, match="delta_nl"):
+        M.size_function_evm_kernel(evm_kernel, pk, radii, -1.0, H)
     with pytest.raises(ValueError, match="h must"):
         M.size_function_evm(evm_kernel.k, pk, radii, -0.9, 0.0)
     with pytest.raises(ValueError, match="one per node"):
@@ -320,7 +322,7 @@ def test_spherical_map_methods():
 def test_size_function_lcdm(evm_kernel):
     pk = cdm(evm_kernel.k)
     radii = np.geomspace(6.0, 60.0, 12)
-    delta_v = M.spherical_map_linear(-0.5)
+    delta_v = -0.5  # the non-linear threshold
     eds = M.size_function_evm_kernel(evm_kernel, pk, radii, delta_v, H, method="eds")
     one = M.size_function_evm_kernel(
         evm_kernel, pk, radii, delta_v, H, method="lcdm", omega_m=1.0)

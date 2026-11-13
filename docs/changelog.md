@@ -7,6 +7,13 @@ Current version: v0.5 release 0
 
 ### Changed
 
+- The size functions (`sif_size_function_svdw`, `_vdn`, `_evm`, `_evm_kernel`,
+  `_evm_walk`; pysif `size_function_*`) take the non-linear threshold, strictly
+  between -1 and 0, and convert it to the linear barrier inside; the argument
+  is `delta_nl`, no longer `delta_v` (breaking)
+- The `excursion-peak` variant finds its minima on the rung's field, no
+  longer smoothed by a further Gaussian (`refine_centres="none"`, not
+  `"gaussian"`); its centres sit on the nodes (breaking)
 - Spherical-evolution `method="exact"` is now `"eds"`, and
   `SIF_SPHERICAL_EXACT` is `SIF_SPHERICAL_EDS`; the mapping and size-function C
   functions take an `omega_m` argument before `opt` (breaking)

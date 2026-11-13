@@ -55,12 +55,11 @@ def exodus(grid: Grid, mesh: ChainMesh, radii: ArrayLike, threshold: float,
       of 0.4, and the voids of the excursion-set models. The void size
       function depends on the grid below about 10-15 cells in radius. The
       default, for now.
-    - 'excursion-peak': the local minima of each rung's field, found after
-      smoothing it by a Gaussian of 0.15 of the rung and placed between
-      the nodes; a void is refused only when its centre falls inside a
-      larger one. The void size function is within about 1.5% of a finer
-      grid's from about 6 cells in radius; start the ladder about 1.5
-      times below the smallest radius you report.
+    - 'excursion-peak': the local minima of each rung's field, on their
+      nodes; a void is refused only when its centre falls inside a larger
+      one. Start the ladder about 1.5 times below the smallest radius you
+      report. refine_centres='gaussian' of exodus_raw() places the minima
+      between the nodes instead.
     - 'lagrangian-overlap': 'excursion-set', with voids kept apart on their
       Lagrangian radii, R (1 + threshold)^(1/3), instead of the radii they
       are measured to. The catalogue still holds the measured ones, so its
@@ -143,7 +142,7 @@ def exodus_raw(grid: Grid, mesh: ChainMesh, radii: ArrayLike,
 
     The variants are three points of this: excursion-set is every setting
     at its default, the finder of 0.4; excursion-peak is overlap_fraction=1,
-    seeds='minima', refine_centres='gaussian', extend_reach=True and
+    seeds='minima', refine_centres='none', extend_reach=True and
     displace=True; and lagrangian-overlap is excursion-set with
     overlap_type='lagrangian'. Each setting goes with any value of the others.
 

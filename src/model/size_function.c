@@ -432,17 +432,20 @@ static sif_size_function_t* alloc_on_radii(
  * one, so the two differ by exactly F^3.
  */
 static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
-  uint32_t n_points, const sif_real* radii, uint32_t n_radii, sif_real delta_v,
+  uint32_t n_points, const sif_real* radii, uint32_t n_radii, sif_real delta_nl,
   sif_real delta_c, sif_real omega_m, sif_option opt, bool conserve_volume) {
 
   if (check_radii(radii, n_radii) != SIF_OK)
     return NULL;
 
+  /* The barrier the field must cross is the linear contrast of the threshold
+   * asked for. */
+  const sif_real delta_v = sif_spherical_map_linear(delta_nl, omega_m, opt);
+  if (!(delta_v < 0.0f)) /* outside the expanding branch; already logged */
+    return NULL;
+
   /* The expansion factor, (1 + delta_NL)^(-1/3): the same mass occupies
    * 1/(1 + delta_NL) times the volume. */
-  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, omega_m, opt);
-  if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
-    return NULL;
   const double factor = pow(1.0 + (double)delta_nl, -1.0 / 3.0);
 
   /* The barriers are calibrated against top-hat smoothing, so the window is
@@ -516,20 +519,20 @@ static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
 
 sif_size_function_t* sif_size_function_svdw(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  uint32_t n_radii, sif_real delta_nl, sif_real delta_c, sif_real omega_m,
   sif_option opt) {
 
   return size_function(
-    k, pk, n_points, radii, n_radii, delta_v, delta_c, omega_m, opt, false);
+    k, pk, n_points, radii, n_radii, delta_nl, delta_c, omega_m, opt, false);
 }
 
 sif_size_function_t* sif_size_function_vdn(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  uint32_t n_radii, sif_real delta_nl, sif_real delta_c, sif_real omega_m,
   sif_option opt) {
 
   return size_function(
-    k, pk, n_points, radii, n_radii, delta_v, delta_c, omega_m, opt, true);
+    k, pk, n_points, radii, n_radii, delta_nl, delta_c, omega_m, opt, true);
 }
 
 /* --- The EVM size function --- */
@@ -624,7 +627,7 @@ static double evm_ln_correction(double u, double w, double l, double s) {
 }
 
 sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
-  const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
+  const sif_real* radii, uint32_t n_radii, sif_real delta_nl, sif_real h,
   sif_real omega_m, sif_option opt) {
 
   if (!walk) {
@@ -663,8 +666,9 @@ sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
     return NULL;
   }
 
-  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, omega_m, opt);
-  if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
+  /* The barrier is the linear contrast of the threshold asked for. */
+  const sif_real delta_v = sif_spherical_map_linear(delta_nl, omega_m, opt);
+  if (!(delta_v < 0.0f)) /* outside the expanding branch; already logged */
     return NULL;
 
   const double sigma12 = walk_sigma_at(walk, radius12);
@@ -749,7 +753,7 @@ sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
 
 sif_size_function_t* sif_size_function_evm_kernel(
   const sif_variance_kernel_t* kernel, const sif_real* pk,
-  const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
+  const sif_real* radii, uint32_t n_radii, sif_real delta_nl, sif_real h,
   sif_real omega_m, sif_option opt) {
 
   sif_walk_t* walk = sif_walk_pk(kernel, pk);
@@ -757,7 +761,7 @@ sif_size_function_t* sif_size_function_evm_kernel(
     return NULL;
 
   sif_size_function_t* out =
-    sif_size_function_evm_walk(walk, radii, n_radii, delta_v, h, omega_m, opt);
+    sif_size_function_evm_walk(walk, radii, n_radii, delta_nl, h, omega_m, opt);
 
   sif_walk_free(walk);
   return out;
@@ -765,14 +769,14 @@ sif_size_function_t* sif_size_function_evm_kernel(
 
 sif_size_function_t* sif_size_function_evm(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real h, sif_real omega_m,
+  uint32_t n_radii, sif_real delta_nl, sif_real h, sif_real omega_m,
   sif_option opt) {
 
   if (check_radii(radii, n_radii) != SIF_OK)
     return NULL;
 
-  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, omega_m, opt);
-  if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
+  /* The threshold must be reachable by a void; already logged if not. */
+  if (!(sif_spherical_map_linear(delta_nl, omega_m, opt) < 0.0f))
     return NULL;
 
   /* The calibration's lattice, stretched for radii or an h beyond it. */
@@ -790,7 +794,7 @@ sif_size_function_t* sif_size_function_evm(const sif_real* k,
 
   sif_size_function_t* out =
     sif_size_function_evm_kernel(
-      kernel, pk, radii, n_radii, delta_v, h, omega_m, opt);
+      kernel, pk, radii, n_radii, delta_nl, h, omega_m, opt);
 
   sif_variance_kernel_free(kernel);
   return out;

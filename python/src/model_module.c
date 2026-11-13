@@ -129,7 +129,7 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_svdw", (PyCFunction)py_sif_size_function_svdw,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_svdw(k, pk, radii, delta_v, delta_c, units='ln_r', met"
+    "size_function_svdw(k, pk, radii, delta_nl, delta_c, units='ln_r', met"
     "hod='b94', omega_m=None)"
     "\n"
     "--\n\n"
@@ -137,7 +137,9 @@ static PyMethodDef model_methods[] = {
     "given Eulerian radii.\n"
     "Number-conserving, so its void volume fraction exceeds one at large "
     "radii; present as the reference rather than the recommendation.\n"
-    "The expansion factor is not an argument: delta_v already fixes it. Use "
+    "delta_nl is the non-linear density contrast the voids are defined by "
+    "(the finder's threshold), strictly between -1 and 0; the linear barrier "
+    "is derived from it inside, and so is the expansion factor. Use "
     "method='b94' (default), 'eds' or 'lcdm' (with omega_m) to choose how, as "
     "in spherical_map_nonlinear."},
 
@@ -232,7 +234,7 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_vdn(k, pk, radii, delta_v, delta_c, units='ln_r', meth"
+    "size_function_vdn(k, pk, radii, delta_nl, delta_c, units='ln_r', meth"
     "od='b94', omega_m=None)"
     "\n"
     "--\n\n"
@@ -243,7 +245,7 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_evm", (PyCFunction)py_sif_size_function_evm,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_evm(k, pk, radii, delta_v, h, units='ln_r', method='b94', "
+    "size_function_evm(k, pk, radii, delta_nl, h, units='ln_r', method='b94', "
     "omega_m=None)"
     "\n"
     "--\n\n"
@@ -252,10 +254,10 @@ static PyMethodDef model_methods[] = {
     "emulated first crossing, and a fitted volume-conserving mapping.\n"
     "pk is the linear P(k) at the epoch wanted, and no redshift is "
     "passed: the epoch is seen through sigma12, for which h places 12 "
-    "Mpc on radii in Mpc/h. delta_v is the linear barrier, as for "
-    "size_function_svdw; spherical_map_linear converts a threshold "
-    "quoted as an observed underdensity. Calibrated on one cosmology for "
-    "sigma12 from 0.39 to 1 and a magnitude of delta_v at z = 99 (scaled "
+    "Mpc on radii in Mpc/h. delta_nl is the non-linear threshold, as for "
+    "size_function_svdw, converted to the linear barrier inside. Calibrated "
+    "on one cosmology for "
+    "sigma12 from 0.39 to 1 and a magnitude of the linear barrier at z = 99 (scaled "
     "by sigma12(z=99) / sigma12) from "
     "0.003 to 0.045; outside them a warning is logged. Radii past the "
     "emulated first crossing give 0.\n"
@@ -264,7 +266,7 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_evm_kernel", (PyCFunction)py_sif_size_function_evm_kernel,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_evm_kernel(kernel, pk, radii, delta_v, h, units='ln_r', "
+    "size_function_evm_kernel(kernel, pk, radii, delta_nl, h, units='ln_r', "
     "method='b94', omega_m=None)"
     "\n"
     "--\n\n"
@@ -278,13 +280,13 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_evm_walk", (PyCFunction)py_sif_size_function_evm_walk,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_evm_walk(walk, radii, delta_v, h, units='ln_r', "
+    "size_function_evm_walk(walk, radii, delta_nl, h, units='ln_r', "
     "method='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "size_function_evm_kernel on a Walk built beforehand, for several "
     "thresholds of one spectrum: walk = kernel(pk), then one call per "
-    "delta_v.\n"
+    "delta_nl.\n"
     "The walk comes from a kernel as size_function_evm_kernel requires. "
     "Other arguments as size_function_evm."},
 

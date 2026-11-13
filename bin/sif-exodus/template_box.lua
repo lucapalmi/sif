@@ -85,9 +85,8 @@ finder = {
   -- The finder: one of three. excursion-set grows voids from every cell
   -- below the threshold, with no overlap -- the voids of the excursion-set
   -- models, and the finder of sif-exodus 0.4. excursion-peak centres them
-  -- on minima of the density smoothed at each rung's scale, a void refused
-  -- only by a larger one it sits inside; its void size function depends on
-  -- the grid less. lagrangian-overlap is excursion-set with voids kept apart
+  -- on minima of the density at each rung's scale, a void refused only by
+  -- a larger one it sits inside. lagrangian-overlap is excursion-set with voids kept apart
   -- on their Lagrangian radii, R (1 + threshold)^(1/3), not the measured
   -- ones, which stay the radii of the catalogue.
   variant = "excursion-set",

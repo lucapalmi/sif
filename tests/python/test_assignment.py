@@ -110,7 +110,7 @@ def test_deconvolution_refusals(field, mesh):
 VARIANTS = {
     "excursion-set": {},
     "excursion-peak": {"overlap_fraction": 1, "seeds": "minima",
-                       "refine_centres": "gaussian", "extend_reach": True,
+                       "refine_centres": "none", "extend_reach": True,
                        "displace": True},
 }
 

@@ -93,7 +93,10 @@ sif_real sif_spherical_map_linear(
  * @param n_points Length of k and pk, at least 2
  * @param radii Eulerian (observed) void radii, strictly positive
  * @param n_radii Number of radii
- * @param delta_v Linear void barrier, strictly negative
+ * @param delta_nl Non-linear density contrast the voids are defined by (the
+ * threshold of the finder), strictly between -1 and 0. Its linear contrast, the
+ * barrier the field must cross, is sif_spherical_map_linear of it, with omega_m
+ * and the mapping of opt
  * @param delta_c Collapse barrier, strictly positive
  * @param omega_m Omega_m at the epoch of the voids, read only under
  * SIF_SPHERICAL_LCDM; see sif_spherical_map_nonlinear
@@ -103,14 +106,14 @@ sif_real sif_spherical_map_linear(
  * what the barriers are calibrated against.
  *
  * @note The Lagrangian-to-Eulerian expansion factor is not an argument: it is
- * (1 + delta_NL)^(-1/3), which delta_v already determines.
+ * (1 + delta_NL)^(-1/3), which delta_nl already determines.
  *
  * @return Newly allocated size function with n_bins = n_radii, released with
  * sif_size_function_free, or NULL on invalid input.
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_svdw(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  uint32_t n_radii, sif_real delta_nl, sif_real delta_c, sif_real omega_m,
   sif_option opt);
 
 /**
@@ -128,7 +131,7 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_svdw(const sif_real* k,
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  uint32_t n_radii, sif_real delta_nl, sif_real delta_c, sif_real omega_m,
   sif_option opt);
 
 /**
@@ -150,7 +153,7 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  * linear P(k) at the redshift wanted; no redshift is passed.
  *
  * @note Calibrated on one cosmology, for sigma12 between 0.39 and 1, a
- * magnitude of delta_v at z = 99 (scaled by sigma12(z = 99) / sigma12) between
+ * magnitude of its linear contrast at z = 99 (scaled by sigma12(z = 99) / sigma12) between
  * 0.003 and 0.045, and radii above nu ~ 0.5. Outside the first two a warning is
  * logged and the answer is still returned. The correction is not a derived law,
  * so do not expect it to extrapolate.
@@ -167,8 +170,9 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  * @param radii Eulerian (observed) void radii, strictly positive and strictly
  * increasing
  * @param n_radii Number of radii
- * @param delta_v Linear void barrier, strictly negative. A threshold quoted as
- * an observed underdensity goes through sif_spherical_map_linear first.
+ * @param delta_nl Non-linear density contrast the voids are defined by (the
+ * threshold of the finder), strictly between -1 and 0; converted to the linear
+ * barrier inside, with omega_m and the mapping of opt.
  * @param h Hubble parameter in units of 100 km/s/Mpc, strictly positive: it
  * places 12 Mpc on radii measured in Mpc/h
  * @param omega_m Omega_m at the epoch of the voids, read only under
@@ -183,7 +187,7 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_evm(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real h, sif_real omega_m,
+  uint32_t n_radii, sif_real delta_nl, sif_real h, sif_real omega_m,
   sif_option opt);
 
 /**
@@ -200,7 +204,7 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_evm(const sif_real* k,
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_evm_kernel(
   const sif_variance_kernel_t* kernel, const sif_real* pk,
-  const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
+  const sif_real* radii, uint32_t n_radii, sif_real delta_nl, sif_real h,
   sif_real omega_m, sif_option opt);
 
 /**
@@ -214,6 +218,6 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_evm_kernel(
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_evm_walk(
   const sif_walk_t* walk, const sif_real* radii, uint32_t n_radii,
-  sif_real delta_v, sif_real h, sif_real omega_m, sif_option opt);
+  sif_real delta_nl, sif_real h, sif_real omega_m, sif_option opt);
 
 #endif /* SIF_MODEL_SIZE_FUNCTION_H */

@@ -383,17 +383,17 @@ static void test_svdw_vdn_ratio(void) {
     radii[i] =
       (sif_real)exp(log(1.0) + (log(25.0) - log(1.0)) * i / (n_r - 1.0));
 
-  const sif_real dv = -2.7f, dc = 1.686f;
+  /* The threshold is the non-linear contrast; -2.7 is about its linear one. */
+  const sif_real dnl = -0.8f, dc = 1.686f;
 
   /* The same expansion factor the models derive internally when passed 0. */
   const double f =
-    pow(1.0 + (double)sif_spherical_map_nonlinear(dv, 1.0f, SIF_SPHERICAL_B94),
-      -1.0 / 3.0);
+    pow(1.0 + (double)dnl, -1.0 / 3.0);
 
   sif_size_function_t* sw =
-    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_DEFAULT);
+    sif_size_function_svdw(k, pk, N_K, radii, n_r, dnl, dc, 1.0f, SIF_DEFAULT);
   sif_size_function_t* vdn =
-    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_DEFAULT);
+    sif_size_function_vdn(k, pk, N_K, radii, n_r, dnl, dc, 1.0f, SIF_DEFAULT);
 
   CHECK(sw && vdn, "size functions returned NULL");
 
@@ -430,7 +430,7 @@ static void test_svdw_vdn_ratio(void) {
 
   /* The linear convention is the log one over R. */
   sif_size_function_t* per_r =
-    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_VSF_BIN_LINEAR);
+    sif_size_function_vdn(k, pk, N_K, radii, n_r, dnl, dc, 1.0f, SIF_VSF_BIN_LINEAR);
   if (per_r && vdn) {
     double worst = 0.0;
     for (uint32_t i = 0; i < n_r; i++) {
@@ -448,7 +448,7 @@ static void test_svdw_vdn_ratio(void) {
    * must differ -- proving the flag is threaded through -- but only slightly.
    */
   sif_size_function_t* forced =
-    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_SPHERICAL_EDS);
+    sif_size_function_svdw(k, pk, N_K, radii, n_r, dnl, dc, 1.0f, SIF_SPHERICAL_EDS);
   if (forced && sw) {
     double worst = 0.0;
     int differs = 0;
@@ -511,7 +511,7 @@ static void test_evm(void) {
   for (uint32_t i = 0; i < n_r; i++)
     radii[i] = (sif_real)(6.0 * exp(log(150.0) * i / (double)(n_r - 1)));
 
-  const sif_real dv = sif_spherical_map_linear(-0.5f, 1.0f, SIF_SPHERICAL_B94);
+  const sif_real dv = -0.5f; /* the non-linear threshold */
   const sif_real h = 0.67f;
 
   sif_variance_kernel_t* kernel = sif_variance_kernel_alloc(
@@ -576,7 +576,10 @@ static void test_evm(void) {
     "accepted a radius beyond the lattice");
   CHECK(
     !sif_size_function_evm_kernel(kernel, pk, radii, n_r, 0.5f, h, 1.0f, SIF_DEFAULT),
-    "accepted a positive delta_v");
+    "accepted a positive delta_nl");
+  CHECK(
+    !sif_size_function_evm_kernel(kernel, pk, radii, n_r, -1.0f, h, 1.0f, SIF_DEFAULT),
+    "accepted delta_nl = -1");
   CHECK(!sif_size_function_evm_kernel(
           kernel, pk, radii, n_r, dv, 0.0f, 1.0f, SIF_DEFAULT),
     "accepted h = 0");

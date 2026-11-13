@@ -45,8 +45,7 @@ static int failures = 0;
 
 /* What excursion-peak sets, the overlap apart. */
 #define PEAK_OPTIONS                                                           \
-  (SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_REFINE_GAUSSIAN |                      \
-    SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE)
+  (SIF_FINDER_SEEDS_MINIMA | SIF_FINDER_EXTEND_REACH | SIF_FINDER_DISPLACE)
 
 #define BOX    200.0f
 #define N_GRID 32
@@ -1090,8 +1089,9 @@ static double shift_residual(const sif_catalogue_t* a, const sif_catalogue_t* b,
 
 /*
  * Moving every tracer by a fraction of a cell should move every centre by the
- * same. Centres on cells sit on nodes and cannot; minima are placed between
- * the nodes, to a tenth or two of a cell. On a Poisson field full of
+ * same. Centres on cells sit on nodes and cannot (nor can the minima of
+ * excursion-peak); minima refined with the Gaussian are placed between the
+ * nodes, to a tenth or two of a cell. On a Poisson field full of
  * marginal voids.
  */
 static void run_grid_shift(void) {
@@ -1121,7 +1121,7 @@ static void run_grid_shift(void) {
     sif_option opt;
   } modes[2] = {
     {"cells", SIF_FINDER_SEEDS_CELLS},
-    {"minima", PEAK_OPTIONS}};
+    {"minima", PEAK_OPTIONS | SIF_FINDER_REFINE_GAUSSIAN}};
   sif_catalogue_t* cat[2][2] = {{NULL, NULL}, {NULL, NULL}};
   for (int moved = 0; moved < 2; moved++) {
     const sif_real* p = x + 3 * np * moved;
