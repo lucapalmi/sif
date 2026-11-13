@@ -7,6 +7,9 @@ Current version: v0.5 release 0
 
 ### Changed
 
+- Spherical-evolution `method="exact"` is now `"eds"`, and
+  `SIF_SPHERICAL_EXACT` is `SIF_SPHERICAL_EDS`; the mapping and size-function C
+  functions take an `omega_m` argument before `opt` (breaking)
 - Data files and checkpoints are checked by the new `sif-inspect --check`
   (breaking), which reads everything: `--deep`, `--columns`, `--delimiter`
   and `--skip-header` are gone, and so are `sif_fits_check()`,
@@ -30,6 +33,8 @@ Current version: v0.5 release 0
 
 ### Added
 
+- Spherical-evolution mapping `method="lcdm"`: the top-hat integrated in flat
+  LambdaCDM, given `omega_m`, Omega_m at the epoch of the voids
 - `sif_file_info_read()`: any file sif reads, described as metadata, tables
   of typed columns and arrays, the same for every format; `sif-inspect FILE`
   prints it

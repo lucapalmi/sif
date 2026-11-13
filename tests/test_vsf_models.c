@@ -176,21 +176,24 @@ static void test_delta_mapping(void) {
   printf("linear <-> non-linear density contrast\n");
 
   const double barriers[5] = {-2.7, -1.8, -1.24, -0.8, -0.5};
-  const sif_option methods[2] = {SIF_SPHERICAL_B94, SIF_SPHERICAL_EXACT};
-  const char* names[2] = {"B94", "exact"};
+  const sif_option methods[3] = {
+    SIF_SPHERICAL_B94, SIF_SPHERICAL_EDS, SIF_SPHERICAL_LCDM};
+  const sif_real omega_m[3] = {1.0f, 1.0f, 0.31858f};
+  const char* names[3] = {"B94", "EdS", "LCDM"};
 
-  for (int m = 0; m < 2; m++) {
+  for (int m = 0; m < 3; m++) {
     double worst_trip = 0.0;
 
     for (int i = 0; i < 5; i++) {
       const sif_real dnl =
-        sif_spherical_map_nonlinear((sif_real)barriers[i], methods[m]);
+        sif_spherical_map_nonlinear(
+        (sif_real)barriers[i], omega_m[m], methods[m]);
 
       CHECK(dnl < 0.0f && dnl > -1.0f,
         "%s: delta_L=%g gave delta_NL=%g, outside (-1, 0)", names[m],
         barriers[i], (double)dnl);
 
-      const sif_real back = sif_spherical_map_linear(dnl, methods[m]);
+      const sif_real back = sif_spherical_map_linear(dnl, omega_m[m], methods[m]);
       const double rel = fabs((double)back - barriers[i]) / fabs(barriers[i]);
       if (rel > worst_trip)
         worst_trip = rel;
@@ -210,9 +213,9 @@ static void test_delta_mapping(void) {
   double worst_f = 0.0;
   for (int i = 0; i < 5; i++) {
     const double a = (double)sif_spherical_map_nonlinear(
-      (sif_real)barriers[i], SIF_SPHERICAL_B94);
+      (sif_real)barriers[i], 1.0f, SIF_SPHERICAL_B94);
     const double b = (double)sif_spherical_map_nonlinear(
-      (sif_real)barriers[i], SIF_SPHERICAL_EXACT);
+      (sif_real)barriers[i], 1.0f, SIF_SPHERICAL_EDS);
 
     const double fa = pow(1.0 + a, -1.0 / 3.0);
     const double fb = pow(1.0 + b, -1.0 / 3.0);
@@ -220,7 +223,7 @@ static void test_delta_mapping(void) {
     if (rel > worst_f)
       worst_f = rel;
 
-    printf("    delta_L=%+.2f  ->  F = %.4f (B94) vs %.4f (exact)\n",
+    printf("    delta_L=%+.2f  ->  F = %.4f (B94) vs %.4f (EdS)\n",
       barriers[i], fa, fb);
   }
   CHECK(worst_f < 3e-3,
@@ -229,8 +232,9 @@ static void test_delta_mapping(void) {
     worst_f);
 
   /* Shell crossing, the one value the literature pins down. */
-  for (int m = 0; m < 2; m++) {
-    const double d = (double)sif_spherical_map_nonlinear(-2.7f, methods[m]);
+  for (int m = 0; m < 3; m++) {
+    const double d =
+      (double)sif_spherical_map_nonlinear(-2.7f, omega_m[m], methods[m]);
     const double f = pow(1.0 + d, -1.0 / 3.0);
     CHECK(fabs(f - 1.69) < 0.02,
       "%s: shell crossing gave F=%g, expected about 1.69", names[m], f);
@@ -242,25 +246,79 @@ static void test_delta_mapping(void) {
   }
 
   /* The linear limit: a barely underdense region has not evolved. */
-  for (int m = 0; m < 2; m++) {
+  for (int m = 0; m < 3; m++) {
     const double tiny = -1e-4;
-    const double d =
-      (double)sif_spherical_map_nonlinear((sif_real)tiny, methods[m]);
+    const double d = (double)sif_spherical_map_nonlinear(
+      (sif_real)tiny, omega_m[m], methods[m]);
     CHECK(fabs(d - tiny) < 1e-6,
       "%s: delta_L=%g should map to nearly itself, gave %g", names[m], tiny, d);
   }
 
   /* Out of the expanding branch, both directions, both methods. */
-  for (int m = 0; m < 2; m++) {
-    CHECK(sif_spherical_map_nonlinear(0.5f, methods[m]) == 0.0f,
+  for (int m = 0; m < 3; m++) {
+    CHECK(sif_spherical_map_nonlinear(0.5f, omega_m[m], methods[m]) == 0.0f,
       "%s: a positive linear contrast was accepted", names[m]);
-    CHECK(sif_spherical_map_nonlinear(0.0f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_nonlinear(0.0f, omega_m[m], methods[m]) == 0.0f,
       "%s: a zero linear contrast was accepted", names[m]);
-    CHECK(sif_spherical_map_linear(-1.0f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_linear(-1.0f, omega_m[m], methods[m]) == 0.0f,
       "%s: total evacuation was accepted", names[m]);
-    CHECK(sif_spherical_map_linear(0.5f, methods[m]) == 0.0f,
+    CHECK(sif_spherical_map_linear(0.5f, omega_m[m], methods[m]) == 0.0f,
       "%s: a positive non-linear contrast was accepted", names[m]);
   }
+}
+
+/*
+ * The flat LambdaCDM integration against an independent one (scipy DOP853 at
+ * rtol 1e-13 in u = ln(1 + delta), started at a = 3e-5 on the third-order
+ * growing mode), and its Einstein-de Sitter limit against the parametric
+ * solution. A start on the linear growing mode alone is off by O(delta) at the
+ * start, ~1e-4 on delta_L at delta_NL = -0.95 from a = 1e-5.
+ */
+static void test_lcdm_mapping(void) {
+  printf("spherical evolution in flat LambdaCDM\n");
+
+  const double om[2] = {0.31858, 0.05};
+  const double nonlinear[4] = {-0.3, -0.5, -0.8, -0.95};
+  const double linear[2][4] = {
+    {-0.39941558, -0.86744549, -2.78584771, -8.98988408},
+    {-0.39965223, -0.86842134, -2.79255567, -9.02405377}};
+
+  double worst = 0.0;
+  for (int o = 0; o < 2; o++) {
+    for (int i = 0; i < 4; i++) {
+      const double got = (double)sif_spherical_map_linear(
+        (sif_real)nonlinear[i], (sif_real)om[o], SIF_SPHERICAL_LCDM);
+      const double rel = fabs(got / linear[o][i] - 1.0);
+      if (rel > worst)
+        worst = rel;
+      CHECK(rel < 2e-6, "Omega_m %g, delta_NL %g: delta_L %.8f, expected %.8f",
+        om[o], nonlinear[i], got, linear[o][i]);
+    }
+  }
+  printf("  against the reference: worst relative error %.2e\n", worst);
+
+  /* Omega_m = 1 is Einstein-de Sitter. */
+  double worst_eds = 0.0;
+  for (int i = 0; i < 4; i++) {
+    const double a = (double)sif_spherical_map_linear(
+      (sif_real)nonlinear[i], 1.0f, SIF_SPHERICAL_LCDM);
+    const double b = (double)sif_spherical_map_linear(
+      (sif_real)nonlinear[i], 1.0f, SIF_SPHERICAL_EDS);
+    const double rel = fabs(a / b - 1.0);
+    if (rel > worst_eds)
+      worst_eds = rel;
+  }
+  CHECK(worst_eds < 2e-6, "Omega_m = 1 differs from EdS by %.2e", worst_eds);
+  printf("  Omega_m = 1 against EdS: worst relative error %.2e\n", worst_eds);
+
+  /* Omega_m outside (0, 1] is refused; B94 and EdS never read it. */
+  CHECK(sif_spherical_map_linear(-0.5f, 0.0f, SIF_SPHERICAL_LCDM) == 0.0f,
+    "Omega_m = 0 was accepted");
+  CHECK(sif_spherical_map_nonlinear(-1.0f, 1.5f, SIF_SPHERICAL_LCDM) == 0.0f,
+    "Omega_m = 1.5 was accepted");
+  CHECK(sif_spherical_map_linear(-0.5f, 0.0f, SIF_SPHERICAL_EDS) ==
+          sif_spherical_map_linear(-0.5f, 1.0f, SIF_SPHERICAL_EDS),
+    "EdS read Omega_m");
 }
 
 /* The multiplicity function has to be continuous across its branch. */
@@ -329,13 +387,13 @@ static void test_svdw_vdn_ratio(void) {
 
   /* The same expansion factor the models derive internally when passed 0. */
   const double f =
-    pow(1.0 + (double)sif_spherical_map_nonlinear(dv, SIF_SPHERICAL_B94),
+    pow(1.0 + (double)sif_spherical_map_nonlinear(dv, 1.0f, SIF_SPHERICAL_B94),
       -1.0 / 3.0);
 
   sif_size_function_t* sw =
-    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, SIF_DEFAULT);
+    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_DEFAULT);
   sif_size_function_t* vdn =
-    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, SIF_DEFAULT);
+    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_DEFAULT);
 
   CHECK(sw && vdn, "size functions returned NULL");
 
@@ -372,7 +430,7 @@ static void test_svdw_vdn_ratio(void) {
 
   /* The linear convention is the log one over R. */
   sif_size_function_t* per_r =
-    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, SIF_VSF_BIN_LINEAR);
+    sif_size_function_vdn(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_VSF_BIN_LINEAR);
   if (per_r && vdn) {
     double worst = 0.0;
     for (uint32_t i = 0; i < n_r; i++) {
@@ -390,7 +448,7 @@ static void test_svdw_vdn_ratio(void) {
    * must differ -- proving the flag is threaded through -- but only slightly.
    */
   sif_size_function_t* forced =
-    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, SIF_SPHERICAL_EXACT);
+    sif_size_function_svdw(k, pk, N_K, radii, n_r, dv, dc, 1.0f, SIF_SPHERICAL_EDS);
   if (forced && sw) {
     double worst = 0.0;
     int differs = 0;
@@ -403,7 +461,7 @@ static void test_svdw_vdn_ratio(void) {
         worst = rel;
     }
     CHECK(differs,
-      "SIF_SPHERICAL_EXACT gave the same curve as B94; the option is not "
+      "SIF_SPHERICAL_EDS gave the same curve as B94; the option is not "
       "reaching the mapping");
     CHECK(worst < 0.02,
       "the two spherical-evolution methods give size functions differing by "
@@ -453,7 +511,7 @@ static void test_evm(void) {
   for (uint32_t i = 0; i < n_r; i++)
     radii[i] = (sif_real)(6.0 * exp(log(150.0) * i / (double)(n_r - 1)));
 
-  const sif_real dv = sif_spherical_map_linear(-0.5f, SIF_SPHERICAL_B94);
+  const sif_real dv = sif_spherical_map_linear(-0.5f, 1.0f, SIF_SPHERICAL_B94);
   const sif_real h = 0.67f;
 
   sif_variance_kernel_t* kernel = sif_variance_kernel_alloc(
@@ -461,17 +519,17 @@ static void test_evm(void) {
   CHECK(kernel != NULL, "kernel returned NULL");
 
   sif_size_function_t* direct =
-    sif_size_function_evm_kernel(kernel, pk, radii, n_r, dv, h, SIF_DEFAULT);
+    sif_size_function_evm_kernel(kernel, pk, radii, n_r, dv, h, 1.0f, SIF_DEFAULT);
   sif_size_function_t* wrapped =
-    sif_size_function_evm(k, pk, n_k, radii, n_r, dv, h, SIF_DEFAULT);
+    sif_size_function_evm(k, pk, n_k, radii, n_r, dv, h, 1.0f, SIF_DEFAULT);
   sif_size_function_t* per_r = sif_size_function_evm_kernel(
-    kernel, pk, radii, n_r, dv, h, SIF_VSF_BIN_LINEAR);
+    kernel, pk, radii, n_r, dv, h, 1.0f, SIF_VSF_BIN_LINEAR);
   sif_size_function_t* exact = sif_size_function_evm_kernel(
-    kernel, pk, radii, n_r, dv, h, SIF_SPHERICAL_EXACT);
+    kernel, pk, radii, n_r, dv, h, 1.0f, SIF_SPHERICAL_EDS);
 
   sif_walk_t* walk = sif_walk_pk(kernel, pk);
   sif_size_function_t* shared =
-    sif_size_function_evm_walk(walk, radii, n_r, dv, h, SIF_DEFAULT);
+    sif_size_function_evm_walk(walk, radii, n_r, dv, h, 1.0f, SIF_DEFAULT);
 
   CHECK(direct && wrapped && per_r && exact && shared, "EVM returned NULL");
 
@@ -492,7 +550,7 @@ static void test_evm(void) {
       if (exact->vsf[i] != direct->vsf[i])
         differs = 1;
     }
-    CHECK(differs, "SIF_SPHERICAL_EXACT is not reaching the mapping");
+    CHECK(differs, "SIF_SPHERICAL_EDS is not reaching the mapping");
     CHECK(direct->vsf[0] > 0.0f && direct->vsf[n_r - 1] == 0.0f,
       "expected voids at the first radius and none at the last");
     CHECK(direct->n_bins == n_r && direct->r_min == radii[0] &&
@@ -506,24 +564,24 @@ static void test_evm(void) {
   sif_variance_kernel_t* gaussian = sif_variance_kernel_alloc(
     k, n_k, 0.3f, 1000.0f, 0.02f, SIF_DELTA_FILTER_GAUSSIAN);
 
-  CHECK(!sif_size_function_evm_kernel(NULL, pk, radii, n_r, dv, h, SIF_DEFAULT),
+  CHECK(!sif_size_function_evm_kernel(NULL, pk, radii, n_r, dv, h, 1.0f, SIF_DEFAULT),
     "accepted a NULL kernel");
-  CHECK(!sif_size_function_evm_walk(NULL, radii, n_r, dv, h, SIF_DEFAULT),
+  CHECK(!sif_size_function_evm_walk(NULL, radii, n_r, dv, h, 1.0f, SIF_DEFAULT),
     "accepted a NULL walk");
   CHECK(!sif_size_function_evm_kernel(
-          kernel, pk, descending, 2, dv, h, SIF_DEFAULT),
+          kernel, pk, descending, 2, dv, h, 1.0f, SIF_DEFAULT),
     "accepted descending radii");
   CHECK(
-    !sif_size_function_evm_kernel(kernel, pk, too_large, 2, dv, h, SIF_DEFAULT),
+    !sif_size_function_evm_kernel(kernel, pk, too_large, 2, dv, h, 1.0f, SIF_DEFAULT),
     "accepted a radius beyond the lattice");
   CHECK(
-    !sif_size_function_evm_kernel(kernel, pk, radii, n_r, 0.5f, h, SIF_DEFAULT),
+    !sif_size_function_evm_kernel(kernel, pk, radii, n_r, 0.5f, h, 1.0f, SIF_DEFAULT),
     "accepted a positive delta_v");
   CHECK(!sif_size_function_evm_kernel(
-          kernel, pk, radii, n_r, dv, 0.0f, SIF_DEFAULT),
+          kernel, pk, radii, n_r, dv, 0.0f, 1.0f, SIF_DEFAULT),
     "accepted h = 0");
   CHECK(
-    !sif_size_function_evm_kernel(gaussian, pk, radii, n_r, dv, h, SIF_DEFAULT),
+    !sif_size_function_evm_kernel(gaussian, pk, radii, n_r, dv, h, 1.0f, SIF_DEFAULT),
     "accepted a Gaussian kernel");
 
   sif_variance_kernel_free(gaussian);
@@ -551,6 +609,7 @@ int main(void) {
   test_sigma_slope_closed_form();
   test_sigma_slope_vs_finite_difference();
   test_delta_mapping();
+  test_lcdm_mapping();
   test_multiplicity_continuity();
   test_svdw_vdn_ratio();
   test_evm();

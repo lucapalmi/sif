@@ -17,14 +17,16 @@
 
 /* Both size functions take the same arguments; only the model differs. */
 typedef sif_size_function_t* (*vsf_fn)(const sif_real*, const sif_real*,
-  uint32_t, const sif_real*, uint32_t, sif_real, sif_real, sif_option);
+  uint32_t, const sif_real*, uint32_t, sif_real, sif_real, sif_real,
+  sif_option);
 
 /* Forward-declared: shared with the mapping entry points further down. */
-static int py_sif_spherical_option(const char* method, sif_option* opt);
+static int py_sif_spherical_option(const char* method, PyObject* omega_m_obj,
+  sif_option* opt, double* omega_m);
 
-/* The units= and method= every model size function takes. */
-static int py_sif_vsf_options(
-  const char* units, const char* method, sif_option* options) {
+/* The units=, method= and omega_m= every model size function takes. */
+static int py_sif_vsf_options(const char* units, const char* method,
+  PyObject* omega_m_obj, sif_option* options, double* omega_m) {
 
   *options = SIF_DEFAULT;
   if (units == NULL || strcmp(units, "ln_r") == 0) {
@@ -38,7 +40,7 @@ static int py_sif_vsf_options(
   }
 
   sif_option spherical;
-  if (py_sif_spherical_option(method, &spherical) != 0)
+  if (py_sif_spherical_option(method, omega_m_obj, &spherical, omega_m) != 0)
     return -1;
   *options |= spherical;
   return 0;
@@ -53,17 +55,20 @@ static PyObject* size_function(
   double delta_c = 1.686;
   const char* units = NULL;
   const char* method = NULL;
+  PyObject* omega_m_obj = Py_None;
 
-  static char* kwlist[] = {
-    "k", "pk", "radii", "delta_v", "delta_c", "units", "method", NULL};
+  static char* kwlist[] = {"k", "pk", "radii", "delta_v", "delta_c", "units",
+    "method", "omega_m", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|ddzz", kwlist, &k_obj,
-        &pk_obj, &radii_obj, &delta_v, &delta_c, &units, &method)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOO|ddzzO", kwlist, &k_obj,
+        &pk_obj, &radii_obj, &delta_v, &delta_c, &units, &method,
+        &omega_m_obj)) {
     return NULL;
   }
 
   sif_option options;
-  if (py_sif_vsf_options(units, method, &options) != 0)
+  double omega_m;
+  if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0)
     return NULL;
 
   if (!(delta_v < 0.0)) {
@@ -108,7 +113,7 @@ static PyObject* size_function(
   Py_BEGIN_ALLOW_THREADS vsf = compute((const sif_real*)PyArray_DATA(k_arr),
     (const sif_real*)PyArray_DATA(pk_arr), (uint32_t)n_points,
     (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
-    (sif_real)delta_v, (sif_real)delta_c, options);
+    (sif_real)delta_v, (sif_real)delta_c, (sif_real)omega_m, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
@@ -156,17 +161,19 @@ PyObject* py_sif_size_function_evm(
   double h;
   const char* units = NULL;
   const char* method = NULL;
+  PyObject* omega_m_obj = Py_None;
 
   static char* kwlist[] = {
-    "k", "pk", "radii", "delta_v", "h", "units", "method", NULL};
+    "k", "pk", "radii", "delta_v", "h", "units", "method", "omega_m", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOdd|zz", kwlist, &k_obj,
-        &pk_obj, &radii_obj, &delta_v, &h, &units, &method)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "OOOdd|zzO", kwlist, &k_obj,
+        &pk_obj, &radii_obj, &delta_v, &h, &units, &method, &omega_m_obj)) {
     return NULL;
   }
 
   sif_option options;
-  if (py_sif_vsf_options(units, method, &options) != 0 ||
+  double omega_m;
+  if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0 ||
       evm_check_scalars(delta_v, h) != 0) {
     return NULL;
   }
@@ -205,7 +212,8 @@ PyObject* py_sif_size_function_evm(
   Py_BEGIN_ALLOW_THREADS vsf = sif_size_function_evm(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
-    (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, options);
+    (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, (sif_real)omega_m,
+    options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
@@ -227,13 +235,14 @@ PyObject* py_sif_size_function_evm_kernel(
   double h;
   const char* units = NULL;
   const char* method = NULL;
+  PyObject* omega_m_obj = Py_None;
 
-  static char* kwlist[] = {
-    "kernel", "pk", "radii", "delta_v", "h", "units", "method", NULL};
+  static char* kwlist[] = {"kernel", "pk", "radii", "delta_v", "h", "units",
+    "method", "omega_m", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OOdd|zz", kwlist,
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!OOdd|zzO", kwlist,
         &sifVarianceKernelType, &kernel_obj, &pk_obj, &radii_obj, &delta_v, &h,
-        &units, &method)) {
+        &units, &method, &omega_m_obj)) {
     return NULL;
   }
 
@@ -245,7 +254,8 @@ PyObject* py_sif_size_function_evm_kernel(
   }
 
   sif_option options;
-  if (py_sif_vsf_options(units, method, &options) != 0 ||
+  double omega_m;
+  if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0 ||
       evm_check_scalars(delta_v, h) != 0) {
     return NULL;
   }
@@ -275,7 +285,7 @@ PyObject* py_sif_size_function_evm_kernel(
   Py_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_evm_kernel(kernel, (const sif_real*)PyArray_DATA(pk_arr),
       (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
-      (sif_real)delta_v, (sif_real)h, options);
+      (sif_real)delta_v, (sif_real)h, (sif_real)omega_m, options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(pk_arr);
@@ -295,12 +305,14 @@ PyObject* py_sif_size_function_evm_walk(
   double h;
   const char* units = NULL;
   const char* method = NULL;
+  PyObject* omega_m_obj = Py_None;
 
   static char* kwlist[] = {
-    "walk", "radii", "delta_v", "h", "units", "method", NULL};
+    "walk", "radii", "delta_v", "h", "units", "method", "omega_m", NULL};
 
-  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Odd|zz", kwlist, &sifWalkType,
-        &walk_obj, &radii_obj, &delta_v, &h, &units, &method)) {
+  if (!PyArg_ParseTupleAndKeywords(args, kwds, "O!Odd|zzO", kwlist,
+        &sifWalkType, &walk_obj, &radii_obj, &delta_v, &h, &units, &method,
+        &omega_m_obj)) {
     return NULL;
   }
 
@@ -311,7 +323,8 @@ PyObject* py_sif_size_function_evm_walk(
   }
 
   sif_option options;
-  if (py_sif_vsf_options(units, method, &options) != 0 ||
+  double omega_m;
+  if (py_sif_vsf_options(units, method, omega_m_obj, &options, &omega_m) != 0 ||
       evm_check_scalars(delta_v, h) != 0) {
     return NULL;
   }
@@ -327,7 +340,8 @@ PyObject* py_sif_size_function_evm_walk(
   sif_error_clear();
   Py_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_evm_walk(walk, (const sif_real*)PyArray_DATA(radii_arr),
-      (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, options);
+      (uint32_t)n_radii, (sif_real)delta_v, (sif_real)h, (sif_real)omega_m,
+      options);
   Py_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
@@ -405,28 +419,57 @@ PyObject* py_sif_delta_sigma_slope_pk(
   return py_sif_owned_array(values, n_radii);
 }
 
-static int py_sif_spherical_option(const char* method, sif_option* opt) {
+/* method= and omega_m=: omega_m is required by 'lcdm' and refused by the
+ * others, so no cosmology is ever assumed. */
+static int py_sif_spherical_option(const char* method, PyObject* omega_m_obj,
+  sif_option* opt, double* omega_m) {
+  *omega_m = 1.0;
   if (!method || strcmp(method, "b94") == 0) {
     *opt = SIF_SPHERICAL_B94;
+  } else if (strcmp(method, "eds") == 0) {
+    *opt = SIF_SPHERICAL_EDS;
+  } else if (strcmp(method, "lcdm") == 0) {
+    *opt = SIF_SPHERICAL_LCDM;
+  } else {
+    PyErr_Format(PyExc_ValueError,
+      "method: '%s' (expected 'b94', 'eds' or 'lcdm')", method);
+    return -1;
+  }
+
+  if (*opt != SIF_SPHERICAL_LCDM) {
+    if (omega_m_obj != Py_None) {
+      PyErr_SetString(
+        PyExc_ValueError, "omega_m: given, but only method='lcdm' reads it");
+      return -1;
+    }
     return 0;
   }
-  if (strcmp(method, "exact") == 0) {
-    *opt = SIF_SPHERICAL_EXACT;
-    return 0;
+
+  if (omega_m_obj == Py_None) {
+    PyErr_SetString(PyExc_ValueError,
+      "omega_m: required by method='lcdm' (Omega_m at the epoch of the voids)");
+    return -1;
   }
-  PyErr_Format(
-    PyExc_ValueError, "method must be 'b94' or 'exact', got '%s'", method);
-  return -1;
+  *omega_m = PyFloat_AsDouble(omega_m_obj);
+  if (*omega_m == -1.0 && PyErr_Occurred())
+    return -1;
+  if (!(*omega_m > 0.0 && *omega_m <= 1.0)) {
+    PyErr_Format(
+      PyExc_ValueError, "omega_m: %g (expected 0 < omega_m <= 1)", *omega_m);
+    return -1;
+  }
+  return 0;
 }
 
 PyObject* py_sif_spherical_map_nonlinear(
   PyObject* self, PyObject* args, PyObject* kwds) {
   double delta_linear;
   const char* method = NULL;
-  static char* kwlist[] = {"delta_linear", "method", NULL};
+  PyObject* omega_m_obj = Py_None;
+  static char* kwlist[] = {"delta_linear", "method", "omega_m", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "d|s", kwlist, &delta_linear, &method))
+        args, kwds, "d|zO", kwlist, &delta_linear, &method, &omega_m_obj))
     return NULL;
 
   if (!(delta_linear < 0.0)) {
@@ -435,21 +478,23 @@ PyObject* py_sif_spherical_map_nonlinear(
   }
 
   sif_option opt;
-  if (py_sif_spherical_option(method, &opt) != 0)
+  double omega_m;
+  if (py_sif_spherical_option(method, omega_m_obj, &opt, &omega_m) != 0)
     return NULL;
 
-  return PyFloat_FromDouble(
-    (double)sif_spherical_map_nonlinear((sif_real)delta_linear, opt));
+  return PyFloat_FromDouble((double)sif_spherical_map_nonlinear(
+    (sif_real)delta_linear, (sif_real)omega_m, opt));
 }
 
 PyObject* py_sif_spherical_map_linear(
   PyObject* self, PyObject* args, PyObject* kwds) {
   double delta_nonlinear;
   const char* method = NULL;
-  static char* kwlist[] = {"delta_nonlinear", "method", NULL};
+  PyObject* omega_m_obj = Py_None;
+  static char* kwlist[] = {"delta_nonlinear", "method", "omega_m", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "d|s", kwlist, &delta_nonlinear, &method))
+        args, kwds, "d|zO", kwlist, &delta_nonlinear, &method, &omega_m_obj))
     return NULL;
 
   if (!(delta_nonlinear < 0.0) || !(delta_nonlinear > -1.0)) {
@@ -459,11 +504,12 @@ PyObject* py_sif_spherical_map_linear(
   }
 
   sif_option opt;
-  if (py_sif_spherical_option(method, &opt) != 0)
+  double omega_m;
+  if (py_sif_spherical_option(method, omega_m_obj, &opt, &omega_m) != 0)
     return NULL;
 
-  return PyFloat_FromDouble(
-    (double)sif_spherical_map_linear((sif_real)delta_nonlinear, opt));
+  return PyFloat_FromDouble((double)sif_spherical_map_linear(
+    (sif_real)delta_nonlinear, (sif_real)omega_m, opt));
 }
 
 PyObject* py_sif_svdw_multiplicity_function(

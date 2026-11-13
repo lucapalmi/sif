@@ -337,17 +337,16 @@ static inline float sif__finder_search_factor(uint32_t opt) {
  * @brief How the linear and non-linear density contrasts of a void are mapped
  * onto each other.
  *
- * B94 is the Bernardeau (1994) fit, closed form and accurate to 0.2%; EXACT
- * root-finds the Einstein-de Sitter expansion solution.
- *
- * @note Bit 9 is free. Bits 8-9 used to select between a histogram, a KDE and
- * an auto-binned histogram; the VSF is now always a plain histogram, and bit 8
- * has since been taken by this mapping.
+ * B94 is the Bernardeau (1994) fit, closed form and within 0.2% of EDS; EDS
+ * root-finds the Einstein-de Sitter expansion solution; LCDM integrates the
+ * spherical top-hat in flat LambdaCDM (no radiation), which needs Omega_m at
+ * the epoch of the voids and reduces to EDS at Omega_m = 1.
  * @{
  */
 #define SIF_SPHERICAL_B94   (0u << 8)
-#define SIF_SPHERICAL_EXACT (1u << 8)
-#define SIF__SPHERICAL_MASK (1u << 8)
+#define SIF_SPHERICAL_EDS   (1u << 8)
+#define SIF_SPHERICAL_LCDM  (2u << 8)
+#define SIF__SPHERICAL_MASK (3u << 8)
 /** @} */
 
 /**

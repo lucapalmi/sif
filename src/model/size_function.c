@@ -64,12 +64,14 @@ static double sinh_minus(double eta) {
 }
 
 /* delta_L(eta), decreasing from 0. */
-static double eds_linear(double eta) {
+static double eds_linear(double eta, const void* ctx) {
+  (void)ctx;
   return -0.15 * pow(6.0 * sinh_minus(eta), 2.0 / 3.0);
 }
 
 /* delta_NL(eta), decreasing from 0 to -1. */
-static double eds_nonlinear(double eta) {
+static double eds_nonlinear(double eta, const void* ctx) {
+  (void)ctx;
   if (eta < EDS_SERIES_SWITCH) {
     /* (9/2) (eta^3/6)^2 / (eta^2/2)^3 is exactly 1, so the ratio is taken
      * between the bracketed corrections rather than the raw differences,
@@ -84,14 +86,14 @@ static double eds_nonlinear(double eta) {
   return 4.5 * s * s / (c * c * c) - 1.0;
 }
 
-/* Brent's method on g(eta) == target. Both g above are smooth and strictly
+/* Brent's method on g(x, ctx) == target. Every g here is smooth and strictly
  * monotone. */
-static int brent(
-  double (*g)(double), double target, double lo, double hi, double* root) {
+static int brent(double (*g)(double, const void*), const void* ctx,
+  double target, double lo, double hi, double* root) {
 
   double a = lo, b = hi;
-  double fa = g(a) - target;
-  double fb = g(b) - target;
+  double fa = g(a, ctx) - target;
+  double fb = g(b, ctx) - target;
 
   if (!(fa * fb < 0.0))
     return SIF_ERR_RANGE;
@@ -132,7 +134,7 @@ static int brent(
       s = 0.5 * (a + b);
     bisected = take_bisection;
 
-    const double fs = g(s) - target;
+    const double fs = g(s, ctx) - target;
     d = c;
     c = b;
     fc = fb;
@@ -159,7 +161,126 @@ static int brent(
   return SIF_OK;
 }
 
-sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt) {
+/*
+ * The spherical top-hat in flat LambdaCDM without radiation, in u = ln(1 +
+ * delta) and x = ln a, ' = d/dx:
+ *
+ *     u'' = u'^2 / 3 - (2 - 3/2 Om(a)) u' + 3/2 Om(a) (e^u - 1)
+ *
+ * which is delta'' + (2 + dlnH/dlna) delta' - (4/3) delta'^2 / (1 + delta) =
+ * (3/2) Om(a) delta (1 + delta) rewritten so that nothing diverges as delta
+ * approaches -1. The linear contrast obeys the same equation without its
+ * non-linear terms, D'' = -(2 - 3/2 Om(a)) D' + 3/2 Om(a) D.
+ *
+ * The solution reached at a = 1 depends on Omega_m and the epoch only through
+ * Om(a) there, since shifting ln a maps one flat LambdaCDM onto another; so
+ * the epoch of the voids is a = 1 with Omega_m = Om(a) of that epoch.
+ *
+ * Both start in matter domination, where the run is still Einstein-de Sitter
+ * to (1 / Omega_m - 1) a^3, on the growing mode: D = a, and delta to third
+ * order in the linear contrast d, delta = d + (17/21) d^2 + (341/567) d^3
+ * (Bernardeau 1992), with d small enough for the next order to be below
+ * double precision.
+ */
+
+/* Latest start: (1 / Omega_m - 1) a^3 is then below 1e-9 for Omega_m > 0.5%,
+ * and the start only gets earlier from there. */
+#define LCDM_A_START_MAX 1e-3
+/* Largest |linear contrast| at the start: the fourth order is ~1e-16. */
+#define LCDM_D_START_MAX 1e-4
+/* RK4 step in ln a: a global error of ~1e-11 on delta_L, measured against
+ * an adaptive DOP853 at rtol 1e-12. */
+#define LCDM_STEP 2e-3
+/* The bracket in delta_L the inverse searches: -1e4 is delta_NL ~ -0.99996. */
+#define LCDM_LINEAR_MIN -1e4
+
+typedef struct {
+  double omega_m;
+  double growth; /* D(1) on D = a at early times */
+} lcdm_ctx_t;
+
+static double lcdm_om(double x, double omega_m) {
+  const double a3 = exp(3.0 * x);
+  return omega_m / (omega_m + (1.0 - omega_m) * a3);
+}
+
+/* One RK4 step of the non-linear equation, y = (u, u'). */
+static void lcdm_step_nonlinear(double x, double h, double omega_m, double y[2]) {
+  double k[4][2], t[2];
+  const double xs[4] = {x, x + 0.5 * h, x + 0.5 * h, x + h};
+  const double fs[4] = {0.0, 0.5, 0.5, 1.0};
+  for (int s = 0; s < 4; s++) {
+    t[0] = y[0] + (s ? fs[s] * h * k[s - 1][0] : 0.0);
+    t[1] = y[1] + (s ? fs[s] * h * k[s - 1][1] : 0.0);
+    const double om = lcdm_om(xs[s], omega_m);
+    k[s][0] = t[1];
+    k[s][1] = t[1] * t[1] / 3.0 - (2.0 - 1.5 * om) * t[1] + 1.5 * om * expm1(t[0]);
+  }
+  for (int i = 0; i < 2; i++)
+    y[i] += h / 6.0 * (k[0][i] + 2.0 * k[1][i] + 2.0 * k[2][i] + k[3][i]);
+}
+
+/* One RK4 step of the linear equation, y = (D, D'). */
+static void lcdm_step_linear(double x, double h, double omega_m, double y[2]) {
+  double k[4][2], t[2];
+  const double xs[4] = {x, x + 0.5 * h, x + 0.5 * h, x + h};
+  const double fs[4] = {0.0, 0.5, 0.5, 1.0};
+  for (int s = 0; s < 4; s++) {
+    t[0] = y[0] + (s ? fs[s] * h * k[s - 1][0] : 0.0);
+    t[1] = y[1] + (s ? fs[s] * h * k[s - 1][1] : 0.0);
+    const double om = lcdm_om(xs[s], omega_m);
+    k[s][0] = t[1];
+    k[s][1] = -(2.0 - 1.5 * om) * t[1] + 1.5 * om * t[0];
+  }
+  for (int i = 0; i < 2; i++)
+    y[i] += h / 6.0 * (k[0][i] + 2.0 * k[1][i] + 2.0 * k[2][i] + k[3][i]);
+}
+
+/* Number of RK4 steps from x0 to 0, at most LCDM_STEP apart. */
+static uint32_t lcdm_n_steps(double x0) {
+  return (uint32_t)ceil(-x0 / LCDM_STEP);
+}
+
+/* D(1), normalised to D = a at early times. */
+static double lcdm_growth(double omega_m) {
+  const double x0 = log(LCDM_A_START_MAX);
+  const uint32_t n = lcdm_n_steps(x0);
+  const double h = -x0 / n;
+  double y[2] = {LCDM_A_START_MAX, LCDM_A_START_MAX};
+  for (uint32_t i = 0; i < n; i++)
+    lcdm_step_linear(x0 + i * h, h, omega_m, y);
+  return y[0];
+}
+
+/* delta_NL at a = 1 of the shell whose linear contrast there is delta_l. */
+static double lcdm_nonlinear(double delta_l, const void* vctx) {
+  const lcdm_ctx_t* ctx = vctx;
+  /* Early enough for |d| <= LCDM_D_START_MAX, with d = delta_l a / D(1). */
+  const double a0 =
+    fmin(LCDM_A_START_MAX, LCDM_D_START_MAX * ctx->growth / fabs(delta_l));
+  const double d = delta_l * a0 / ctx->growth;
+  const double delta0 = d + 17.0 / 21.0 * d * d + 341.0 / 567.0 * d * d * d;
+  const double ddelta0 = d + 34.0 / 21.0 * d * d + 341.0 / 189.0 * d * d * d;
+
+  const double x0 = log(a0);
+  const uint32_t n = lcdm_n_steps(x0);
+  const double h = -x0 / n;
+  double y[2] = {log1p(delta0), ddelta0 / (1.0 + delta0)};
+  for (uint32_t i = 0; i < n; i++)
+    lcdm_step_nonlinear(x0 + i * h, h, ctx->omega_m, y);
+  return expm1(y[0]);
+}
+
+static int lcdm_check_omega(double omega_m) {
+  if (!(omega_m > 0.0 && omega_m <= 1.0)) {
+    SIF_LOG_ERROR(TAG, "omega_m: %g (expected 0 < omega_m <= 1)", omega_m);
+    return SIF_ERR_INVALID;
+  }
+  return SIF_OK;
+}
+
+sif_real sif_spherical_map_nonlinear(
+  sif_real delta_linear, sif_real omega_m, sif_option opt) {
   const double d = (double)delta_linear;
 
   if (!(d < 0.0)) {
@@ -170,13 +291,22 @@ sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt) {
     return (sif_real)0.0;
   }
 
-  if ((opt & SIF__SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
+  const sif_option method = opt & SIF__SPHERICAL_MASK;
+
+  if (method == SIF_SPHERICAL_B94) {
     const double c = SIF_SPHERICAL_EXPANSION_C;
     return (sif_real)(pow(1.0 - d / c, -c) - 1.0);
   }
 
+  if (method == SIF_SPHERICAL_LCDM) {
+    if (lcdm_check_omega((double)omega_m) != SIF_OK)
+      return (sif_real)0.0;
+    const lcdm_ctx_t ctx = {(double)omega_m, lcdm_growth((double)omega_m)};
+    return (sif_real)lcdm_nonlinear(d, &ctx);
+  }
+
   double eta;
-  if (brent(eds_linear, d, EDS_ETA_MIN, EDS_ETA_MAX, &eta) != SIF_OK) {
+  if (brent(eds_linear, NULL, d, EDS_ETA_MIN, EDS_ETA_MAX, &eta) != SIF_OK) {
     SIF_LOG_ERROR(TAG,
       "delta_linear = %g lies outside the range the parametric solution is "
       "bracketed over",
@@ -184,10 +314,11 @@ sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt) {
     return (sif_real)0.0;
   }
 
-  return (sif_real)eds_nonlinear(eta);
+  return (sif_real)eds_nonlinear(eta, NULL);
 }
 
-sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt) {
+sif_real sif_spherical_map_linear(
+  sif_real delta_nonlinear, sif_real omega_m, sif_option opt) {
   const double d = (double)delta_nonlinear;
 
   if (!(d < 0.0) || !(d > -1.0)) {
@@ -198,13 +329,37 @@ sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt) {
     return (sif_real)0.0;
   }
 
-  if ((opt & SIF__SPHERICAL_MASK) == SIF_SPHERICAL_B94) {
+  const sif_option method = opt & SIF__SPHERICAL_MASK;
+
+  if (method == SIF_SPHERICAL_B94) {
     const double c = SIF_SPHERICAL_EXPANSION_C;
     return (sif_real)(c * (1.0 - pow(1.0 + d, -1.0 / c)));
   }
 
+  if (method == SIF_SPHERICAL_LCDM) {
+    if (lcdm_check_omega((double)omega_m) != SIF_OK)
+      return (sif_real)0.0;
+    const lcdm_ctx_t ctx = {(double)omega_m, lcdm_growth((double)omega_m)};
+    /* B94 is within 0.2% of the answer: a tight bracket first, the whole
+     * branch if that misses. */
+    const double c = SIF_SPHERICAL_EXPANSION_C;
+    const double guess = c * (1.0 - pow(1.0 + d, -1.0 / c));
+    double root;
+    if (brent(lcdm_nonlinear, &ctx, d, 1.05 * guess, 0.95 * guess, &root) ==
+          SIF_OK ||
+        brent(lcdm_nonlinear, &ctx, d, LCDM_LINEAR_MIN, 1e-3 * guess, &root) ==
+          SIF_OK) {
+      return (sif_real)root;
+    }
+    SIF_LOG_ERROR(TAG,
+      "delta_nonlinear = %g lies outside the range the LCDM solution is "
+      "bracketed over",
+      d);
+    return (sif_real)0.0;
+  }
+
   double eta;
-  if (brent(eds_nonlinear, d, EDS_ETA_MIN, EDS_ETA_MAX, &eta) != SIF_OK) {
+  if (brent(eds_nonlinear, NULL, d, EDS_ETA_MIN, EDS_ETA_MAX, &eta) != SIF_OK) {
     SIF_LOG_ERROR(TAG,
       "delta_nonlinear = %g lies outside the range the parametric solution is "
       "bracketed over",
@@ -212,7 +367,7 @@ sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt) {
     return (sif_real)0.0;
   }
 
-  return (sif_real)eds_linear(eta);
+  return (sif_real)eds_linear(eta, NULL);
 }
 
 /* --- The container --- */
@@ -278,14 +433,14 @@ static sif_size_function_t* alloc_on_radii(
  */
 static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
   uint32_t n_points, const sif_real* radii, uint32_t n_radii, sif_real delta_v,
-  sif_real delta_c, sif_option opt, bool conserve_volume) {
+  sif_real delta_c, sif_real omega_m, sif_option opt, bool conserve_volume) {
 
   if (check_radii(radii, n_radii) != SIF_OK)
     return NULL;
 
   /* The expansion factor, (1 + delta_NL)^(-1/3): the same mass occupies
    * 1/(1 + delta_NL) times the volume. */
-  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, opt);
+  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, omega_m, opt);
   if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
     return NULL;
   const double factor = pow(1.0 + (double)delta_nl, -1.0 / 3.0);
@@ -361,18 +516,20 @@ static sif_size_function_t* size_function(const sif_real* k, const sif_real* pk,
 
 sif_size_function_t* sif_size_function_svdw(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt) {
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  sif_option opt) {
 
   return size_function(
-    k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, false);
+    k, pk, n_points, radii, n_radii, delta_v, delta_c, omega_m, opt, false);
 }
 
 sif_size_function_t* sif_size_function_vdn(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt) {
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  sif_option opt) {
 
   return size_function(
-    k, pk, n_points, radii, n_radii, delta_v, delta_c, opt, true);
+    k, pk, n_points, radii, n_radii, delta_v, delta_c, omega_m, opt, true);
 }
 
 /* --- The EVM size function --- */
@@ -468,7 +625,7 @@ static double evm_ln_correction(double u, double w, double l, double s) {
 
 sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
   const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
-  sif_option opt) {
+  sif_real omega_m, sif_option opt) {
 
   if (!walk) {
     SIF_LOG_ERROR(TAG, "walk is required");
@@ -506,7 +663,7 @@ sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
     return NULL;
   }
 
-  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, opt);
+  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, omega_m, opt);
   if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
     return NULL;
 
@@ -593,14 +750,14 @@ sif_size_function_t* sif_size_function_evm_walk(const sif_walk_t* walk,
 sif_size_function_t* sif_size_function_evm_kernel(
   const sif_variance_kernel_t* kernel, const sif_real* pk,
   const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
-  sif_option opt) {
+  sif_real omega_m, sif_option opt) {
 
   sif_walk_t* walk = sif_walk_pk(kernel, pk);
   if (!walk)
     return NULL;
 
   sif_size_function_t* out =
-    sif_size_function_evm_walk(walk, radii, n_radii, delta_v, h, opt);
+    sif_size_function_evm_walk(walk, radii, n_radii, delta_v, h, omega_m, opt);
 
   sif_walk_free(walk);
   return out;
@@ -608,12 +765,13 @@ sif_size_function_t* sif_size_function_evm_kernel(
 
 sif_size_function_t* sif_size_function_evm(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real h, sif_option opt) {
+  uint32_t n_radii, sif_real delta_v, sif_real h, sif_real omega_m,
+  sif_option opt) {
 
   if (check_radii(radii, n_radii) != SIF_OK)
     return NULL;
 
-  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, opt);
+  const sif_real delta_nl = sif_spherical_map_nonlinear(delta_v, omega_m, opt);
   if (!(delta_nl < 0.0f)) /* outside the expanding branch; already logged */
     return NULL;
 
@@ -631,7 +789,8 @@ sif_size_function_t* sif_size_function_evm(const sif_real* k,
     return NULL;
 
   sif_size_function_t* out =
-    sif_size_function_evm_kernel(kernel, pk, radii, n_radii, delta_v, h, opt);
+    sif_size_function_evm_kernel(
+      kernel, pk, radii, n_radii, delta_v, h, omega_m, opt);
 
   sif_variance_kernel_free(kernel);
   return out;

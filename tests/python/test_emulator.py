@@ -253,7 +253,7 @@ def test_evm_arguments_reach_the_c_side(evm_kernel):
     np.testing.assert_allclose(per_r.vsf, per_ln_r.vsf / radii, rtol=1e-5)
 
     exact = M.size_function_evm_kernel(
-        evm_kernel, pk, radii, delta_v, H, method="exact")
+        evm_kernel, pk, radii, delta_v, H, method="eds")
     assert not np.array_equal(exact.vsf, per_ln_r.vsf)
 
     other_h = M.size_function_evm_kernel(evm_kernel, pk, radii, delta_v, 0.7)
@@ -293,3 +293,38 @@ def test_evm_refusals(evm_kernel):
         M.size_function_evm_walk(gaussian(cdm(gaussian.k)), radii, -0.9, H)
     with pytest.raises(TypeError):
         M.size_function_evm_walk(evm_kernel, radii, -0.9, H)
+
+
+def test_spherical_map_methods():
+    # Omega_m = 1 is Einstein-de Sitter; at 0.31858 the reference from an
+    # independent integration (see tests/test_vsf_models.c).
+    for delta_nl in (-0.3, -0.8):
+        assert M.spherical_map_linear(delta_nl, method="lcdm", omega_m=1.0) == \
+            pytest.approx(M.spherical_map_linear(delta_nl, method="eds"), rel=2e-6)
+    assert M.spherical_map_linear(-0.8, method="lcdm", omega_m=0.31858) == \
+        pytest.approx(-2.78584771, rel=2e-6)
+    delta_l = M.spherical_map_linear(-0.5, method="lcdm", omega_m=0.3)
+    assert M.spherical_map_nonlinear(delta_l, method="lcdm", omega_m=0.3) == \
+        pytest.approx(-0.5, rel=1e-6)
+
+    with pytest.raises(ValueError, match="required"):
+        M.spherical_map_linear(-0.5, method="lcdm")
+    with pytest.raises(ValueError, match="only method='lcdm'"):
+        M.spherical_map_linear(-0.5, method="eds", omega_m=0.3)
+    with pytest.raises(ValueError, match="expected 0 < omega_m <= 1"):
+        M.spherical_map_nonlinear(-1.0, method="lcdm", omega_m=1.2)
+    with pytest.raises(ValueError, match="expected 'b94', 'eds' or 'lcdm'"):
+        M.spherical_map_linear(-0.5, method="exact")
+
+
+def test_size_function_lcdm(evm_kernel):
+    pk = cdm(evm_kernel.k)
+    radii = np.geomspace(6.0, 60.0, 12)
+    delta_v = M.spherical_map_linear(-0.5)
+    eds = M.size_function_evm_kernel(evm_kernel, pk, radii, delta_v, H, method="eds")
+    one = M.size_function_evm_kernel(
+        evm_kernel, pk, radii, delta_v, H, method="lcdm", omega_m=1.0)
+    lcdm = M.size_function_evm_kernel(
+        evm_kernel, pk, radii, delta_v, H, method="lcdm", omega_m=0.31858)
+    np.testing.assert_allclose(one.vsf, eds.vsf, rtol=1e-5)
+    assert not np.array_equal(lcdm.vsf, eds.vsf)

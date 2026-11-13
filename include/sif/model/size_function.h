@@ -33,20 +33,31 @@
  *
  * Under SIF_SPHERICAL_B94, the Bernardeau (1994) fit quoted by Jennings, Li &
  * Hu (2013) eq. (A4): delta_NL = (1 - delta_L/c)^-c - 1. Under
- * SIF_SPHERICAL_EXACT, the Einstein-de Sitter expansion solution, by
+ * SIF_SPHERICAL_EDS, the Einstein-de Sitter expansion solution, by
  * root-find. The two agree to better than 0.1% on the expansion factor.
+ * Under SIF_SPHERICAL_LCDM, the spherical top-hat integrated in flat
+ * LambdaCDM without radiation, from the growing mode in matter domination to
+ * the epoch of the voids; it differs from EDS by up to 0.2% on delta_L
+ * between delta_NL = -0.3 and -0.8 at Omega_m = 0.32, and equals it at
+ * Omega_m = 1.
  *
  * @note Only the expanding branch is implemented; a non-negative linear
  * contrast collapses rather than expands.
  *
- * @param delta_linear Linear density contrast, strictly negative
- * @param opt SIF_SPHERICAL_B94 (default) or SIF_SPHERICAL_EXACT
+ * @param delta_linear Linear density contrast, strictly negative, at the
+ * epoch of the voids
+ * @param omega_m Omega_m at the epoch of the voids, Omega_m(z), in (0, 1];
+ * read only under SIF_SPHERICAL_LCDM. The flat LambdaCDM solution depends on
+ * the cosmology and the epoch only through it.
+ * @param opt SIF_SPHERICAL_B94 (default), SIF_SPHERICAL_EDS or
+ * SIF_SPHERICAL_LCDM
  *
  * @return The non-linear contrast, strictly between -1 and 0, or 0 for input
  * outside that branch. A valid result is never 0, so the two are
  * distinguishable.
  */
-sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt);
+sif_real sif_spherical_map_nonlinear(
+  sif_real delta_linear, sif_real omega_m, sif_option opt);
 
 /**
  * @brief Linear density contrast that evolves into a given non-linear one,
@@ -56,12 +67,15 @@ sif_real sif_spherical_map_nonlinear(sif_real delta_linear, sif_option opt);
  * linear threshold.
  *
  * @param delta_nonlinear Non-linear density contrast, strictly between -1 and 0
- * @param opt SIF_SPHERICAL_B94 (default) or SIF_SPHERICAL_EXACT
+ * @param omega_m As sif_spherical_map_nonlinear
+ * @param opt SIF_SPHERICAL_B94 (default), SIF_SPHERICAL_EDS or
+ * SIF_SPHERICAL_LCDM
  *
  * @return The linear contrast, strictly negative, or 0 for input outside that
  * range.
  */
-sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt);
+sif_real sif_spherical_map_linear(
+  sif_real delta_nonlinear, sif_real omega_m, sif_option opt);
 
 /**
  * @brief Sheth & van de Weygaert void size function.
@@ -81,9 +95,11 @@ sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt);
  * @param n_radii Number of radii
  * @param delta_v Linear void barrier, strictly negative
  * @param delta_c Collapse barrier, strictly positive
+ * @param omega_m Omega_m at the epoch of the voids, read only under
+ * SIF_SPHERICAL_LCDM; see sif_spherical_map_nonlinear
  * @param opt SIF_VSF_BIN_LN (default) or SIF_VSF_BIN_LINEAR for the units,
- * combined with SIF_SPHERICAL_B94 (default) or SIF_SPHERICAL_EXACT for the
- * mapping used to expand the radii. The window is always a top-hat, which is
+ * combined with SIF_SPHERICAL_B94 (default), SIF_SPHERICAL_EDS or
+ * SIF_SPHERICAL_LCDM for the mapping used to expand the radii. The window is always a top-hat, which is
  * what the barriers are calibrated against.
  *
  * @note The Lagrangian-to-Eulerian expansion factor is not an argument: it is
@@ -94,7 +110,8 @@ sif_real sif_spherical_map_linear(sif_real delta_nonlinear, sif_option opt);
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_svdw(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt);
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  sif_option opt);
 
 /**
  * @brief Volume-conserving (Vdn) void size function.
@@ -111,7 +128,8 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_svdw(const sif_real* k,
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_option opt);
+  uint32_t n_radii, sif_real delta_v, sif_real delta_c, sif_real omega_m,
+  sif_option opt);
 
 /**
  * @brief The EVM void size function: a calibrated moving barrier, its emulated
@@ -153,9 +171,11 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  * an observed underdensity goes through sif_spherical_map_linear first.
  * @param h Hubble parameter in units of 100 km/s/Mpc, strictly positive: it
  * places 12 Mpc on radii measured in Mpc/h
+ * @param omega_m Omega_m at the epoch of the voids, read only under
+ * SIF_SPHERICAL_LCDM; see sif_spherical_map_nonlinear
  * @param opt SIF_VSF_BIN_LN (default) or SIF_VSF_BIN_LINEAR for the units,
  * combined with SIF_SPHERICAL_B94 (default, what the model was calibrated
- * with) or SIF_SPHERICAL_EXACT for delta_NL. The window is always a top-hat.
+ * with), SIF_SPHERICAL_EDS or SIF_SPHERICAL_LCDM for delta_NL. The window is always a top-hat.
  *
  * @return Newly allocated size function with n_bins = n_radii, released with
  * sif_size_function_free, or NULL on invalid input. A radius where the
@@ -163,7 +183,8 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_vdn(const sif_real* k,
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_evm(const sif_real* k,
   const sif_real* pk, uint32_t n_points, const sif_real* radii,
-  uint32_t n_radii, sif_real delta_v, sif_real h, sif_option opt);
+  uint32_t n_radii, sif_real delta_v, sif_real h, sif_real omega_m,
+  sif_option opt);
 
 /**
  * @brief sif_size_function_evm on a variance kernel built beforehand: what a
@@ -180,7 +201,7 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_evm(const sif_real* k,
 SIF_NODISCARD sif_size_function_t* sif_size_function_evm_kernel(
   const sif_variance_kernel_t* kernel, const sif_real* pk,
   const sif_real* radii, uint32_t n_radii, sif_real delta_v, sif_real h,
-  sif_option opt);
+  sif_real omega_m, sif_option opt);
 
 /**
  * @brief sif_size_function_evm_kernel on a walk built beforehand: for several
@@ -193,6 +214,6 @@ SIF_NODISCARD sif_size_function_t* sif_size_function_evm_kernel(
  */
 SIF_NODISCARD sif_size_function_t* sif_size_function_evm_walk(
   const sif_walk_t* walk, const sif_real* radii, uint32_t n_radii,
-  sif_real delta_v, sif_real h, sif_option opt);
+  sif_real delta_v, sif_real h, sif_real omega_m, sif_option opt);
 
 #endif /* SIF_MODEL_SIZE_FUNCTION_H */

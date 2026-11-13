@@ -94,24 +94,28 @@ static PyMethodDef model_methods[] = {
 
   {"spherical_map_nonlinear", (PyCFunction)py_sif_spherical_map_nonlinear,
     METH_VARARGS | METH_KEYWORDS,
-    "spherical_map_nonlinear(delta_linear, method='b94')"
+    "spherical_map_nonlinear(delta_linear, method='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "Non-linear density contrast a void of a given linear contrast evolves "
     "to.\n"
-    "method='b94' (default) uses the Bernardeau (1994) fit, method='exact' "
-    "solves the Einstein-de Sitter expansion by root-find. The expansion "
-    "factor r_NL/r_L is (1 + delta_NL)**(-1/3); delta_L = -2.7 gives ~1.69."},
+    "method='b94' (default) uses the Bernardeau (1994) fit, 'eds' solves the "
+    "Einstein-de Sitter expansion by root-find, and 'lcdm' integrates the "
+    "spherical top-hat in flat LambdaCDM without radiation. 'lcdm' requires "
+    "omega_m, Omega_m at the epoch of the voids (Omega_m(z), not today's), "
+    "which is all of the cosmology and epoch it depends on; the others refuse "
+    "it. The expansion factor r_NL/r_L is (1 + delta_NL)**(-1/3); delta_L = "
+    "-2.7 gives ~1.69."},
 
   {"spherical_map_linear", (PyCFunction)py_sif_spherical_map_linear,
     METH_VARARGS | METH_KEYWORDS,
-    "spherical_map_linear(delta_nonlinear, method='b94')"
+    "spherical_map_linear(delta_nonlinear, method='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "Linear density contrast that evolves into a given non-linear one, the "
     "inverse of delta_nonlinear.\n"
     "Wanted when a barrier is quoted as an observed underdensity rather than "
-    "as a linear threshold. Same method= choices."},
+    "as a linear threshold. Same method= and omega_m= choices."},
 
   {"svdw_multiplicity_function", (PyCFunction)py_sif_svdw_multiplicity_function,
     METH_VARARGS | METH_KEYWORDS,
@@ -126,7 +130,7 @@ static PyMethodDef model_methods[] = {
   {"size_function_svdw", (PyCFunction)py_sif_size_function_svdw,
     METH_VARARGS | METH_KEYWORDS,
     "size_function_svdw(k, pk, radii, delta_v, delta_c, units='ln_r', met"
-    "hod='b94')"
+    "hod='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "Sheth & van de Weygaert void size function, as a SizeFunction over the "
@@ -134,7 +138,8 @@ static PyMethodDef model_methods[] = {
     "Number-conserving, so its void volume fraction exceeds one at large "
     "radii; present as the reference rather than the recommendation.\n"
     "The expansion factor is not an argument: delta_v already fixes it. Use "
-    "method='b94' (default) or 'exact' to choose how."},
+    "method='b94' (default), 'eds' or 'lcdm' (with omega_m) to choose how, as "
+    "in spherical_map_nonlinear."},
 
   {"delta_covariance_pk", (PyCFunction)py_sif_delta_covariance_pk,
     METH_VARARGS | METH_KEYWORDS,
@@ -228,7 +233,7 @@ static PyMethodDef model_methods[] = {
   {"size_function_vdn", (PyCFunction)py_sif_size_function_vdn,
     METH_VARARGS | METH_KEYWORDS,
     "size_function_vdn(k, pk, radii, delta_v, delta_c, units='ln_r', meth"
-    "od='b94')"
+    "od='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "Volume-conserving (Vdn) void size function, as a SizeFunction over the "
@@ -238,7 +243,8 @@ static PyMethodDef model_methods[] = {
 
   {"size_function_evm", (PyCFunction)py_sif_size_function_evm,
     METH_VARARGS | METH_KEYWORDS,
-    "size_function_evm(k, pk, radii, delta_v, h, units='ln_r', method='b94')"
+    "size_function_evm(k, pk, radii, delta_v, h, units='ln_r', method='b94', "
+    "omega_m=None)"
     "\n"
     "--\n\n"
     "The EVM void size function, as a SizeFunction over the given "
@@ -259,7 +265,7 @@ static PyMethodDef model_methods[] = {
   {"size_function_evm_kernel", (PyCFunction)py_sif_size_function_evm_kernel,
     METH_VARARGS | METH_KEYWORDS,
     "size_function_evm_kernel(kernel, pk, radii, delta_v, h, units='ln_r', "
-    "method='b94')"
+    "method='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "size_function_evm on a VarianceKernel built beforehand, for chains: "
@@ -273,7 +279,7 @@ static PyMethodDef model_methods[] = {
   {"size_function_evm_walk", (PyCFunction)py_sif_size_function_evm_walk,
     METH_VARARGS | METH_KEYWORDS,
     "size_function_evm_walk(walk, radii, delta_v, h, units='ln_r', "
-    "method='b94')"
+    "method='b94', omega_m=None)"
     "\n"
     "--\n\n"
     "size_function_evm_kernel on a Walk built beforehand, for several "
