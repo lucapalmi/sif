@@ -13,6 +13,7 @@
 #include "sif/model/size_function.h"
 #include "structures/py_size_function.h"
 #include <numpy/arrayobject.h>
+#include <stdio.h>
 #include <string.h>
 
 /* Both size functions take the same arguments; only the model differs. */
@@ -456,8 +457,11 @@ static int py_sif_spherical_option(const char* method, PyObject* omega_m_obj,
   if (*omega_m == -1.0 && PyErr_Occurred())
     return -1;
   if (!(*omega_m > 0.0 && *omega_m <= 1.0)) {
-    PyErr_Format(
-      PyExc_ValueError, "omega_m: %g (expected 0 < omega_m <= 1)", *omega_m);
+    /* PyErr_Format has no %g (Python 3.12 rejects it), so format here. */
+    char message[96];
+    snprintf(message, sizeof message, "omega_m: %g (expected 0 < omega_m <= 1)",
+      *omega_m);
+    PyErr_SetString(PyExc_ValueError, message);
     return -1;
   }
   return 0;
