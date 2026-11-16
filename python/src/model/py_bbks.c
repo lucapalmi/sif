@@ -105,11 +105,11 @@ PyObject* py_sif_bbks_number_density_differential(
 
   sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values =
+  PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_bbks_number_density_differential((const sif_real*)PyArray_DATA(nu_arr),
       (const sif_real*)PyArray_DATA(gamma_arr),
       (const sif_real*)PyArray_DATA(r_star_arr), (uint32_t)size, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(nu_arr);
   Py_DECREF(gamma_arr);
@@ -159,9 +159,9 @@ PyObject* py_sif_bbks_number_density_cumulative(
     return NULL;
   sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values =
+  PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_bbks_number_density_cumulative((sif_real)delta, moments, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (!values) {
     PyErr_SetString(PyExc_RuntimeError,
@@ -224,9 +224,9 @@ PyObject* py_sif_size_function_bbks(
 
   sif_size_function_t* vsf = NULL;
 
-  Py_BEGIN_ALLOW_THREADS vsf =
+  PY_SIF_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_bbks((sif_real)delta, moments, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (!vsf) {
     PyErr_SetString(PyExc_RuntimeError,

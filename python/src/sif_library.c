@@ -29,12 +29,11 @@ static PyObject* py_sif_system_init(
   /* Default values */
   int threads = 0;
   int skip_tuning = 0;
-  int log_level = 2; /* SIF_LOG_LEVEL_INFO */
 
-  static char* kwlist[] = {"threads", "skip_tuning", "log_level", NULL};
+  static char* kwlist[] = {"threads", "skip_tuning", NULL};
 
   if (!PyArg_ParseTupleAndKeywords(
-        args, kwds, "|ipi", kwlist, &threads, &skip_tuning, &log_level)) {
+        args, kwds, "|ip", kwlist, &threads, &skip_tuning)) {
     return NULL;
   }
 
@@ -42,9 +41,12 @@ static PyObject* py_sif_system_init(
 
   sif_omp_config_t omp_cfg = {.n_threads = (uint32_t)threads};
 
+  /* The level is the pysif loggers', not a setting of init: init keeps the
+   * one they ask for. */
+  py_sif_log_sync();
   sif_config_t config = {.fft_config = &fft_cfg,
     .omp_config = &omp_cfg,
-    .log_level = (uint8_t)log_level};
+    .log_level = sif_log_level_get()};
 
   /* Where the C library used to end the process, and now reports instead:
    * the interpreter survives a failed init and can say why. */
@@ -59,7 +61,10 @@ static PyObject* py_sif_system_init(
 }
 
 static PyObject* py_sif_system_finalise(PyObject* module, PyObject* args) {
+  py_sif_log_sync();
   sif_system_finalise();
+  /* Finalise puts the level back to INFO, which is sif's, not the loggers'. */
+  py_sif_log_sync();
   Py_RETURN_NONE;
 }
 
@@ -138,25 +143,23 @@ static PyObject* py_sif_setting_get(
  * ========================================================================== */
 
 static PyMethodDef sif_module_methods[] = {
-  {"system_init", (PyCFunction)py_sif_system_init,
-    METH_VARARGS | METH_KEYWORDS,
-    "system_init(threads=0, skip_tuning=False, log_level=2)\n"
+  {"system_init", (PyCFunction)py_sif_system_init, METH_VARARGS | METH_KEYWORDS,
+    "system_init(threads=0, skip_tuning=False)\n"
     "--\n\n"
-    "Bring up the system state: FFTW, the settings table, the thread\n"
-    "ceiling and the log level. Calling it twice warns and does nothing.\n\n"
+    "Bring up the system state: FFTW, the settings table and the thread\n"
+    "ceiling. Calling it twice warns and does nothing.\n\n"
     "Only some of pysif needs it: the finders (finders.spherical,\n"
     "finders.exodus, finders.exodus_survey) and\n"
     "measure.delta_moments_grid and measure.delta_distribution_grid, which\n"
     "transform a grid, and get_setting and set_setting. Called without it,\n"
     "those raise RuntimeError (get_setting returns its fallback instead).\n"
-    "Everything else works without it, using OpenMP's own thread count and\n"
-    "logging at info level.\n\n"
+    "Everything else works without it, using OpenMP's own thread count.\n\n"
+    "What sif logs goes to the logging module, under pysif.<tag>: configure\n"
+    "it there, as logging.getLogger('pysif').setLevel(logging.INFO).\n\n"
     "Args:\n"
     "    threads: Thread ceiling; 0 leaves OpenMP's own default.\n"
     "    skip_tuning: Take FFTW's estimated plan instead of tuning. Faster\n"
-    "        to start, slower to transform; worth setting for short runs.\n"
-    "    log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none.\n"
-    "        0 is the verbose mode: everything, timings included."},
+    "        to start, slower to transform; worth setting for short runs."},
   {"system_finalise", (PyCFunction)py_sif_system_finalise, METH_NOARGS,
     "system_finalise()\n"
     "--\n\n"
@@ -165,13 +168,23 @@ static PyMethodDef sif_module_methods[] = {
     "cache. The functions that need system_init() may not be called\n"
     "afterwards without initialising again."},
   {"init", (PyCFunction)py_sif_init, METH_VARARGS | METH_KEYWORDS,
-    "init(threads=0, skip_tuning=False, log_level=2)\n"
+    "init(threads=0, skip_tuning=False)\n"
     "--\n\n"
     "Deprecated name of system_init(); warns and forwards."},
   {"finalise", (PyCFunction)py_sif_finalise, METH_NOARGS,
     "finalise()\n"
     "--\n\n"
     "Deprecated name of system_finalise(); warns and forwards."},
+  {"_log_install", (PyCFunction)py_sif_log_install, METH_VARARGS,
+    "_log_install(emit, c_level)\n"
+    "--\n\n"
+    "Route sif's log through emit(level, tag, message), at the level\n"
+    "c_level() returns. Private: pysif calls it on import."},
+  {"_log_from_threads", (PyCFunction)py_sif_log_from_threads, METH_VARARGS,
+    "_log_from_threads(message, n_threads, per_thread, release_gil)\n"
+    "--\n\n"
+    "Log a WARNING per_thread times from each of n_threads threads Python\n"
+    "does not know, as OpenMP's workers are. Private: for the tests."},
   {"field_from_numpy", (PyCFunction)pysif_field_from_numpy,
     METH_VARARGS | METH_KEYWORDS,
     "field_from_numpy(x=None, y=None, z=None, *, ra=None, dec=None, "

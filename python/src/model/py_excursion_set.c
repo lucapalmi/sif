@@ -132,13 +132,13 @@ PyObject* py_sif_delta_covariance_pk(
 
   double* cov = NULL;
 
-  Py_BEGIN_ALLOW_THREADS cov = sif_delta_covariance_pk(
+  PY_SIF_BEGIN_ALLOW_THREADS cov = sif_delta_covariance_pk(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
     (uint32_t)n_radii, (sif_real*)PyArray_DATA((PyArrayObject*)sigma_arr),
     (sif_real*)PyArray_DATA((PyArrayObject*)high_arr),
     (double*)PyArray_DATA((PyArrayObject*)dvar_arr), options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
   Py_DECREF(pk_arr);
@@ -371,12 +371,12 @@ PyObject* py_sif_ep_first_crossing_counts(
 
   uint64_t* counts = NULL;
 
-  Py_BEGIN_ALLOW_THREADS counts =
+  PY_SIF_BEGIN_ALLOW_THREADS counts =
     sif_ep_first_crossing_counts((const sif_real*)PyArray_DATA(w.radii),
       (uint32_t)n, (const double*)PyArray_DATA(w.cov),
       (const sif_real*)PyArray_DATA(w.barrier), collapse_data(&w),
       (uint64_t)w.n_paths, (uint64_t)w.seed, collapse_counts, SIF_DEFAULT);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     walk_args_release(&w);
 
@@ -423,12 +423,12 @@ PyObject* py_sif_ep_multiplicity_function(
 
   sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values =
+  PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_ep_multiplicity_function((const sif_real*)PyArray_DATA(w.radii),
       (uint32_t)n, (const double*)PyArray_DATA(w.cov),
       (const sif_real*)PyArray_DATA(w.barrier), collapse_data(&w),
       (uint64_t)w.n_paths, (uint64_t)w.seed, counts_data, SIF_DEFAULT);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     walk_args_release(&w);
 
@@ -516,12 +516,12 @@ PyObject* py_sif_ep_multiplicity_function_emu(
   sif_real* values = NULL;
 
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS values = sif_ep_multiplicity_function_emu(walk,
+  PY_SIF_BEGIN_ALLOW_THREADS values = sif_ep_multiplicity_function_emu(walk,
     (const sif_real*)PyArray_DATA(barrier_arr),
     collapse_arr ? (const sif_real*)PyArray_DATA(collapse_arr) : NULL,
     (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n, &domain,
     binned ? SIF_EP_EMU_BIN_CENTRES : SIF_EP_EMU_AT_RADII);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(barrier_arr);
   Py_DECREF(radii_arr);

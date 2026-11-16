@@ -12,7 +12,27 @@
 
 #include "sif/core/macros.h"
 #include "sif/utils/logger.h"
+#include <inttypes.h>
 #include <string.h>
+
+/*
+ * @defgroup py_log The log bridge (py_log.c)
+ *
+ * Every call into sif that releases the GIL goes through these two in place
+ * of Py_BEGIN_ALLOW_THREADS / Py_END_ALLOW_THREADS: the first brings sif's
+ * runtime level down to what the pysif loggers would accept, the second
+ * emits what OpenMP workers logged during the call, which they could not
+ * emit themselves. Both run with the GIL held.
+ */
+void py_sif_log_sync(void);
+void py_sif_log_drain(void);
+PyObject* py_sif_log_install(PyObject* module, PyObject* args);
+PyObject* py_sif_log_from_threads(PyObject* module, PyObject* args);
+
+#define PY_SIF_BEGIN_ALLOW_THREADS                                             \
+  py_sif_log_sync();                                                           \
+  Py_BEGIN_ALLOW_THREADS
+#define PY_SIF_END_ALLOW_THREADS Py_END_ALLOW_THREADS py_sif_log_drain();
 
 #define NPY_NO_DEPRECATED_API  NPY_1_7_API_VERSION
 #define PY_ARRAY_UNIQUE_SYMBOL pysif_ARRAY_API

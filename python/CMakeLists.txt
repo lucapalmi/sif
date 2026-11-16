@@ -18,6 +18,7 @@ execute_process(
 # 2. Define the Python wrapper sources
 set(PYTHON_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/sif_library.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/py_log.c
 
     # Submodule Entry Points
     ${CMAKE_CURRENT_SOURCE_DIR}/src/measure_module.c

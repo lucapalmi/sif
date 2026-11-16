@@ -21,6 +21,12 @@ into submodules: io for reading and writing, finders for void
 identification, measure for measurements taken from data, and
 model for theoretical predictions.
 
+What the library logs goes to the logging module, under pysif and a
+logger per subsystem (pysif.io.hdf5, pysif.finder.exodus, ...), so the
+usual configuration applies: logging.getLogger("pysif").setLevel(
+logging.INFO) shows progress, which is hidden by default as every
+library's is.
+
 pysif.real is the NumPy scalar type matching the precision the
 library was built with, so np.zeros(n, dtype=pysif.real) gives
 arrays the bindings take without a conversion copy.
@@ -52,25 +58,24 @@ class _WrapCounts(TypedDict):
     wrapped: int
     nonfinite: int
 
-def system_init(threads: int = 0, skip_tuning: bool = False,
-                log_level: int = 2) -> None:
-    """Bring up the system state: FFTW, the settings table, the thread
-    ceiling and the log level. Calling it twice warns and does nothing.
+def system_init(threads: int = 0, skip_tuning: bool = False) -> None:
+    """Bring up the system state: FFTW, the settings table and the thread
+    ceiling. Calling it twice warns and does nothing.
 
     Only some of pysif needs it: the finders (finders.spherical,
     finders.exodus, finders.exodus_survey) and
     measure.delta_moments_grid and measure.delta_distribution_grid, which
     transform a grid, and get_setting and set_setting. Called without it,
     those raise RuntimeError (get_setting returns its fallback instead).
-    Everything else works without it, using OpenMP's own thread count and
-    logging at info level.
+    Everything else works without it, using OpenMP's own thread count.
+
+    What sif logs goes to the logging module, under pysif.<tag>: configure
+    it there, as logging.getLogger('pysif').setLevel(logging.INFO).
 
     Args:
         threads: Thread ceiling; 0 leaves OpenMP's own default.
         skip_tuning: Take FFTW's estimated plan instead of tuning. Faster
             to start, slower to transform; worth setting for short runs.
-        log_level: 0 trace, 1 debug, 2 info, 3 warning, 4 error, 5 none.
-            0 is the verbose mode: everything, timings included.
     """
 
 def system_finalise() -> None:
@@ -81,8 +86,7 @@ def system_finalise() -> None:
     afterwards without initialising again.
     """
 
-def init(threads: int = 0, skip_tuning: bool = False,
-         log_level: int = 2) -> None:
+def init(threads: int = 0, skip_tuning: bool = False) -> None:
     """Deprecated name of system_init(); warns and forwards."""
 
 def finalise() -> None:

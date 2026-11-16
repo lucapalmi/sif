@@ -375,10 +375,10 @@ static PyObject* run_exodus(PyObject* grid_obj, PyObject* mesh_obj,
 
   sif_catalogue_t* cat = NULL;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS cat = sif_finder_exodus_raw(c_grid, c_mesh, radii_data,
+  PY_SIF_BEGIN_ALLOW_THREADS cat = sif_finder_exodus_raw(c_grid, c_mesh, radii_data,
     (uint32_t)n_radii, (sif_real)threshold, (sif_real)overlap_fraction,
     options | x->options, &x->extras);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
   Py_XDECREF(x->path_bytes);
@@ -516,9 +516,9 @@ PyObject* py_sif_finder_spherical(
   /* See the note in the exodus wrapper: the GIL is released for the run. */
   sif_catalogue_t* res_catalogue = NULL;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS res_catalogue = sif_finder_spherical(c_grid, radii_data,
+  PY_SIF_BEGIN_ALLOW_THREADS res_catalogue = sif_finder_spherical(c_grid, radii_data,
     (uint32_t)n_radii, (sif_real)threshold, (sif_real)overlap_frac, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
@@ -563,11 +563,11 @@ static PyObject* run_exodus_survey(PyObject* data_grid_obj,
 
   sif_catalogue_t* res = NULL;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS res =
+  PY_SIF_BEGIN_ALLOW_THREADS res =
     sif_finder_exodus_survey_raw(data_grid, random_grid, data_mesh, random_mesh,
       offset, radii_data, (uint32_t)n_radii, (sif_real)threshold,
       (sif_real)overlap_fraction, options | x->options, &x->extras);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
   Py_XDECREF(x->path_bytes);

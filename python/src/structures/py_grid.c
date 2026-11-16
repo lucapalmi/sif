@@ -66,9 +66,9 @@ static PyObject* sifGrid_assign_cic(
    * the particle counts this is for, as for the tessellation deposit. */
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status =
+  PY_SIF_BEGIN_ALLOW_THREADS status =
     sif_grid_assign_cic(self->grid, py_field->field);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) return py_sif_field_raise_binning(status, "assign_cic");
 
@@ -107,9 +107,9 @@ static PyObject* sifGrid_assign(
 
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status = sif_grid_assign(self->grid, py_field->field,
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_grid_assign(self->grid, py_field->field,
     scheme, interlace ? SIF_GRID_INTERLACE : 0);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) return py_sif_field_raise_binning(status, "assign");
 
@@ -177,9 +177,9 @@ static PyObject* sifGrid_assign_cic_tessellation(
 
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status =
+  PY_SIF_BEGIN_ALLOW_THREADS status =
     sif_grid_assign_cic_tessellation(self->grid, py_tess->tess);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) return py_sif_field_raise_binning(
       status, "assign_cic_tessellation");

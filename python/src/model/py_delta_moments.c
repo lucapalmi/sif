@@ -61,11 +61,11 @@ PyObject* py_sif_delta_moments_pk(
 
   sif_delta_moments_t* tmp = NULL;
 
-  Py_BEGIN_ALLOW_THREADS tmp = sif_delta_moments_pk(
+  PY_SIF_BEGIN_ALLOW_THREADS tmp = sif_delta_moments_pk(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
     (uint32_t)n_radii, (uint8_t)order, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
   Py_DECREF(pk_arr);

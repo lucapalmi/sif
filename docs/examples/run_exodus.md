@@ -12,15 +12,19 @@ of exodus: Python, C, and the Lua configuration file of the **sif-exodus** progr
 
 ::::{tab-item} Python
 ```python
+import logging
+
 import numpy as np
 import pysif
 
+# what sif logs goes to the logging module, under "pysif": at INFO it prints
+# one line for each rung of the finder, at TRACE (5) everything the library
+# does; by default only warnings and errors show
+logging.basicConfig()
+logging.getLogger("pysif").setLevel(logging.INFO)
+
 # bring up the system state: the finder needs it
-# log_level 2 (info, the default) prints one line for each rung of
-# the finder; 0 (trace) prints everything the library does, and
-# higher levels print out only warnings and errors
-# in this case, we don't need further configuration
-pysif.system_init(log_level=2)
+pysif.system_init()
 
 # first, load the data into a pysif.Field structure
 # in this example, we consider a Gadget snapshot, and read its
@@ -292,11 +296,17 @@ sif-exodus exodus.lua
 ::::{tab-item} Python
 
 ```python
+import logging
+
 import numpy as np
 import pysif
 
-# bring up the system state (the finder needs it), as for a simulation
-pysif.system_init(log_level=2)
+# the finder's progress, at INFO, as for a simulation
+logging.basicConfig()
+logging.getLogger("pysif").setLevel(logging.INFO)
+
+# bring up the system state (the finder needs it)
+pysif.system_init()
 
 # first, load the galaxies and the randoms into two pysif.Field
 # structures, from FITS tables holding right ascension, declination (in

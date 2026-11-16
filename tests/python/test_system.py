@@ -86,4 +86,4 @@ def test_get_setting_stores_nothing():
 
 def test_deprecated_names_warn():
     with pytest.warns(FutureWarning, match=r"pysif\.system_init\(\)"):
-        pysif.init(skip_tuning=True, log_level=5)  # already up: a no-op
+        pysif.init(skip_tuning=True)  # already up: a no-op

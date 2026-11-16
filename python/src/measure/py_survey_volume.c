@@ -48,8 +48,8 @@ PyObject* py_sif_survey_volume(PyObject* self, PyObject* args, PyObject* kwds) {
   sif_real volume = 0.0f;
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status = sif_survey_volume(randoms, obs, &volume);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_survey_volume(randoms, obs, &volume);
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) return py_sif_raise(status, "survey_volume");
 

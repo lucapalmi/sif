@@ -79,9 +79,9 @@ PyObject* py_sif_delta_distribution_grid(
 
   /* Release the GIL allowing seamless multi-threading in the C backend */
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS tmp = sif_delta_distribution_grid(c_grid, c_radii,
+  PY_SIF_BEGIN_ALLOW_THREADS tmp = sif_delta_distribution_grid(c_grid, c_radii,
     (uint32_t)n_radii, n_bins, delta_bounds, (uint64_t)seed, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
@@ -141,10 +141,10 @@ PyObject* py_sif_delta_moments_grid(
   sif_delta_moments_t* tmp = NULL;
 
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS tmp =
+  PY_SIF_BEGIN_ALLOW_THREADS tmp =
     sif_delta_moments_grid(c_grid, c_radii, (uint32_t)n_radii, (uint8_t)order,
       (uint64_t)n_tracers, (uint64_t)seed, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 

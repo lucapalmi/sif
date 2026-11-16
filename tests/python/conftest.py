@@ -31,12 +31,10 @@ atexit.register(shutil.rmtree, os.environ["SIF_HOME"], ignore_errors=True)
 # At import rather than in a fixture: HAS_HDF5 below calls into the library
 # while the tests are still being collected.
 #
-# Silent by default. The failure tests provoke errors on purpose, and the C
-# log is flushed at exit rather than with the test that wrote it, so it would
-# only add noise. PYSIF_TEST_LOG_LEVEL=2 brings it back when debugging.
-pysif.system_init(skip_tuning=True,
-                  log_level=int(os.environ.get("PYSIF_TEST_LOG_LEVEL", "5")))
-
+# The library's log reaches the logging module, which pytest captures and
+# shows with a failing test, so nothing needs silencing here. pytest's
+# --log-level (TRACE is 5) shows more of it.
+pysif.system_init(skip_tuning=True)
 
 def pytest_unconfigure(config):
     pysif.system_finalise()

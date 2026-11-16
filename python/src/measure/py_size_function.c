@@ -44,9 +44,9 @@ PyObject* py_sif_size_function_catalogue(
   sifCatalogueObject* cat = (sifCatalogueObject*)cat_obj;
 
   sif_size_function_t* tmp = NULL;
-  Py_BEGIN_ALLOW_THREADS tmp = sif_size_function_catalogue(cat->catalogue,
+  PY_SIF_BEGIN_ALLOW_THREADS tmp = sif_size_function_catalogue(cat->catalogue,
     (sif_real)box_length, n_bins, options, (sif_real)r_min, (sif_real)r_max);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (!tmp) {
     PyErr_SetString(PyExc_RuntimeError, "Failed to compute size function");

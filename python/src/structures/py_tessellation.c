@@ -39,9 +39,9 @@ static int sifTessellation_init(
   const sif_option opt = use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
 
   sif_tessellation_t* tmp = NULL;
-  Py_BEGIN_ALLOW_THREADS tmp =
+  PY_SIF_BEGIN_ALLOW_THREADS tmp =
     sif_tessellation_alloc(mesh->mesh, samples_per_tracer, (uint64_t)seed, opt);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (!tmp) {
     PyErr_SetString(PyExc_ValueError,
@@ -151,11 +151,11 @@ static PyObject* sifTessellation_mesh(
   const sif_option opt = drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT;
 
   sif_chain_mesh_t* tmp = NULL;
-  Py_BEGIN_ALLOW_THREADS tmp =
+  PY_SIF_BEGIN_ALLOW_THREADS tmp =
     consume
       ? sif_chain_mesh_alloc_tessellation_consume(self->tess, n_cells, opt)
       : sif_chain_mesh_alloc_tessellation(self->tess, n_cells, opt);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (!tmp) {
     PyErr_SetString(PyExc_ValueError,

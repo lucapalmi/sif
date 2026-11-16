@@ -15,6 +15,12 @@ into submodules: io for reading and writing, finders for void
 identification, measure for measurements taken from data, and
 model for theoretical predictions.
 
+What the library logs goes to the logging module, under pysif and a
+logger per subsystem (pysif.io.hdf5, pysif.finder.exodus, ...), so the
+usual configuration applies: logging.getLogger("pysif").setLevel(
+logging.INFO) shows progress, which is hidden by default as every
+library's is.
+
 pysif.real is the NumPy scalar type matching the precision the
 library was built with, so np.zeros(n, dtype=pysif.real) gives
 arrays the bindings take without a conversion copy.
@@ -27,6 +33,10 @@ arrays the bindings take without a conversion copy.
 # command-line programs among them.
 from ._pysif import *  # noqa: F401,F403
 from . import _pysif
+from . import _log
+
+# What sif logs goes to the logging module from here on, under pysif.<tag>.
+_pysif._log_install(_log.emit, _log.c_level)
 
 # The functions defined at the root report _pysif as their module, which
 # autodoc reads as "imported from elsewhere" and leaves out of the pysif page.

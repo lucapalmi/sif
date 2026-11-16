@@ -94,9 +94,9 @@ static PyObject* write_field_impl(
 
   /* 3. Release the GIL so Python can do other things while NVMe writes */
   int status = 0;
-  Py_BEGIN_ALLOW_THREADS status =
+  PY_SIF_BEGIN_ALLOW_THREADS status =
     sif_field_write(filepath, &temp_field, box_length);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     /* 4. Cleanup NumPy references */
     Py_DECREF(x_arr);
@@ -134,8 +134,8 @@ static PyObject* read_field_impl(
   sif_field_t* field = NULL;
 
   /* Drop GIL while 144 threads hit the disk via parallel pread() */
-  Py_BEGIN_ALLOW_THREADS field = sif_field_read(filepath, &box_length);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS field = sif_field_read(filepath, &box_length);
+  PY_SIF_END_ALLOW_THREADS
 
     if (!field) {
     return PyErr_Format(
@@ -151,9 +151,9 @@ static PyObject* read_field_impl(
   if (wrap) {
     int status = SIF_OK;
     uint64_t nonfinite = 0;
-    Py_BEGIN_ALLOW_THREADS status = sif_field_wrap_periodic(
+    PY_SIF_BEGIN_ALLOW_THREADS status = sif_field_wrap_periodic(
       field, (sif_real)box_length, NULL, NULL, &nonfinite);
-    Py_END_ALLOW_THREADS
+    PY_SIF_END_ALLOW_THREADS
 
       if (status != SIF_OK) {
       sif_field_free(field);
@@ -248,8 +248,8 @@ static PyObject* write_grid_impl(
   sifGridObject* grid_wrap = (sifGridObject*)grid_obj;
 
   int status = 0;
-  Py_BEGIN_ALLOW_THREADS status = sif_grid_write(filepath, grid_wrap->grid);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_grid_write(filepath, grid_wrap->grid);
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != 0) {
     return PyErr_Format(
@@ -275,8 +275,8 @@ static PyObject* read_grid_impl(
 
   sif_grid_t* grid = NULL;
 
-  Py_BEGIN_ALLOW_THREADS grid = sif_grid_read(filepath);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS grid = sif_grid_read(filepath);
+  PY_SIF_END_ALLOW_THREADS
 
     if (!grid) {
     return PyErr_Format(
@@ -325,9 +325,9 @@ static PyObject* read_field_ascii_impl(
 
   int status = 0;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status =
+  PY_SIF_BEGIN_ALLOW_THREADS status =
     sif_field_read_ascii_into(field, filepath, format, delimiter, skip_lines);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
     sif_field_free(field);
@@ -481,9 +481,9 @@ static PyObject* write_catalogue_ascii_impl(
 
   int status = 0;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status =
+  PY_SIF_BEGIN_ALLOW_THREADS status =
     sif_catalogue_write_ascii(filepath, cat->catalogue);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
     return py_sif_raise(status, filepath);
@@ -512,8 +512,8 @@ static PyObject* read_catalogue_ascii_impl(
   sif_catalogue_t* cat = NULL;
 
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS cat = sif_catalogue_read_ascii(filepath, format);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS cat = sif_catalogue_read_ascii(filepath, format);
+  PY_SIF_END_ALLOW_THREADS
 
     if (!cat) {
     return py_sif_raise(sif_error_status(), filepath);
@@ -559,9 +559,9 @@ static PyObject* write_profiles_ascii_impl(
 
   int status = 0;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status =
+  PY_SIF_BEGIN_ALLOW_THREADS status =
     sif_profiles_write_ascii(filepath, prof->dens, prof->vel, cat->catalogue);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
     return py_sif_raise(status, filepath);
@@ -599,9 +599,9 @@ static PyObject* read_profiles_ascii_impl(
   sif_velocity_profiles_t* vel = NULL;
   int status = SIF_OK;
 
-  Py_BEGIN_ALLOW_THREADS status = sif_profiles_read_ascii(
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_profiles_read_ascii(
     filepath, &cat, has_dens ? &dens : NULL, has_vel ? &vel : NULL);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
     return py_sif_raise(status, filepath);

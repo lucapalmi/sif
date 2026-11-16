@@ -112,11 +112,11 @@ static PyObject* size_function(
 
   sif_size_function_t* vsf = NULL;
 
-  Py_BEGIN_ALLOW_THREADS vsf = compute((const sif_real*)PyArray_DATA(k_arr),
+  PY_SIF_BEGIN_ALLOW_THREADS vsf = compute((const sif_real*)PyArray_DATA(k_arr),
     (const sif_real*)PyArray_DATA(pk_arr), (uint32_t)n_points,
     (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
     (sif_real)delta_nl, (sif_real)delta_c, (sif_real)omega_m, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
   Py_DECREF(pk_arr);
@@ -212,12 +212,12 @@ PyObject* py_sif_size_function_evm(
   sif_size_function_t* vsf = NULL;
 
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS vsf = sif_size_function_evm(
+  PY_SIF_BEGIN_ALLOW_THREADS vsf = sif_size_function_evm(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
     (uint32_t)n_radii, (sif_real)delta_nl, (sif_real)h, (sif_real)omega_m,
     options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
   Py_DECREF(pk_arr);
@@ -285,11 +285,11 @@ PyObject* py_sif_size_function_evm_kernel(
   sif_size_function_t* vsf = NULL;
 
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS vsf =
+  PY_SIF_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_evm_kernel(kernel, (const sif_real*)PyArray_DATA(pk_arr),
       (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
       (sif_real)delta_nl, (sif_real)h, (sif_real)omega_m, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(pk_arr);
   Py_DECREF(radii_arr);
@@ -341,11 +341,11 @@ PyObject* py_sif_size_function_evm_walk(
   sif_size_function_t* vsf = NULL;
 
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS vsf =
+  PY_SIF_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_evm_walk(walk, (const sif_real*)PyArray_DATA(radii_arr),
       (uint32_t)n_radii, (sif_real)delta_nl, (sif_real)h, (sif_real)omega_m,
       options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(radii_arr);
 
@@ -403,11 +403,11 @@ PyObject* py_sif_delta_sigma_slope_pk(
 
   sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values =
+  PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_delta_sigma_slope_pk((const sif_real*)PyArray_DATA(k_arr),
       (const sif_real*)PyArray_DATA(pk_arr), (uint32_t)n_points,
       (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
   Py_DECREF(pk_arr);
@@ -547,10 +547,10 @@ PyObject* py_sif_svdw_multiplicity_function(
   const npy_intp n = PyArray_SIZE(sigma_arr);
   sif_real* values = NULL;
 
-  Py_BEGIN_ALLOW_THREADS values =
+  PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_svdw_multiplicity_function((const sif_real*)PyArray_DATA(sigma_arr),
       (uint32_t)n, (sif_real)delta_v, (sif_real)delta_c);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(sigma_arr);
 

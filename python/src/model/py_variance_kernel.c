@@ -199,10 +199,10 @@ static int sifVarianceKernel_init(
 
   sif_variance_kernel_t* kernel = NULL;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS kernel = sif_variance_kernel_alloc(
+  PY_SIF_BEGIN_ALLOW_THREADS kernel = sif_variance_kernel_alloc(
     (const sif_real*)PyArray_DATA(k_arr), (uint32_t)PyArray_SIZE(k_arr),
     (sif_real)r_min, (sif_real)r_max, (sif_real)dln_r, options);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(k_arr);
 
@@ -243,9 +243,9 @@ static PyObject* sifVarianceKernel_call(
 
   sif_walk_t* walk = NULL;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS walk =
+  PY_SIF_BEGIN_ALLOW_THREADS walk =
     sif_walk_pk(self->kernel, (const sif_real*)PyArray_DATA(pk_arr));
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     Py_DECREF(pk_arr);
 

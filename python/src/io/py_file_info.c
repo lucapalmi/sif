@@ -194,9 +194,9 @@ static PyObject* check_dict(const sif_file_check_t* c) {
 static sif_file_info_t* read_info(const char* path, sif_file_format_t format) {
   sif_file_info_t* info;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS;
+  PY_SIF_BEGIN_ALLOW_THREADS;
   info = sif_file_info_read(path, format);
-  Py_END_ALLOW_THREADS;
+  PY_SIF_END_ALLOW_THREADS;
   if (!info)
     py_sif_raise(sif_error_status(), path);
   return info;
@@ -207,9 +207,9 @@ static sif_file_info_t* read_info(const char* path, sif_file_format_t format) {
 static sif_file_check_t* run_check(const char* path, sif_file_format_t format) {
   sif_file_check_t* c;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS;
+  PY_SIF_BEGIN_ALLOW_THREADS;
   c = sif_file_check(path, format);
-  Py_END_ALLOW_THREADS;
+  PY_SIF_END_ALLOW_THREADS;
   if (!c)
     py_sif_raise(SIF_ERR_ALLOC, path);
   return c;

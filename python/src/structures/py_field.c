@@ -197,9 +197,9 @@ static PyObject* sifField_wrap(
 
   /* One pass over every coordinate: worth dropping the GIL at the particle
    * counts this is meant for. */
-  Py_BEGIN_ALLOW_THREADS status = sif_field_wrap_periodic(
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_field_wrap_periodic(
     self->field, (sif_real)box_length, &boundary, &wrapped, &nonfinite);
-  Py_END_ALLOW_THREADS
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) return py_sif_raise(status, "wrap");
 
@@ -344,8 +344,8 @@ static PyObject* sifField_convert_sky_coordinates(
 
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status = sif_field_convert_sky_coordinates(f, &cosmo);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_field_convert_sky_coordinates(f, &cosmo);
+  PY_SIF_END_ALLOW_THREADS
 
     switch (status) {
   case SIF_OK:

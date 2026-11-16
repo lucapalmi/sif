@@ -11,6 +11,8 @@ Current version: v0.5 release 0
   its arguments; log lines from concurrent threads no longer interleave
 - Log tags are now `area.domain`, after the header at work (`io.hdf5`,
   `finder.exodus`); the list is in `logger.h`
+- `pysif.system_init()` no longer takes `log_level`: configure
+  `logging.getLogger("pysif")` instead (breaking)
 - The size functions (`sif_size_function_svdw`, `_vdn`, `_evm`, `_evm_kernel`,
   `_evm_walk`; pysif `size_function_*`) take the non-linear threshold, strictly
   between -1 and 0, and convert it to the linear barrier inside; the argument
@@ -54,6 +56,8 @@ Current version: v0.5 release 0
   problem as data; `sif-inspect --check FILE` prints it
 - `pysif.io.describe()`, `check()` and `inspect()`: the description and the
   check as dicts, or printed as sif-inspect prints them
+- pysif logs through the `logging` module, under `pysif.<tag>`, from any
+  thread; like any library's, its INFO is hidden until configured
 - Swappable log backend: `sif_log_sink_set()` for a custom sink, or
   `sif_log_sink_stream_set()` / `sif_log_sink_file_set()`; `sif_log_level_set()`
   changes the level after init

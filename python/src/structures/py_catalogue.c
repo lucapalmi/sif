@@ -375,8 +375,8 @@ static PyObject* sifCatalogue_to_sky(
 
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status = sif_catalogue_to_sky(cat, &cosmo);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_catalogue_to_sky(cat, &cosmo);
+  PY_SIF_END_ALLOW_THREADS
 
     switch (status) {
   case SIF_OK:
@@ -411,8 +411,8 @@ static PyObject* sifCatalogue_to_cartesian(
 
   int status;
   sif_error_clear();
-  Py_BEGIN_ALLOW_THREADS status = sif_catalogue_to_cartesian(cat, &cosmo);
-  Py_END_ALLOW_THREADS
+  PY_SIF_BEGIN_ALLOW_THREADS status = sif_catalogue_to_cartesian(cat, &cosmo);
+  PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) return py_sif_raise(status, "to_cartesian");
   Py_RETURN_NONE;
