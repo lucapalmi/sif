@@ -48,7 +48,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define TAG "fits"
+#define TAG "io.fits"
 
 /* Rows per read. As in the GADGET reader: large enough that the per-call
  * overhead vanishes, small enough that the buffers (at most 7 doubles a row,

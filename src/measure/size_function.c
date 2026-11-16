@@ -15,6 +15,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TAG "measure.size_function"
+
 SIF_DEFINE_QUICKSORT(sif_sort_real_array, sif_real, a < b)
 
 /*
@@ -36,7 +38,7 @@ static void fill_histogram(sif_size_function_t* vsf, const sif_catalogue_t* cat,
   const sif_real width = (hi - lo) / (sif_real)n_bins;
 
   if (!(width > 0.0f)) {
-    SIF_LOG_ERROR("size_function",
+    SIF_LOG_ERROR(TAG,
       "degenerate radius range [%g, %g], cannot bin", (double)vsf->r_min,
       (double)vsf->r_max);
     return;
@@ -87,12 +89,12 @@ sif_size_function_t* sif_size_function_catalogue(const sif_catalogue_t* cat,
   const bool use_ln_bins = (options & SIF__VSF_BIN_MASK) == SIF_VSF_BIN_LN;
 
   if (!cat || cat->n_voids == 0 || n_bins == 0) {
-    SIF_LOG_ERROR("size_function", "invalid catalogue or bin count");
+    SIF_LOG_ERROR(TAG, "invalid catalogue or bin count");
     return NULL;
   }
 
   if (!(box_length > 0.0f)) {
-    SIF_LOG_ERROR("size_function", "box_length must be positive");
+    SIF_LOG_ERROR(TAG, "box_length must be positive");
     return NULL;
   }
 
@@ -110,14 +112,14 @@ sif_size_function_t* sif_size_function_catalogue(const sif_catalogue_t* cat,
   }
 
   if (!(true_r_max > true_r_min)) {
-    SIF_LOG_ERROR("size_function",
+    SIF_LOG_ERROR(TAG,
       "degenerate radius range [%g, %g]: need at least two distinct radii",
       (double)true_r_min, (double)true_r_max);
     return NULL;
   }
 
   if (use_ln_bins && !(true_r_min > 0.0f)) {
-    SIF_LOG_ERROR("size_function",
+    SIF_LOG_ERROR(TAG,
       "log binning needs a strictly positive minimum radius (got %g)",
       (double)true_r_min);
     return NULL;
@@ -161,7 +163,7 @@ sif_size_function_t* sif_size_function_catalogue(const sif_catalogue_t* cat,
                     : 0.0f;
   }
 
-  SIF_LOG_INFO("size_function",
+  SIF_LOG_INFO(TAG,
     "size function computed over [%g, %g] in %u %s bins", (double)true_r_min,
     (double)true_r_max, n_bins, use_ln_bins ? "log" : "linear");
 
@@ -222,13 +224,13 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
   sif_option options) {
 
   if (!vsfs || n_vsfs == 0 || master_bins == 0) {
-    SIF_LOG_ERROR("size_function", "invalid arguments to combine");
+    SIF_LOG_ERROR(TAG, "invalid arguments to combine");
     return NULL;
   }
 
   for (uint32_t i = 0; i < n_vsfs; i++) {
     if (!vsfs[i] || vsfs[i]->n_bins == 0) {
-      SIF_LOG_ERROR("size_function", "size function %u is missing or empty", i);
+      SIF_LOG_ERROR(TAG, "size function %u is missing or empty", i);
       return NULL;
     }
   }
@@ -244,7 +246,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
       merge_strategy != SIF_VSF_MERGE_MEDIAN &&
       merge_strategy != SIF_VSF_MERGE_STITCH) {
     SIF_LOG_ERROR(
-      "size_function", "unrecognised merge strategy in the options bitmask");
+      TAG, "unrecognised merge strategy in the options bitmask");
     return NULL;
   }
 
@@ -370,7 +372,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
   free(temp_vals);
   free(temp_errs);
 
-  SIF_LOG_INFO("size_function",
+  SIF_LOG_INFO(TAG,
     "successfully combined %u VSFs into master grid (Bins: %u)", n_vsfs,
     master_bins);
   return master;

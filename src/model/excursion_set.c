@@ -21,7 +21,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define TAG "ep"
+#define TAG "model.ep"
 
 /* Relative jitter added to the diagonal before factorising, so a marginally
  * rank-deficient radius grid does not fail on its last pivot. Far below the

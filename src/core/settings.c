@@ -22,6 +22,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#define TAG "core.settings"
+
 /* Fixed-size entries, so the table is one flat allocation and a lookup is a
  * linear scan over contiguous memory. There are a handful of settings, read a
  * handful of times per run; anything cleverer would be harder to reason about
@@ -170,7 +172,7 @@ static void copy_bounded(char* dst, size_t cap, const char* src) {
   size_t len = strlen(src);
   if (len >= cap) {
     SIF_LOG_WARNING(
-      "settings", "%zu-character entry truncated to %zu", len, cap - 1);
+      TAG, "%zu-character entry truncated to %zu", len, cap - 1);
     len = cap - 1;
   }
   memcpy(dst, src, len);
@@ -414,7 +416,7 @@ static void settings_save(void) {
   FILE* f = fopen(tmp_path, "w");
   if (!f) {
     SIF_LOG_WARNING(
-      "settings", "%s: cannot open for writing: %s", tmp_path, strerror(errno));
+      TAG, "%s: cannot open for writing: %s", tmp_path, strerror(errno));
     return;
   }
 
@@ -456,10 +458,10 @@ static void settings_save(void) {
     ok = false;
 
   if (ok && rename(tmp_path, settings_filepath) == 0) {
-    SIF_LOG_TRACE("settings", "%s: saved", settings_filepath);
+    SIF_LOG_TRACE(TAG, "%s: saved", settings_filepath);
     settings_modified = false;
   } else {
-    SIF_LOG_WARNING("settings", "%s: not saved", settings_filepath);
+    SIF_LOG_WARNING(TAG, "%s: not saved", settings_filepath);
     remove(tmp_path);
   }
 }
@@ -469,14 +471,14 @@ static void settings_save(void) {
 static void settings_load_line(const char* key, const char* raw, uint32_t line) {
   entry_t* e = settings_find(key);
   if (!e) {
-    SIF_LOG_WARNING("settings", "%s:%u: %s: not a setting (kept, not used)",
+    SIF_LOG_WARNING(TAG, "%s:%u: %s: not a setting (kept, not used)",
       settings_filepath, line, key);
 
     if (settings_count == settings_capacity) {
       const uint32_t grown_cap = settings_capacity * 2;
       entry_t* grown = realloc(settings, grown_cap * sizeof(entry_t));
       if (!grown) {
-        SIF_LOG_ERROR("settings", "%s:%u: %s: dropped: out of memory",
+        SIF_LOG_ERROR(TAG, "%s:%u: %s: dropped: out of memory",
           settings_filepath, line, key);
         return;
       }
@@ -497,7 +499,7 @@ static bool settings_load(void) {
   if (!f && settings_filepath[0] && errno != ENOENT) {
     /* There, but not ours to read: saving would replace it with the defaults
      * and lose whatever it holds. */
-    SIF_LOG_WARNING("settings",
+    SIF_LOG_WARNING(TAG,
       "%s: cannot read (%s); running on defaults, and nothing will be saved "
       "to it",
       settings_filepath, strerror(errno));
@@ -515,7 +517,7 @@ static bool settings_load(void) {
      * parse as an entry of its own -- so discard it whole. Reaching EOF
      * without a newline is the ordinary last line, not an over-long one. */
     if (!strchr(line, '\n') && !feof(f)) {
-      SIF_LOG_WARNING("settings", "%s:%u: longer than %d characters (ignored)",
+      SIF_LOG_WARNING(TAG, "%s:%u: longer than %d characters (ignored)",
         settings_filepath, lineno, LINE_CAP - 1);
       int c;
       while ((c = fgetc(f)) != EOF && c != '\n') {
@@ -529,7 +531,7 @@ static bool settings_load(void) {
 
     char* eq = strchr(trimmed, '=');
     if (!eq) {
-      SIF_LOG_WARNING("settings", "%s:%u: no '=' (ignored)", settings_filepath,
+      SIF_LOG_WARNING(TAG, "%s:%u: no '=' (ignored)", settings_filepath,
         lineno);
       continue;
     }
@@ -541,7 +543,7 @@ static bool settings_load(void) {
       settings_load_line(key, val, lineno);
   }
   fclose(f);
-  SIF_LOG_TRACE("settings", "%s: loaded", settings_filepath);
+  SIF_LOG_TRACE(TAG, "%s: loaded", settings_filepath);
   return true;
 }
 
@@ -553,7 +555,7 @@ void sif__settings_init(const char* root_dir) {
   int written = snprintf(
     settings_filepath, sizeof(settings_filepath), "%s/config", root_dir);
   if (written < 0 || (size_t)written >= sizeof(settings_filepath)) {
-    SIF_LOG_WARNING("settings", "%s/config: path too long: settings will not "
+    SIF_LOG_WARNING(TAG, "%s/config: path too long: settings will not "
       "persist", root_dir);
     settings_filepath[0] = '\0';
   }
@@ -563,7 +565,7 @@ void sif__settings_init(const char* root_dir) {
                                                     : (uint32_t)N_REGISTRY;
   settings = calloc(settings_capacity, sizeof(entry_t));
   if (!settings) {
-    SIF_LOG_ERROR("settings", "failed to allocate the settings table");
+    SIF_LOG_ERROR(TAG, "failed to allocate the settings table");
     settings_capacity = 0;
     return;
   }
@@ -581,7 +583,7 @@ void sif__settings_init(const char* root_dir) {
     const char* env = getenv(var);
     if (env) {
       layer_store(&e->layers[LAYER_ENV], env, 0);
-      SIF_LOG_DEBUG("settings", "%s: %s = %s", var, e->key, env);
+      SIF_LOG_DEBUG(TAG, "%s: %s = %s", var, e->key, env);
     }
   }
 
@@ -677,7 +679,7 @@ int sif_setting_check(
 static int setting_write_check(
   const char* fn, const char* key, const char* value, entry_t** out) {
   if (!key) {
-    SIF_LOG_ERROR("settings", "%s: key: NULL", fn);
+    SIF_LOG_ERROR(TAG, "%s: key: NULL", fn);
     return SIF_ERR_INVALID;
   }
 
@@ -688,7 +690,7 @@ static int setting_write_check(
       (void)sif__system_state(); /* logs, and records the status */
       return SIF_ERR_UNINITIALISED;
     }
-    SIF_LOG_ERROR("settings",
+    SIF_LOG_ERROR(TAG,
       "%s: not stored: no settings table (its allocation failed at init)", key);
     return SIF_ERR_ALLOC;
   }
@@ -697,12 +699,12 @@ static int setting_write_check(
   char reason[512];
   if (!e || !e->def) {
     describe_unknown(reason, sizeof(reason));
-    SIF_LOG_ERROR("settings", "%s: %s", key, reason);
+    SIF_LOG_ERROR(TAG, "%s: %s", key, reason);
     return SIF_ERR_INVALID;
   }
 
   if (value && value_problem(e->def, value, reason, sizeof(reason))) {
-    SIF_LOG_ERROR("settings", "%s: not stored: %s", key, reason);
+    SIF_LOG_ERROR(TAG, "%s: not stored: %s", key, reason);
     return SIF_ERR_INVALID;
   }
 
@@ -713,7 +715,7 @@ static int setting_write_check(
 int sif_setting_set(const char* key, const char* value) {
   entry_t* e = NULL;
   if (!value) {
-    SIF_LOG_ERROR("settings", "%s: value: NULL", key ? key : "(NULL key)");
+    SIF_LOG_ERROR(TAG, "%s: value: NULL", key ? key : "(NULL key)");
     return SIF_ERR_INVALID;
   }
   const int status = setting_write_check("sif_setting_set", key, value, &e);
@@ -721,7 +723,7 @@ int sif_setting_set(const char* key, const char* value) {
     return status;
 
   if (settings_filepath[0] == '\0')
-    SIF_LOG_WARNING("settings",
+    SIF_LOG_WARNING(TAG,
       "%s: set for this process only: there is no settings file to save it to",
       key);
 
@@ -737,13 +739,13 @@ int sif_setting_set(const char* key, const char* value) {
   int which;
   entry_effective(e, &which);
   if (which == LAYER_SESSION) {
-    SIF_LOG_WARNING("settings",
+    SIF_LOG_WARNING(TAG,
       "%s: saved, but the value set for this process takes precedence", key);
   } else if (which == LAYER_ENV) {
     char var[KEY_CAP + 4];
     env_name(key, var, sizeof(var));
     SIF_LOG_WARNING(
-      "settings", "%s: saved, but %s takes precedence in this process", key,
+      TAG, "%s: saved, but %s takes precedence in this process", key,
       var);
   }
   return SIF_OK;
@@ -804,14 +806,14 @@ static const char* setting_value_or_default(entry_t* e) {
     describe_origin(e, which, origin, sizeof(origin));
     describe_expected(e->def, expected, sizeof(expected));
     if (l->unset_var[0])
-      SIF_LOG_WARNING("settings", "%s: $%s is not set ('%s'); using %s",
+      SIF_LOG_WARNING(TAG, "%s: $%s is not set ('%s'); using %s",
         origin, l->unset_var, l->raw, e->layers[LAYER_DEFAULT].value);
     else if (l->truncated)
-      SIF_LOG_WARNING("settings",
+      SIF_LOG_WARNING(TAG,
         "%s: longer than %d characters once expanded; using %s", origin,
         VALUE_CAP - 1, e->layers[LAYER_DEFAULT].value);
     else
-      SIF_LOG_WARNING("settings", "%s: '%s' (expected %s); using %s", origin,
+      SIF_LOG_WARNING(TAG, "%s: '%s' (expected %s); using %s", origin,
         l->raw, expected, e->layers[LAYER_DEFAULT].value);
     e->warned = true;
   }
@@ -849,7 +851,7 @@ int sif__ensure_dir(const char* path) {
   char tmp[PATH_CAP];
   int written = snprintf(tmp, sizeof(tmp), "%s", path);
   if (written < 0 || (size_t)written >= sizeof(tmp)) {
-    SIF_LOG_ERROR("settings", "%s: path too long (at most %d characters)",
+    SIF_LOG_ERROR(TAG, "%s: path too long (at most %d characters)",
       path, PATH_CAP - 1);
     return SIF_ERR_INVALID;
   }
@@ -867,20 +869,20 @@ int sif__ensure_dir(const char* path) {
 
     *p = '\0';
     if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
-      SIF_LOG_ERROR("settings", "%s: cannot create: %s", tmp, strerror(errno));
+      SIF_LOG_ERROR(TAG, "%s: cannot create: %s", tmp, strerror(errno));
       return SIF_ERR_IO;
     }
     *p = '/';
   }
 
   if (mkdir(tmp, 0777) != 0 && errno != EEXIST) {
-    SIF_LOG_ERROR("settings", "%s: cannot create: %s", tmp, strerror(errno));
+    SIF_LOG_ERROR(TAG, "%s: cannot create: %s", tmp, strerror(errno));
     return SIF_ERR_IO;
   }
 
   struct stat st;
   if (stat(tmp, &st) != 0 || !S_ISDIR(st.st_mode)) {
-    SIF_LOG_ERROR("settings", "%s: exists, but is not a directory", tmp);
+    SIF_LOG_ERROR(TAG, "%s: exists, but is not a directory", tmp);
     return SIF_ERR_IO;
   }
 
@@ -904,17 +906,17 @@ int sif__setting_directory(const char* key, const char** path) {
   describe_origin(e, which, origin, sizeof(origin));
 
   if (l->unset_var[0]) {
-    SIF_LOG_ERROR("settings", "%s: $%s is not set ('%s')", origin,
+    SIF_LOG_ERROR(TAG, "%s: $%s is not set ('%s')", origin,
       l->unset_var, l->raw);
     return SIF_ERR_INVALID;
   }
   if (l->truncated) {
-    SIF_LOG_ERROR("settings", "%s: longer than %d characters once expanded",
+    SIF_LOG_ERROR(TAG, "%s: longer than %d characters once expanded",
       origin, VALUE_CAP - 1);
     return SIF_ERR_INVALID;
   }
   if (l->value[0] == '\0') {
-    SIF_LOG_ERROR("settings", "%s: empty path", origin);
+    SIF_LOG_ERROR(TAG, "%s: empty path", origin);
     return SIF_ERR_INVALID;
   }
 

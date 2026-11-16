@@ -35,7 +35,7 @@
 #include <stdbool.h>
 #include <stdio.h>
 
-#define TAG "hdf5"
+#define TAG "io.hdf5"
 
 int sif__hdf5_describe(char* buf, size_t len) {
   snprintf(buf, len, "no HDF5");

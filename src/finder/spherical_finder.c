@@ -25,7 +25,7 @@
 
 SIF_DEFINE_QUICKSORT(sort_radii_desc, sif_real, a > b)
 
-#define TAG "spherical_finder"
+#define TAG "finder.spherical"
 
 /* Coarse grid for the void-vs-void overlap index. */
 #define VOID_CLL_CELLS 32
@@ -206,8 +206,8 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
       break;
     grid->values = sif__fft_grid_backward(ctx.fft_ws);
 
-    status =
-      sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
+    status = sif__finder_scan_candidates(
+      TAG, grid, ctx.mask, threshold, &ctx.candidates);
     if (status != SIF_OK)
       break;
     stats.n_candidates = ctx.candidates.count;

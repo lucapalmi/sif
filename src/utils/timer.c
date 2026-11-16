@@ -8,9 +8,11 @@
 
 #include "sif/utils/logger.h"
 
+#define TAG "utils.timer"
+
 void sif_timer_start(sif_timer_t* timer) {
   if (!timer) {
-    SIF_LOG_WARNING("timer", "start called on NULL timer");
+    SIF_LOG_WARNING(TAG, "start called on NULL timer");
     return;
   }
 
@@ -22,7 +24,7 @@ void sif_timer_start(sif_timer_t* timer) {
 
 void sif_timer_stop(sif_timer_t* timer) {
   if (!timer) {
-    SIF_LOG_WARNING("timer", "stop called on NULL timer");
+    SIF_LOG_WARNING(TAG, "stop called on NULL timer");
     return;
   }
 
@@ -31,7 +33,7 @@ void sif_timer_stop(sif_timer_t* timer) {
 
 double sif_timer_elapsed_ms(const sif_timer_t* timer) {
   if (!timer) {
-    SIF_LOG_WARNING("timer", "elapsed_ms called on NULL timer");
+    SIF_LOG_WARNING(TAG, "elapsed_ms called on NULL timer");
     return -1.0;
   }
 

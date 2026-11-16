@@ -27,7 +27,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "bbks"
+#define TAG "model.bbks"
 
 /* The fit is calibrated for CDM-like spectra; outside this band it degrades. */
 #define BBKS_GAMMA_MIN 0.4

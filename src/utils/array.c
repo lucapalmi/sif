@@ -12,6 +12,8 @@
 #include <math.h>
 #include <stdint.h>
 
+#define TAG "utils.array"
+
 /* Blocks every reduction below splits its input into. Fixed, and deliberately
  * not derived from the thread count: the partition of the array -- and so the
  * order the partial results are combined in -- has to be a property of the
@@ -30,7 +32,7 @@
  */
 static sif_real* alloc_elements(uint64_t size, const char* what) {
   if (size > SIZE_MAX / sizeof(sif_real)) {
-    SIF_LOG_ERROR("array",
+    SIF_LOG_ERROR(TAG,
       "%s of %" PRIu64 " elements exceeds addressable "
       "memory",
       what, size);
@@ -40,7 +42,7 @@ static sif_real* alloc_elements(uint64_t size, const char* what) {
   sif_real* arr = sif_malloc_aligned((size_t)size * sizeof(sif_real));
   if (!arr) {
     SIF_LOG_ERROR(
-      "array", "failed to allocate %s of %" PRIu64 " elements", what, size);
+      TAG, "failed to allocate %s of %" PRIu64 " elements", what, size);
   }
 
   return arr;
@@ -57,7 +59,7 @@ sif_real* sif_array_zeros(uint64_t size) {
    * bandwidth, and it checks the multiplication for overflow on the way. */
   if (size > SIZE_MAX / sizeof(sif_real)) {
     SIF_LOG_ERROR(
-      "array", "%" PRIu64 " elements exceeds addressable memory", size);
+      TAG, "%" PRIu64 " elements exceeds addressable memory", size);
     return NULL;
   }
 
@@ -122,7 +124,7 @@ sif_real* sif_array_arange(
     *out_size = 0;
 
   if (step == (sif_real)0.0) {
-    SIF_LOG_ERROR("array", "arange step size cannot be zero");
+    SIF_LOG_ERROR(TAG, "arange step size cannot be zero");
     return NULL;
   }
 
@@ -139,7 +141,7 @@ sif_real* sif_array_arange(
   const double count = ceil(((double)stop - (double)start) / (double)step);
 
   if (!(count >= 1.0) || count > 9007199254740992.0) {
-    SIF_LOG_ERROR("array",
+    SIF_LOG_ERROR(TAG,
       "arange over [%g, %g) by %g yields no usable "
       "element count",
       (double)start, (double)stop, (double)step);

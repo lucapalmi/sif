@@ -13,7 +13,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define TAG "delta"
+#define TAG "structures.delta"
 
 /*
  * The moment set is one array per quantity, indexed [order][radius] through an

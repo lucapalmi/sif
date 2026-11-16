@@ -19,7 +19,7 @@
 #include <string.h>
 #include <strings.h>
 
-#define TAG "io"
+#define TAG "io.file"
 
 /* The check and what running it needs: the public struct first, so the two
  * share an address. */

@@ -46,7 +46,7 @@
 #include "io/internal.h"
 #include "utils/logger_internal.h"
 
-#define TAG "exodus_finder"
+#define TAG "finder.exodus"
 
 #define BYTE_ORDER_MARK 0x01020304u
 

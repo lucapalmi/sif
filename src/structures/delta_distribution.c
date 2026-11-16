@@ -12,7 +12,7 @@
 
 #include <stdlib.h>
 
-#define TAG "delta"
+#define TAG "structures.delta"
 
 /*
  * One PDF per radius, laid out as n_radii rows of n_bins in a single block.

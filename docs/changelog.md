@@ -7,6 +7,10 @@ Current version: v0.5 release 0
 
 ### Changed
 
+- A log call below the runtime level costs a branch and no longer evaluates
+  its arguments; log lines from concurrent threads no longer interleave
+- Log tags are now `area.domain`, after the header at work (`io.hdf5`,
+  `finder.exodus`); the list is in `logger.h`
 - The size functions (`sif_size_function_svdw`, `_vdn`, `_evm`, `_evm_kernel`,
   `_evm_walk`; pysif `size_function_*`) take the non-linear threshold, strictly
   between -1 and 0, and convert it to the linear barrier inside; the argument
@@ -50,6 +54,9 @@ Current version: v0.5 release 0
   problem as data; `sif-inspect --check FILE` prints it
 - `pysif.io.describe()`, `check()` and `inspect()`: the description and the
   check as dicts, or printed as sif-inspect prints them
+- Swappable log backend: `sif_log_sink_set()` for a custom sink, or
+  `sif_log_sink_stream_set()` / `sif_log_sink_file_set()`; `sif_log_level_set()`
+  changes the level after init
 - Exodus Lagrangian overlap: voids kept apart on R (1 + threshold)^(1/3), the
   catalogue keeping R. Variant `"lagrangian-overlap"`, `overlap_type=` in
   `exodus_raw()`, `SIF_FINDER_LAGRANGIAN_OVERLAP`

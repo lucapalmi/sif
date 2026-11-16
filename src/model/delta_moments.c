@@ -22,7 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "delta"
+#define TAG "model.delta"
 
 /* high_k_fraction above this is reported: past it the moment is dominated by
  * the far end of the tabulated k range rather than by the spectrum. */

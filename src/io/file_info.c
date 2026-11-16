@@ -29,7 +29,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define TAG "io"
+#define TAG "io.file"
 
 /* ------------------------------------------------------------------------ */
 /* formats                                                                   */

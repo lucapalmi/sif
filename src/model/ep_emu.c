@@ -33,7 +33,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define TAG "ep_emu"
+#define TAG "model.ep"
 
 /* Column order of the feature matrix. Must match ep_emu_weights.h, which
  * records the same list as the order the network was fitted in. */

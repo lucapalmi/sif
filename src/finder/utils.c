@@ -127,7 +127,7 @@ static inline uint8_t cell_is_candidate(const sif_real* delta,
   return delta[i] <= threshold && !sif_bitmask_get(mask, i);
 }
 
-int sif__finder_scan_candidates(const sif_grid_t* grid,
+int sif__finder_scan_candidates(const char* tag, const sif_grid_t* grid,
   const sif_bitmask_t* mask, sif_real threshold, sif_candidate_buffer_t* buf) {
 
   const uint64_t total_cells = grid->total_cells;
@@ -179,7 +179,7 @@ int sif__finder_scan_candidates(const sif_grid_t* grid,
       sif_malloc_aligned(new_capacity * sizeof(sif_candidate_t));
     if (!items) {
       SIF_LOG_ERROR(
-        "finder", "failed to allocate %" PRIu64 " candidates", new_capacity);
+        tag, "failed to allocate %" PRIu64 " candidates", new_capacity);
       return SIF_ERR_ALLOC;
     }
     buf->items = items;
@@ -374,8 +374,8 @@ static inline uint64_t chunk_start(int c, uint64_t chunk, uint64_t n_words) {
 
 /* Grows a buffer of `size`-byte items to hold `needed`, discarding what it
  * held: every caller rewrites it whole. */
-static int buffer_reserve(
-  void** items, uint64_t* capacity, uint64_t needed, size_t size) {
+static int buffer_reserve(const char* tag, void** items, uint64_t* capacity,
+  uint64_t needed, size_t size) {
   if (needed <= *capacity)
     return SIF_OK;
 
@@ -386,9 +386,8 @@ static int buffer_reserve(
   const uint64_t new_capacity = (uint64_t)((double)needed * 1.2) + 1;
   *items = sif_malloc_aligned(new_capacity * size);
   if (!*items) {
-    SIF_LOG_ERROR("finder",
-      "failed to allocate %" PRIu64 " entries of %zu bytes", new_capacity,
-      size);
+    SIF_LOG_ERROR(tag, "failed to allocate %" PRIu64 " entries of %zu bytes",
+      new_capacity, size);
     return SIF_ERR_ALLOC;
   }
   *capacity = new_capacity;
@@ -404,9 +403,9 @@ void sif__offset_buffer_free(sif_offset_buffer_t* buf) {
   buf->capacity = 0;
 }
 
-int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
-  sif_bitmask_t* below, sif_real threshold, int survey, int refine,
-  int minima_only, sif_candidate_buffer_t* candidates,
+int sif__finder_scan_refined(const char* tag, sif_grid_t* grid,
+  const sif_bitmask_t* mask, sif_bitmask_t* below, sif_real threshold,
+  int survey, int refine, int minima_only, sif_candidate_buffer_t* candidates,
   sif_offset_buffer_t* offsets, sif_refine_stats_t* stats,
   int (*resmooth)(void*), void* resmooth_arg) {
 
@@ -495,15 +494,15 @@ int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
    * fraction of the candidates, and 2^32 of them is past any grid that fits
    * in memory -- but a wrapped index would point at another void's offset. */
   if (n_minima >= UINT32_MAX) {
-    SIF_LOG_ERROR("finder", "%" PRIu64 " minima: more than %u can be refined",
+    SIF_LOG_ERROR(tag, "%" PRIu64 " minima: more than %u can be refined",
       n_minima, UINT32_MAX - 1);
     return SIF_ERR_RANGE;
   }
 
-  int status = buffer_reserve((void**)&candidates->items,
+  int status = buffer_reserve(tag, (void**)&candidates->items,
     &candidates->capacity, n_below, sizeof(sif_candidate_t));
   if (status == SIF_OK && refine)
-    status = buffer_reserve((void**)&offsets->items, &offsets->capacity,
+    status = buffer_reserve(tag, (void**)&offsets->items, &offsets->capacity,
       n_minima, sizeof(sif_offset_t));
   if (status != SIF_OK)
     return status;
@@ -604,9 +603,10 @@ static inline void place_on_point(const sif_grid_t* grid, double x, double y,
   off->dz = (sif_real)(p[2] - node[2]);
 }
 
-int sif__finder_scan_tracers(const sif_grid_t* grid, const sif_real* x,
-  const sif_real* y, const sif_real* z, uint64_t n_points, sif_real threshold,
-  sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets) {
+int sif__finder_scan_tracers(const char* tag, const sif_grid_t* grid,
+  const sif_real* x, const sif_real* y, const sif_real* z, uint64_t n_points,
+  sif_real threshold, sif_candidate_buffer_t* candidates,
+  sif_offset_buffer_t* offsets) {
 
   uint64_t counts[FINDER_SCAN_CHUNKS];
 
@@ -634,16 +634,16 @@ int sif__finder_scan_tracers(const sif_grid_t* grid, const sif_real* x,
 
   /* The index rides in 32 bits next to the depth, as a minimum's does. */
   if (total >= UINT32_MAX) {
-    SIF_LOG_ERROR("finder", "%" PRIu64 " tracers: more than %u can be refined",
+    SIF_LOG_ERROR(tag, "%" PRIu64 " tracers: more than %u can be refined",
       total, UINT32_MAX - 1);
     return SIF_ERR_RANGE;
   }
 
-  int status = buffer_reserve((void**)&candidates->items,
+  int status = buffer_reserve(tag, (void**)&candidates->items,
     &candidates->capacity, total, sizeof(sif_candidate_t));
   if (status == SIF_OK)
-    status = buffer_reserve(
-      (void**)&offsets->items, &offsets->capacity, total, sizeof(sif_offset_t));
+    status = buffer_reserve(tag, (void**)&offsets->items, &offsets->capacity,
+      total, sizeof(sif_offset_t));
   if (status != SIF_OK)
     return status;
 
@@ -724,7 +724,7 @@ static uint64_t nearest_tracer(
   return who;
 }
 
-int sif__finder_snap_to_tracers(const sif_grid_t* grid,
+int sif__finder_snap_to_tracers(const char* tag, const sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, sif_real threshold,
   sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets) {
 
@@ -736,12 +736,12 @@ int sif__finder_snap_to_tracers(const sif_grid_t* grid,
   if (count == 0)
     return SIF_OK;
   if (count >= UINT32_MAX) {
-    SIF_LOG_ERROR("finder", "%" PRIu64 " minima: more than %u can be refined",
-      count, UINT32_MAX - 1);
+    SIF_LOG_ERROR(tag, "%" PRIu64 " minima: more than %u can be refined", count,
+      UINT32_MAX - 1);
     return SIF_ERR_RANGE;
   }
-  const int status = buffer_reserve(
-    (void**)&offsets->items, &offsets->capacity, count, sizeof(sif_offset_t));
+  const int status = buffer_reserve(tag, (void**)&offsets->items,
+    &offsets->capacity, count, sizeof(sif_offset_t));
   if (status != SIF_OK)
     return status;
 

@@ -20,13 +20,15 @@
 
 #include <stdio.h>
 
+#define TAG "io.fits"
+
 int sif__fits_describe(char* buf, size_t len) {
   snprintf(buf, len, "no cfitsio");
   return 0;
 }
 
 static int refuse(const char* path) {
-  SIF_LOG_ERROR("fits",
+  SIF_LOG_ERROR(TAG,
     "%s: FITS support not built (rebuild with -DSIF_FITS_SUPPORT=ON)",
     path ? path : "(null)");
   return SIF_ERR_UNSUPPORTED;

@@ -21,7 +21,7 @@
 #include <math.h>
 #include <string.h>
 
-#define TAG "nn"
+#define TAG "math.nn"
 
 static int validate(const sif_nn_t* nn, const double* x, double* out) {
 

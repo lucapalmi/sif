@@ -28,7 +28,7 @@
 #include "exodus_internal.h"
 #include "utils.h"
 
-#define TAG "exodus_finder"
+#define TAG "finder.exodus"
 
 /*
  * Marks every grid cell that holds at least one random. Each random lands in

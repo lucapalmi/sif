@@ -34,7 +34,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "vsf_model"
+#define TAG "model.size_function"
 
 /* --- Spherical evolution --- */
 

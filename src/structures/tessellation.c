@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TAG "structures.tessellation"
+
 /*
  * How many samples cell `c` receives, and where its run starts.
  *
@@ -49,12 +51,12 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   uint32_t samples_per_tracer, uint64_t seed, sif_option opt) {
 
   if (!mesh || mesh->n_particles == 0 || !(mesh->box_length > (sif_real)0.0)) {
-    SIF_LOG_ERROR("tessellation", "invalid or empty chain mesh");
+    SIF_LOG_ERROR(TAG, "invalid or empty chain mesh");
     return NULL;
   }
 
   if (samples_per_tracer == 0) {
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "samples_per_tracer must be non-zero; a tessellation nothing was thrown "
       "at has no volumes to report");
     return NULL;
@@ -66,7 +68,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   /* The sample count multiplies the field, so it is the one number here that
    * can turn a reasonable field into an impossible allocation. */
   if (n_samples / (uint64_t)samples_per_tracer != n_tracers) {
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "%" PRIu64 " tracers at %u samples each overflows a sample count",
       n_tracers, samples_per_tracer);
     return NULL;
@@ -84,7 +86,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
     const uint64_t needed =
       (mesh->total_cells + n_tracers - 1) / n_tracers; /* ceil */
 
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "%" PRIu64 " samples cannot be stratified over a %" PRIu64
       "-cell mesh. Either raise samples_per_tracer to at least %" PRIu64
       ", or tessellate on a mesh sized for the tracers rather than this one",
@@ -108,7 +110,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   tess->samples = sif_field_alloc(n_samples);
 
   if (!tess->volumes || !tess->samples) {
-    SIF_LOG_ERROR("tessellation", "OOM allocating the tessellation");
+    SIF_LOG_ERROR(TAG, "OOM allocating the tessellation");
     sif_tessellation_free(tess);
     return NULL;
   }
@@ -118,7 +120,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   if (sif_field_reserve_positions(tess->samples) != SIF_OK ||
       sif_field_reserve_weights(tess->samples) != SIF_OK ||
       (mesh->vx && sif_field_reserve_velocities(tess->samples) != SIF_OK)) {
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "OOM allocating %" PRIu64 " samples (%.2f GiB)", n_samples,
       (double)(n_samples * (mesh->vx ? 7 : 4) * sizeof(sif_real)) /
         (1024.0 * 1024.0 * 1024.0));
@@ -133,7 +135,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   uint64_t* counts = sif_calloc_aligned(n_tracers, sizeof(uint64_t));
 
   if (!owners || !counts) {
-    SIF_LOG_ERROR("tessellation", "OOM allocating the ownership pass");
+    SIF_LOG_ERROR(TAG, "OOM allocating the ownership pass");
     sif_free_aligned(owners);
     sif_free_aligned(counts);
     sif_tessellation_free(tess);
@@ -153,7 +155,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   sif_real* sy = tess->samples->y;
   sif_real* sz = tess->samples->z;
 
-  SIF_LOG_INFO("tessellation",
+  SIF_LOG_INFO(TAG,
     "throwing %" PRIu64 " samples at %" PRIu64 " tracers (%u per tracer)",
     n_samples, n_tracers, samples_per_tracer);
 
@@ -271,14 +273,14 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
     const double missing = (double)n_empty / (double)n_tracers;
 
     if (missing > 1e-3) {
-      SIF_LOG_WARNING("tessellation",
+      SIF_LOG_WARNING(TAG,
         "%" PRIu64 " of %" PRIu64
         " tracers (%.2f%%) caught no sample; their volume reads zero and "
         "their weight is missing from the samples, which shifts every density "
         "normalised to it. Raise samples_per_tracer above %u",
         n_empty, n_tracers, 100.0 * missing, samples_per_tracer);
     } else {
-      SIF_LOG_INFO("tessellation",
+      SIF_LOG_INFO(TAG,
         "%" PRIu64 " of %" PRIu64
         " tracers (%.4f%%) caught no sample; too little weight to matter, but "
         "their volume reads zero",
@@ -286,7 +288,7 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
     }
   }
 
-  SIF_LOG_INFO("tessellation", "tessellation complete");
+  SIF_LOG_INFO(TAG, "tessellation complete");
   return tess;
 }
 
@@ -295,19 +297,19 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
  */
 static int mesh_inputs_valid(const sif_tessellation_t* tess, uint32_t n_cells) {
   if (!tess || !tess->samples) {
-    SIF_LOG_ERROR("tessellation", "invalid tessellation");
+    SIF_LOG_ERROR(TAG, "invalid tessellation");
     return 0;
   }
 
   if (tess->samples->n_particles == 0) {
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "these samples have already been consumed by "
       "sif_chain_mesh_alloc_tessellation_consume()");
     return 0;
   }
 
   if (n_cells == 0) {
-    SIF_LOG_ERROR("tessellation", "n_cells must be non-zero");
+    SIF_LOG_ERROR(TAG, "n_cells must be non-zero");
     return 0;
   }
 
@@ -337,12 +339,12 @@ int sif_grid_assign_cic_tessellation(
   sif_grid_t* grid, const sif_tessellation_t* tess) {
 
   if (!grid || !tess || !tess->samples) {
-    SIF_LOG_ERROR("tessellation", "invalid grid or tessellation");
+    SIF_LOG_ERROR(TAG, "invalid grid or tessellation");
     return SIF_ERR_INVALID;
   }
 
   if (tess->samples->n_particles == 0) {
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "these samples have already been consumed by "
       "sif_chain_mesh_alloc_tessellation_consume(); there is nothing left to "
       "deposit");
@@ -353,7 +355,7 @@ int sif_grid_assign_cic_tessellation(
    * would not fail -- the samples all lie inside either one -- it would just
    * put the density on the wrong scale. */
   if (grid->box_length != tess->box_length) {
-    SIF_LOG_ERROR("tessellation",
+    SIF_LOG_ERROR(TAG,
       "the grid spans a box of %g but the tessellation was built in one of %g",
       (double)grid->box_length, (double)tess->box_length);
     return SIF_ERR_INVALID;

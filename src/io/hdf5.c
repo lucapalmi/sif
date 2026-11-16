@@ -43,7 +43,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
-#define TAG "hdf5"
+#define TAG "io.hdf5"
 
 /* What the root of every sif file says about itself. The version is of the
  * layout, not of the library: it moves when a reader of this version could no

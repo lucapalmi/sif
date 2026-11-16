@@ -13,6 +13,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TAG "structures.cell_linked_list"
+
 /*
  * Item ids are stored as int32_t (-1 marks "empty"), so this is the hard cap.
  *
@@ -60,7 +62,7 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
   sif_real box_length, uint64_t initial_capacity, sif_option opt) {
 
   if (n_cells == 0 || !(box_length > 0.0f)) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "invalid geometry (n_cells=%u, box_length=%g)", n_cells,
       (double)box_length);
     return NULL;
@@ -70,7 +72,7 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
     initial_capacity = 1;
 
   if (initial_capacity > CLL_MAX_CAPACITY) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "requested capacity %" PRIu64 " exceeds the int32 item limit %" PRIu64,
       initial_capacity, CLL_MAX_CAPACITY);
     return NULL;
@@ -78,7 +80,7 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
 
   sif_cell_linked_list_t* cll = malloc(sizeof(sif_cell_linked_list_t));
   if (!cll) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate linked list (%zu bytes)",
       sizeof(sif_cell_linked_list_t));
     return NULL;
@@ -95,7 +97,7 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
   cll->next = sif_malloc_aligned(cll->capacity * sizeof(int32_t));
 
   if (!cll->head || !cll->next) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate head/next arrays (total: %" PRIu64 " bytes)",
       (cll->total_cells + cll->capacity) * sizeof(int32_t));
     sif_free_aligned(cll->head);
@@ -113,7 +115,7 @@ sif_cell_linked_list_t* sif_cell_linked_list_alloc(uint32_t n_cells,
    * always overwritten. */
   memset(cll->head, 0xFF, cll->total_cells * sizeof(int32_t));
 
-  SIF_LOG_TRACE("cell_linked_list",
+  SIF_LOG_TRACE(TAG,
     "initialised with capacity %" PRIu64 " (%s boundaries)", cll->capacity,
     cll->periodic ? "periodic" : "open");
 
@@ -139,7 +141,7 @@ int sif_cell_linked_list_ensure_capacity(
     return SIF_OK;
 
   if (required_capacity > CLL_MAX_CAPACITY) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "required capacity %" PRIu64 " exceeds the int32 item limit %" PRIu64,
       required_capacity, CLL_MAX_CAPACITY);
     return SIF_ERR_RANGE;
@@ -158,7 +160,7 @@ int sif_cell_linked_list_ensure_capacity(
    * and does not change with the number of items in the list. */
   int32_t* new_next = sif_malloc_aligned(new_capacity * sizeof(int32_t));
   if (!new_next) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "failed to reallocate next array (%" PRIu64 " bytes)",
       new_capacity * sizeof(int32_t));
     return SIF_ERR_ALLOC;
@@ -171,7 +173,7 @@ int sif_cell_linked_list_ensure_capacity(
   cll->capacity = new_capacity;
 
   SIF_LOG_TRACE(
-    "cell_linked_list", "capacity expanded to %" PRIu64, cll->capacity);
+    TAG, "capacity expanded to %" PRIu64, cll->capacity);
 
   return SIF_OK;
 }
@@ -183,7 +185,7 @@ int sif_cell_linked_list_insert(sif_cell_linked_list_t* cll, uint64_t item_idx,
     return SIF_ERR_INVALID;
 
   if (item_idx >= cll->capacity) {
-    SIF_LOG_ERROR("cell_linked_list",
+    SIF_LOG_ERROR(TAG,
       "item index %" PRIu64 " is past capacity %" PRIu64, item_idx,
       cll->capacity);
     return SIF_ERR_RANGE;

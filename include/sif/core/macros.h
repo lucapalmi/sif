@@ -749,9 +749,14 @@ static inline uint32_t sif__ctz_u64(uint64_t x) {
 #  define SIF_ATOMIC_OR_U64(p, v) __atomic_fetch_or((p), (v), __ATOMIC_RELAXED)
 #  define SIF_ATOMIC_AND_U64(p, v)                                             \
     __atomic_fetch_and((p), (v), __ATOMIC_RELAXED)
+/** @brief Add @p v to the int at @p p, relaxed; a plain add without the
+ *  builtins. */
+#  define SIF_ATOMIC_ADD_INT(p, v)                                             \
+    ((void)__atomic_fetch_add((p), (v), __ATOMIC_RELAXED))
 #  define SIF_HAS_ATOMIC_BUILTINS 1
 #else
-#  define SIF_HAS_ATOMIC_BUILTINS 0
+#  define SIF_ATOMIC_ADD_INT(p, v) ((void)(*(p) += (v)))
+#  define SIF_HAS_ATOMIC_BUILTINS  0
 #endif
 /** @} */
 

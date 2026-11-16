@@ -17,6 +17,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TAG "measure.profiles"
+
 /*
  * Elements per per-thread scratch row, rounded up so each thread's row starts
  * on its own cache line.
@@ -98,7 +100,7 @@ static int validate_inputs(const sif_catalogue_t* cat,
   const sif_velocity_profiles_t* const* out_vel) {
 
   if (!cat || cat->n_voids == 0) {
-    SIF_LOG_ERROR("profiles", "no voids to profile");
+    SIF_LOG_ERROR(TAG, "no voids to profile");
     return SIF_ERR_INVALID;
   }
 
@@ -106,25 +108,25 @@ static int validate_inputs(const sif_catalogue_t* cat,
    * both the tracer count and the volume it spreads over. An empty mesh, or
    * one that cannot name its box, has no mean density to normalise by. */
   if (!mesh || mesh->n_particles == 0 || !(mesh->box_length > (sif_real)0.0)) {
-    SIF_LOG_ERROR("profiles", "invalid or empty chain mesh");
+    SIF_LOG_ERROR(TAG, "invalid or empty chain mesh");
     return SIF_ERR_INVALID;
   }
 
   if (!out_dens && !out_vel) {
     SIF_LOG_ERROR(
-      "profiles", "both outputs are NULL; there is nothing to compute");
+      TAG, "both outputs are NULL; there is nothing to compute");
     return SIF_ERR_INVALID;
   }
 
   /* n_bins divides ext, so a zero turns the bin width into 0 and the bin
    * index into an undefined cast rather than into a wrong answer. */
   if (n_bins == 0) {
-    SIF_LOG_ERROR("profiles", "n_bins must be non-zero");
+    SIF_LOG_ERROR(TAG, "n_bins must be non-zero");
     return SIF_ERR_INVALID;
   }
 
   if (out_vel && !mesh->vx) {
-    SIF_LOG_ERROR("profiles",
+    SIF_LOG_ERROR(TAG,
       "velocity profiles were requested but the mesh carries no velocities");
     return SIF_ERR_INVALID;
   }
@@ -359,7 +361,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
   if (status != SIF_OK)
     return status;
   if (cat->units != SIF_COORDINATES_CARTESIAN) {
-    SIF_LOG_ERROR("profiles",
+    SIF_LOG_ERROR(TAG,
       "the catalogue holds sky coordinates; profiles are measured around "
       "Cartesian centres, before sif_catalogue_to_sky()");
     return SIF_ERR_INVALID;
@@ -380,7 +382,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
 
   const sif_real box_length = mesh->box_length;
 
-  SIF_LOG_INFO("profiles",
+  SIF_LOG_INFO(TAG,
     "computing %s profiles for %" PRIu64 " voids out to %g void radii",
     differential ? "differential" : "cumulative", cat->n_voids, (double)ext);
 
@@ -391,7 +393,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
     *out_dens =
       sif__density_profiles_alloc(cat->n_voids, n_bins, ext, differential);
     if (!*out_dens) {
-      SIF_LOG_ERROR("profiles", "OOM allocating density profiles");
+      SIF_LOG_ERROR(TAG, "OOM allocating density profiles");
       return SIF_ERR_ALLOC;
     }
   }
@@ -399,7 +401,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
   if (compute_vel && *out_vel == NULL) {
     *out_vel = sif__velocity_profiles_alloc(cat->n_voids, n_bins, ext);
     if (!*out_vel) {
-      SIF_LOG_ERROR("profiles", "OOM allocating velocity profiles");
+      SIF_LOG_ERROR(TAG, "OOM allocating velocity profiles");
       status = SIF_ERR_ALLOC;
       goto fail;
     }
@@ -411,7 +413,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
   if (compute_dens) {
     bin_vols = sif_malloc_aligned(n_bins * sizeof(sif_real));
     if (!bin_vols) {
-      SIF_LOG_ERROR("profiles", "OOM allocating the bin volumes");
+      SIF_LOG_ERROR(TAG, "OOM allocating the bin volumes");
       status = SIF_ERR_ALLOC;
       goto fail;
     }
@@ -473,7 +475,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
     sif_malloc_aligned((size_t)n_threads * row_count * sizeof(uint64_t));
 
   if (!scratch_mass || !scratch_vrad || !scratch_count) {
-    SIF_LOG_ERROR("profiles", "OOM allocating the per-thread bin scratch");
+    SIF_LOG_ERROR(TAG, "OOM allocating the per-thread bin scratch");
     sif_free_aligned(scratch_mass);
     sif_free_aligned(scratch_vrad);
     sif_free_aligned(scratch_count);
@@ -654,7 +656,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
   sif_free_aligned(scratch_count);
   sif_free_aligned(bin_vols);
 
-  SIF_LOG_INFO("profiles", "profile computation completed");
+  SIF_LOG_INFO(TAG, "profile computation completed");
   return SIF_OK;
 
 fail:

@@ -25,7 +25,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define TAG "ep_emu"
+#define TAG "model.ep"
 
 /* As in ep_model.py. */
 #define VIC_RATE_FLOOR   1e-300

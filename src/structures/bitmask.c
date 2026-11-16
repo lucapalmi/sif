@@ -11,15 +11,17 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TAG "structures.bitmask"
+
 sif_bitmask_t* sif_bitmask_alloc(uint64_t n_bits) {
   if (n_bits == 0) {
-    SIF_LOG_ERROR("bitmask", "cannot allocate a zero-length bitmask");
+    SIF_LOG_ERROR(TAG, "cannot allocate a zero-length bitmask");
     return NULL;
   }
 
   sif_bitmask_t* mask = malloc(sizeof(sif_bitmask_t));
   if (!mask) {
-    SIF_LOG_ERROR("bitmask", "failed to allocate bitmask (%zu bytes)",
+    SIF_LOG_ERROR(TAG, "failed to allocate bitmask (%zu bytes)",
       sizeof(sif_bitmask_t));
     return NULL;
   }
@@ -35,7 +37,7 @@ sif_bitmask_t* sif_bitmask_alloc(uint64_t n_bits) {
 
   if (!mask->words) {
     SIF_LOG_ERROR(
-      "bitmask", "failed to allocate %" PRIu64 " mask words", mask->n_words);
+      TAG, "failed to allocate %" PRIu64 " mask words", mask->n_words);
     free(mask);
     return NULL;
   }
@@ -53,7 +55,7 @@ void sif_bitmask_free(sif_bitmask_t* mask) {
 
 void sif_bitmask_clear_all(sif_bitmask_t* mask) {
   if (!mask || !mask->words) {
-    SIF_LOG_ERROR("bitmask", "invalid bitmask");
+    SIF_LOG_ERROR(TAG, "invalid bitmask");
     return;
   }
 
@@ -62,7 +64,7 @@ void sif_bitmask_clear_all(sif_bitmask_t* mask) {
 
 uint64_t sif_bitmask_count_set(const sif_bitmask_t* mask) {
   if (!mask || !mask->words) {
-    SIF_LOG_ERROR("bitmask", "invalid bitmask");
+    SIF_LOG_ERROR(TAG, "invalid bitmask");
     return 0;
   }
 

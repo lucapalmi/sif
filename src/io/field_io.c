@@ -24,6 +24,8 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#define TAG "io.field"
+
 /* Columns a format string may describe, and the longest input line the parser
  * accepts. A row wider than this is read in pieces and its tail parses as a
  * row of its own, so the limit has to be generous. */
@@ -35,7 +37,7 @@
 #define CHECK_WRITE(ptr, size, count, stream, msg)                             \
   do {                                                                         \
     if (fwrite((ptr), (size), (count), (stream)) != (count)) {                 \
-      SIF_LOG_ERROR("xfield", "failed to write %s", (msg));                    \
+      SIF_LOG_ERROR(TAG, "failed to write %s", (msg));                    \
       fclose(file);                                                            \
       return SIF_ERR_IO;                                                       \
     }                                                                          \
@@ -44,7 +46,7 @@
 #define CHECK_PREAD(fd, dest, bytes, offset, msg, file_ptr)                    \
   do {                                                                         \
     if (sif__io_pread_parallel((fd), (dest), (bytes), (offset)) != SIF_OK) {   \
-      SIF_LOG_ERROR("xfield", "parallel read error for %s", (msg));            \
+      SIF_LOG_ERROR(TAG, "parallel read error for %s", (msg));            \
       fclose(file_ptr);                                                        \
       return SIF_ERR_IO;                                                       \
     }                                                                          \
@@ -55,7 +57,7 @@
 int sif_field_write(
   const char* filepath, const sif_field_t* field, double box_length) {
   if (!filepath || !field) {
-    SIF_LOG_ERROR("xfield", "invalid arguments");
+    SIF_LOG_ERROR(TAG, "invalid arguments");
     return SIF_ERR_INVALID;
   }
 
@@ -63,18 +65,18 @@ int sif_field_write(
    * has nothing to write. Checked here rather than trusted, because the very
    * next thing this function does is hand the pointers to the checksum. */
   if (field->n_particles == 0 || !field->x || !field->y || !field->z) {
-    SIF_LOG_ERROR("xfield", "field carries no positions to write");
+    SIF_LOG_ERROR(TAG, "field carries no positions to write");
     return SIF_ERR_INVALID;
   }
 
   /* The format has nowhere to say what the positions are, so a field of sky
    * coordinates would read back as one of Cartesian positions. */
-  if (sif__field_require_cartesian(field, "xfield", "field") != SIF_OK)
+  if (sif__field_require_cartesian(field, TAG, "field") != SIF_OK)
     return SIF_ERR_INVALID;
 
   FILE* file = fopen(filepath, "wb");
   if (!file) {
-    SIF_LOG_ERROR("xfield", "failed to open %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to open %s", filepath);
     return SIF_ERR_IO;
   }
 
@@ -130,11 +132,11 @@ int sif_field_write(
    * file it believes is complete. */
   const bool ok = (ferror(file) == 0);
   if (fclose(file) != 0 || !ok) {
-    SIF_LOG_ERROR("xfield", "failed to flush %s to disk", filepath);
+    SIF_LOG_ERROR(TAG, "failed to flush %s to disk", filepath);
     return SIF_ERR_IO;
   }
 
-  SIF_LOG_INFO("xfield", "wrote %" PRIu64 " particles to %s", n, filepath);
+  SIF_LOG_INFO(TAG, "wrote %" PRIu64 " particles to %s", n, filepath);
   return SIF_OK;
 }
 
@@ -149,14 +151,14 @@ int sif_field_write(
 static int header_validate(
   const sif_xfield_header_t* header, const char* filepath) {
   if (strncmp(header->magic, SIF_XFIELD_MAGIC, 4) != 0) {
-    SIF_LOG_ERROR("xfield", "%s is not a valid xfield binary", filepath);
+    SIF_LOG_ERROR(TAG, "%s is not a valid xfield binary", filepath);
     return SIF_ERR_IO;
   }
 
   /* Older files stay readable; newer ones cannot be, since the layout they
    * describe is one this build has never seen. */
   if (header->version > SIF_XFIELD_VERSION) {
-    SIF_LOG_ERROR("xfield",
+    SIF_LOG_ERROR(TAG,
       "%s is version %u, but this build reads up to version %u", filepath,
       header->version, (unsigned)SIF_XFIELD_VERSION);
     return SIF_ERR_IO;
@@ -166,7 +168,7 @@ static int header_validate(
    * a conversion but a reinterpretation. Refused rather than adapted to. */
   const uint32_t current_is_double = (sizeof(sif_real) == 8) ? 1u : 0u;
   if (header->is_double != current_is_double) {
-    SIF_LOG_ERROR("xfield", "%s is %s, this build is %s", filepath,
+    SIF_LOG_ERROR(TAG, "%s is %s, this build is %s", filepath,
       header->is_double ? "FP64" : "FP32", current_is_double ? "FP64" : "FP32");
     return SIF_ERR_IO;
   }
@@ -180,13 +182,13 @@ int sif_field_read_into(sif_field_t* field, const char* filepath) {
 
   FILE* file = fopen(filepath, "rb");
   if (!file) {
-    SIF_LOG_ERROR("xfield", "could not open %s for reading", filepath);
+    SIF_LOG_ERROR(TAG, "could not open %s for reading", filepath);
     return SIF_ERR_IO;
   }
 
   sif_xfield_header_t header;
   if (fread(&header, sizeof(sif_xfield_header_t), 1, file) != 1) {
-    SIF_LOG_ERROR("xfield", "failed to read header from %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to read header from %s", filepath);
     fclose(file);
     return SIF_ERR_IO;
   }
@@ -200,7 +202,7 @@ int sif_field_read_into(sif_field_t* field, const char* filepath) {
    * agree exactly -- there is nowhere to put a longer file and no way to fill
    * a shorter one. */
   if (header.n_particles != field->n_particles) {
-    SIF_LOG_ERROR("xfield",
+    SIF_LOG_ERROR(TAG,
       "geometry mismatch: %s has %" PRIu64
       " particles, target field has %" PRIu64,
       filepath, header.n_particles, field->n_particles);
@@ -209,13 +211,13 @@ int sif_field_read_into(sif_field_t* field, const char* filepath) {
   }
 
   if (header.has_velocities && !field->vx) {
-    SIF_LOG_ERROR("xfield", "target field lacks velocity allocation");
+    SIF_LOG_ERROR(TAG, "target field lacks velocity allocation");
     fclose(file);
     return SIF_ERR_IO;
   }
 
   if (header.has_weights && !field->weights) {
-    SIF_LOG_ERROR("xfield", "target field lacks a weight allocation");
+    SIF_LOG_ERROR(TAG, "target field lacks a weight allocation");
     fclose(file);
     return SIF_ERR_IO;
   }
@@ -277,12 +279,12 @@ int sif_field_read_into(sif_field_t* field, const char* filepath) {
 
     const uint32_t got = sif_crc32_final(crc);
     if (got != header.crc32) {
-      SIF_LOG_ERROR("xfield", "%s is corrupt: checksum %08x, expected %08x",
+      SIF_LOG_ERROR(TAG, "%s is corrupt: checksum %08x, expected %08x",
         filepath, got, header.crc32);
       return SIF_ERR_IO;
     }
   } else {
-    SIF_LOG_WARNING("xfield",
+    SIF_LOG_WARNING(TAG,
       "%s is a version %u file and carries no checksum; contents cannot be "
       "validated",
       filepath, header.version);
@@ -298,13 +300,13 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
 
   FILE* file = fopen(filepath, "rb");
   if (!file) {
-    SIF_LOG_ERROR("xfield", "could not open %s for reading", filepath);
+    SIF_LOG_ERROR(TAG, "could not open %s for reading", filepath);
     return NULL;
   }
 
   sif_xfield_header_t header;
   if (fread(&header, sizeof(sif_xfield_header_t), 1, file) != 1) {
-    SIF_LOG_ERROR("xfield", "failed to read header from %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to read header from %s", filepath);
     fclose(file);
     return NULL;
   }
@@ -317,7 +319,7 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
     return NULL;
 
   if (header.n_particles == 0) {
-    SIF_LOG_ERROR("xfield", "%s holds no particles", filepath);
+    SIF_LOG_ERROR(TAG, "%s holds no particles", filepath);
     return NULL;
   }
 
@@ -332,19 +334,19 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
    * goes through an intermediate copy. Only the blocks the header announces
    * are reserved, so the field ends up carrying exactly what the file did. */
   if (sif_field_reserve_positions(field) != SIF_OK) {
-    SIF_LOG_ERROR("xfield", "OOM allocating position block");
+    SIF_LOG_ERROR(TAG, "OOM allocating position block");
     sif_field_free(field);
     return NULL;
   }
 
   if (header.has_velocities && sif_field_reserve_velocities(field) != SIF_OK) {
-    SIF_LOG_ERROR("xfield", "OOM allocating velocity block");
+    SIF_LOG_ERROR(TAG, "OOM allocating velocity block");
     sif_field_free(field);
     return NULL;
   }
 
   if (header.has_weights && sif_field_reserve_weights(field) != SIF_OK) {
-    SIF_LOG_ERROR("xfield", "OOM allocating weights block");
+    SIF_LOG_ERROR(TAG, "OOM allocating weights block");
     sif_field_free(field);
     return NULL;
   }
@@ -354,7 +356,7 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
     return NULL;
   }
 
-  SIF_LOG_INFO("xfield", "loaded %" PRIu64 " particles from %s",
+  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " particles from %s",
     header.n_particles, filepath);
   return field;
 }
@@ -412,7 +414,7 @@ typedef struct {
 static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
   memset(out, 0, sizeof(*out));
   if (!fmt) {
-    SIF_LOG_ERROR("io", "no column format given");
+    SIF_LOG_ERROR(TAG, "no column format given");
     return SIF_ERR_INVALID;
   }
 
@@ -444,7 +446,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       break;
     case 'r':
       if (tolower((unsigned char)p[1]) != 'a') {
-        SIF_LOG_ERROR("io",
+        SIF_LOG_ERROR(TAG,
           "format '%s': position %ld: 'r' is not a column name (ra?)", fmt, at);
         return SIF_ERR_INVALID;
       }
@@ -456,7 +458,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
     case 'd':
       if (tolower((unsigned char)p[1]) != 'e' ||
           tolower((unsigned char)p[2]) != 'c') {
-        SIF_LOG_ERROR("io",
+        SIF_LOG_ERROR(TAG,
           "format '%s': position %ld: 'd' is not a column name (dec?)", fmt,
           at);
         return SIF_ERR_INVALID;
@@ -483,7 +485,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       else if (d == 'z')
         col.kind = COL_VZ;
       else {
-        SIF_LOG_ERROR("io",
+        SIF_LOG_ERROR(TAG,
           "format '%s': position %ld: 'v' is not a column name (vx vy vz?)",
           fmt, at);
         return SIF_ERR_INVALID;
@@ -495,7 +497,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       p++;
       if (isdigit((unsigned char)*p)) {
         if (!allow_widths) {
-          SIF_LOG_ERROR("io",
+          SIF_LOG_ERROR(TAG,
             "format '%s': position %ld: skip width (*N) in a text format; "
             "'*' skips one column",
             fmt, at);
@@ -504,7 +506,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
         char* end;
         const unsigned long width = strtoul(p, &end, 10);
         if (width == 0 || width > MAX_SKIP_WIDTH) {
-          SIF_LOG_ERROR("io",
+          SIF_LOG_ERROR(TAG,
             "format '%s': position %ld: skip width not in 1..%u bytes", fmt, at,
             MAX_SKIP_WIDTH);
           return SIF_ERR_INVALID;
@@ -514,19 +516,19 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
       }
       break;
     case 'm':
-      SIF_LOG_ERROR("io",
+      SIF_LOG_ERROR(TAG,
         "format '%s': position %ld: 'm' is no longer a column name (weight "
         "is 'w')",
         fmt, at);
       return SIF_ERR_INVALID;
     case 'u':
-      SIF_LOG_ERROR("io",
+      SIF_LOG_ERROR(TAG,
         "format '%s': position %ld: 'u' is no longer a column name "
         "(velocities are 'vx vy vz')",
         fmt, at);
       return SIF_ERR_INVALID;
     default:
-      SIF_LOG_ERROR("io",
+      SIF_LOG_ERROR(TAG,
         "format '%s': position %ld: '%c' is not a column name (x y z | ra "
         "dec z, vx vy vz, w, *)",
         fmt, at, *p);
@@ -536,14 +538,14 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
     /* x and y are positions, ra and dec sky coordinates: a format is one or
      * the other, and z goes with either -- a length, or the redshift. */
     if (named_xy && named_radec) {
-      SIF_LOG_ERROR("io", "format '%s': mixes x y with ra dec", fmt);
+      SIF_LOG_ERROR(TAG, "format '%s': mixes x y with ra dec", fmt);
       return SIF_ERR_INVALID;
     }
 
     if (col.kind != COL_SKIP) {
       const unsigned bit = 1u << col.kind;
       if (named & bit) {
-        SIF_LOG_ERROR("io", "format '%s': '%s' named twice", fmt,
+        SIF_LOG_ERROR(TAG, "format '%s': '%s' named twice", fmt,
           name ? name : COL_NAMES[col.kind]);
         return SIF_ERR_INVALID;
       }
@@ -551,7 +553,7 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
     }
 
     if (out->n_cols == MAX_COLS) {
-      SIF_LOG_ERROR("io", "format '%s': more than %d columns", fmt, MAX_COLS);
+      SIF_LOG_ERROR(TAG, "format '%s': more than %d columns", fmt, MAX_COLS);
       return SIF_ERR_INVALID;
     }
     out->cols[out->n_cols++] = col;
@@ -568,18 +570,18 @@ static int format_parse(const char* fmt, bool allow_widths, format_t* out) {
    * one block each, so naming two of the three would allocate the third and
    * never write it. */
   if (out->has_pos && (named & pos) != pos) {
-    SIF_LOG_ERROR("io", "format '%s': position named in part", fmt);
+    SIF_LOG_ERROR(TAG, "format '%s': position named in part", fmt);
     return SIF_ERR_INVALID;
   }
   if (out->has_vel && (named & vel) != vel) {
-    SIF_LOG_ERROR("io", "format '%s': velocity named in part", fmt);
+    SIF_LOG_ERROR(TAG, "format '%s': velocity named in part", fmt);
     return SIF_ERR_INVALID;
   }
 
   /* A format of skips alone would consume the file and write nothing, leaving
    * a field whose memory reads as loaded. */
   if (named == 0) {
-    SIF_LOG_ERROR("io", "format '%s': no column to read", fmt);
+    SIF_LOG_ERROR(TAG, "format '%s': no column to read", fmt);
     return SIF_ERR_INVALID;
   }
 
@@ -600,11 +602,11 @@ static int format_reserve(
   sif_field_t* field, const format_t* f, const char* fmt) {
   if (!f->has_pos && !field->x) {
     SIF_LOG_ERROR(
-      "io", "format '%s': no positions, and the field has none", fmt);
+      TAG, "format '%s': no positions, and the field has none", fmt);
     return SIF_ERR_INVALID;
   }
   if (!f->has_pos && (field->state_flags & SIF_FIELD_STATE_MORTON_SORTED)) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "format '%s': no positions, and the field is Morton-sorted (not in "
       "file order); read it before sorting, or with the positions",
       fmt);
@@ -749,7 +751,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   const char* fmt, char delimiter, uint32_t skip_header) {
 
   if (!field || !filepath || !fmt) {
-    SIF_LOG_ERROR("io", "invalid field, path or format string");
+    SIF_LOG_ERROR(TAG, "invalid field, path or format string");
     return SIF_ERR_INVALID;
   }
 
@@ -758,7 +760,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   if (status != SIF_OK)
     return status;
 
-  status = sif__io_check_readable("io", filepath, NULL);
+  status = sif__io_check_readable(TAG, filepath, NULL);
   if (status != SIF_OK)
     return status;
 
@@ -768,7 +770,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   const bool sized_here = field->n_particles == 0;
   if (sized_here) {
     uint64_t rows;
-    status = sif__io_ascii_row_count("io", filepath, skip_header, &rows);
+    status = sif__io_ascii_row_count(TAG, filepath, skip_header, &rows);
     if (status != SIF_OK)
       return status;
     field->n_particles = rows;
@@ -780,7 +782,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
 
   FILE* file = fopen(filepath, "r");
   if (!file)
-    return sif__io_os_error("io", filepath, NULL, errno);
+    return sif__io_os_error(TAG, filepath, NULL, errno);
 
   char line[LINE_CAP];
   uint64_t lineno = 0;
@@ -798,7 +800,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
      * parsed as a row of its own. */
     const size_t len = strlen(line);
     if (len == sizeof(line) - 1 && line[len - 1] != '\n' && !feof(file)) {
-      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": line longer than %d characters",
+      SIF_LOG_ERROR(TAG, "%s:%" PRIu64 ": line longer than %d characters",
         filepath, lineno, LINE_CAP - 2);
       status = SIF_ERR_IO;
       break;
@@ -831,10 +833,10 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
         continue;
       if (!ok) {
         if (tok_len == 0)
-          SIF_LOG_ERROR("io", "%s:%" PRIu64 ": column %d (%s): empty", filepath,
+          SIF_LOG_ERROR(TAG, "%s:%" PRIu64 ": column %d (%s): empty", filepath,
             lineno, col + 1, col_label(&f, f.cols[col].kind));
         else
-          SIF_LOG_ERROR("io",
+          SIF_LOG_ERROR(TAG,
             "%s:%" PRIu64 ": column %d (%s): '%.*s' is not a number", filepath,
             lineno, col + 1, col_label(&f, f.cols[col].kind),
             tok_len > 32 ? 32 : tok_len, tok);
@@ -847,7 +849,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
       break;
 
     if (col < f.n_cols) {
-      SIF_LOG_ERROR("io", "%s:%" PRIu64 ": %d column%s, format '%s' needs %d",
+      SIF_LOG_ERROR(TAG, "%s:%" PRIu64 ": %d column%s, format '%s' needs %d",
         filepath, lineno, col, col == 1 ? "" : "s", fmt, f.n_cols);
       status = SIF_ERR_IO;
       break;
@@ -858,13 +860,13 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
   }
 
   if (status == SIF_OK && ferror(file))
-    status = sif__io_os_error("io", filepath, "read", errno);
+    status = sif__io_os_error(TAG, filepath, "read", errno);
   fclose(file);
   if (status != SIF_OK)
     return status;
 
   if (loaded == 0) {
-    SIF_LOG_ERROR("io", "%s: no data rows", filepath);
+    SIF_LOG_ERROR(TAG, "%s: no data rows", filepath);
     return SIF_ERR_IO;
   }
 
@@ -872,7 +874,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
     /* Only a field sized here can be short of its count without the file
      * being short of rows: the count included the blank and comment lines. */
     if (!sized_here) {
-      SIF_LOG_ERROR("io",
+      SIF_LOG_ERROR(TAG,
         "%s: %" PRIu64 " data rows, field has %" PRIu64 " particles", filepath,
         loaded, field->n_particles);
       return SIF_ERR_IO;
@@ -880,12 +882,12 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
     field->n_particles = loaded;
   }
 
-  SIF_LOG_INFO("io", "loaded %" PRIu64 " particles from %s", loaded, filepath);
+  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " particles from %s", loaded, filepath);
   if (skipped)
     SIF_LOG_DEBUG(
-      "io", "%s: %" PRIu64 " blank or comment lines", filepath, skipped);
+      TAG, "%s: %" PRIu64 " blank or comment lines", filepath, skipped);
   if (has_more)
-    SIF_LOG_WARNING("io",
+    SIF_LOG_WARNING(TAG,
       "%s: rows after line %" PRIu64 " not read (field holds %" PRIu64 ")",
       filepath, last_row, loaded);
 
@@ -915,7 +917,7 @@ int sif_field_check_ascii(const char* filepath, const char* fmt, char delimiter,
   uint32_t skip_header, FILE* report) {
 
   if (!filepath) {
-    SIF_LOG_ERROR("io", "sif_field_check_ascii: NULL path");
+    SIF_LOG_ERROR(TAG, "sif_field_check_ascii: NULL path");
     return SIF_ERR_INVALID;
   }
   if (delimiter == '\0')
@@ -927,15 +929,15 @@ int sif_field_check_ascii(const char* filepath, const char* fmt, char delimiter,
     return SIF_ERR_INVALID;
 
   uint64_t bytes = 0;
-  int status = sif__io_check_readable("io", filepath, &bytes);
+  int status = sif__io_check_readable(TAG, filepath, &bytes);
   if (status != SIF_OK)
     return status;
 
   FILE* file = fopen(filepath, "r");
   if (!file)
-    return sif__io_os_error("io", filepath, NULL, errno);
+    return sif__io_os_error(TAG, filepath, NULL, errno);
 
-  sif__io_problems_t pr = {"io", 0};
+  sif__io_problems_t pr = {TAG, 0};
   sif__io_stats_t stats[CHECK_COLS];
   memset(stats, 0, sizeof(stats));
 
@@ -1048,7 +1050,7 @@ int sif_field_check_ascii(const char* filepath, const char* fmt, char delimiter,
   free(line);
   fclose(file);
   if (read_error)
-    return sif__io_os_error("io", filepath, "read", err);
+    return sif__io_os_error(TAG, filepath, "read", err);
 
   if (lineno == 0)
     sif__io_problem(&pr, "%s: empty file", filepath);
@@ -1130,12 +1132,12 @@ static bool binary_slot_ok(int value, int first, int n, const char* slot) {
     break;
   }
   if (meant && strcmp(meant, slot) != 0)
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "the %s argument was given a %s option (0x%x); are two arguments "
       "swapped?",
       slot, meant, value);
   else
-    SIF_LOG_ERROR("io", "0x%x is not a valid %s option", value, slot);
+    SIF_LOG_ERROR(TAG, "0x%x is not a valid %s option", value, slot);
   return false;
 }
 
@@ -1221,7 +1223,7 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
   sif_binary_endian_t endian, uint64_t header_bytes) {
 
   if (!field || !filepath || !fmt) {
-    SIF_LOG_ERROR("io", "invalid field, path or format string");
+    SIF_LOG_ERROR(TAG, "invalid field, path or format string");
     return SIF_ERR_INVALID;
   }
 
@@ -1247,12 +1249,12 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
 
   struct stat st;
   if (stat(filepath, &st) != 0 || !S_ISREG(st.st_mode)) {
-    SIF_LOG_ERROR("io", "could not open %s", filepath);
+    SIF_LOG_ERROR(TAG, "could not open %s", filepath);
     return SIF_ERR_IO;
   }
   const uint64_t file_bytes = (uint64_t)st.st_size;
   if (file_bytes < header_bytes) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "%s is %" PRIu64 " bytes, shorter than its %" PRIu64 "-byte header",
       filepath, file_bytes, header_bytes);
     return SIF_ERR_IO;
@@ -1264,7 +1266,7 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
    * count rounded down from it would read every particle wrong. */
   if (field->n_particles == 0) {
     if (data_bytes % record != 0 || data_bytes == 0) {
-      SIF_LOG_ERROR("io",
+      SIF_LOG_ERROR(TAG,
         "%s holds %" PRIu64 " bytes after its header, not a whole number of "
         "%" PRIu64 "-byte particles for format '%s'; check the format, the "
         "precision and the header length",
@@ -1273,13 +1275,13 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
     }
     field->n_particles = data_bytes / record;
   } else if (field->n_particles > data_bytes / record) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "%s holds %" PRIu64 " particles of %" PRIu64 " bytes after its header, "
       "fewer than the %" PRIu64 " asked for",
       filepath, data_bytes / record, record, field->n_particles);
     return SIF_ERR_IO;
   } else if (field->n_particles * record < data_bytes) {
-    SIF_LOG_WARNING("io",
+    SIF_LOG_WARNING(TAG,
       "field filled at %" PRIu64 " particles; %s holds %" PRIu64 " more bytes",
       field->n_particles, filepath, data_bytes - field->n_particles * record);
   }
@@ -1299,7 +1301,7 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
     if (file)
       fclose(file);
     free(buf);
-    SIF_LOG_ERROR("io", "failed to open %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to open %s", filepath);
     return file ? SIF_ERR_ALLOC : SIF_ERR_IO;
   }
 
@@ -1316,13 +1318,13 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
   fclose(file);
 
   if (status != SIF_OK) {
-    SIF_LOG_ERROR("io", "failed to read %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to read %s", filepath);
     return status;
   }
 
   format_loaded(field, &f);
   SIF_LOG_INFO(
-    "io", "loaded %" PRIu64 " particles from %s", field->n_particles, filepath);
+    TAG, "loaded %" PRIu64 " particles from %s", field->n_particles, filepath);
   return SIF_OK;
 }
 
@@ -1333,7 +1335,7 @@ sif_field_t* sif_field_read_ascii(
   const char* filepath, const char* fmt, char delimiter, uint32_t skip_header) {
   sif_field_t* field = sif_field_alloc(0);
   if (!field) {
-    SIF_LOG_ERROR("io", "failed to allocate a field for %s",
+    SIF_LOG_ERROR(TAG, "failed to allocate a field for %s",
       filepath ? filepath : "(null)");
     return NULL;
   }
@@ -1350,7 +1352,7 @@ sif_field_t* sif_field_read_binary(const char* filepath, const char* fmt,
   sif_binary_endian_t endian, uint64_t header_bytes) {
   sif_field_t* field = sif_field_alloc(0);
   if (!field) {
-    SIF_LOG_ERROR("io", "failed to allocate a field for %s",
+    SIF_LOG_ERROR(TAG, "failed to allocate a field for %s",
       filepath ? filepath : "(null)");
     return NULL;
   }

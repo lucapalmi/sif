@@ -49,7 +49,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "survey_volume"
+#define TAG "measure.survey_volume"
 
 /* In double: SIF_PI is a sif_real, and the sky grid is laid out in double. */
 #define PI 3.14159265358979323846

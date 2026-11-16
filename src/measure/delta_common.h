@@ -22,7 +22,7 @@
 #include "sif/structures/grid.h"
 
 /** @brief Log tag shared by both estimators. */
-#define SIF__DELTA_TAG "delta"
+#define SIF__DELTA_TAG "measure.delta"
 
 /** @brief Below this many cells per radius the k-space window is aliased badly
  *  enough that the result is grid artefacts rather than field. */

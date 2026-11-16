@@ -175,7 +175,7 @@ typedef struct climb_order {
 SIF_DEFINE_QUICKSORT(
   sort_climbs, climb_order_t, a.r > b.r || (a.r == b.r && a.b < b.b))
 
-#define TAG "exodus_finder"
+#define TAG "finder.exodus"
 
 /*
  * Speculation window.
@@ -1741,7 +1741,7 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     const int find_minima = ctx.seed_minima || gaussian;
     const int tracers = ctx.refine == SIF_FINDER_REFINE_TRACERS;
     if (tracers && !ctx.seed_minima) {
-      status = sif__finder_scan_tracers(grid, ctx.mesh->x, ctx.mesh->y,
+      status = sif__finder_scan_tracers(TAG, grid, ctx.mesh->x, ctx.mesh->y,
         ctx.mesh->z, ctx.mesh->n_particles, threshold, &ctx.candidates,
         &ctx.offsets);
     } else if (find_minima) {
@@ -1751,15 +1751,15 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
         .grid = grid,
         .radius = radius,
         .sigma = RUNG_MINIMA_SIGMA * radius};
-      status = sif__finder_scan_refined(grid, ctx.mask, ctx.below, threshold,
-        survey, gaussian, ctx.seed_minima, &ctx.candidates, &ctx.offsets,
-        &refine, gaussian ? resmooth_rung : NULL, &rs);
+      status = sif__finder_scan_refined(TAG, grid, ctx.mask, ctx.below,
+        threshold, survey, gaussian, ctx.seed_minima, &ctx.candidates,
+        &ctx.offsets, &refine, gaussian ? resmooth_rung : NULL, &rs);
       if (status == SIF_OK && tracers)
         status = sif__finder_snap_to_tracers(
-          grid, ctx.mesh, threshold, &ctx.candidates, &ctx.offsets);
+          TAG, grid, ctx.mesh, threshold, &ctx.candidates, &ctx.offsets);
     } else {
-      status =
-        sif__finder_scan_candidates(grid, ctx.mask, threshold, &ctx.candidates);
+      status = sif__finder_scan_candidates(
+        TAG, grid, ctx.mask, threshold, &ctx.candidates);
     }
     if (status != SIF_OK)
       break;

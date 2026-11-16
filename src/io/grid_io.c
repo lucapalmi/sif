@@ -16,12 +16,14 @@
 #include <string.h>
 #include <unistd.h>
 
+#define TAG "io.grid"
+
 /* Wrapped in do/while so an unbraced `if` around one of these cannot swallow
  * the failure path. */
 #define CHECK_WRITE(ptr, size, count, stream, msg)                             \
   do {                                                                         \
     if (fwrite((ptr), (size), (count), (stream)) != (count)) {                 \
-      SIF_LOG_ERROR("xgrid", "failed to write %s", (msg));                     \
+      SIF_LOG_ERROR(TAG, "failed to write %s", (msg));                     \
       fclose(file);                                                            \
       return SIF_ERR_IO;                                                       \
     }                                                                          \
@@ -30,7 +32,7 @@
 #define CHECK_PREAD(fd, dest, bytes, offset, msg, file_ptr)                    \
   do {                                                                         \
     if (sif__io_pread_parallel((fd), (dest), (bytes), (offset)) != SIF_OK) {   \
-      SIF_LOG_ERROR("xgrid", "parallel read error for %s", (msg));             \
+      SIF_LOG_ERROR(TAG, "parallel read error for %s", (msg));             \
       fclose(file_ptr);                                                        \
       return SIF_ERR_IO;                                                       \
     }                                                                          \
@@ -48,13 +50,13 @@ int sif__grid_write_keyed(
     return SIF_ERR_INVALID;
 
   if (!grid->values || grid->total_cells == 0) {
-    SIF_LOG_ERROR("xgrid", "grid carries no cell values to write");
+    SIF_LOG_ERROR(TAG, "grid carries no cell values to write");
     return SIF_ERR_INVALID;
   }
 
   FILE* file = fopen(filepath, "wb");
   if (!file) {
-    SIF_LOG_ERROR("xgrid", "could not open %s for writing", filepath);
+    SIF_LOG_ERROR(TAG, "could not open %s for writing", filepath);
     return SIF_ERR_IO;
   }
 
@@ -93,7 +95,7 @@ int sif__grid_write_keyed(
    * cache, so an unchecked truncation would be published to every later run. */
   const bool ok = (ferror(file) == 0);
   if (fclose(file) != 0 || !ok) {
-    SIF_LOG_ERROR("xgrid", "failed to flush %s to disk", filepath);
+    SIF_LOG_ERROR(TAG, "failed to flush %s to disk", filepath);
     return SIF_ERR_IO;
   }
 
@@ -110,12 +112,12 @@ int sif__grid_write_keyed(
 static int header_validate(
   const sif_xgrid_header_t* header, const char* filepath) {
   if (strncmp(header->magic, SIF_XGRID_MAGIC, 4) != 0) {
-    SIF_LOG_ERROR("xgrid", "%s is not a valid xgrid binary", filepath);
+    SIF_LOG_ERROR(TAG, "%s is not a valid xgrid binary", filepath);
     return SIF_ERR_IO;
   }
 
   if (header->version > SIF_XGRID_VERSION) {
-    SIF_LOG_ERROR("xgrid",
+    SIF_LOG_ERROR(TAG,
       "%s is version %u, but this build reads up to version %u", filepath,
       header->version, (unsigned)SIF_XGRID_VERSION);
     return SIF_ERR_IO;
@@ -125,7 +127,7 @@ static int header_validate(
    * reinterpretation rather than a conversion. */
   const uint32_t current_is_double = (sizeof(sif_real) == 8) ? 1u : 0u;
   if (header->is_double != current_is_double) {
-    SIF_LOG_ERROR("xgrid", "%s is %s, this build is %s", filepath,
+    SIF_LOG_ERROR(TAG, "%s is %s, this build is %s", filepath,
       header->is_double ? "FP64" : "FP32", current_is_double ? "FP64" : "FP32");
     return SIF_ERR_IO;
   }
@@ -151,7 +153,7 @@ int sif__grid_read_into_keyed(
 
   sif_xgrid_header_t header;
   if (fread(&header, sizeof(sif_xgrid_header_t), 1, file) != 1) {
-    SIF_LOG_ERROR("xgrid", "failed to read header from %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to read header from %s", filepath);
     fclose(file);
     return SIF_ERR_IO;
   }
@@ -168,7 +170,7 @@ int sif__grid_read_into_keyed(
    * from this file gets the same value back, bit for bit. */
   if (header.n_cells != grid->n_cells ||
       header.box_length != (double)grid->box_length) {
-    SIF_LOG_WARNING("xgrid",
+    SIF_LOG_WARNING(TAG,
       "%s does not match the target grid geometry, not loading", filepath);
     fclose(file);
     return SIF_ERR_IO;
@@ -186,7 +188,7 @@ int sif__grid_read_into_keyed(
   if (expect_key) {
     if (header.source_key[0] != expect_key[0] ||
         header.source_key[1] != expect_key[1]) {
-      SIF_LOG_WARNING("xgrid",
+      SIF_LOG_WARNING(TAG,
         "%s records source key %016llx%016llx, not the %016llx%016llx asked "
         "for; treating it as a miss",
         filepath, (unsigned long long)header.source_key[1],
@@ -223,12 +225,12 @@ int sif__grid_read_into_keyed(
   if (header.version >= 2) {
     const uint32_t got = sif_crc32(grid->values, array_bytes);
     if (got != header.crc32) {
-      SIF_LOG_ERROR("xgrid", "%s is corrupt: checksum %08x, expected %08x",
+      SIF_LOG_ERROR(TAG, "%s is corrupt: checksum %08x, expected %08x",
         filepath, got, header.crc32);
       return SIF_ERR_IO;
     }
   } else {
-    SIF_LOG_WARNING("xgrid",
+    SIF_LOG_WARNING(TAG,
       "%s is a version %u file and carries no checksum; contents cannot be "
       "validated",
       filepath, header.version);
@@ -243,13 +245,13 @@ sif_grid_t* sif_grid_read(const char* filepath) {
 
   FILE* file = fopen(filepath, "rb");
   if (!file) {
-    SIF_LOG_ERROR("xgrid", "could not open %s for reading", filepath);
+    SIF_LOG_ERROR(TAG, "could not open %s for reading", filepath);
     return NULL;
   }
 
   sif_xgrid_header_t header;
   if (fread(&header, sizeof(sif_xgrid_header_t), 1, file) != 1) {
-    SIF_LOG_ERROR("xgrid", "failed to read header from %s", filepath);
+    SIF_LOG_ERROR(TAG, "failed to read header from %s", filepath);
     fclose(file);
     return NULL;
   }
@@ -260,14 +262,14 @@ sif_grid_t* sif_grid_read(const char* filepath) {
     return NULL;
 
   if (header.n_cells == 0) {
-    SIF_LOG_ERROR("xgrid", "%s describes an empty grid", filepath);
+    SIF_LOG_ERROR(TAG, "%s describes an empty grid", filepath);
     return NULL;
   }
 
   sif_grid_t* grid =
     sif_grid_alloc(header.n_cells, (sif_real)header.box_length);
   if (!grid) {
-    SIF_LOG_ERROR("xgrid", "OOM allocating grid");
+    SIF_LOG_ERROR(TAG, "OOM allocating grid");
     return NULL;
   }
 
@@ -276,6 +278,6 @@ sif_grid_t* sif_grid_read(const char* filepath) {
     return NULL;
   }
 
-  SIF_LOG_INFO("xgrid", "loaded %u^3 grid from %s", header.n_cells, filepath);
+  SIF_LOG_INFO(TAG, "loaded %u^3 grid from %s", header.n_cells, filepath);
   return grid;
 }

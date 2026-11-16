@@ -967,8 +967,8 @@ static void run_minimum_scan(void) {
      * from the well again. */
     memcpy(well, g->values, g->total_cells * sizeof(sif_real));
 
-    CHECK(sif__finder_scan_refined(
-            g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st, NULL, NULL) == SIF_OK,
+    CHECK(sif__finder_scan_refined("finder.exodus", g, mask, below, -0.5f, 0, 1,
+            0, &cands, &offs, &st, NULL, NULL) == SIF_OK,
       "well %d: scan failed", c);
     CHECK(cands.count > 1 && st.n_minima == 1 && st.n_fallback == 0,
       "well %d: %llu candidates, %llu minima, %llu left on their node", c,
@@ -1004,16 +1004,16 @@ static void run_minimum_scan(void) {
      * refined, on the node it was found at. */
     const sif_offset_t first = *m;
     memcpy(g->values, well, g->total_cells * sizeof(sif_real));
-    CHECK(sif__finder_scan_refined(
-            g, mask, below, -0.5f, 0, 1, 1, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
+    CHECK(sif__finder_scan_refined("finder.exodus", g, mask, below, -0.5f, 0, 1,
+            1, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
             cands.count == 1 && cands.items[0].flat_idx == f &&
             cands.items[0].refined != 0 &&
             offs.items[cands.items[0].refined - 1].dx == first.dx,
       "well %d, minima only: %llu candidates", c,
       (unsigned long long)cands.count);
     memcpy(g->values, well, g->total_cells * sizeof(sif_real));
-    CHECK(sif__finder_scan_refined(
-            g, mask, below, -0.5f, 0, 0, 1, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
+    CHECK(sif__finder_scan_refined("finder.exodus", g, mask, below, -0.5f, 0, 0,
+            1, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
             cands.count == 1 && cands.items[0].refined == 0 && offs.count == 0,
       "well %d, minima only on the nodes: %llu candidates, %llu offsets", c,
       (unsigned long long)cands.count, (unsigned long long)offs.count);
@@ -1022,8 +1022,8 @@ static void run_minimum_scan(void) {
 
   for (uint64_t i = 0; i < g->total_cells; i++)
     g->values[i] = -0.9f;
-  CHECK(sif__finder_scan_refined(
-          g, mask, below, -0.5f, 0, 1, 0, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
+  CHECK(sif__finder_scan_refined("finder.exodus", g, mask, below, -0.5f, 0, 1,
+          0, &cands, &offs, &st, NULL, NULL) == SIF_OK &&
           cands.count == g->total_cells && st.n_minima == 1 &&
           st.n_fallback == 1,
     "flat field: %llu candidates, %llu minima, %llu left on their node",

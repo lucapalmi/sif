@@ -20,16 +20,8 @@
 #include "math/fft.h"
 #include "sif/utils/timer.h"
 
-/** @brief Logger configuration, resolved from sif_config_t at init. */
-typedef struct {
-  /** Minimum level a message must reach to be printed. */
-  uint8_t level;
-} sif_logger_state_t;
-
 /** @brief Everything the library holds between init and finalise. */
 typedef struct {
-  sif_logger_state_t logger;
-
   /** Thread ceiling actually in force, as reported by the OpenMP runtime --
    *  which may be lower than the one requested. */
   uint32_t max_threads;
@@ -55,8 +47,8 @@ sif_system_state_t* sif__system_state(void);
 /**
  * @brief The system state, or NULL if the library is not initialised.
  *
- * For the few call sites that must be able to run either way -- the logger
- * itself, and teardown paths.
+ * For the few call sites that must be able to run either way, such as
+ * teardown paths.
  */
 sif_system_state_t* sif__system_state_safe(void);
 

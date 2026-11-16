@@ -19,6 +19,8 @@
 #include <strings.h>
 #include <sys/types.h>
 
+#define TAG "io.profiles"
+
 /*
  * The shape two sets have to agree on before they can share a file: they are
  * written as one row, so a row would otherwise mean two different things on
@@ -39,13 +41,13 @@ int sif_profiles_write_ascii(const char* filepath,
   const sif_catalogue_t* cat) {
 
   if ((!dens && !vel) || !cat || !filepath) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "sif_profiles_write_ascii: needs a path, a catalogue and a profile set");
     return SIF_ERR_INVALID;
   }
 
   if (!shapes_agree(dens, vel)) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "%s: density and velocity profiles differ in shape (n_voids, n_bins, "
       "ext)",
       filepath);
@@ -60,7 +62,7 @@ int sif_profiles_write_ascii(const char* filepath,
   /* Row i is void i. A catalogue of a different length is a different
    * catalogue, and writing it would label every row with the wrong void. */
   if (cat->n_voids != n_voids) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "%s: catalogue has %" PRIu64 " voids, profiles %" PRIu64, filepath,
       cat->n_voids, n_voids);
     return SIF_ERR_INVALID;
@@ -68,7 +70,7 @@ int sif_profiles_write_ascii(const char* filepath,
 
   FILE* file = fopen(filepath, "w");
   if (!file)
-    return sif__io_os_error("io", filepath, NULL, errno);
+    return sif__io_os_error(TAG, filepath, NULL, errno);
 
   /* What the file is, then what each column is, all behind '#': the shape
    * first, so the reader can size everything once, then the bin edges every
@@ -113,9 +115,9 @@ int sif_profiles_write_ascii(const char* filepath,
    * the disk. Without this a full quota reads back as a short file. */
   const bool ok = (ferror(file) == 0);
   if (fclose(file) != 0 || !ok)
-    return sif__io_os_error("io", filepath, "write", errno);
+    return sif__io_os_error(TAG, filepath, "write", errno);
 
-  SIF_LOG_INFO("io", "saved %" PRIu64 " profiles (%s) to %s (ASCII)", n_voids,
+  SIF_LOG_INFO(TAG, "saved %" PRIu64 " profiles (%s) to %s (ASCII)", n_voids,
     dens && vel ? "density and velocity" : (dens ? "density" : "velocity"),
     filepath);
   return SIF_OK;
@@ -143,7 +145,7 @@ static int read_legacy_header(FILE* file, const char* filepath, header_t* h) {
   if (fscanf(file, "%" SCNu64 " %" SCNu32 " " SIF_SCN_REAL " %d %d %d",
         &h->n_voids, &h->n_bins, &h->ext, &h->has_dens, &h->has_vel,
         &h->differential) != 6) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "%s: legacy header: expected 'n_voids n_bins ext has_density "
       "has_velocity differential'",
       filepath);
@@ -192,7 +194,7 @@ static int parse_names(char* text, const char* filepath, header_t* h) {
   const char* const* centre = h->sky ? SKY : CART;
   for (int c = 0; c < 4; c++, tok = strtok_r(NULL, " \t", &save)) {
     if (!tok || strcasecmp(tok, centre[c]) != 0) {
-      SIF_LOG_ERROR("io",
+      SIF_LOG_ERROR(TAG,
         "%s: column %d is '%s', expected '%s' (cx cy cz r | ra dec z r)",
         filepath, c + 1, tok ? tok : "", centre[c]);
       return SIF_ERR_INVALID;
@@ -209,7 +211,7 @@ static int parse_names(char* text, const char* filepath, header_t* h) {
       char want[32];
       snprintf(want, sizeof want, "%s%" PRIu32, prefix, j);
       if (!tok || strcasecmp(tok, want) != 0) {
-        SIF_LOG_ERROR("io", "%s: column '%s', expected '%s'", filepath,
+        SIF_LOG_ERROR(TAG, "%s: column '%s', expected '%s'", filepath,
           tok ? tok : "", want);
         return SIF_ERR_INVALID;
       }
@@ -217,7 +219,7 @@ static int parse_names(char* text, const char* filepath, header_t* h) {
     *(block == 0 ? &h->has_dens : &h->has_vel) = 1;
   }
   if (tok) {
-    SIF_LOG_ERROR("io", "%s: column '%s': unknown", filepath, tok);
+    SIF_LOG_ERROR(TAG, "%s: column '%s': unknown", filepath, tok);
     return SIF_ERR_INVALID;
   }
   return SIF_OK;
@@ -281,7 +283,7 @@ static int read_named_header(FILE* file, const char* filepath, header_t* h) {
 
   if (status == SIF_OK &&
       !(have_n && have_bins && have_ext && edges_text && have_names)) {
-    SIF_LOG_ERROR("io", "%s: header lacks%s%s%s%s%s", filepath,
+    SIF_LOG_ERROR(TAG, "%s: header lacks%s%s%s%s%s", filepath,
       have_n ? "" : " n", have_bins ? "" : " n_bins", have_ext ? "" : " ext",
       edges_text ? "" : " r_edges", have_names ? "" : " column-names");
     status = SIF_ERR_INVALID;
@@ -289,7 +291,7 @@ static int read_named_header(FILE* file, const char* filepath, header_t* h) {
   if (status == SIF_OK && h->n_bins > 0) {
     h->edges = parse_edges(edges_text, h->n_bins);
     if (!h->edges) {
-      SIF_LOG_ERROR("io", "%s: r_edges: expected %" PRIu32 " numbers", filepath,
+      SIF_LOG_ERROR(TAG, "%s: r_edges: expected %" PRIu32 " numbers", filepath,
         h->n_bins + 1);
       status = SIF_ERR_INVALID;
     }
@@ -323,7 +325,7 @@ static int read_header(FILE* file, const char* filepath, header_t* h) {
   }
 
   if (h->n_voids == 0 || h->n_bins == 0 || (!h->has_dens && !h->has_vel)) {
-    SIF_LOG_ERROR("io",
+    SIF_LOG_ERROR(TAG,
       "%s: empty profile set (n=%" PRIu64 ", n_bins=%" PRIu32
       ", density=%d, velocity=%d)",
       filepath, h->n_voids, h->n_bins, h->has_dens, h->has_vel);
@@ -339,15 +341,15 @@ int sif_profiles_read_header_ascii(const char* filepath, uint64_t* out_n_voids,
   int* out_has_velocity, int* out_differential) {
 
   if (!filepath) {
-    SIF_LOG_ERROR("io", "sif_profiles_read_header_ascii: NULL path");
+    SIF_LOG_ERROR(TAG, "sif_profiles_read_header_ascii: NULL path");
     return SIF_ERR_INVALID;
   }
 
-  if (sif__io_check_readable("io", filepath, NULL) != SIF_OK)
+  if (sif__io_check_readable(TAG, filepath, NULL) != SIF_OK)
     return SIF_ERR_IO;
   FILE* file = fopen(filepath, "r");
   if (!file)
-    return sif__io_os_error("io", filepath, NULL, errno);
+    return sif__io_os_error(TAG, filepath, NULL, errno);
 
   header_t h;
   const int status = read_header(file, filepath, &h);
@@ -396,11 +398,11 @@ static int read_value(FILE* file, const char* path, uint64_t row,
   char tok[64];
   if (fscanf(file, "%63s", tok) != 1) {
     if (ferror(file))
-      return sif__io_os_error("io", path, "read", errno);
+      return sif__io_os_error(TAG, path, "read", errno);
     /* A row that ends within itself, not between two rows. */
     if (bin != UINT32_MAX || (strcmp(col, "cx") != 0 && strcmp(col, "ra") != 0))
       SIF_LOG_ERROR(
-        "io", "%s: row %" PRIu64 ": ends before %s", path, row, where);
+        TAG, "%s: row %" PRIu64 ": ends before %s", path, row, where);
     return SIF_ERR_IO;
   }
 
@@ -408,7 +410,7 @@ static int read_value(FILE* file, const char* path, uint64_t row,
   *out = sizeof(sif_real) == 4 ? (sif_real)strtof(tok, &end)
                                : (sif_real)strtod(tok, &end);
   if (end == tok || *end) {
-    SIF_LOG_ERROR("io", "%s: row %" PRIu64 ", %s: '%s' is not a number", path,
+    SIF_LOG_ERROR(TAG, "%s: row %" PRIu64 ", %s: '%s' is not a number", path,
       row, where, tok);
     return SIF_ERR_IO;
   }
@@ -419,7 +421,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   sif_density_profiles_t** out_dens, sif_velocity_profiles_t** out_vel) {
 
   if (!filepath) {
-    SIF_LOG_ERROR("io", "sif_profiles_read_ascii: NULL path");
+    SIF_LOG_ERROR(TAG, "sif_profiles_read_ascii: NULL path");
     return SIF_ERR_INVALID;
   }
 
@@ -433,11 +435,11 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   if (out_vel)
     *out_vel = NULL;
 
-  if (sif__io_check_readable("io", filepath, NULL) != SIF_OK)
+  if (sif__io_check_readable(TAG, filepath, NULL) != SIF_OK)
     return SIF_ERR_IO;
   FILE* file = fopen(filepath, "r");
   if (!file)
-    return sif__io_os_error("io", filepath, NULL, errno);
+    return sif__io_os_error(TAG, filepath, NULL, errno);
 
   header_t h;
   if (read_header(file, filepath, &h) != SIF_OK) {
@@ -455,7 +457,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   /* Asked for something the file does not carry. Handing back an empty set
    * would be indistinguishable from a measurement of zeros. */
   if ((out_dens && !h.has_dens) || (out_vel && !h.has_vel)) {
-    SIF_LOG_ERROR("io", "%s: no %s profiles", filepath,
+    SIF_LOG_ERROR(TAG, "%s: no %s profiles", filepath,
       (out_dens && !h.has_dens) ? "density" : "velocity");
     goto fail;
   }
@@ -464,7 +466,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   if (out_cat) {
     cat = sif_catalogue_alloc(n_voids);
     if (!cat) {
-      SIF_LOG_ERROR("io", "%s: catalogue: out of memory", filepath);
+      SIF_LOG_ERROR(TAG, "%s: catalogue: out of memory", filepath);
       goto fail;
     }
     if (h.sky)
@@ -475,7 +477,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
     dens =
       sif__density_profiles_alloc(n_voids, n_bins, h.ext, h.differential != 0);
     if (!dens) {
-      SIF_LOG_ERROR("io", "%s: density profiles: out of memory", filepath);
+      SIF_LOG_ERROR(TAG, "%s: density profiles: out of memory", filepath);
       goto fail;
     }
   }
@@ -483,7 +485,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   if (out_vel) {
     vel = sif__velocity_profiles_alloc(n_voids, n_bins, h.ext);
     if (!vel) {
-      SIF_LOG_ERROR("io", "%s: velocity profiles: out of memory", filepath);
+      SIF_LOG_ERROR(TAG, "%s: velocity profiles: out of memory", filepath);
       goto fail;
     }
   }
@@ -516,7 +518,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
       if (read_value(file, filepath, i + 1, (h.sky ? CENTRE_SKY : CENTRE)[k],
             UINT32_MAX, &c[k]) != SIF_OK) {
         if (feof(file))
-          SIF_LOG_ERROR("io",
+          SIF_LOG_ERROR(TAG,
             "%s: %" PRIu64 " rows, header says %" PRIu64 " (truncated?)",
             filepath, i, n_voids);
         status = SIF_ERR_IO;
@@ -574,7 +576,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   fclose(file);
 
   SIF_LOG_INFO(
-    "io", "loaded %" PRIu64 " profiles from %s (ASCII)", n_voids, filepath);
+    TAG, "loaded %" PRIu64 " profiles from %s (ASCII)", n_voids, filepath);
   return SIF_OK;
 
 fail:

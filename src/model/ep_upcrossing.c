@@ -44,7 +44,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define TAG "ep"
+#define TAG "model.ep"
 
 /*
  * Above this the bracket below is evaluated from its asymptotic series rather

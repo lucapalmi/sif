@@ -26,7 +26,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "gadget"
+#define TAG "io.gadget"
 
 struct sif_gadget_h5_file {
   hid_t file;

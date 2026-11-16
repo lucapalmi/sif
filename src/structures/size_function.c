@@ -12,6 +12,8 @@
 #include <math.h>
 #include <stdlib.h>
 
+#define TAG "structures.size_function"
+
 /*
  * One container for two quite different things: a histogram of a catalogue,
  * and a model evaluated pointwise.
@@ -27,7 +29,7 @@ sif_size_function_t* sif__size_function_alloc(uint32_t n_bins) {
 
   sif_size_function_t* vsf = calloc(1, sizeof(sif_size_function_t));
   if (!vsf) {
-    SIF_LOG_ERROR("size_function", "failed to allocate the VSF struct");
+    SIF_LOG_ERROR(TAG, "failed to allocate the VSF struct");
     return NULL;
   }
 
@@ -45,7 +47,7 @@ sif_size_function_t* sif__size_function_alloc(uint32_t n_bins) {
 
   if (!vsf->r_edges || !vsf->r_centres || !vsf->counts || !vsf->vsf ||
       !vsf->err) {
-    SIF_LOG_ERROR("size_function", "failed to allocate the VSF arrays");
+    SIF_LOG_ERROR(TAG, "failed to allocate the VSF arrays");
     sif_size_function_free(vsf);
     return NULL;
   }

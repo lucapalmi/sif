@@ -20,6 +20,7 @@ file(MAKE_DIRECTORY "${SIF_TEST_HOME}")
 
 set(SIF_TESTS
   test_utils        # allocation, arrays, crc32, prng, sort
+  test_logger       # runtime level, sinks, capture, whole lines from threads
   test_structures   # bitmask, catalogue, cell linked list, chain mesh
   test_field_grid   # morton ordering, require_* helpers, CIC
   test_io           # .xfield/.xgrid round trips, checksums, ASCII and raw binary

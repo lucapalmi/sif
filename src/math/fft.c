@@ -21,6 +21,8 @@
 #include "sif/utils/logger.h"
 #include "sif/utils/random.h"
 
+#define TAG "math.fft"
+
 /* Number of complex slots for an r2c transform. The matching in-place real
  * buffer is 2x this, with the last dimension padded to 2 * (n/2 + 1). */
 static inline uint64_t fft_complex_count(uint32_t n) {
@@ -47,13 +49,13 @@ sif_fft_manager_t* sif__fft_manager_init(
   mgr->wisdom_dir = wisdom_dir ? strdup(wisdom_dir) : NULL;
 
   if (wisdom_dir && !mgr->wisdom_dir) {
-    SIF_LOG_WARNING("fft_manager", "failed to copy the wisdom directory path");
+    SIF_LOG_WARNING(TAG, "failed to copy the wisdom directory path");
   }
 
   /* Zero is FFTW's failure, and planning with threads after it is not
    * something FFTW promises to survive. */
   if (!real_fftw_init_threads()) {
-    SIF_LOG_ERROR("fft_manager", "FFTW could not initialise its threads");
+    SIF_LOG_ERROR(TAG, "FFTW could not initialise its threads");
     free(mgr->wisdom_dir);
     free(mgr);
     return NULL;
@@ -107,7 +109,7 @@ static unsigned int fft_resolve_plan_flags(
   if (gib <= cap_gib)
     return mgr->flags;
 
-  SIF_LOG_INFO("fft_context",
+  SIF_LOG_INFO(TAG,
     "a %u^3 spectrum is %.1f GiB, over the %g GiB fft_tuning_max_gib ceiling; "
     "planning both transforms with FFTW_ESTIMATE. Tuning at this size costs "
     "far more in planning than it returns over a run",
@@ -144,7 +146,7 @@ static void fft_load_wisdom(const sif_fft_manager_t* mgr) {
   fft_wisdom_path(mgr->wisdom_dir, path, sizeof(path));
 
   if (real_fftw_import_wisdom_from_filename(path) != 0)
-    SIF_LOG_INFO("fft_manager", "loaded wisdom from %s", path);
+    SIF_LOG_INFO(TAG, "loaded wisdom from %s", path);
 }
 
 /*
@@ -182,19 +184,19 @@ static void fft_save_wisdom(const sif_fft_manager_t* mgr) {
 
   /* FFTW's export returns non-zero on success, unlike most of C. */
   if (real_fftw_export_wisdom_to_filename(tmp_path) == 0) {
-    SIF_LOG_WARNING("fft_manager", "failed to export wisdom to %s", tmp_path);
+    SIF_LOG_WARNING(TAG, "failed to export wisdom to %s", tmp_path);
     remove(tmp_path);
     return;
   }
 
   if (rename(tmp_path, final_path) != 0) {
     SIF_LOG_WARNING(
-      "fft_manager", "failed to install the wisdom file %s", final_path);
+      TAG, "failed to install the wisdom file %s", final_path);
     remove(tmp_path);
     return;
   }
 
-  SIF_LOG_TRACE("fft_manager", "wisdom saved to %s", final_path);
+  SIF_LOG_TRACE(TAG, "wisdom saved to %s", final_path);
 }
 
 /* A workspace with or without its spectrum buffer; see
@@ -202,7 +204,7 @@ static void fft_save_wisdom(const sif_fft_manager_t* mgr) {
 static sif_fft_workspace_t* fft_workspace_new(
   sif_fft_manager_t* mgr, uint32_t n_cells, int with_spectrum) {
   if (!mgr || n_cells == 0) {
-    SIF_LOG_ERROR("fft_context", "invalid manager or grid size");
+    SIF_LOG_ERROR(TAG, "invalid manager or grid size");
     return NULL;
   }
 
@@ -242,7 +244,7 @@ static sif_fft_workspace_t* fft_workspace_new(
 
   ws->delta_k = real_fftw_malloc(spectrum_bytes);
   if (!ws->delta_k) {
-    SIF_LOG_ERROR("fft_context",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate the spectrum buffer (%" PRIu64 " bytes)",
       spectrum_bytes);
     free(ws);
@@ -354,12 +356,12 @@ static int fft_plan_stage(sif_fft_workspace_t* ws, int forward) {
   real_fftw_free(pencils);
 
   if (status != SIF_OK) {
-    SIF_LOG_ERROR("fft_context", "failed to create the %s plans for %u^3",
+    SIF_LOG_ERROR(TAG, "failed to create the %s plans for %u^3",
       forward ? "forward" : "backward", n);
     return status;
   }
 
-  SIF_LOG_TRACE("fft_context", "%s plans created (%s)",
+  SIF_LOG_TRACE(TAG, "%s plans created (%s)",
     forward ? "forward" : "backward", fft_is_tuned(ws) ? "tuned" : "estimated");
   return SIF_OK;
 }
@@ -420,7 +422,7 @@ static int fft_pencils(
   }
 
   if (failed) {
-    SIF_LOG_ERROR("fft_context",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate the pencil buffers for a %u^3 transform", n);
     return SIF_ERR_ALLOC;
   }
@@ -440,7 +442,7 @@ int sif__fft_workspace_init_backward(
   ws->delta_k_cpy =
     sif_malloc_aligned(complex_cells * sizeof(sif_real_complex));
   if (!ws->delta_k_cpy) {
-    SIF_LOG_ERROR("fft_context",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate the real-space buffer (%" PRIu64 " bytes)",
       complex_cells * sizeof(sif_real_complex));
     return SIF_ERR_ALLOC;
@@ -478,7 +480,7 @@ sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
 
 void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
   if (!ws) {
-    SIF_LOG_WARNING("fft_context", "cannot free a NULL workspace");
+    SIF_LOG_WARNING(TAG, "cannot free a NULL workspace");
     return;
   }
 
@@ -522,7 +524,7 @@ static sif_real* fft_build_filter_lut(sif_filter_type_t filter, sif_real r,
 
   sif_real* lut = malloc(((size_t)max_k2 + 1) * sizeof(sif_real));
   if (!lut) {
-    SIF_LOG_ERROR("fft_context",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate the filter lookup table (%zu bytes)",
       ((size_t)max_k2 + 1) * sizeof(sif_real));
     return NULL;
@@ -613,7 +615,7 @@ static int fft_forward_streamed(sif_fft_workspace_t* ws) {
   }
 
   if (failed == SIF_ERR_ALLOC)
-    SIF_LOG_ERROR("fft_context",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate the plane buffers for a %u^3 transform", n);
   if (failed != SIF_OK)
     return failed;
@@ -625,7 +627,7 @@ int sif__fft_workspace_stream(
   sif_fft_manager_t* mgr, const sif_grid_t* grid, sif_fft_workspace_t** out) {
   *out = NULL;
   if (!grid || !grid->values) {
-    SIF_LOG_ERROR("fft_context", "invalid grid");
+    SIF_LOG_ERROR(TAG, "invalid grid");
     return SIF_ERR_INVALID;
   }
 
@@ -701,7 +703,7 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
 
   if (!ws || !ws->delta_k_cpy) {
     SIF_LOG_ERROR(
-      "fft_context", "the backward stage must be initialised before filtering");
+      TAG, "the backward stage must be initialised before filtering");
     return SIF_ERR_INVALID;
   }
 
@@ -709,7 +711,7 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
       filter != SIF__FILTER_GAUSSIAN) {
     /* Returning without writing delta_k_cpy would leave the backward transform
      * operating on whatever was there before, so this has to be an error. */
-    SIF_LOG_ERROR("fft_context", "filter type %d is not supported", filter);
+    SIF_LOG_ERROR(TAG, "filter type %d is not supported", filter);
     return SIF_ERR_INVALID;
   }
 
@@ -729,7 +731,7 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
   if (filter == SIF__FILTER_NONE) {
     if (src != ws->delta_k_cpy)
       memcpy(ws->delta_k_cpy, src, complex_cells * sizeof(sif_real_complex));
-    SIF_LOG_TRACE("fft_context", "no filter applied");
+    SIF_LOG_TRACE(TAG, "no filter applied");
     return SIF_OK;
   }
 
@@ -777,7 +779,7 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
 
   free(lut);
 
-  SIF_LOG_TRACE("fft_context", "%s smoothing applied",
+  SIF_LOG_TRACE(TAG, "%s smoothing applied",
     filter == SIF__FILTER_TOP_HAT ? "top hat" : "gaussian");
 
   return SIF_OK;
@@ -785,7 +787,7 @@ int sif__fft_apply_filter_smoothed(sif_fft_workspace_t* ws,
 
 int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
   if (!ws || !ws->delta_k || !grid || !grid->values) {
-    SIF_LOG_ERROR("fft_context", "invalid workspace or grid");
+    SIF_LOG_ERROR(TAG, "invalid workspace or grid");
     return SIF_ERR_INVALID;
   }
 
@@ -809,13 +811,13 @@ int sif__fft_grid_forward(sif_fft_workspace_t* ws, const sif_grid_t* grid) {
 
   const int status = fft_pencils(ws, ws->delta_k, ws->pencil_forward);
   if (status == SIF_OK)
-    SIF_LOG_TRACE("fft_context", "forward fft on cubic grid executed");
+    SIF_LOG_TRACE(TAG, "forward fft on cubic grid executed");
   return status;
 }
 
 sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
   if (!ws || !ws->plane_c2r || !ws->delta_k_cpy) {
-    SIF_LOG_ERROR("fft_context", "the backward stage is not initialised");
+    SIF_LOG_ERROR(TAG, "the backward stage is not initialised");
     return NULL;
   }
 
@@ -874,12 +876,12 @@ sif_real* sif__fft_grid_backward(sif_fft_workspace_t* ws) {
   }
 
   if (failed) {
-    SIF_LOG_ERROR("fft_context",
+    SIF_LOG_ERROR(TAG,
       "failed to allocate the plane buffers for a %u^3 transform", n);
     return NULL;
   }
 
-  SIF_LOG_TRACE("fft_context", "backward fft on cubic grid executed");
+  SIF_LOG_TRACE(TAG, "backward fft on cubic grid executed");
   return data;
 }
 
@@ -956,7 +958,7 @@ static double* fft_build_window_axis(
 
   double* axis = malloc((size_t)n_cells * sizeof(double));
   if (!axis) {
-    SIF_LOG_ERROR("fft_context", "failed to allocate the window table");
+    SIF_LOG_ERROR(TAG, "failed to allocate the window table");
     return NULL;
   }
 
@@ -975,7 +977,7 @@ static double* fft_build_window_axis(
 static double* fft_build_window_wsa(uint32_t n_cells, int order) {
   double* t = malloc((size_t)3 * n_cells * sizeof(double));
   if (!t) {
-    SIF_LOG_ERROR("fft_context", "failed to allocate the window tables");
+    SIF_LOG_ERROR(TAG, "failed to allocate the window tables");
     return NULL;
   }
   for (uint32_t i = 0; i < n_cells; i++) {
@@ -1011,11 +1013,11 @@ double sif__fft_window_corner_gain(
 int sif__fft_set_window_correction(sif_fft_workspace_t* ws, int order,
   sif_window_mode_t mode, int interlaced) {
   if (!ws || ws->n_cells == 0) {
-    SIF_LOG_ERROR("fft_context", "invalid workspace");
+    SIF_LOG_ERROR(TAG, "invalid workspace");
     return SIF_ERR_INVALID;
   }
   if (order < 0 || order > 4) {
-    SIF_LOG_ERROR("fft_context", "window order %d (expected 0 to 4)", order);
+    SIF_LOG_ERROR(TAG, "window order %d (expected 0 to 4)", order);
     return SIF_ERR_INVALID;
   }
 
@@ -1034,7 +1036,7 @@ int sif__fft_set_window_correction(sif_fft_workspace_t* ws, int order,
   if (!ws->window_axis && !ws->window_wsa)
     return SIF_ERR_ALLOC;
 
-  SIF_LOG_TRACE("fft_context",
+  SIF_LOG_TRACE(TAG,
     "filtering will correct a window of order %d (%s%s)", order,
     mode == SIF__WINDOW_ALIASING ? "aliasing-aware" : "full",
     interlaced ? ", interlaced" : "");
@@ -1044,11 +1046,11 @@ int sif__fft_set_window_correction(sif_fft_workspace_t* ws, int order,
 int sif__fft_deconvolve_window(sif_fft_workspace_t* ws, int order,
   sif_window_mode_t mode, int interlaced) {
   if (!ws || !ws->delta_k) {
-    SIF_LOG_ERROR("fft_context", "no spectrum to deconvolve");
+    SIF_LOG_ERROR(TAG, "no spectrum to deconvolve");
     return SIF_ERR_INVALID;
   }
   if (order < 1 || order > 4) {
-    SIF_LOG_ERROR("fft_context", "window order %d (expected 1 to 4)", order);
+    SIF_LOG_ERROR(TAG, "window order %d (expected 1 to 4)", order);
     return SIF_ERR_INVALID;
   }
 
@@ -1080,7 +1082,7 @@ int sif__fft_deconvolve_window(sif_fft_workspace_t* ws, int order,
   free(axis);
   free(wsa);
 
-  SIF_LOG_TRACE("fft_context", "window of order %d deconvolved", order);
+  SIF_LOG_TRACE(TAG, "window of order %d deconvolved", order);
   return SIF_OK;
 }
 
@@ -1132,7 +1134,7 @@ int sif__fft_randomise_phases(
   sif_fft_workspace_t* ws, uint64_t seed, bool resample_amplitudes) {
 
   if (!ws || !ws->delta_k) {
-    SIF_LOG_ERROR("fft_context", "no spectrum to randomise");
+    SIF_LOG_ERROR(TAG, "no spectrum to randomise");
     return SIF_ERR_INVALID;
   }
 
@@ -1235,7 +1237,7 @@ int sif__fft_randomise_phases(
     }
   }
 
-  SIF_LOG_TRACE("fft_context", "phases randomised (%s amplitudes)",
+  SIF_LOG_TRACE(TAG, "phases randomised (%s amplitudes)",
     resample_amplitudes ? "resampled" : "preserved");
   return SIF_OK;
 }
@@ -1247,12 +1249,12 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   uint64_t n_tracers, double* sigma_sq, double* high_k_fraction) {
 
   if (!ws || !ws->delta_k || !sigma_sq) {
-    SIF_LOG_ERROR("fft_context", "no spectrum to evaluate");
+    SIF_LOG_ERROR(TAG, "no spectrum to evaluate");
     return SIF_ERR_INVALID;
   }
 
   if (max_order > SIF__FFT_MAX_MOMENT_ORDER) {
-    SIF_LOG_ERROR("fft_context", "moment order %u exceeds the maximum of %d",
+    SIF_LOG_ERROR(TAG, "moment order %u exceeds the maximum of %d",
       max_order, SIF__FFT_MAX_MOMENT_ORDER);
     return SIF_ERR_INVALID;
   }
@@ -1297,7 +1299,7 @@ int sif__fft_spectral_moments(const sif_fft_workspace_t* ws,
   double* scratch =
     sif_calloc_aligned((size_t)n_blocks * stride, sizeof(double));
   if (!scratch) {
-    SIF_LOG_ERROR("fft_context", "failed to allocate the moment scratch");
+    SIF_LOG_ERROR(TAG, "failed to allocate the moment scratch");
     free(lut);
     return SIF_ERR_ALLOC;
   }

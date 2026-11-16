@@ -66,6 +66,9 @@ static inline void sif__unflatten_index(const sif_grid_t* grid, uint64_t flat,
   *ix = sif__fast_div(flat, (uint64_t)n * n, p2_shift ? 2 * p2_shift : 0);
 }
 
+/* The helpers below that can fail take the calling finder's log tag first, so
+ * what they log is reported under that finder, not under a tag of their own. */
+
 /* --- argument checks, shared by every finder --- */
 
 /**
@@ -149,7 +152,7 @@ void sif__candidate_buffer_free(sif_candidate_buffer_t* buf);
  * @return SIF_OK on success, where a count of 0 is a legitimate result, or
  * SIF_ERR_ALLOC if the buffer could not grow.
  */
-int sif__finder_scan_candidates(const sif_grid_t* grid,
+int sif__finder_scan_candidates(const char* tag, const sif_grid_t* grid,
   const sif_bitmask_t* mask, sif_real threshold, sif_candidate_buffer_t* buf);
 
 /* --- centres between the nodes --- */
@@ -228,9 +231,9 @@ typedef struct {
 /* resmooth, when not NULL, is called once the candidates are known: it
  * re-smooths grid->values in place, and the minima are found on what it
  * leaves there. NULL finds them on the field as it is. */
-int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
-  sif_bitmask_t* below, sif_real threshold, int survey, int refine,
-  int minima_only, sif_candidate_buffer_t* candidates,
+int sif__finder_scan_refined(const char* tag, sif_grid_t* grid,
+  const sif_bitmask_t* mask, sif_bitmask_t* below, sif_real threshold,
+  int survey, int refine, int minima_only, sif_candidate_buffer_t* candidates,
   sif_offset_buffer_t* offsets, sif_refine_stats_t* stats,
   int (*resmooth)(void*), void* resmooth_arg);
 
@@ -252,9 +255,10 @@ int sif__finder_scan_refined(sif_grid_t* grid, const sif_bitmask_t* mask,
  * @return SIF_OK, where a count of 0 is a legitimate result, SIF_ERR_ALLOC, or
  * SIF_ERR_RANGE for more candidates than an index can hold.
  */
-int sif__finder_scan_tracers(const sif_grid_t* grid, const sif_real* x,
-  const sif_real* y, const sif_real* z, uint64_t n_points, sif_real threshold,
-  sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets);
+int sif__finder_scan_tracers(const char* tag, const sif_grid_t* grid,
+  const sif_real* x, const sif_real* y, const sif_real* z, uint64_t n_points,
+  sif_real threshold, sif_candidate_buffer_t* candidates,
+  sif_offset_buffer_t* offsets);
 
 /**
  * @brief Moves each candidate to the tracer nearest it, for minima under
@@ -272,7 +276,7 @@ int sif__finder_scan_tracers(const sif_grid_t* grid, const sif_real* x,
  * @return SIF_OK, SIF_ERR_ALLOC, or SIF_ERR_RANGE for more candidates than an
  * index can hold.
  */
-int sif__finder_snap_to_tracers(const sif_grid_t* grid,
+int sif__finder_snap_to_tracers(const char* tag, const sif_grid_t* grid,
   const sif_chain_mesh_t* mesh, sif_real threshold,
   sif_candidate_buffer_t* candidates, sif_offset_buffer_t* offsets);
 

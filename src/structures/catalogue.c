@@ -18,6 +18,8 @@
 #include "structures/catalogue_internal.h"
 #include "utils/logger_internal.h"
 
+#define TAG "structures.catalogue"
+
 /*
  * Number of sif_real views packed into the arena: cx, cy, cz, radii.
  *
@@ -119,7 +121,7 @@ static int catalogue_resize(sif_catalogue_t* catalogue, uint64_t new_capacity) {
   }
 
   if (!new_block) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue: cannot resize from %" PRIu64 " to %" PRIu64
       " voids (%.2f GiB); the catalogue is unchanged",
       catalogue->capacity, new_capacity,
@@ -173,7 +175,7 @@ sif_catalogue_t* sif_catalogue_alloc(uint64_t initial_capacity) {
 
   sif_catalogue_t* cat = malloc(sizeof(sif_catalogue_t));
   if (!cat) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: cannot allocate (%zu bytes)",
+    SIF_LOG_ERROR(TAG, "catalogue: cannot allocate (%zu bytes)",
       sizeof(sif_catalogue_t));
     return NULL;
   }
@@ -191,14 +193,14 @@ sif_catalogue_t* sif_catalogue_alloc(uint64_t initial_capacity) {
     initial_capacity, &cat->cx, &cat->cy, &cat->cz, &cat->radii);
 
   if (!cat->_block) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue: cannot allocate room for %" PRIu64 " voids (%.2f GiB)",
       initial_capacity, SIF__GIB(catalogue_block_bytes(initial_capacity)));
     free(cat);
     return NULL;
   }
 
-  SIF_LOG_TRACE("void_catalogue", "void catalogue initialised");
+  SIF_LOG_TRACE(TAG, "void catalogue initialised");
   return cat;
 }
 
@@ -222,7 +224,7 @@ int sif_catalogue_append(
   sif_catalogue_t* catalogue, sif_real x, sif_real y, sif_real z, sif_real r) {
 
   if (!catalogue) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
+    SIF_LOG_ERROR(TAG, "catalogue: NULL");
     return SIF_ERR_INVALID;
   }
 
@@ -236,7 +238,7 @@ int sif_catalogue_append(
       return status;
 
     SIF_LOG_TRACE(
-      "void_catalogue", "resized catalogue to %" PRIu64, catalogue->capacity);
+      TAG, "resized catalogue to %" PRIu64, catalogue->capacity);
   }
 
   const uint64_t n = catalogue->n_voids;
@@ -255,7 +257,7 @@ int sif_catalogue_append(
 
 int sif_catalogue_trim(sif_catalogue_t* catalogue) {
   if (!catalogue) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
+    SIF_LOG_ERROR(TAG, "catalogue: NULL");
     return SIF_ERR_INVALID;
   }
 
@@ -265,7 +267,7 @@ int sif_catalogue_trim(sif_catalogue_t* catalogue) {
 
   if (target == catalogue->capacity) {
     SIF_LOG_TRACE(
-      "void_catalogue", "catalogue already exact, no trimming required");
+      TAG, "catalogue already exact, no trimming required");
     return SIF_OK;
   }
 
@@ -276,13 +278,13 @@ int sif_catalogue_trim(sif_catalogue_t* catalogue) {
     return status;
 
   SIF_LOG_TRACE(
-    "void_catalogue", "trimmed catalogue to %" PRIu64 " voids", catalogue->n_voids);
+    TAG, "trimmed catalogue to %" PRIu64 " voids", catalogue->n_voids);
   return SIF_OK;
 }
 
 int sif_catalogue_reserve_footprint(sif_catalogue_t* catalogue) {
   if (!catalogue) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
+    SIF_LOG_ERROR(TAG, "catalogue: NULL");
     return SIF_ERR_INVALID;
   }
 
@@ -292,7 +294,7 @@ int sif_catalogue_reserve_footprint(sif_catalogue_t* catalogue) {
   sif_real *fp, *fp_shell;
   sif_real* block = catalogue_footprint_alloc(catalogue->capacity, &fp, &fp_shell);
   if (!block) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue: cannot allocate the footprint columns for %" PRIu64
       " voids (%.2f GiB)",
       catalogue->capacity,
@@ -316,11 +318,11 @@ int sif_catalogue_reserve_footprint(sif_catalogue_t* catalogue) {
 int sif_catalogue_translate(sif_catalogue_t* catalogue, const sif_real offset[3]) {
   if (!catalogue || !offset) {
     SIF_LOG_ERROR(
-      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "offset");
+      TAG, "%s: NULL", !catalogue ? "catalogue" : "offset");
     return SIF_ERR_INVALID;
   }
   if (catalogue->units != SIF_COORDINATES_CARTESIAN) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue: sky coordinates (ra, dec, z), not positions; a translation "
       "would move angles");
     return SIF_ERR_INVALID;
@@ -338,11 +340,11 @@ int sif_catalogue_translate(sif_catalogue_t* catalogue, const sif_real offset[3]
 int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosmo) {
   if (!catalogue || !cosmo) {
     SIF_LOG_ERROR(
-      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "cosmology");
+      TAG, "%s: NULL", !catalogue ? "catalogue" : "cosmology");
     return SIF_ERR_INVALID;
   }
   if (catalogue->units != SIF_COORDINATES_CARTESIAN) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: already in sky coordinates");
+    SIF_LOG_ERROR(TAG, "catalogue: already in sky coordinates");
     return SIF_ERR_INVALID;
   }
 
@@ -363,7 +365,7 @@ int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosm
     }
   }
   if (bad) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue: %" PRIu64 " of %" PRIu64 " centres not finite (first: void "
       "%" PRIu64 " at (%g, %g, %g)); nothing converted",
       bad, n, first, (double)catalogue->cx[first],
@@ -395,7 +397,7 @@ int sif_catalogue_to_sky(sif_catalogue_t* catalogue, const sif_cosmology_t* cosm
   sif__distance_table_free(&table);
   catalogue->units = SIF_COORDINATES_SKY;
 
-  SIF_LOG_INFO("void_catalogue",
+  SIF_LOG_INFO(TAG,
     "catalogue: %" PRIu64 " void centres converted to the sky, out to D_C = %g "
     "Mpc/h",
     n, d_max);
@@ -406,11 +408,11 @@ int sif_catalogue_to_cartesian(
   sif_catalogue_t* catalogue, const sif_cosmology_t* cosmo) {
   if (!catalogue || !cosmo) {
     SIF_LOG_ERROR(
-      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "cosmology");
+      TAG, "%s: NULL", !catalogue ? "catalogue" : "cosmology");
     return SIF_ERR_INVALID;
   }
   if (catalogue->units != SIF_COORDINATES_SKY) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: already Cartesian");
+    SIF_LOG_ERROR(TAG, "catalogue: already Cartesian");
     return SIF_ERR_INVALID;
   }
 
@@ -439,7 +441,7 @@ int sif_catalogue_to_cartesian(
     }
   }
   if (bad) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue: %" PRIu64 " of %" PRIu64 " sky centres unusable: %" PRIu64
       " ra not finite, %" PRIu64 " dec outside [-90, 90], %" PRIu64
       " z negative or not finite (first: void %" PRIu64
@@ -466,7 +468,7 @@ int sif_catalogue_to_cartesian(
     catalogue->cz[i] = (sif_real)(d * sin(b));
   }
 
-  SIF_LOG_INFO("void_catalogue",
+  SIF_LOG_INFO(TAG,
     "catalogue: %" PRIu64 " void centres converted from the sky, out to z = "
     "%g (D_C = %g Mpc/h)",
     n, z_max, sif__distance_table_eval(&table, z_max));
@@ -586,7 +588,7 @@ static int meta_slot(sif_catalogue_t* cat, const char* key,
   sif_catalogue_meta_entry_t** slot) {
 
   if (!cat) {
-    SIF_LOG_ERROR("void_catalogue", "catalogue: NULL");
+    SIF_LOG_ERROR(TAG, "catalogue: NULL");
     return SIF_ERR_INVALID;
   }
 
@@ -595,9 +597,9 @@ static int meta_slot(sif_catalogue_t* cat, const char* key,
   const char* problem = meta_key_problem(key, k, why, sizeof why);
   if (problem) {
     if (!key)
-      SIF_LOG_ERROR("void_catalogue", "catalogue value: %s", problem);
+      SIF_LOG_ERROR(TAG, "catalogue value: %s", problem);
     else
-      SIF_LOG_ERROR("void_catalogue", "catalogue value \"%.*s%s\": %s",
+      SIF_LOG_ERROR(TAG, "catalogue value \"%.*s%s\": %s",
         META_KEY_MAX, key, strlen(key) > META_KEY_MAX ? "..." : "", problem);
     return SIF_ERR_INVALID;
   }
@@ -614,7 +616,7 @@ static int meta_slot(sif_catalogue_t* cat, const char* key,
   sif_catalogue_meta_entry_t* grown =
     realloc(cat->_meta, (cat->_n_meta + 1) * sizeof(*grown));
   if (!grown) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue value \"%s\": cannot grow the table to %u entries", k,
       cat->_n_meta + 1);
     return SIF_ERR_ALLOC;
@@ -625,7 +627,7 @@ static int meta_slot(sif_catalogue_t* cat, const char* key,
   e->key = strdup(k);
   if (!e->key) {
     SIF_LOG_ERROR(
-      "void_catalogue", "catalogue value \"%s\": cannot copy the key", k);
+      TAG, "catalogue value \"%s\": cannot copy the key", k);
     return SIF_ERR_ALLOC;
   }
   cat->_n_meta++;
@@ -648,7 +650,7 @@ int sif_catalogue_meta_int_set(
 int sif_catalogue_meta_real_set(
   sif_catalogue_t* catalogue, const char* key, double value) {
   if (!isfinite(value)) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue value \"%s\": %g is not finite (the file formats cannot hold "
       "it)",
       key ? key : "(null)", value);
@@ -668,12 +670,12 @@ int sif_catalogue_meta_string_set(
   sif_catalogue_t* catalogue, const char* key, const char* value) {
   if (!value) {
     SIF_LOG_ERROR(
-      "void_catalogue", "catalogue value \"%s\": NULL", key ? key : "(null)");
+      TAG, "catalogue value \"%s\": NULL", key ? key : "(null)");
     return SIF_ERR_INVALID;
   }
   const char* bad = strpbrk(value, "\n\r\"");
   if (bad) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue value \"%s\": contains %s at character %zu (the file formats "
       "cannot hold it)",
       key ? key : "(null)", *bad == '"' ? "a double quote" : "a line break",
@@ -682,7 +684,7 @@ int sif_catalogue_meta_string_set(
   }
   char* copy = strdup(value);
   if (!copy) {
-    SIF_LOG_ERROR("void_catalogue",
+    SIF_LOG_ERROR(TAG,
       "catalogue value \"%s\": cannot copy %zu characters",
       key ? key : "(null)", strlen(value));
     return SIF_ERR_ALLOC;
@@ -701,7 +703,7 @@ int sif_catalogue_meta_string_set(
 int sif_catalogue_meta_remove(sif_catalogue_t* catalogue, const char* key) {
   if (!catalogue || !key) {
     SIF_LOG_ERROR(
-      "void_catalogue", "%s: NULL", !catalogue ? "catalogue" : "key");
+      TAG, "%s: NULL", !catalogue ? "catalogue" : "key");
     return SIF_ERR_INVALID;
   }
   const int at = meta_find(catalogue, key);

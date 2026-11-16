@@ -39,7 +39,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define TAG "delta"
+#define TAG "model.variance_kernel"
 
 /*
  * Largest sub-interval, in ln k and in phase kR. Against the same kernel built

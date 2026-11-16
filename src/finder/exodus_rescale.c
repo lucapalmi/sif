@@ -28,7 +28,7 @@
 SIF_DEFINE_QUICKSORT(sort_real_asc, sif_real, a < b)
 SIF_DEFINE_QUICKSORT(sort_pairs_asc, refine_pair_t, a.d2 < b.d2)
 
-#define TAG "exodus_finder"
+#define TAG "finder.exodus"
 
 /*
  * --- Per-thread scratch for the radial pass ---

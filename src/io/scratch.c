@@ -32,7 +32,7 @@
 #include <time.h>
 #include <unistd.h>
 
-#define TAG "scratch"
+#define TAG "io.scratch"
 
 /* Tries at a name before giving up: a collision needs two 64-bit ids to
  * agree, so a second one failing too says something is wrong with the

@@ -36,7 +36,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#define TAG "gadget"
+#define TAG "io.gadget"
 
 /* Particles per read. Large enough that the per-read overhead vanishes, small
  * enough that the buffers (about 14 MB at this size) never matter next to the

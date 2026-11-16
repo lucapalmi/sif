@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#define TAG "structures.chain_mesh"
+
 static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
   bool consume, sif_option opt);
 
@@ -30,7 +32,7 @@ static inline int32_t iabs(int32_t v) { return v < 0 ? -v : v; }
 static void* chain_mesh_alloc_array(uint64_t bytes, const char* what) {
   void* p = sif_malloc_aligned(bytes);
   if (!p)
-    SIF_LOG_ERROR("chain_mesh", "chain mesh: cannot allocate the %s (%.2f GiB)",
+    SIF_LOG_ERROR(TAG, "chain mesh: cannot allocate the %s (%.2f GiB)",
       what, SIF__GIB(bytes));
   return p;
 }
@@ -48,18 +50,18 @@ static sif_chain_mesh_t* chain_mesh_new(uint32_t n_cells, sif_real box_length,
   const sif_field_t* field, int* status, uint64_t* n_edge) {
 
   *status =
-    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, "chain_mesh", "field");
+    sif__field_check(field, SIF__FIELD_NEED_CARTESIAN, TAG, "field");
   if (*status != SIF_OK)
     return NULL;
 
   if (n_cells == 0) {
-    SIF_LOG_ERROR("chain_mesh", "n_cells: 0 (expected > 0)");
+    SIF_LOG_ERROR(TAG, "n_cells: 0 (expected > 0)");
     *status = SIF_ERR_INVALID;
     return NULL;
   }
   if (!(box_length > 0.0f)) {
     SIF_LOG_ERROR(
-      "chain_mesh", "box_length: %g (expected > 0)", (double)box_length);
+      TAG, "box_length: %g (expected > 0)", (double)box_length);
     *status = SIF_ERR_INVALID;
     return NULL;
   }
@@ -69,7 +71,7 @@ static sif_chain_mesh_t* chain_mesh_new(uint32_t n_cells, sif_real box_length,
    * make the binning disagree with the queries, so reject it up front -- all
    * but the coordinates within rounding of a face, which the build folds. */
   *status = sif__field_check_in_box(field->x, field->y, field->z,
-    field->n_particles, box_length, "chain_mesh", "field", n_edge);
+    field->n_particles, box_length, TAG, "field", n_edge);
   if (*status != SIF_OK)
     return NULL;
 
@@ -77,7 +79,7 @@ static sif_chain_mesh_t* chain_mesh_new(uint32_t n_cells, sif_real box_length,
 
   sif_chain_mesh_t* mesh = calloc(1, sizeof(sif_chain_mesh_t));
   if (!mesh) {
-    SIF_LOG_ERROR("chain_mesh", "chain mesh: cannot allocate (%zu bytes)",
+    SIF_LOG_ERROR(TAG, "chain mesh: cannot allocate (%zu bytes)",
       sizeof(sif_chain_mesh_t));
     return NULL;
   }
@@ -109,7 +111,7 @@ static sif_chain_mesh_t* chain_mesh_new(uint32_t n_cells, sif_real box_length,
   const uint64_t table_bytes = (1 + mesh->total_cells) * sizeof(uint64_t);
   mesh->cell_offsets = sif_malloc_aligned(table_bytes);
   if (!mesh->cell_offsets) {
-    SIF_LOG_ERROR("chain_mesh",
+    SIF_LOG_ERROR(TAG,
       "chain mesh: cannot allocate the cell table (%u^3 cells, %.2f GiB)",
       n_cells, SIF__GIB(table_bytes));
     sif_chain_mesh_free(mesh);
@@ -129,7 +131,7 @@ static void chain_mesh_apply_options(sif_chain_mesh_t* mesh, sif_option opt) {
   sif_free_aligned(mesh->original_indices);
   mesh->original_indices = NULL;
 
-  SIF_LOG_TRACE("chain_mesh",
+  SIF_LOG_TRACE(TAG,
     "released the field index map (%.2f GiB); nearest-neighbour queries are "
     "unavailable on this mesh",
     (double)(mesh->n_particles * sizeof(uint64_t)) /
@@ -278,7 +280,7 @@ sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
   if (status != SIF_OK) {
     /* A warning, not a second error: the error above is the cause, and this
      * is the consequence the caller would otherwise only find later. */
-    SIF_LOG_WARNING("chain_mesh",
+    SIF_LOG_WARNING(TAG,
       "field: emptied by the failed build (its storage had already been "
       "taken over)");
     sif__error_status_set(status);
@@ -286,7 +288,7 @@ sif_chain_mesh_t* sif_chain_mesh_alloc_consume(
     return NULL;
   }
 
-  SIF_LOG_TRACE("chain_mesh",
+  SIF_LOG_TRACE(TAG,
     "took over the field's payload columns (%.2f GiB); the field is now empty",
     (double)(3 * mesh->n_particles * sizeof(sif_real)) /
       (1024.0 * 1024.0 * 1024.0));
@@ -686,7 +688,7 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
   uint32_t grid_dim = mesh->n_cells;
   const sif_real box = mesh->box_length;
 
-  SIF_LOG_TRACE("chain_mesh", "starting mesh construction");
+  SIF_LOG_TRACE(TAG, "starting mesh construction");
 
 /* PASS 0: NUMA-Aware First Touch */
 #pragma omp parallel for schedule(static)
@@ -815,7 +817,7 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
     return SIF_ERR_ALLOC;
 
   if (opt & SIF_MESH_NO_CANONICAL)
-    SIF_LOG_TRACE("chain_mesh",
+    SIF_LOG_TRACE(TAG,
       "canonical ordering skipped; cell contents are in scatter order and two "
       "identical runs may order a cell differently");
   else
@@ -824,7 +826,7 @@ static int chain_mesh_create(sif_chain_mesh_t* mesh, const sif_field_t* field,
   if (chain_mesh_sum_weights(mesh) != SIF_OK)
     return SIF_ERR_ALLOC;
 
-  SIF_LOG_TRACE("chain_mesh", "RLE atomic mesh construction complete");
+  SIF_LOG_TRACE(TAG, "RLE atomic mesh construction complete");
 
   return SIF_OK;
 }
@@ -1111,11 +1113,11 @@ static uint64_t nearest_field_index(
   const sif_chain_mesh_t* mesh, uint64_t slot, const char* who) {
 
   if (!mesh) {
-    SIF_LOG_ERROR("chain_mesh", "%s: mesh: NULL", who);
+    SIF_LOG_ERROR(TAG, "%s: mesh: NULL", who);
     return UINT64_MAX;
   }
   if (!mesh->original_indices) {
-    SIF_LOG_ERROR("chain_mesh",
+    SIF_LOG_ERROR(TAG,
       "%s: mesh: built without its index map (SIF_MESH_DROP_INDICES), so it "
       "cannot name its particles; rebuild it without that option to query "
       "neighbours",

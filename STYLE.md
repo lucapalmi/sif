@@ -475,6 +475,18 @@ call.
   asked for is an error; input that is legitimately skipped but surprising is
   a warning with a count and the first location.
 
+**Log tags.** Every file logs under one `#define TAG "area.domain"`, taken
+from the public header it implements, and never under a literal at the call
+site; the vocabulary is the list in `utils/logger.h`, which check 6 in §7
+holds the tree to. A helper shared between domains takes the caller's tag as
+its first parameter rather than having one of its own. The subject at the
+start of a message (`"field: ..."`, `"%s: ..."` for a path) stays even where
+it echoes the tag: the error record keeps the message without the tag, and
+the message is what a Python exception says.
+
+**No logging from a parallel region.** Count inside it, and log once after
+it, with the count and the first occurrence.
+
 **Validate at the boundary.** Public entry points check their arguments and
 return `SIF_ERR_INVALID`; internal helpers assume the contract holds and use
 `SIF_ASSERT` for invariants. `SIF_ASSERT` compiles away unless
@@ -546,11 +558,18 @@ done
 
 # 5. formatting
 clang-format --dry-run --Werror $(git ls-files '*.c' '*.h' | grep -v '^vendor/')
+
+# 6. log tags: literal tags at call sites, and tags not in logger.h's list
+git grep -nE 'SIF_LOG_[A-Z]+\([[:space:]]*"' -- 'src/*'
+known=$(sed -n "/The library's tags are:/,/The programs in bin/p" \
+    include/sif/utils/logger.h | grep -oE '`[a-z]+\.[a-z0-9_]+`' | tr -d '`')
+git grep -hoE '#define (TAG|SIF__[A-Z_]*TAG) "[^"]*"' -- 'src/*' \
+  | grep -oE '"[^"]*"' | tr -d '"' | sort -u | grep -vxF "$known"
 ```
 
 As of writing, (1) reports 272 identifiers, (2) reports 49 and (3) reports
 every header in the tree. That is the size of the job, and each number should
-reach zero as the per-file pass proceeds.
+reach zero as the per-file pass proceeds. (6) reports nothing, and has to stay that way.
 
 ---
 

@@ -28,6 +28,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
+#define TAG "core.system"
+
 /* Enough for the paths sif builds itself ($HOME plus two components). Anything
  * longer is refused rather than truncated: a truncated path names a real but
  * different directory, and the run would silently write somewhere else. */
@@ -44,7 +46,7 @@ int sif_system_init(sif_config_t* config) {
   /* Idempotent rather than an error: the library is up, which is what the
    * caller asked for. The configuration of the first call stays in force. */
   if (system_state) {
-    SIF_LOG_WARNING("system", "the system state is already initialised");
+    SIF_LOG_WARNING(TAG, "the system state is already initialised");
     return SIF_OK;
   }
 
@@ -55,14 +57,13 @@ int sif_system_init(sif_config_t* config) {
    * other. */
   system_state = calloc(1, sizeof(sif_system_state_t));
   if (!system_state) {
-    SIF_LOG_ERROR("system", "failed to allocate sif system state (%zu bytes)",
+    SIF_LOG_ERROR(TAG, "failed to allocate sif system state (%zu bytes)",
       sizeof(sif_system_state_t));
     return SIF_ERR_ALLOC;
   }
 
-  /* Resolve the logger first: everything below here logs, and until the state
-   * exists sif__log_impl() has to guess a level. */
-  system_state->logger.level = config ? config->log_level : SIF_LOG_LEVEL_INFO;
+  /* Resolve the logger first: everything below here logs. */
+  sif_log_level_set(config ? config->log_level : SIF_LOG_LEVEL_INFO);
 
   sif_timer_start(&system_state->total_runtime_timer);
 
@@ -90,7 +91,7 @@ int sif_system_init(sif_config_t* config) {
    * Running this way is not an error, so it is a warning. */
   const int n_procs = omp_get_num_procs();
   if (n_procs > 0 && system_state->max_threads > (uint32_t)n_procs) {
-    SIF_LOG_WARNING("system",
+    SIF_LOG_WARNING(TAG,
       "%u threads but %d processor%s available to this process: the threads "
       "will share them. Check the CPU affinity this process inherited "
       "(taskset -p, or Cpus_allowed_list in /proc/self/status)",
@@ -99,7 +100,7 @@ int sif_system_init(sif_config_t* config) {
 #else
   system_state->max_threads = 1;
   if (req_threads > 1) {
-    SIF_LOG_WARNING("system",
+    SIF_LOG_WARNING(TAG,
       "requested %u threads, but compiled without OpenMP", req_threads);
   }
 #endif
@@ -120,11 +121,11 @@ int sif_system_init(sif_config_t* config) {
     written = snprintf(base_dir, sizeof(base_dir), "%s/.sif", home);
   } else {
     written = snprintf(base_dir, sizeof(base_dir), "/tmp/.sif");
-    SIF_LOG_WARNING("system", "HOME: not set; settings, cache and wisdom go "
+    SIF_LOG_WARNING(TAG, "HOME: not set; settings, cache and wisdom go "
       "to %s, which may not outlive the job", base_dir);
   }
   if (written < 0 || (size_t)written >= sizeof(base_dir)) {
-    SIF_LOG_ERROR("system", "%s: settings directory longer than %d characters",
+    SIF_LOG_ERROR(TAG, "%s: settings directory longer than %d characters",
       base_dir, PATH_CAP - 1);
     free(system_state);
     system_state = NULL;
@@ -170,7 +171,7 @@ int sif_system_init(sif_config_t* config) {
    * a status and a library that is simply not initialised. */
   system_state->fft_mgr = sif__fft_manager_init(skip_tuning, wisdom_dir);
   if (!system_state->fft_mgr) {
-    SIF_LOG_ERROR("system", "failed to initialise FFTW");
+    SIF_LOG_ERROR(TAG, "failed to initialise FFTW");
     sif__settings_finalise();
     free(system_state);
     system_state = NULL;
@@ -185,7 +186,7 @@ int sif_system_init(sif_config_t* config) {
   char fits[64];
   sif__fits_describe(fits, sizeof(fits));
 
-  SIF_LOG_INFO("system", "sif system state initialised (threads: %u, %s, %s)",
+  SIF_LOG_INFO(TAG, "sif system state initialised (threads: %u, %s, %s)",
     system_state->max_threads, hdf5, fits);
 
   SIF_LOG_FLUSH();
@@ -194,13 +195,13 @@ int sif_system_init(sif_config_t* config) {
 
 void sif_system_finalise(void) {
   if (!system_state) {
-    SIF_LOG_WARNING("system", "the system state is not initialised");
+    SIF_LOG_WARNING(TAG, "the system state is not initialised");
     return;
   }
 
   sif_timer_stop(&system_state->total_runtime_timer);
   double total_time = sif_timer_elapsed_ms(&system_state->total_runtime_timer);
-  SIF_LOG_INFO("system",
+  SIF_LOG_INFO(TAG,
     "sif system state finalised. Total execution time: %.2f s",
     total_time / 1000);
 
@@ -216,6 +217,9 @@ void sif_system_finalise(void) {
 
   free(system_state);
   system_state = NULL;
+
+  /* Back to the level in force before init. */
+  sif_log_level_set(SIF_LOG_LEVEL_INFO);
 }
 
 /* --- deprecated names --- */
@@ -224,14 +228,14 @@ void sif_system_finalise(void) {
  * logged as well as declared: a caller that builds with deprecation warnings
  * off, or through the Python bindings, still hears about it. */
 int sif_init(sif_config_t* config) {
-  SIF_LOG_WARNING("system",
+  SIF_LOG_WARNING(TAG,
     "sif_init(): deprecated, removed in the next release: call "
     "sif_system_init()");
   return sif_system_init(config);
 }
 
 void sif_finalise(void) {
-  SIF_LOG_WARNING("system",
+  SIF_LOG_WARNING(TAG,
     "sif_finalise(): deprecated, removed in the next release: call "
     "sif_system_finalise()");
   sif_system_finalise();
@@ -244,7 +248,7 @@ sif_system_state_t* sif__system_state(void) {
    * every caller only has to pass SIF_ERR_UNINITIALISED up -- and a function
    * that returns a pointer still reports it through sif_error_status(). */
   if (!system_state) {
-    SIF_LOG_ERROR("system",
+    SIF_LOG_ERROR(TAG,
       "system state not initialised: call sif_system_init() first "
       "(pysif.system_init() in Python)");
     sif__error_status_set(SIF_ERR_UNINITIALISED);

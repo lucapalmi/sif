@@ -14,7 +14,7 @@
 #include <math.h>
 #include <stdlib.h>
 
-#define TAG "cosmology"
+#define TAG "model.cosmology"
 
 /* Width of the pieces the integral is split into. The integrand, 1/E(z), is
  * smooth, and eight Gauss-Legendre points integrate a piece this narrow to
