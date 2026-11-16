@@ -131,10 +131,10 @@ static PyObject* derived_array(PyObject* self_obj,
     return NULL;
   }
 
+  sif_error_clear();
   sif_real* values = compute(self->moments);
   if (!values) {
-    PyErr_Format(
-      PyExc_RuntimeError, "failed to compute %s; see the sif log", what);
+    py_sif_raise_failed(PyExc_RuntimeError, what);
     return NULL;
   }
 

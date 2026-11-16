@@ -35,12 +35,11 @@ static int sifCellLinkedList_init(
 
   sif_option opt = periodic ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
 
+  sif_error_clear();
   sif_cell_linked_list_t* tmp = sif_cell_linked_list_alloc(
     n_cells, (sif_real)box_length_in, (uint64_t)initial_capacity, opt);
   if (!tmp) {
-    PyErr_SetString(PyExc_ValueError,
-      "Failed to allocate sif.cell_linked_list (check n_cells, box_length and "
-      "capacity)");
+    py_sif_raise_failed(PyExc_ValueError, "CellLinkedList");
     return -1;
   }
 
@@ -143,6 +142,7 @@ static PyObject* sifCellLinkedList_ensure_capacity(
     return NULL;
   }
 
+  sif_error_clear();
   int status = sif_cell_linked_list_ensure_capacity(
     self->cll, (uint64_t)required_capacity);
 
@@ -152,7 +152,7 @@ static PyObject* sifCellLinkedList_ensure_capacity(
     return NULL;
   }
   if (status != SIF_OK) {
-    PyErr_SetString(PyExc_MemoryError, "failed to grow the cell linked list");
+    py_sif_raise_failed(PyExc_MemoryError, "CellLinkedList");
     return NULL;
   }
 

@@ -180,11 +180,22 @@ static PyMethodDef sif_module_methods[] = {
     "--\n\n"
     "Route sif's log through emit(level, tag, message), at the level\n"
     "c_level() returns. Private: pysif calls it on import."},
-  {"_log_from_threads", (PyCFunction)py_sif_log_from_threads, METH_VARARGS,
-    "_log_from_threads(message, n_threads, per_thread, release_gil)\n"
+  {"_log_sync", (PyCFunction)py_sif_log_sync_py, METH_NOARGS,
+    "_log_sync()\n"
     "--\n\n"
-    "Log a WARNING per_thread times from each of n_threads threads Python\n"
-    "does not know, as OpenMP's workers are. Private: for the tests."},
+    "Set the library's level from the pysif loggers now. Private: called\n"
+    "whenever the logging configuration changes."},
+  {"_log_level", (PyCFunction)py_sif_log_level_py, METH_NOARGS,
+    "_log_level()\n"
+    "--\n\n"
+    "The library's level, 0 (TRACE) to 5 (none). Private: for the tests."},
+  {"_log_from_threads", (PyCFunction)py_sif_log_from_threads, METH_VARARGS,
+    "_log_from_threads(message, n_threads, per_thread, release_gil, "
+    "error=False)\n"
+    "--\n\n"
+    "Log a WARNING (an ERROR if error) per_thread times from each of\n"
+    "n_threads threads Python does not know, as OpenMP's workers are.\n"
+    "Private: for the tests."},
   {"field_from_numpy", (PyCFunction)pysif_field_from_numpy,
     METH_VARARGS | METH_KEYWORDS,
     "field_from_numpy(x=None, y=None, z=None, *, ra=None, dec=None, "

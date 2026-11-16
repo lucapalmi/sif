@@ -923,6 +923,52 @@ cmp -s a.txt b.txt || fail "the prior's voids did not come back as they went in"
 [ "$(voids sky_small.txt | wc -l)" -gt "$n_large" ] ||
   fail "a survey extended from the sky added no voids"
 
+# --- the log in a file ---------------------------------------------------------
+
+cat >logged.lua <<'EOF'
+mode = "box"
+input = { path = inp or "holes.txt", format = "ascii", box_length = 100 }
+grid = { n_cells = 32 }
+finder = { radii = { 15, 12 }, threshold = -0.7, variant = "excursion-set" }
+output = "logged.txt"
+run = { log_level = "info", log_file = "logged.log", checkpoint = false }
+EOF
+
+# The whole log goes to the file, each line timed; the terminal is told where.
+run logged.lua
+expect_status 0 "a run logging to a file"
+expect_error "logging to logged.log" "a run logging to a file"
+[ -s logged.log ] || fail "the log file is empty or missing"
+untimed=$(grep -cvE '^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} \[(TRACE|DEBUG|INFO|WARNING|ERROR)\] ' logged.log)
+[ "$untimed" -eq 0 ] || fail "$untimed log line(s) without the time: $(head -3 logged.log)"
+grep -q '\[INFO\] finder.exodus: ' logged.log || fail "the finder's lines are not in the log"
+grep -q '\[INFO\] core.system: initialised' logged.log ||
+  fail "init's own lines are not in the log"
+grep -q '\[INFO\]' err.txt out.txt && fail "the log also went to the terminal"
+
+# Appended to, not replaced; --log-file wins over run.log_file.
+n_before=$(wc -l <logged.log)
+run --log-file other.log logged.lua
+expect_status 0 "--log-file"
+[ "$(wc -l <logged.log)" -eq "$n_before" ] || fail "--log-file: run.log_file was written too"
+[ -s other.log ] || fail "--log-file: nothing in other.log"
+run logged.lua
+[ "$(wc -l <logged.log)" -gt "$n_before" ] || fail "the log file was not appended to"
+
+# A run that cannot start says why on the terminal, and where the log is.
+run -D inp=no_such_input.txt logged.lua
+expect_status 2 "a run logging to a file, input missing"
+expect_error "configuration check failed: " "a run logging to a file, input missing"
+expect_error "(log: logged.log)" "a run logging to a file, input missing"
+
+# --check shows it, and finds a directory that would not take it.
+run --check logged.lua
+expect_status 0 "--check, with a log file"
+grep -qF 'log_file = "logged.log"' out.txt || fail "--check: log_file not in the resolved configuration"
+run --check --log-file no_such_dir/x.log logged.lua
+expect_status 2 "--check, a log file in a missing directory"
+expect_error "run.log_file" "--check, a log file in a missing directory"
+
 if [ "$failures" -ne 0 ]; then
   echo "$failures failure(s)"
   exit 1

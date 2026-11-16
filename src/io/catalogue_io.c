@@ -100,7 +100,7 @@ int sif_catalogue_write_ascii(
     return sif__io_os_error(TAG, filepath, "write", errno);
 
   SIF_LOG_INFO(
-    TAG, "saved %" PRIu64 " voids to %s (ASCII)", catalogue->n_voids, filepath);
+    TAG, "%s: %" PRIu64 " voids saved (ASCII)", filepath, catalogue->n_voids);
   return SIF_OK;
 }
 
@@ -634,8 +634,8 @@ sif_catalogue_t* sif_catalogue_read_ascii(const char* filepath, const char* fmt)
   catalogue->n_voids = n_voids;
 
   fclose(file);
-  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " voids from %s (ASCII%s%s)", n_voids,
-    filepath, catalogue->footprint ? ", with footprint" : "",
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " voids loaded (ASCII%s%s)", filepath,
+    n_voids, catalogue->footprint ? ", with footprint" : "",
     layout.sky ? ", on the sky" : "");
 
   return catalogue;

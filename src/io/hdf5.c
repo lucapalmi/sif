@@ -707,7 +707,7 @@ int sif_catalogue_write_hdf5(const char* filepath, const sif_catalogue_t* catalo
   warn_rows(file, filepath, G_VELOCITY, n, G_CATALOGUE);
 
   status = SIF_OK;
-  SIF_LOG_INFO(TAG, "saved %" PRIu64 " voids to %s", n, filepath);
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " voids saved", filepath, n);
   goto done;
 
 fail:
@@ -829,7 +829,7 @@ sif_catalogue_t* sif_catalogue_read_hdf5(const char* filepath) {
   close_id(group);
   close_id(file);
   sif__h5_quiet_end(&quiet);
-  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " voids from %s", n, filepath);
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " voids loaded", filepath, n);
   return cat;
 
 fail:
@@ -917,7 +917,7 @@ int sif_profiles_write_hdf5(const char* filepath,
   }
 
   status = SIF_OK;
-  SIF_LOG_INFO(TAG, "saved profiles to %s", filepath);
+  SIF_LOG_INFO(TAG, "%s: profiles saved", filepath);
 
 done:
   close_id(file);
@@ -1133,7 +1133,7 @@ int sif_size_function_write_hdf5(
   }
 
   if (status == SIF_OK)
-    SIF_LOG_INFO(TAG, "saved the size function to %s", filepath);
+    SIF_LOG_INFO(TAG, "%s: size function saved", filepath);
   else if (file >= 0)
     SIF_LOG_ERROR(TAG, "%s: write /%s: %s", filepath, G_VSF, sif__h5_kept());
 
@@ -1576,8 +1576,8 @@ sif_field_t* sif_field_read_hdf5(const char* const* paths, uint32_t n_paths,
   }
   if (sky)
     field->units = SIF_COORDINATES_SKY;
-  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " of %" PRIu64 " rows from %s%s", n_keep,
-    n_rows, paths[0], n_paths > 1 ? " and the rest" : "");
+  SIF_LOG_INFO(TAG, "%s%s: %" PRIu64 " of %" PRIu64 " rows loaded", paths[0],
+    n_paths > 1 ? " and the rest" : "", n_keep, n_rows);
   return field;
 }
 

@@ -354,8 +354,23 @@ static void test_file_sink(void) {
     text[got] = '\0';
     fclose(f);
   }
-  CHECK(strcmp(text, "[INFO] a: first\n[ERROR] b: second\n") == 0,
-    "file output:\n%s", text);
+  /* Each line starts with the time, "YYYY-MM-DD hh:mm:ss.mmm ", 24
+   * characters, and then reads as the stream sink's would. */
+  const char* want[] = {"[INFO] a: first", "[ERROR] b: second"};
+  const char* line = text;
+  for (int l = 0; l < 2; l++) {
+    const char* nl = strchr(line, '\n');
+    int y, mo, d, h, mi, sec, ms;
+    const int stamped = sscanf(line, "%4d-%2d-%2d %2d:%2d:%2d.%3d", &y, &mo, &d,
+                          &h, &mi, &sec, &ms) == 7 &&
+                        line[23] == ' ';
+    const size_t n = strlen(want[l]);
+    CHECK(nl && stamped && (size_t)(nl - line) == 24 + n &&
+            strncmp(line + 24, want[l], n) == 0,
+      "file line %d: '%.*s'", l, nl ? (int)(nl - line) : 60, line);
+    line = nl ? nl + 1 : line + strlen(line);
+  }
+  CHECK(*line == '\0', "file output has more than two lines:\n%s", text);
   unlink(path);
 
   /* Unopenable: refused with the reason, and the sink in force kept. */

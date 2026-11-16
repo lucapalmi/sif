@@ -14,6 +14,8 @@
 
 #include <time.h>
 
+#include "sif/core/macros.h"
+
 /**
  * @brief A start/stop pair of monotonic timestamps.
  *
@@ -28,14 +30,22 @@ typedef struct {
 /**
  * @brief Start, or restart, the timer.
  * @param timer Timer to stamp.
+ * @return SIF_OK, SIF_ERR_INVALID for a NULL timer, or SIF_ERR_UNSUPPORTED
+ * if the system has no monotonic clock.
+ *
+ * @note Not SIF_NODISCARD, unlike the library's other status returns: a
+ * timing is a diagnostic, and the failures above are a NULL that a timer on
+ * the stack cannot be and a clock POSIX requires. The status is there for the
+ * caller that does care, and the reason is logged either way.
  */
-void sif_timer_start(sif_timer_t* timer);
+int sif_timer_start(sif_timer_t* timer);
 
 /**
  * @brief Stop the timer, fixing the interval.
  * @param timer Timer previously passed to sif_timer_start().
+ * @return As sif_timer_start().
  */
-void sif_timer_stop(sif_timer_t* timer);
+int sif_timer_stop(sif_timer_t* timer);
 
 /**
  * @brief Elapsed time between the last start and the last stop.

@@ -1562,8 +1562,8 @@ sif_field_t* sif_field_read_gadget(const char* path, sif_gadget_format_t format,
     *out_box_length = h0.box_size * pos_scale;
 
   SIF_LOG_INFO(TAG,
-    "loaded %" PRIu64 " of %" PRIu64 " type-%u particles from %u %s file%s",
-    s.n_keep, n_total, t, h0.n_files, format_name(file_format),
+    "%s: %" PRIu64 " of %" PRIu64 " type-%u particles loaded (%u %s file%s)",
+    sp.first, s.n_keep, n_total, t, h0.n_files, format_name(file_format),
     h0.n_files == 1 ? "" : "s");
 
   return s.field;

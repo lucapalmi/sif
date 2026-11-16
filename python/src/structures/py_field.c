@@ -30,9 +30,10 @@ static int sifField_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
     return -1;
   }
 
+  sif_error_clear();
   sif_field_t* tmp = sif_field_alloc(initial_capacity);
   if (!tmp) {
-    PyErr_SetString(PyExc_MemoryError, "failed to allocate sif.field");
+    py_sif_raise_failed(PyExc_MemoryError, "Field");
     return -1;
   }
 

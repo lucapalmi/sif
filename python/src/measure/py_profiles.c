@@ -264,15 +264,13 @@ PyObject* py_sif_profiles(PyObject* self, PyObject* args, PyObject* kwds) {
      across every core and nothing below touches Python state. The mesh is
      borrowed for it; mesh_obj is kept alive by the caller's reference. */
   int status = SIF_OK;
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS status = sif_profiles(c_cat, c_mesh, (sif_real)ext,
     n_bins, options, &dens_out, compute_velocity ? &vel_out : NULL);
   PY_SIF_END_ALLOW_THREADS
 
     if (status != SIF_OK) {
-    PyErr_SetString(
-      status == SIF_ERR_ALLOC ? PyExc_MemoryError : PyExc_ValueError,
-      "Backend profile engine execution failed; see the log for the reason.");
-    return NULL;
+    return py_sif_raise(status, "profiles");
   }
 
   sifProfilesObject* obj =

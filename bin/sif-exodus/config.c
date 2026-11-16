@@ -89,8 +89,8 @@ static const char* const EXODUS_PARAMS_KEYS[] = {"overlap_fraction",
   "displace", "deconvolution", NULL};
 static const char* const OUTPUT_KEYS[] = {"path", "format", NULL};
 static const char* const PRIOR_KEYS[] = {"path", "format", "columns", NULL};
-static const char* const RUN_KEYS[] = {
-  "threads", "log_level", "tune_fft", "checkpoint", "save_memory", NULL};
+static const char* const RUN_KEYS[] = {"threads", "log_level", "tune_fft",
+  "checkpoint", "save_memory", "log_file", NULL};
 
 /* Each section's keys, to tell a setting written at the top level where it
  * belongs. */
@@ -1702,10 +1702,21 @@ static void read_run(
       type_error(r, "run", "checkpoint", "a file name, or false for none", ck);
     }
     lua_pop(L, 1);
+
+    /* run.log_file: unset or false is the terminal. */
+    const int lf = field(L, t, "log_file");
+    if (lf == LUA_TSTRING)
+      c->run.log_file = keep(c, lua_tostring(L, -1));
+    else if (!(lf == LUA_TNIL || (lf == LUA_TBOOLEAN && !lua_toboolean(L, -1))))
+      type_error(r, "run", "log_file", "a file name, or false for none", lf);
+    lua_pop(L, 1);
   } else if (type != LUA_TNIL) {
     report(r, "run", "must be a table, got a %s", lua_typename(L, type));
   }
   lua_settop(L, t - 1);
+
+  if (o && o->log_file)
+    c->run.log_file = keep(c, o->log_file);
 
   if (o && o->checkpoint) {
     c->params.checkpoint = keep(c, o->checkpoint);
@@ -2216,8 +2227,13 @@ static void write_resolved(FILE* out, const exodus_config_t* c,
     write_lua_string(out, p->checkpoint);
   else
     fputs("false", out);
-  fprintf(
-    out, ",\n  save_memory = %s,\n}\n", p->save_memory ? "true" : "false");
+  fprintf(out,
+    ",\n  save_memory = %s,\n  log_file = ", p->save_memory ? "true" : "false");
+  if (c->run.log_file)
+    write_lua_string(out, c->run.log_file);
+  else
+    fputs("false", out);
+  fputs(",\n}\n", out);
 
   /* As strings, which is how the library takes them whatever they were. */
   if (c->n_settings > 0) {
@@ -2629,6 +2645,8 @@ static uint64_t physical_memory(void) {
 }
 
 static void check_output(checker_t* ch, const exodus_params_t* p);
+static void check_dir_writable(
+  checker_t* ch, const char* key, const char* path);
 static void check_resume(checker_t* ch, const exodus_params_t* p);
 
 /* An ASCII input, every row of it, against its column format: every problem
@@ -2803,6 +2821,10 @@ int config_check(
   const exodus_params_t* p = &c->params;
   checker_t ch = {file, !summary, 0};
   input_facts_t in = {0, 0.0, false};
+
+  /* Appended to, so only its directory matters. */
+  if (c->run.log_file)
+    check_dir_writable(&ch, "run.log_file", c->run.log_file);
 
   if (p->mode == EXODUS_MODE_SURVEY) {
     check_survey(&ch, p, summary, deep);
@@ -3037,21 +3059,27 @@ static void check_resume(checker_t* ch, const exodus_params_t* p) {
 
 /* The output: a directory that takes files, and nothing lost silently when
  * it already exists. */
+/* That the directory @p path goes in takes files. */
+static void check_dir_writable(
+  checker_t* ch, const char* key, const char* path) {
+  char* dir = strdup(path);
+  if (!dir)
+    return;
+  char* slash = strrchr(dir, '/');
+  if (!slash)
+    strcpy(dir, ".");
+  else if (slash == dir)
+    slash[1] = '\0';
+  else
+    *slash = '\0';
+  if (access(dir, W_OK) != 0)
+    check_say(ch, SIF_LOG_LEVEL_ERROR, key, "cannot write into %s: %s", dir,
+      strerror(errno));
+  free(dir);
+}
+
 static void check_output(checker_t* ch, const exodus_params_t* p) {
-  char* dir = strdup(p->output.path);
-  if (dir) {
-    char* slash = strrchr(dir, '/');
-    if (!slash)
-      strcpy(dir, ".");
-    else if (slash == dir)
-      slash[1] = '\0';
-    else
-      *slash = '\0';
-    if (access(dir, W_OK) != 0)
-      check_say(ch, SIF_LOG_LEVEL_ERROR, "output.path",
-        "cannot write into %s: %s", dir, strerror(errno));
-    free(dir);
-  }
+  check_dir_writable(ch, "output.path", p->output.path);
   if (access(p->output.path, F_OK) == 0)
     check_say(ch, SIF_LOG_LEVEL_WARNING, "output.path",
       "%s exists, and will be replaced when the run completes", p->output.path);

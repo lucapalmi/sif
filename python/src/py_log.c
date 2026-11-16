@@ -25,6 +25,12 @@
  * A Python thread is one with a thread state; OpenMP's workers have none,
  * since this file is the only place that could give them one and it does
  * not.
+ *
+ * An ERROR from a Python thread is not emitted at all. It is the reason the
+ * call fails, and the binding raises it as the exception's message (see
+ * py_sif_raise()); a log line saying the same would only repeat it. One from
+ * any other thread is emitted: it is recorded on that thread, where no
+ * exception will ever read it.
  */
 
 #include "py_common.h"
@@ -165,6 +171,8 @@ static void sink_write(void* ctx, const sif_log_record_t* rec) {
     enqueue(rec);
     return;
   }
+  if (rec->level >= SIF_LOG_LEVEL_ERROR)
+    return;
 
   const PyGILState_STATE gil = PyGILState_Ensure();
   if (emitting) {
@@ -216,6 +224,19 @@ void py_sif_log_drain(void) {
   emitting = 0;
 }
 
+PyObject* py_sif_log_sync_py(PyObject* module, PyObject* args) {
+  (void)module;
+  (void)args;
+  py_sif_log_sync();
+  Py_RETURN_NONE;
+}
+
+PyObject* py_sif_log_level_py(PyObject* module, PyObject* args) {
+  (void)module;
+  (void)args;
+  return PyLong_FromLong(sif_log_level_get());
+}
+
 PyObject* py_sif_log_install(PyObject* module, PyObject* args) {
   (void)module;
   PyObject* emit_arg;
@@ -256,21 +277,26 @@ PyObject* py_sif_log_install(PyObject* module, PyObject* args) {
 typedef struct {
   const char* message;
   int count;
+  int error;
 } worker_job_t;
 
 static void* worker_log(void* arg) {
   const worker_job_t* job = arg;
-  for (int i = 0; i < job->count; i++)
-    SIF_LOG_WARNING("utils.logger", "%s", job->message);
+  for (int i = 0; i < job->count; i++) {
+    if (job->error)
+      SIF_LOG_ERROR("utils.logger", "%s", job->message);
+    else
+      SIF_LOG_WARNING("utils.logger", "%s", job->message);
+  }
   return NULL;
 }
 
 PyObject* py_sif_log_from_threads(PyObject* module, PyObject* args) {
   (void)module;
   const char* message;
-  int n_threads, per_thread, release_gil;
-  if (!PyArg_ParseTuple(
-        args, "siip", &message, &n_threads, &per_thread, &release_gil))
+  int n_threads, per_thread, release_gil, error = 0;
+  if (!PyArg_ParseTuple(args, "siip|p", &message, &n_threads, &per_thread,
+        &release_gil, &error))
     return NULL;
   if (n_threads < 1 || n_threads > 64 || per_thread < 0) {
     PyErr_SetString(PyExc_ValueError, "_log_from_threads: bad counts");
@@ -278,7 +304,7 @@ PyObject* py_sif_log_from_threads(PyObject* module, PyObject* args) {
   }
 
   pthread_t threads[64];
-  worker_job_t job = {.message = message, .count = per_thread};
+  worker_job_t job = {.message = message, .count = per_thread, .error = error};
   int started = 0;
 
   PyThreadState* saved = NULL;

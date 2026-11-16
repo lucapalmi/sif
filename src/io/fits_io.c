@@ -832,12 +832,12 @@ static int read_fits(const char* const* paths, uint32_t n_paths,
       n_paths == 2 ? "" : "s");
   if (where && *where)
     SIF_LOG_INFO(TAG,
-      "loaded %" PRIu64 " of %" PRIu64 " rows passing \"%s\" (of %" PRIu64
-      ") from %s%s",
-      n_keep, n_pass, where, n_rows, paths[0], files);
+      "%s%s: %" PRIu64 " of %" PRIu64 " rows passing \"%s\" loaded (of %" PRIu64
+      ")",
+      paths[0], files, n_keep, n_pass, where, n_rows);
   else
-    SIF_LOG_INFO(TAG, "loaded %" PRIu64 " of %" PRIu64 " rows from %s%s",
-      n_keep, n_rows, paths[0], files);
+    SIF_LOG_INFO(TAG, "%s%s: %" PRIu64 " of %" PRIu64 " rows loaded", paths[0],
+      files, n_keep, n_rows);
 
   *out_field = st.field;
   return SIF_OK;
@@ -1648,8 +1648,8 @@ int sif_catalogue_write_fits(const char* filepath, const sif_catalogue_t* catalo
 
   if (product_close(f, st, filepath) != SIF_OK)
     return SIF_ERR_IO;
-  SIF_LOG_INFO(TAG, "saved %" PRIu64 " voids to %s (FITS%s)", catalogue->n_voids,
-    filepath, sky ? ", on the sky" : "");
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " voids saved (FITS%s)", filepath,
+    catalogue->n_voids, sky ? ", on the sky" : "");
   return SIF_OK;
 }
 
@@ -1772,8 +1772,8 @@ sif_catalogue_t* sif_catalogue_read_fits(const char* filepath) {
   if (sky)
     cat->units = SIF_COORDINATES_SKY;
 
-  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " voids from %s (FITS%s)", cat->n_voids,
-    filepath, sky ? ", on the sky" : "");
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " voids loaded (FITS%s)", filepath,
+    cat->n_voids, sky ? ", on the sky" : "");
   return cat;
 }
 
@@ -1852,7 +1852,7 @@ int sif_profiles_write_fits(const char* filepath,
 
   if (product_close(f, st, filepath) != SIF_OK)
     return SIF_ERR_IO;
-  SIF_LOG_INFO(TAG, "saved profiles to %s (FITS)", filepath);
+  SIF_LOG_INFO(TAG, "%s: profiles saved (FITS)", filepath);
   return SIF_OK;
 }
 
@@ -2068,7 +2068,7 @@ int sif_size_function_write_fits(
 
   if (product_close(f, st, filepath) != SIF_OK)
     return SIF_ERR_IO;
-  SIF_LOG_INFO(TAG, "saved the size function to %s (FITS)", filepath);
+  SIF_LOG_INFO(TAG, "%s: size function saved (FITS)", filepath);
   return SIF_OK;
 }
 

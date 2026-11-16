@@ -55,6 +55,8 @@ typedef struct {
     /* One of the SIF_LOG_LEVEL_* constants. */
     uint8_t log_level;
     bool tune_fft;
+    /* run.log_file: where the log goes, or NULL for the terminal. */
+    const char* log_file;
   } run;
 
   /* settings = { key = value }: the library's settings for this run, for
@@ -82,6 +84,8 @@ typedef struct {
   const char* checkpoint;
   /* --no-checkpoint: run.checkpoint = false. */
   bool no_checkpoint;
+  /* --log-file PATH: run.log_file = PATH. */
+  const char* log_file;
 } config_overrides_t;
 
 /* Run the script at `path` and read it into `config`, with `overrides`

@@ -478,8 +478,8 @@ static int read_prior(const exodus_params_t* p, sif_catalogue_t** prior,
     *as_given = copy;
   }
 
-  SIF_LOG_INFO(TAG, "prior: %" PRIu64 " voids from %s%s", cat->n_voids,
-    p->prior.path, *as_given ? ", taken off the sky" : "");
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " prior voids loaded%s", p->prior.path,
+    cat->n_voids, *as_given ? ", taken off the sky" : "");
   *prior = cat;
   return SIF_OK;
 }

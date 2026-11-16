@@ -132,6 +132,7 @@ PyObject* py_sif_delta_covariance_pk(
 
   double* cov = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS cov = sif_delta_covariance_pk(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
@@ -148,8 +149,7 @@ PyObject* py_sif_delta_covariance_pk(
     Py_DECREF(sigma_arr);
     Py_DECREF(high_arr);
     Py_DECREF(dvar_arr);
-    PyErr_SetString(
-      PyExc_RuntimeError, "failed to evaluate the covariance; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "delta_covariance_pk");
     return NULL;
   }
 
@@ -191,6 +191,7 @@ PyObject* py_sif_ep_barrier_smt(
     return NULL;
 
   const npy_intp n = PyArray_SIZE(sigma_arr);
+  sif_error_clear();
   sif_real* values =
     sif_ep_barrier_smt((const sif_real*)PyArray_DATA(sigma_arr), (uint32_t)n,
       (sif_real)alpha, (sif_real)beta, (sif_real)gamma);
@@ -198,8 +199,7 @@ PyObject* py_sif_ep_barrier_smt(
   Py_DECREF(sigma_arr);
 
   if (!values) {
-    PyErr_SetString(
-      PyExc_RuntimeError, "failed to build the barrier; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "ep_barrier_smt");
     return NULL;
   }
 
@@ -371,6 +371,7 @@ PyObject* py_sif_ep_first_crossing_counts(
 
   uint64_t* counts = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS counts =
     sif_ep_first_crossing_counts((const sif_real*)PyArray_DATA(w.radii),
       (uint32_t)n, (const double*)PyArray_DATA(w.cov),
@@ -382,8 +383,7 @@ PyObject* py_sif_ep_first_crossing_counts(
 
   if (!counts) {
     Py_XDECREF(collapse_arr);
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to evaluate the first-crossing counts; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "ep_first_crossing_counts");
     return NULL;
   }
 
@@ -423,6 +423,7 @@ PyObject* py_sif_ep_multiplicity_function(
 
   sif_real* values = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_ep_multiplicity_function((const sif_real*)PyArray_DATA(w.radii),
       (uint32_t)n, (const double*)PyArray_DATA(w.cov),
@@ -434,8 +435,7 @@ PyObject* py_sif_ep_multiplicity_function(
 
   if (!values) {
     Py_XDECREF(counts_arr);
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to evaluate the multiplicity function; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "ep_multiplicity_function");
     return NULL;
   }
 

@@ -16,6 +16,10 @@ Current version: v0.5 release 0
 - Diagnostics that fired once per radius (sigma moments, BBKS, the
   covariance) or per bad settings line now warn once, with a count and range
 - `sif_bitmask_clear_all()` returns a status (breaking)
+- pysif's exceptions carry the library's own reason, never "see the sif log";
+  an error is raised, no longer also logged
+- `sif_timer_start()` and `sif_timer_stop()` return a status
+- "loaded" and "saved" messages lead with the file: `path: N voids loaded`
 - The size functions (`sif_size_function_svdw`, `_vdn`, `_evm`, `_evm_kernel`,
   `_evm_walk`; pysif `size_function_*`) take the non-linear threshold, strictly
   between -1 and 0, and convert it to the linear barrier inside; the argument
@@ -61,8 +65,10 @@ Current version: v0.5 release 0
   check as dicts, or printed as sif-inspect prints them
 - pysif logs through the `logging` module, under `pysif.<tag>`, from any
   thread; like any library's, its INFO is hidden until configured
+- `sif-exodus`: `run.log_file` (or `--log-file`) writes the log to a file,
+  each line timed; the terminal still says why a run failed
 - Swappable log backend: `sif_log_sink_set()` for a custom sink, or
-  `sif_log_sink_stream_set()` / `sif_log_sink_file_set()`; `sif_log_level_set()`
+  `sif_log_sink_stream_set()` / `sif_log_sink_file_set()` (each line timed); `sif_log_level_set()`
   changes the level after init
 - Exodus Lagrangian overlap: voids kept apart on R (1 + threshold)^(1/3), the
   catalogue keeping R. Variant `"lagrangian-overlap"`, `overlap_type=` in
@@ -75,6 +81,8 @@ Current version: v0.5 release 0
   instead of returning zero counts
 - A grid cache file that cannot be read or written no longer leaves an error
   behind a call that succeeded
+- pysif on Python 3.10: `except FileNotFoundError`, and the other `OSError`
+  subclasses, now catch pysif's errors
 
 ## v0.5.0 -- 5/11/2026
 

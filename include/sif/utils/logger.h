@@ -19,8 +19,9 @@
  * force (sif_log_sink_set()). The default sink writes to stdout, or to stderr
  * from WARNING upwards, coloured when the destination is a terminal;
  * sif_log_sink_stream_set() and sif_log_sink_file_set() send everything to
- * one stream instead. The built-in sinks write each message with a single
- * call, so lines logged concurrently from an OpenMP region do not interleave.
+ * one stream instead, the file sink with the time on each line. The built-in
+ * sinks write each message with a single call, so lines logged from
+ * concurrent threads do not interleave.
  *
  * An ERROR is also kept in the error record (sif_error_message()) whatever
  * the level and the sink.
@@ -183,7 +184,8 @@ SIF_NODISCARD int sif_log_sink_stream_set(FILE* stream);
 
 /**
  * @brief Write every message to the file at @p path, uncoloured, as
- * `[LEVEL] tag: message`, appending if it exists.
+ * `YYYY-MM-DD hh:mm:ss.mmm [LEVEL] tag: message` in local time, appending if
+ * it exists.
  *
  * The library owns the file and closes it when the sink is replaced. Each
  * message is written with one call to the stream, so lines from concurrent

@@ -26,9 +26,10 @@ static int sifBitmask_init(PyObject* self_obj, PyObject* args, PyObject* kwds) {
     return -1;
   }
 
+  sif_error_clear();
   sif_bitmask_t* tmp = sif_bitmask_alloc(n_bits);
   if (!tmp) {
-    PyErr_SetString(PyExc_MemoryError, "Failed to allocate sif.bitmask");
+    py_sif_raise_failed(PyExc_MemoryError, "Bitmask");
     return -1;
   }
 

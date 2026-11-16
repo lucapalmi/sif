@@ -173,7 +173,7 @@ static PyMethodDef measure_methods[] = {
     "    DeltaDistribution: One PDF per radius.\n\n"
     "Raises:\n"
     "    RuntimeError: If pysif.system_init() has not been called, or the\n"
-    "        computation failed (the sif log says why)."},
+    "        computation failed (the message says why)."},
 
   {"delta_moments_grid", (PyCFunction)py_sif_delta_moments_grid,
     METH_VARARGS | METH_KEYWORDS,
@@ -202,7 +202,7 @@ static PyMethodDef measure_methods[] = {
     "    DeltaMoments: sigma_0..sigma_order at every radius.\n\n"
     "Raises:\n"
     "    RuntimeError: If pysif.system_init() has not been called, or the\n"
-    "        computation failed (the sif log says why)."},
+    "        computation failed (the message says why)."},
 
   {NULL, NULL, 0, NULL}};
 

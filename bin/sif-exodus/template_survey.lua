@@ -131,6 +131,9 @@ run = {
   -- same catalogue. The file goes in the setting scratch_directory (below),
   -- so put that on a fast filesystem with room for the grid.
   save_memory = false,
+  -- The log, to a file instead of the terminal, each line with its time;
+  -- appended to. The terminal still gets the reason if the run fails.
+  -- log_file = "exodus.log",
 }
 
 -- The library's settings, for this run only: over $SIF_<KEY> and the sif

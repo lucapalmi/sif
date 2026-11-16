@@ -285,6 +285,11 @@ sif-exodus --check exodus.lua
 sif-exodus exodus.lua
 ```
 
+In a batch job, `run = { log_file = "exodus.log" }` (or `--log-file
+exodus.log`) sends the log to a file, appended to, with the time on every
+line. The job's own output then says only where the log went and, if the run
+fails, why.
+
 ::::
 
 :::::

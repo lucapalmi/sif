@@ -39,13 +39,13 @@ static int sifTessellation_init(
   const sif_option opt = use_pbc ? SIF_PBC_PERIODIC : SIF_PBC_OPEN;
 
   sif_tessellation_t* tmp = NULL;
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS tmp =
     sif_tessellation_alloc(mesh->mesh, samples_per_tracer, (uint64_t)seed, opt);
   PY_SIF_END_ALLOW_THREADS
 
     if (!tmp) {
-    PyErr_SetString(PyExc_ValueError,
-      "Failed to build pysif.Tessellation; see the sif log for the reason");
+    py_sif_raise_failed(PyExc_ValueError, "Tessellation");
     return -1;
   }
 
@@ -151,6 +151,7 @@ static PyObject* sifTessellation_mesh(
   const sif_option opt = drop_indices ? SIF_MESH_DROP_INDICES : SIF_DEFAULT;
 
   sif_chain_mesh_t* tmp = NULL;
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS tmp =
     consume
       ? sif_chain_mesh_alloc_tessellation_consume(self->tess, n_cells, opt)
@@ -158,9 +159,7 @@ static PyObject* sifTessellation_mesh(
   PY_SIF_END_ALLOW_THREADS
 
     if (!tmp) {
-    PyErr_SetString(PyExc_ValueError,
-      "Failed to bin the samples into a ChainMesh; if consume=True was used "
-      "before, the samples are already gone");
+    py_sif_raise_failed(PyExc_ValueError, "Tessellation.to_chain_mesh");
     return NULL;
   }
 

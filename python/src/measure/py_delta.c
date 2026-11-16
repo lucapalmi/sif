@@ -88,9 +88,7 @@ PyObject* py_sif_delta_distribution_grid(
   if (!tmp && sif_error_status() == SIF_ERR_UNINITIALISED)
     return py_sif_raise(SIF_ERR_UNINITIALISED, "delta_distribution_grid");
   if (!tmp) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "Failed to compute the delta distribution; see the sif log for the "
-      "cause.");
+    py_sif_raise_failed(PyExc_RuntimeError, "delta_distribution_grid");
     return NULL;
   }
 
@@ -151,9 +149,7 @@ PyObject* py_sif_delta_moments_grid(
   if (!tmp && sif_error_status() == SIF_ERR_UNINITIALISED)
     return py_sif_raise(SIF_ERR_UNINITIALISED, "delta_moments_grid");
   if (!tmp) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "Failed to compute the moments from the field; see the sif log for the "
-      "cause.");
+    py_sif_raise_failed(PyExc_RuntimeError, "delta_moments_grid");
     return NULL;
   }
 

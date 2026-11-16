@@ -136,7 +136,7 @@ int sif_field_write(
     return SIF_ERR_IO;
   }
 
-  SIF_LOG_INFO(TAG, "wrote %" PRIu64 " particles to %s", n, filepath);
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " particles saved", filepath, n);
   return SIF_OK;
 }
 
@@ -356,8 +356,8 @@ sif_field_t* sif_field_read(const char* filepath, double* out_box_length) {
     return NULL;
   }
 
-  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " particles from %s",
-    header.n_particles, filepath);
+  SIF_LOG_INFO(
+    TAG, "%s: %" PRIu64 " particles loaded", filepath, header.n_particles);
   return field;
 }
 
@@ -882,7 +882,7 @@ int sif_field_read_ascii_into(sif_field_t* field, const char* filepath,
     field->n_particles = loaded;
   }
 
-  SIF_LOG_INFO(TAG, "loaded %" PRIu64 " particles from %s", loaded, filepath);
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " particles loaded", filepath, loaded);
   if (skipped)
     SIF_LOG_DEBUG(
       TAG, "%s: %" PRIu64 " blank or comment lines", filepath, skipped);
@@ -1324,7 +1324,7 @@ int sif_field_read_binary_into(sif_field_t* field, const char* filepath,
 
   format_loaded(field, &f);
   SIF_LOG_INFO(
-    TAG, "loaded %" PRIu64 " particles from %s", field->n_particles, filepath);
+    TAG, "%s: %" PRIu64 " particles loaded", filepath, field->n_particles);
   return SIF_OK;
 }
 

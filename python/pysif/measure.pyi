@@ -208,7 +208,7 @@ def delta_distribution_grid(grid: Grid, radii: ArrayLike, n_bins: int,
 
     Raises:
         RuntimeError: If pysif.system_init() has not been called, or the
-            computation failed (the sif log says why).
+            computation failed (the message says why).
     """
 
 def delta_moments_grid(grid: Grid, radii: ArrayLike, order: int,
@@ -243,7 +243,7 @@ def delta_moments_grid(grid: Grid, radii: ArrayLike, order: int,
 
     Raises:
         RuntimeError: If pysif.system_init() has not been called, or the
-            computation failed (the sif log says why).
+            computation failed (the message says why).
     """
 
 @final

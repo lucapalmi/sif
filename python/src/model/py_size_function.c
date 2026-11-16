@@ -112,6 +112,7 @@ static PyObject* size_function(
 
   sif_size_function_t* vsf = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS vsf = compute((const sif_real*)PyArray_DATA(k_arr),
     (const sif_real*)PyArray_DATA(pk_arr), (uint32_t)n_points,
     (const sif_real*)PyArray_DATA(radii_arr), (uint32_t)n_radii,
@@ -123,8 +124,7 @@ static PyObject* size_function(
   Py_DECREF(radii_arr);
 
   if (!vsf) {
-    PyErr_Format(PyExc_RuntimeError,
-      "failed to evaluate the %s size function; see the sif log", name);
+    py_sif_raise_failed(PyExc_RuntimeError, "size_function");
     return NULL;
   }
 
@@ -403,6 +403,7 @@ PyObject* py_sif_delta_sigma_slope_pk(
 
   sif_real* values = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_delta_sigma_slope_pk((const sif_real*)PyArray_DATA(k_arr),
       (const sif_real*)PyArray_DATA(pk_arr), (uint32_t)n_points,
@@ -414,8 +415,7 @@ PyObject* py_sif_delta_sigma_slope_pk(
   Py_DECREF(radii_arr);
 
   if (!values) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to evaluate the sigma slope; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "delta_sigma_slope_pk");
     return NULL;
   }
 
@@ -547,6 +547,7 @@ PyObject* py_sif_svdw_multiplicity_function(
   const npy_intp n = PyArray_SIZE(sigma_arr);
   sif_real* values = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_svdw_multiplicity_function((const sif_real*)PyArray_DATA(sigma_arr),
       (uint32_t)n, (sif_real)delta_v, (sif_real)delta_c);
@@ -555,8 +556,7 @@ PyObject* py_sif_svdw_multiplicity_function(
     Py_DECREF(sigma_arr);
 
   if (!values) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to evaluate the multiplicity function; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "svdw_multiplicity_function");
     return NULL;
   }
 

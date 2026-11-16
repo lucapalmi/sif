@@ -61,6 +61,7 @@ PyObject* py_sif_delta_moments_pk(
 
   sif_delta_moments_t* tmp = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS tmp = sif_delta_moments_pk(
     (const sif_real*)PyArray_DATA(k_arr), (const sif_real*)PyArray_DATA(pk_arr),
     (uint32_t)n_points, (const sif_real*)PyArray_DATA(radii_arr),
@@ -72,9 +73,7 @@ PyObject* py_sif_delta_moments_pk(
   Py_DECREF(radii_arr);
 
   if (!tmp) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "Failed to evaluate the moments from P(k); see the sif log for the "
-      "cause.");
+    py_sif_raise_failed(PyExc_RuntimeError, "delta_moments_pk");
     return NULL;
   }
 

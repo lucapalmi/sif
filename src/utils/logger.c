@@ -15,6 +15,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 #include <unistd.h>
 
 #define TAG "utils.logger"
@@ -198,6 +199,23 @@ static void write_stream(void* ctx, const sif_log_record_t* rec) {
 
 static void flush_stream(void* ctx) { fflush((FILE*)ctx); }
 
+/* As write_stream(), with the wall-clock time first: a log file is read after
+ * the fact, often beside a scheduler's own records, and the time is what
+ * lines them up. To the millisecond, which separates the steps of a rung. */
+static void write_file(void* ctx, const sif_log_record_t* rec) {
+  struct timespec now;
+  struct tm local;
+  char stamp[32] = "";
+  if (clock_gettime(CLOCK_REALTIME, &now) == 0 &&
+      localtime_r(&now.tv_sec, &local))
+    strftime(stamp, sizeof(stamp), "%Y-%m-%d %H:%M:%S", &local);
+  else
+    now.tv_nsec = 0;
+
+  fprintf((FILE*)ctx, "%s.%03ld [%s] %s: %s\n", stamp, now.tv_nsec / 1000000L,
+    level_strings[rec->level], rec->tag, rec->message);
+}
+
 static const sif_log_sink_t default_sink = {
   .write = write_default, .flush = flush_default, .ctx = NULL};
 
@@ -259,7 +277,7 @@ int sif_log_sink_file_set(const char* path) {
   setvbuf(f, NULL, _IOLBF, 0);
 
   const sif_log_sink_t next = {
-    .write = write_stream, .flush = flush_stream, .ctx = f};
+    .write = write_file, .flush = flush_stream, .ctx = f};
   sink_install(&next, f);
   return SIF_OK;
 }

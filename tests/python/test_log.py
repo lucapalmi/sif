@@ -37,13 +37,45 @@ def test_message_reaches_its_logger(caplog):
     assert got[0].filename == "test_log.py"
 
 
-def test_error_is_logged_and_raised(caplog):
+def test_error_is_raised_not_logged(caplog):
+    # The exception carries the reason; a log line would only repeat it.
     caplog.set_level(logging.WARNING, logger="pysif")
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises(FileNotFoundError, match="no_such_snapshot"):
         pysif.io.gadget_header(str(GADGET / "no_such_snapshot"))
-    got = [r for r in caplog.records if r.name.startswith("pysif.io.")]
-    assert got and got[0].levelno == logging.ERROR
-    assert "no_such_snapshot" in got[0].getMessage()
+    assert [r for r in caplog.records if r.name.startswith("pysif.")] == []
+
+
+def test_failure_carries_the_library_reason():
+    # Bindings once raised "failed; see the sif log": with errors no longer
+    # logged, the message has to be the library's own.
+    with pytest.raises(ValueError, match="n_cells=0"):
+        pysif.CellLinkedList(0, 100.0, 10)
+
+
+def test_worker_error_is_logged(caplog):
+    # Recorded on a thread no exception reads, so the log is all there is.
+    caplog.set_level(logging.WARNING, logger="pysif")
+    _pysif._log_from_threads("worker failed", 2, 1, True, True)
+    got = [r for r in records(caplog, "pysif.utils.logger")
+           if r.getMessage() == "worker failed"]
+    assert len(got) == 2 and all(r.levelno == logging.ERROR for r in got)
+
+
+def test_level_follows_set_level_at_once():
+    # No call into sif in between: the hook on logging's cache clearing is
+    # what moves the library's level, for calls that keep the GIL.
+    root = logging.getLogger("pysif")
+    saved = root.level
+    try:
+        root.setLevel(logging.ERROR)
+        assert _pysif._log_level() == 4
+        root.setLevel(logging.DEBUG)
+        assert _pysif._log_level() == 1
+        logging.disable(logging.CRITICAL)
+        assert _pysif._log_level() == 5
+    finally:
+        logging.disable(logging.NOTSET)
+        root.setLevel(saved)
 
 
 def test_level_follows_the_loggers(caplog):

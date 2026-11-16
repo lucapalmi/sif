@@ -1107,7 +1107,7 @@ int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
       const int hit = sif__grid_read_into_keyed(grid, final_path, expect);
       sif__log_demote_end();
       if (hit == SIF_OK) {
-        SIF_LOG_INFO(TAG, "loaded cached .xgrid from %s", final_path);
+        SIF_LOG_INFO(TAG, "%s: cached grid loaded", final_path);
         return SIF_OK;
       }
 

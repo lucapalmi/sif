@@ -117,9 +117,9 @@ int sif_profiles_write_ascii(const char* filepath,
   if (fclose(file) != 0 || !ok)
     return sif__io_os_error(TAG, filepath, "write", errno);
 
-  SIF_LOG_INFO(TAG, "saved %" PRIu64 " profiles (%s) to %s (ASCII)", n_voids,
-    dens && vel ? "density and velocity" : (dens ? "density" : "velocity"),
-    filepath);
+  SIF_LOG_INFO(TAG, "%s: %" PRIu64 " %s profiles saved (ASCII)", filepath,
+    n_voids,
+    dens && vel ? "density and velocity" : (dens ? "density" : "velocity"));
   return SIF_OK;
 }
 
@@ -576,7 +576,7 @@ int sif_profiles_read_ascii(const char* filepath, sif_catalogue_t** out_cat,
   fclose(file);
 
   SIF_LOG_INFO(
-    TAG, "loaded %" PRIu64 " profiles from %s (ASCII)", n_voids, filepath);
+    TAG, "%s: %" PRIu64 " profiles loaded (ASCII)", filepath, n_voids);
   return SIF_OK;
 
 fail:

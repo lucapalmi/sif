@@ -105,6 +105,7 @@ PyObject* py_sif_bbks_number_density_differential(
 
   sif_real* values = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_bbks_number_density_differential((const sif_real*)PyArray_DATA(nu_arr),
       (const sif_real*)PyArray_DATA(gamma_arr),
@@ -116,9 +117,7 @@ PyObject* py_sif_bbks_number_density_differential(
   Py_DECREF(r_star_arr);
 
   if (!values) {
-    PyErr_SetString(PyExc_ValueError,
-      "Failed to evaluate the BBKS number density; see the sif log for the "
-      "cause.");
+    py_sif_raise_failed(PyExc_ValueError, "bbks_number_density_differential");
     return NULL;
   }
 
@@ -159,13 +158,13 @@ PyObject* py_sif_bbks_number_density_cumulative(
     return NULL;
   sif_real* values = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS values =
     sif_bbks_number_density_cumulative((sif_real)delta, moments, options);
   PY_SIF_END_ALLOW_THREADS
 
     if (!values) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to compute the cumulative number density; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "bbks_number_density_cumulative");
     return NULL;
   }
 
@@ -224,13 +223,13 @@ PyObject* py_sif_size_function_bbks(
 
   sif_size_function_t* vsf = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS vsf =
     sif_size_function_bbks((sif_real)delta, moments, options);
   PY_SIF_END_ALLOW_THREADS
 
     if (!vsf) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "failed to compute the BBKS size function; see the sif log");
+    py_sif_raise_failed(PyExc_RuntimeError, "size_function_bbks");
     return NULL;
   }
 

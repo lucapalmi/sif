@@ -148,7 +148,7 @@ static void fft_load_wisdom(const sif_fft_manager_t* mgr) {
   fft_wisdom_path(mgr->wisdom_dir, path, sizeof(path));
 
   if (real_fftw_import_wisdom_from_filename(path) != 0)
-    SIF_LOG_INFO(TAG, "loaded wisdom from %s", path);
+    SIF_LOG_INFO(TAG, "%s: wisdom loaded", path);
 }
 
 /*

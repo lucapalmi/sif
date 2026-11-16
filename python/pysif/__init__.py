@@ -37,6 +37,7 @@ from . import _log
 
 # What sif logs goes to the logging module from here on, under pysif.<tag>.
 _pysif._log_install(_log.emit, _log.c_level)
+_log.follow_levels(_pysif._log_sync)
 
 # The functions defined at the root report _pysif as their module, which
 # autodoc reads as "imported from elsewhere" and leaves out of the pysif page.

@@ -11,10 +11,11 @@ configuration selects and silences it: ``logging.getLogger("pysif.io")``
 is every reader and writer. sif's TRACE level is logging level 5, named
 "TRACE" unless something else has named it already.
 
-The compiled half (python/src/py_log.c) calls emit() for each message and
-c_level() before each call into the library, so that a message no pysif
-logger would accept is never formatted at all. Private: configure the
-loggers, not this module.
+The compiled half (python/src/py_log.c) calls emit() for each message, and
+keeps the library's own level at c_level(), so that a message no pysif logger
+would accept is never formatted at all. It re-reads c_level() whenever the
+logging configuration changes -- see follow_levels() -- and before each call
+that releases the GIL. Private: configure the loggers, not this module.
 """
 
 import logging
@@ -57,3 +58,27 @@ def c_level():
         if level <= py_level:
             return sif_level
     return len(_LEVELS)
+
+
+def follow_levels(resync):
+    """Call resync() whenever a logger's level changes.
+
+    logging clears its loggers' level caches, through Manager._clear_cache(),
+    on every change that can move an effective level: setLevel(), disable(),
+    and the configuration functions, which use setLevel(). Hooking that is
+    what keeps the library's level right for calls that do not release the
+    GIL, which do not re-read it themselves. Returns whether the hook went
+    in; without it the level still follows at every call that releases the
+    GIL.
+    """
+    manager = logging.Logger.manager
+    clear_cache = getattr(manager, "_clear_cache", None)
+    if clear_cache is None:
+        return False
+
+    def _clear_cache():
+        clear_cache()
+        resync()
+
+    manager._clear_cache = _clear_cache
+    return True

@@ -134,12 +134,12 @@ static PyObject* read_field_impl(
   sif_field_t* field = NULL;
 
   /* Drop GIL while 144 threads hit the disk via parallel pread() */
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS field = sif_field_read(filepath, &box_length);
   PY_SIF_END_ALLOW_THREADS
 
     if (!field) {
-    return PyErr_Format(
-      PyExc_IOError, "Failed to read .xfield from %s", filepath);
+    return py_sif_raise_failed(PyExc_IOError, "read_field");
   }
 
   /* Off by default: folding coordinates is only ever right for a field that is
@@ -275,12 +275,12 @@ static PyObject* read_grid_impl(
 
   sif_grid_t* grid = NULL;
 
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS grid = sif_grid_read(filepath);
   PY_SIF_END_ALLOW_THREADS
 
     if (!grid) {
-    return PyErr_Format(
-      PyExc_IOError, "Failed to read .xgrid from %s", filepath);
+    return py_sif_raise_failed(PyExc_IOError, "read_grid");
   }
 
   sifGridObject* obj = (sifGridObject*)sifGridType.tp_alloc(&sifGridType, 0);

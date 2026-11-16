@@ -27,6 +27,8 @@
 void py_sif_log_sync(void);
 void py_sif_log_drain(void);
 PyObject* py_sif_log_install(PyObject* module, PyObject* args);
+PyObject* py_sif_log_sync_py(PyObject* module, PyObject* args);
+PyObject* py_sif_log_level_py(PyObject* module, PyObject* args);
 PyObject* py_sif_log_from_threads(PyObject* module, PyObject* args);
 
 #define PY_SIF_BEGIN_ALLOW_THREADS                                             \
@@ -100,11 +102,15 @@ static inline PyObject* py_sif_raise(int status, const char* what) {
   }
 
   if (err) {
-    /* OSError(errno, text) picks the subclass for the errno itself. */
-    PyObject* args = Py_BuildValue("(is)", err, msg);
-    if (args) {
-      PyErr_SetObject(PyExc_OSError, args);
-      Py_DECREF(args);
+    /* OSError(errno, text) picks the subclass for the errno itself. It is
+     * built here and raised as what it is: set with OSError as its type, the
+     * error keeps OSError as its type once normalised, and on Python 3.10,
+     * whose except clauses match on that type, `except FileNotFoundError`
+     * would not catch it. */
+    PyObject* exc = PyObject_CallFunction(PyExc_OSError, "is", err, msg);
+    if (exc) {
+      PyErr_SetObject((PyObject*)Py_TYPE(exc), exc);
+      Py_DECREF(exc);
     }
     return NULL;
   }
@@ -117,6 +123,30 @@ static inline PyObject* py_sif_raise(int status, const char* what) {
   else if (status == SIF_ERR_UNSUPPORTED || status == SIF_ERR_UNINITIALISED)
     type = PyExc_RuntimeError;
   PyErr_SetString(type, msg);
+  return NULL;
+}
+
+/*
+ * @brief py_sif_raise() for a call that returned NULL or failed without a
+ * status of its own -- most of the computations, which do not set
+ * sif_error_status() as the readers do.
+ *
+ * The message is the library's, as with py_sif_raise(): what sif logged as
+ * the error goes to the exception, not to the log, so nothing else carries
+ * it. A status recorded by the call picks the class as py_sif_raise() does;
+ * without one, @p fallback is the class -- the one the binding has always
+ * raised, so that callers' except clauses keep working. Always returns NULL.
+ */
+static inline PyObject* py_sif_raise_failed(
+  PyObject* fallback, const char* what) {
+  const int status = sif_error_status();
+  if (status != SIF_OK || sif_error_errno())
+    return py_sif_raise(status, what);
+  const char* msg = sif_error_message();
+  if (msg[0])
+    PyErr_SetString(fallback, msg);
+  else
+    PyErr_Format(fallback, "%s: failed (no reason recorded)", what);
   return NULL;
 }
 

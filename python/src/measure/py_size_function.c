@@ -44,12 +44,13 @@ PyObject* py_sif_size_function_catalogue(
   sifCatalogueObject* cat = (sifCatalogueObject*)cat_obj;
 
   sif_size_function_t* tmp = NULL;
+  sif_error_clear();
   PY_SIF_BEGIN_ALLOW_THREADS tmp = sif_size_function_catalogue(cat->catalogue,
     (sif_real)box_length, n_bins, options, (sif_real)r_min, (sif_real)r_max);
   PY_SIF_END_ALLOW_THREADS
 
     if (!tmp) {
-    PyErr_SetString(PyExc_RuntimeError, "Failed to compute size function");
+    py_sif_raise_failed(PyExc_RuntimeError, "size_function");
     return NULL;
   }
 
@@ -196,6 +197,7 @@ PyObject* py_sif_size_function_combine(
   }
 
   /* 4. Execute C Engine */
+  sif_error_clear();
   sif_size_function_t* tmp = sif_size_function_combine(
     vsfs_arr, (uint32_t)n_vsfs, master_bins, domains_arr, options);
 
@@ -205,8 +207,7 @@ PyObject* py_sif_size_function_combine(
     free(domains_arr);
 
   if (!tmp) {
-    PyErr_SetString(PyExc_RuntimeError,
-      "Failed to combine size functions. Check bounds and overlap.");
+    py_sif_raise_failed(PyExc_RuntimeError, "size_function_combine");
     return NULL;
   }
 

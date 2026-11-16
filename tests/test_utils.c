@@ -487,20 +487,22 @@ static void test_timer(void) {
   printf("timer\n");
 
   sif_timer_t t;
-  sif_timer_start(&t);
+  CHECK(sif_timer_start(&t) == SIF_OK, "start failed");
 
   /* Something the optimiser cannot discard, so the interval is real. */
   volatile double spin = 0.0;
   for (int i = 0; i < 2000000; i++)
     spin += (double)i;
 
-  sif_timer_stop(&t);
+  CHECK(sif_timer_stop(&t) == SIF_OK, "stop failed");
 
   const double ms = sif_timer_elapsed_ms(&t);
   CHECK(ms >= 0.0, "elapsed time came back negative (%g ms)", ms);
   CHECK(ms < 60000.0, "elapsed time is implausible (%g ms)", ms);
 
   CHECK(sif_timer_elapsed_ms(NULL) == -1.0, "a NULL timer should report -1.0");
+  CHECK(sif_timer_start(NULL) == SIF_ERR_INVALID, "NULL start accepted");
+  CHECK(sif_timer_stop(NULL) == SIF_ERR_INVALID, "NULL stop accepted");
 }
 
 /* Whether the file holds @p line as a line of its own. */

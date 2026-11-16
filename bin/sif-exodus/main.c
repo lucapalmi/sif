@@ -47,6 +47,10 @@ static void print_usage(FILE* out) {
     "                 output path + .ckpt; run.checkpoint in CONFIG)\n"
     "  --no-checkpoint\n"
     "                 save no progress\n"
+    "  --log-file PATH\n"
+    "                 write the log to PATH, each line with its time, and\n"
+    "                 only the reason a run fails to the terminal\n"
+    "                 (run.log_file in CONFIG)\n"
     "  -c, --check    resolve, check and print CONFIG, and stop\n"
     "  --deep         with --check, read CONFIG's inputs as the run would\n"
     "  -t, --template MODE\n"
@@ -55,6 +59,17 @@ static void print_usage(FILE* out) {
     "  -h, --help     show this message and exit\n"
     "  -V, --version  show the version and exit\n",
     out);
+}
+
+/* With the log in a file, the terminal -- a batch job's own output -- would
+ * otherwise say nothing of why the program stopped: the reason the library
+ * recorded, and where the rest is. */
+static void say_failed(const char* log_file, const char* what) {
+  if (!log_file)
+    return;
+  const char* why = sif_error_message();
+  fprintf(stderr, "sif-exodus: %s: %s (log: %s)\n", what,
+    why[0] ? why : "see the log", log_file);
 }
 
 /* The value of an option that takes one, or NULL with a message. */
@@ -71,7 +86,7 @@ int main(int argc, char** argv) {
   size_t n_defines = 0;
   bool check_only = false;
   bool deep = false;
-  config_overrides_t overrides = {NULL, false};
+  config_overrides_t overrides = {NULL, false, NULL};
 
   for (int i = 1; i < argc; i++) {
     const char* arg = argv[i];
@@ -116,6 +131,9 @@ int main(int argc, char** argv) {
         return 2;
     } else if (strcmp(arg, "--no-checkpoint") == 0) {
       overrides.no_checkpoint = true;
+    } else if (strcmp(arg, "--log-file") == 0) {
+      if (!(overrides.log_file = option_value(argc, argv, &i)))
+        return 2;
     } else if (strcmp(arg, "--deep") == 0) {
       deep = true;
     } else if (strcmp(arg, "--format") == 0 ||
@@ -221,6 +239,17 @@ int main(int argc, char** argv) {
     return 0;
   }
 
+  /* Before init, so that init's own lines are in the file too. */
+  const char* log_file = config.run.log_file;
+  if (log_file) {
+    if (sif_log_sink_file_set(log_file) != SIF_OK) {
+      fprintf(stderr, "sif-exodus: run.log_file: %s\n", sif_error_message());
+      config_free(&config);
+      return 2;
+    }
+    fprintf(stderr, "sif-exodus: logging to %s\n", log_file);
+  }
+
   sif_fft_config_t fft = {.skip_tuning = !config.run.tune_fft};
   sif_omp_config_t omp = {.n_threads = config.run.n_threads};
   sif_config_t lib = {.fft_config = &fft,
@@ -228,8 +257,10 @@ int main(int argc, char** argv) {
     .log_level = config.run.log_level,
     .settings = config.settings,
     .n_settings = config.n_settings};
+  sif_error_clear();
   if (sif_system_init(&lib) != SIF_OK) {
     fputs("sif-exodus: could not initialise the library\n", stderr);
+    say_failed(log_file, "init failed");
     config_free(&config);
     return 1;
   }
@@ -237,16 +268,24 @@ int main(int argc, char** argv) {
   /* The same check as --check, before anything is read: what it finds wrong
    * would stop the run later anyway, after the expensive part. */
   if (config_check(&config, config_path, false, false) != 0) {
+    say_failed(log_file, "configuration check failed");
     sif_system_finalise();
     config_free(&config);
     return 2;
   }
 
+  sif_error_clear();
   const int status = config.params.mode == EXODUS_MODE_SURVEY
                        ? pipeline_survey(&config.params)
                        : pipeline_box(&config.params);
 
   sif_system_finalise();
+
+  if (status != SIF_OK)
+    say_failed(log_file, "run failed");
+  /* Back to the terminal, which closes the file. */
+  if (log_file && sif_log_sink_set(NULL) != SIF_OK)
+    fputs("sif-exodus: could not close the log\n", stderr);
   config_free(&config);
   return status == SIF_OK ? 0 : 1;
 }

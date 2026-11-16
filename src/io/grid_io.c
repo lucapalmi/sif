@@ -278,6 +278,6 @@ sif_grid_t* sif_grid_read(const char* filepath) {
     return NULL;
   }
 
-  SIF_LOG_INFO(TAG, "loaded %u^3 grid from %s", header.n_cells, filepath);
+  SIF_LOG_INFO(TAG, "%s: %u^3 grid loaded", filepath, header.n_cells);
   return grid;
 }
