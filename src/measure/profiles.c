@@ -382,8 +382,7 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
 
   const sif_real box_length = mesh->box_length;
 
-  SIF_LOG_INFO(TAG,
-    "computing %s profiles for %" PRIu64 " voids out to %g void radii",
+  SIF_LOG_INFO(TAG, "%s profiles: %" PRIu64 " voids, out to %g void radii",
     differential ? "differential" : "cumulative", cat->n_voids, (double)ext);
 
   /* Allocated here only if the caller passed a pointer to NULL; a set it
@@ -656,7 +655,6 @@ int sif_profiles(const sif_catalogue_t* cat, const sif_chain_mesh_t* mesh,
   sif_free_aligned(scratch_count);
   sif_free_aligned(bin_vols);
 
-  SIF_LOG_INFO(TAG, "profile computation completed");
   return SIF_OK;
 
 fail:

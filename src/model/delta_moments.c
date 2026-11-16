@@ -16,6 +16,7 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "structures/results_internal.h"
+#include "utils/log_tally.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -133,9 +134,8 @@ sif_delta_moments_t* sif_delta_moments_pk(const sif_real* k, const sif_real* pk,
   memcpy(m->radii, radii, (size_t)n_radii * sizeof(sif_real));
 
   SIF_LOG_INFO(TAG,
-    "evaluating sigma_0..sigma_%u over %u radii from a %u-point P(k) (%s "
-    "window)",
-    order, n_radii, n_points, gaussian ? "Gaussian" : "top-hat");
+    "sigma_0..sigma_%u: %u radii from a %u-point P(k) (%s window)", order,
+    n_radii, n_points, gaussian ? "Gaussian" : "top-hat");
 
   /* sigma_j^2 = (1 / 2 pi^2) integral dk k^(2j+2) P(k) W^2(kR).
    *
@@ -192,26 +192,28 @@ sif_delta_moments_t* sif_delta_moments_pk(const sif_real* k, const sif_real* pk,
   /* The diagnostics run outside the parallel region, so a caller comparing two
    * runs sees the same warnings in the same order rather than in whatever
    * order the threads happened to finish. */
-  for (uint32_t r = 0; r < n_radii; r++) {
-    for (uint8_t j = 0; j < n_moments; j++) {
+  for (uint8_t j = 0; j < n_moments; j++) {
+    sif_log_tally_t zero = {0}, high_k = {0};
+    for (uint32_t r = 0; r < n_radii; r++) {
       const size_t at = m->offsets[j] + r;
-
-      if (m->sigma[at] <= 0.0f) {
-        SIF_LOG_WARNING(TAG,
-          "sigma_%u at radius %g integrated to zero; check that the P(k) table "
-          "covers the relevant scales",
-          j, (double)radii[r]);
-      }
-      if (m->high_k_fraction[at] > HIGH_K_WARN_LEVEL) {
-        SIF_LOG_WARNING(TAG,
-          "at R = %g, %.1f%% of the sigma_%u integral comes from the top half "
-          "of the tabulated k range; the table is truncating the moment",
-          (double)radii[r], 100.0 * (double)m->high_k_fraction[at], j);
-      }
+      if (m->sigma[at] <= 0.0f)
+        sif__log_tally_add(&zero, (double)radii[r], 0.0);
+      if (m->high_k_fraction[at] > HIGH_K_WARN_LEVEL)
+        sif__log_tally_add(
+          &high_k, (double)radii[r], (double)m->high_k_fraction[at]);
     }
+    if (zero.n)
+      SIF_LOG_WARNING(TAG,
+        "sigma_%u: integrated to zero at %u of %u radii, R from %g to %g; "
+        "check that the P(k) table covers the relevant scales",
+        j, zero.n, n_radii, zero.r_min, zero.r_max);
+    if (high_k.n)
+      SIF_LOG_WARNING(TAG,
+        "sigma_%u: up to %.1f%% of the integral from the top half of the "
+        "tabulated k range at %u of %u radii, R from %g to %g; the table is "
+        "truncating the moment",
+        j, 100.0 * high_k.worst, high_k.n, n_radii, high_k.r_min, high_k.r_max);
   }
-
-  SIF_LOG_INFO(TAG, "sigma_0..sigma_%u evaluated from P(k)", order);
 
   return m;
 }
@@ -302,14 +304,15 @@ sif_real* sif_delta_sigma_slope_pk(const sif_real* k, const sif_real* pk,
     out[r] = (sif_real)(denominator > 0.0 ? numerator / denominator : 0.0);
   }
 
-  for (uint32_t r = 0; r < n_radii; r++) {
-    if (out[r] == 0.0f) {
-      SIF_LOG_WARNING(TAG,
-        "the slope at radius %g came out zero; the P(k) table may not cover "
-        "the relevant scales",
-        (double)radii[r]);
-    }
-  }
+  sif_log_tally_t zero = {0};
+  for (uint32_t r = 0; r < n_radii; r++)
+    if (out[r] == 0.0f)
+      sif__log_tally_add(&zero, (double)radii[r], 0.0);
+  if (zero.n)
+    SIF_LOG_WARNING(TAG,
+      "sigma slope: zero at %u of %u radii, R from %g to %g; the P(k) table "
+      "may not cover the relevant scales",
+      zero.n, n_radii, zero.r_min, zero.r_max);
 
   return out;
 }
@@ -519,6 +522,9 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
     }
   }
 
+  /* Counted over the radii, and reported once each after the loop. */
+  sif_log_tally_t d_high_k = {0}, d_aliased = {0}, zero = {0}, high_k = {0};
+
   for (uint32_t i = 0; i < n_radii; i++) {
     const double diag = cov[SIF_COV_INDEX(i, i)];
 
@@ -554,15 +560,8 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
        * a table that stops too early moves the multiplicity function while the
        * sigma diagnostic below stays perfectly quiet.
        */
-      if (dd_dr2[i] > 0.0 && high_d[i] / dd_dr2[i] > HIGH_K_WARN_LEVEL) {
-        SIF_LOG_WARNING(TAG,
-          "at R = %g, %.1f%% of <(d delta / dR)^2> comes from the top half of "
-          "the tabulated k range; the table is truncating the derivative "
-          "variance, which sets the up-crossing rate's slope scatter. Extend "
-          "P(k) to higher k -- this integral converges far more slowly than "
-          "the covariance itself",
-          (double)radii[i], 100.0 * high_d[i] / dd_dr2[i]);
-      }
+      if (dd_dr2[i] > 0.0 && high_d[i] / dd_dr2[i] > HIGH_K_WARN_LEVEL)
+        sif__log_tally_add(&d_high_k, (double)radii[i], high_d[i] / dd_dr2[i]);
 
       /*
        * Reaching high enough in k is only half of it: the grid also has to be
@@ -573,30 +572,47 @@ double* sif_delta_covariance_pk(const sif_real* k, const sif_real* pk,
        * like truncation: refining the grid makes the answer jump around rather
        * than approach a limit, because each sample is reporting a phase.
        */
-      if (dd_dr2[i] > 0.0 && alias_d[i] / dd_dr2[i] > ALIAS_WARN_LEVEL) {
-        SIF_LOG_WARNING(TAG,
-          "at R = %g, %.1f%% of <(d delta / dR)^2> comes from k samples too "
-          "widely spaced to resolve the sin(kR) oscillation (fewer than %g per "
-          "period); the derivative variance is being aliased rather than "
-          "integrated. Sample P(k) more finely in log k -- the requirement is "
-          "k dlnk R < pi / %g, so it is the largest radius that sets it",
-          (double)radii[i], 100.0 * alias_d[i] / dd_dr2[i], ALIAS_MIN_SAMPLES,
-          ALIAS_MIN_SAMPLES);
-      }
+      if (dd_dr2[i] > 0.0 && alias_d[i] / dd_dr2[i] > ALIAS_WARN_LEVEL)
+        sif__log_tally_add(
+          &d_aliased, (double)radii[i], alias_d[i] / dd_dr2[i]);
     }
 
-    if (!(diag > 0.0)) {
-      SIF_LOG_WARNING(TAG,
-        "the covariance at radius %g integrated to zero; check that the P(k) "
-        "table covers the relevant scales",
-        (double)radii[i]);
-    } else if (high[i] / diag > HIGH_K_WARN_LEVEL) {
-      SIF_LOG_WARNING(TAG,
-        "at R = %g, %.1f%% of the variance comes from the top half of the "
-        "tabulated k range; the table is truncating the covariance",
-        (double)radii[i], 100.0 * high[i] / diag);
-    }
+    if (!(diag > 0.0))
+      sif__log_tally_add(&zero, (double)radii[i], 0.0);
+    else if (high[i] / diag > HIGH_K_WARN_LEVEL)
+      sif__log_tally_add(&high_k, (double)radii[i], high[i] / diag);
   }
+
+  if (d_high_k.n)
+    SIF_LOG_WARNING(TAG,
+      "<(d delta / dR)^2>: up to %.1f%% from the top half of the tabulated k "
+      "range at %u of %u radii, R from %g to %g; the table is truncating the "
+      "derivative variance, which sets the up-crossing rate's slope scatter. "
+      "Extend P(k) to higher k -- this integral converges far more slowly "
+      "than the covariance itself",
+      100.0 * d_high_k.worst, d_high_k.n, n_radii, d_high_k.r_min,
+      d_high_k.r_max);
+  if (d_aliased.n)
+    SIF_LOG_WARNING(TAG,
+      "<(d delta / dR)^2>: up to %.1f%% from k samples too widely spaced to "
+      "resolve the sin(kR) oscillation (fewer than %g per period) at %u of "
+      "%u radii, R from %g to %g; the derivative variance is being aliased "
+      "rather than integrated. Sample P(k) more finely in log k -- the "
+      "requirement is k dlnk R < pi / %g, so it is the largest radius that "
+      "sets it",
+      100.0 * d_aliased.worst, ALIAS_MIN_SAMPLES, d_aliased.n, n_radii,
+      d_aliased.r_min, d_aliased.r_max, ALIAS_MIN_SAMPLES);
+  if (zero.n)
+    SIF_LOG_WARNING(TAG,
+      "covariance: integrated to zero at %u of %u radii, R from %g to %g; "
+      "check that the P(k) table covers the relevant scales",
+      zero.n, n_radii, zero.r_min, zero.r_max);
+  if (high_k.n)
+    SIF_LOG_WARNING(TAG,
+      "covariance: up to %.1f%% of the variance from the top half of the "
+      "tabulated k range at %u of %u radii, R from %g to %g; the table is "
+      "truncating the covariance",
+      100.0 * high_k.worst, high_k.n, n_radii, high_k.r_min, high_k.r_max);
 
   free(logk);
   free(amp);

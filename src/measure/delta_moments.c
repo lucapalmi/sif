@@ -11,6 +11,7 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "structures/results_internal.h"
+#include "utils/log_tally.h"
 
 #include <math.h>
 #include <stdlib.h>
@@ -23,14 +24,20 @@
  * field any more. */
 #define HIGH_K_WARN_LEVEL 0.1
 
+/* What store() found wrong, per moment, over every radius. */
+typedef struct {
+  sif_log_tally_t noise[SIF_MAX_MOMENT_ORDER + 1];
+  sif_log_tally_t high_k[SIF_MAX_MOMENT_ORDER + 1];
+} findings_t;
+
 /*
  * Stores one radius' column of results. A shot-noise subtraction can push a
  * sigma^2 negative, which is a real outcome -- the moment was noise -- so it
  * is reported as a zero sigma and flagged rather than square-rooted into a
- * NaN.
+ * NaN. What is flagged is counted, and reported once by report().
  */
 static void store(sif_delta_moments_t* m, uint32_t k, const double* sigma_sq,
-  const double* high_k) {
+  const double* high_k, findings_t* found) {
 
   for (uint8_t j = 0; j < m->n_moments; j++) {
     const size_t at = m->offsets[j] + k;
@@ -38,20 +45,28 @@ static void store(sif_delta_moments_t* m, uint32_t k, const double* sigma_sq,
     m->sigma[at] = (sif_real)(sigma_sq[j] > 0.0 ? sqrt(sigma_sq[j]) : 0.0);
     m->high_k_fraction[at] = (sif_real)high_k[j];
 
-    if (sigma_sq[j] <= 0.0) {
-      SIF_LOG_WARNING(TAG,
-        "sigma_%u^2 at radius %g is %g after shot-noise subtraction; the "
-        "moment is dominated by Poisson noise",
-        j, (double)m->radii[k], sigma_sq[j]);
-    }
+    if (sigma_sq[j] <= 0.0)
+      sif__log_tally_add(&found->noise[j], (double)m->radii[k], -sigma_sq[j]);
+    if (high_k[j] > HIGH_K_WARN_LEVEL)
+      sif__log_tally_add(&found->high_k[j], (double)m->radii[k], high_k[j]);
+  }
+}
 
-    if (high_k[j] > HIGH_K_WARN_LEVEL) {
+static void report(const sif_delta_moments_t* m, const findings_t* found) {
+  for (uint8_t j = 0; j < m->n_moments; j++) {
+    const sif_log_tally_t* t = &found->noise[j];
+    if (t->n)
       SIF_LOG_WARNING(TAG,
-        "at R = %g, %.1f%% of the sigma_%u sum comes from the top half of the "
-        "available k range; that moment is resolution-limited, not "
-        "field-limited",
-        (double)m->radii[k], 100.0 * high_k[j], j);
-    }
+        "sigma_%u: not positive after shot-noise subtraction at %u of %u "
+        "radii, R from %g to %g; the moment is dominated by Poisson noise",
+        j, t->n, m->n_radii, t->r_min, t->r_max);
+    t = &found->high_k[j];
+    if (t->n)
+      SIF_LOG_WARNING(TAG,
+        "sigma_%u: up to %.1f%% of the sum from the top half of the available "
+        "k range at %u of %u radii, R from %g to %g; the moment is "
+        "resolution-limited, not field-limited",
+        j, 100.0 * t->worst, t->n, m->n_radii, t->r_min, t->r_max);
   }
 }
 
@@ -107,8 +122,7 @@ sif_delta_moments_t* sif_delta_moments_grid(const sif_grid_t* grid,
 
   memcpy(m->radii, radii, (size_t)n_radii * sizeof(sif_real));
 
-  SIF_LOG_INFO(TAG,
-    "measuring sigma_0..sigma_%u over %u radii on a %u^3 grid (%s window)",
+  SIF_LOG_INFO(TAG, "sigma_0..sigma_%u: %u radii on a %u^3 grid (%s window)",
     order, n_radii, grid->n_cells,
     filter == SIF__FILTER_GAUSSIAN ? "Gaussian" : "top-hat");
 
@@ -120,6 +134,7 @@ sif_delta_moments_t* sif_delta_moments_grid(const sif_grid_t* grid,
 
   double sigma_sq[SIF_MAX_MOMENT_ORDER + 1];
   double high_k[SIF_MAX_MOMENT_ORDER + 1];
+  findings_t found = {0};
 
   for (uint32_t k = 0; k < n_radii; k++) {
     /* Every order shares one pass over the spectrum. */
@@ -131,12 +146,11 @@ sif_delta_moments_t* sif_delta_moments_grid(const sif_grid_t* grid,
       return NULL;
     }
 
-    store(m, k, sigma_sq, high_k);
+    store(m, k, sigma_sq, high_k, &found);
   }
 
   sif__fft_workspace_free(ws);
-
-  SIF_LOG_INFO(TAG, "sigma_0..sigma_%u measured from the field", order);
+  report(m, &found);
 
   return m;
 }

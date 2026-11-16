@@ -80,6 +80,10 @@ target_include_directories(pysif
 # pysif's link line through it.
 target_link_libraries(pysif PRIVATE sif)
 
+# The log bridge (src/py_log.c) guards its queue with a pthread mutex.
+find_package(Threads REQUIRED)
+target_link_libraries(pysif PRIVATE Threads::Threads)
+
 # The oldest NumPy the module runs with is set by the C API level it is
 # compiled for, and NumPy's headers pick a default that rises with their own
 # version. Stated here, so that it is the numpy>=1.23 in pyproject.toml

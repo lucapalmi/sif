@@ -53,13 +53,14 @@ void sif_bitmask_free(sif_bitmask_t* mask) {
   free(mask);
 }
 
-void sif_bitmask_clear_all(sif_bitmask_t* mask) {
+int sif_bitmask_clear_all(sif_bitmask_t* mask) {
   if (!mask || !mask->words) {
-    SIF_LOG_ERROR(TAG, "invalid bitmask");
-    return;
+    SIF_LOG_ERROR(TAG, "bitmask: %s", !mask ? "NULL" : "no words");
+    return SIF_ERR_INVALID;
   }
 
   memset(mask->words, 0, mask->n_words * sizeof(uint64_t));
+  return SIF_OK;
 }
 
 uint64_t sif_bitmask_count_set(const sif_bitmask_t* mask) {

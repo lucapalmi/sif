@@ -2100,8 +2100,10 @@ static void describe_group(
 
   dataset_shape_t* sets =
     ginfo.nlinks ? calloc((size_t)ginfo.nlinks, sizeof(*sets)) : NULL;
+  /* Not an ERROR: the description goes on, and counts the group among the
+   * unreadable, which is what it says about it. */
   if (ginfo.nlinks && !sets) {
-    SIF_LOG_ERROR(TAG, "out of memory");
+    SIF_LOG_WARNING(TAG, "%s: out of memory; group not described", at);
     w->n_unreadable++;
     return;
   }

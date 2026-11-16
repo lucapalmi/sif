@@ -57,8 +57,9 @@ void sif_bitmask_free(sif_bitmask_t* mask);
 /**
  * @brief Clear every bit.
  * @param mask Mask to clear.
+ * @return SIF_OK, or SIF_ERR_INVALID for a NULL mask or one without words.
  */
-void sif_bitmask_clear_all(sif_bitmask_t* mask);
+SIF_NODISCARD int sif_bitmask_clear_all(sif_bitmask_t* mask);
 
 /**
  * @brief Count the set bits.

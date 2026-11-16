@@ -156,7 +156,8 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
   sif_real* sz = tess->samples->z;
 
   SIF_LOG_INFO(TAG,
-    "throwing %" PRIu64 " samples at %" PRIu64 " tracers (%u per tracer)",
+    "tessellation: %" PRIu64 " samples over %" PRIu64 " tracers (%u per "
+    "tracer)",
     n_samples, n_tracers, samples_per_tracer);
 
   /* --- ownership pass --- */
@@ -288,7 +289,6 @@ sif_tessellation_t* sif_tessellation_alloc(const sif_chain_mesh_t* mesh,
     }
   }
 
-  SIF_LOG_INFO(TAG, "tessellation complete");
   return tess;
 }
 

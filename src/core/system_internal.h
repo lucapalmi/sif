@@ -61,6 +61,8 @@ sif_system_state_t* sif__system_state_safe(void);
 int sif__system_max_threads(void);
 int sif__system_num_threads(void);
 int sif__system_thread_num(void);
+/** Whether the caller is inside an active parallel region. */
+int sif__system_in_parallel(void);
 /** @} */
 
 /**

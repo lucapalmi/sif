@@ -1100,8 +1100,13 @@ int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
 
       /* Keyed, so a file found by name still has to say it came from this
        * field before its contents are believed. */
+      /* A cache file that cannot be used is a miss, not a failure: the grid
+       * is computed instead, so what the read reports is demoted. */
       const uint64_t expect[2] = {key.a, key.b};
-      if (sif__grid_read_into_keyed(grid, final_path, expect) == SIF_OK) {
+      sif__log_demote_begin();
+      const int hit = sif__grid_read_into_keyed(grid, final_path, expect);
+      sif__log_demote_end();
+      if (hit == SIF_OK) {
         SIF_LOG_INFO(TAG, "loaded cached .xgrid from %s", final_path);
         return SIF_OK;
       }
@@ -1138,7 +1143,11 @@ int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
 
   const uint64_t source_key[2] = {key.a, key.b};
 
-  if (sif__grid_write_keyed(tmp_path, grid, source_key) == SIF_OK) {
+  /* The grid is the caller's either way, so a failed write is demoted. */
+  sif__log_demote_begin();
+  const int written = sif__grid_write_keyed(tmp_path, grid, source_key);
+  sif__log_demote_end();
+  if (written == SIF_OK) {
     if (rename(tmp_path, final_path) == 0) {
       SIF_LOG_TRACE(TAG, "%s: grid cached", final_path);
     } else {
@@ -1149,7 +1158,7 @@ int sif_grid_assign(sif_grid_t* grid, const sif_field_t* field,
     }
   } else {
     SIF_LOG_WARNING(TAG,
-      "%s: grid computed but not cached: the write failed (see the error "
+      "%s: grid computed but not cached: the write failed (see the warning "
       "above)",
       tmp_path);
     remove(tmp_path);

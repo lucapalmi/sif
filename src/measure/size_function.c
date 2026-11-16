@@ -26,7 +26,7 @@ SIF_DEFINE_QUICKSORT(sif_sort_real_array, sif_real, a < b)
  * Both branches clamp the top edge into the last bin, so a void sitting
  * exactly at true_r_max is counted rather than silently dropped.
  */
-static void fill_histogram(sif_size_function_t* vsf, const sif_catalogue_t* cat,
+static int fill_histogram(sif_size_function_t* vsf, const sif_catalogue_t* cat,
   sif_real box_length, sif_real true_r_min, sif_real true_r_max,
   bool use_ln_bins) {
 
@@ -37,11 +37,13 @@ static void fill_histogram(sif_size_function_t* vsf, const sif_catalogue_t* cat,
   const sif_real hi = use_ln_bins ? SIF_REAL_LOG(vsf->r_max) : vsf->r_max;
   const sif_real width = (hi - lo) / (sif_real)n_bins;
 
+  /* The caller has already refused r_max <= r_min, but in log bins two
+   * radii a float apart can still share a logarithm. */
   if (!(width > 0.0f)) {
     SIF_LOG_ERROR(TAG,
       "degenerate radius range [%g, %g], cannot bin", (double)vsf->r_min,
       (double)vsf->r_max);
-    return;
+    return SIF_ERR_INVALID;
   }
 
   const sif_real inv_width = 1.0f / width;
@@ -76,6 +78,7 @@ static void fill_histogram(sif_size_function_t* vsf, const sif_catalogue_t* cat,
 
   for (uint32_t b = 0; b < n_bins; b++)
     vsf->vsf[b] = (sif_real)((double)out_counts[b] / norm);
+  return SIF_OK;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -154,7 +157,11 @@ sif_size_function_t* sif_size_function_catalogue(const sif_catalogue_t* cat,
   }
 
   /* 4. Bin and normalise */
-  fill_histogram(vsf, cat, box_length, true_r_min, true_r_max, use_ln_bins);
+  if (fill_histogram(
+        vsf, cat, box_length, true_r_min, true_r_max, use_ln_bins) != SIF_OK) {
+    sif_size_function_free(vsf);
+    return NULL;
+  }
 
   /* 5. Poisson error: the relative error on a bin is 1/sqrt(N). */
   for (uint32_t b = 0; b < n_bins; b++) {
@@ -163,9 +170,8 @@ sif_size_function_t* sif_size_function_catalogue(const sif_catalogue_t* cat,
                     : 0.0f;
   }
 
-  SIF_LOG_INFO(TAG,
-    "size function computed over [%g, %g] in %u %s bins", (double)true_r_min,
-    (double)true_r_max, n_bins, use_ln_bins ? "log" : "linear");
+  SIF_LOG_INFO(TAG, "size function: %u %s bins over [%g, %g]", n_bins,
+    use_ln_bins ? "log" : "linear", (double)true_r_min, (double)true_r_max);
 
   return vsf;
 }
@@ -372,8 +378,7 @@ sif_size_function_t* sif_size_function_combine(const sif_size_function_t** vsfs,
   free(temp_vals);
   free(temp_errs);
 
-  SIF_LOG_INFO(TAG,
-    "successfully combined %u VSFs into master grid (Bins: %u)", n_vsfs,
-    master_bins);
+  SIF_LOG_INFO(
+    TAG, "size function: %u combined into %u bins", n_vsfs, master_bins);
   return master;
 }

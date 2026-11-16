@@ -95,7 +95,8 @@ static void survey_close_pass(const sif_bitmask_t* src, sif_bitmask_t* dst,
   const int32_t len = (int32_t)n;
   const int32_t full = 2 * k + 1;
 
-  sif_bitmask_clear_all(dst);
+  /* dst is the caller's own, allocated mask: clearing it cannot fail. */
+  (void)sif_bitmask_clear_all(dst);
 
 #pragma omp parallel for schedule(static)
   for (uint64_t line = 0; line < n2; line++) {

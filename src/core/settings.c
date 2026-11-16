@@ -478,7 +478,8 @@ static void settings_load_line(const char* key, const char* raw, uint32_t line) 
       const uint32_t grown_cap = settings_capacity * 2;
       entry_t* grown = realloc(settings, grown_cap * sizeof(entry_t));
       if (!grown) {
-        SIF_LOG_ERROR(TAG, "%s:%u: %s: dropped: out of memory",
+        /* Loading goes on without it, so not an ERROR. */
+        SIF_LOG_WARNING(TAG, "%s:%u: %s: dropped: out of memory",
           settings_filepath, line, key);
         return;
       }
@@ -511,14 +512,18 @@ static bool settings_load(void) {
 
   char line[LINE_CAP];
   uint32_t lineno = 0;
+  /* Lines skipped as malformed: counted, and reported once each with the
+   * first, so that a file that is not a settings file at all does not
+   * produce a warning per line. */
+  uint32_t n_long = 0, first_long = 0, n_no_eq = 0, first_no_eq = 0;
   while (fgets(line, sizeof(line), f)) {
     lineno++;
     /* An over-long line comes back in pieces, and the tail of one would
      * parse as an entry of its own -- so discard it whole. Reaching EOF
      * without a newline is the ordinary last line, not an over-long one. */
     if (!strchr(line, '\n') && !feof(f)) {
-      SIF_LOG_WARNING(TAG, "%s:%u: longer than %d characters (ignored)",
-        settings_filepath, lineno, LINE_CAP - 1);
+      if (n_long++ == 0)
+        first_long = lineno;
       int c;
       while ((c = fgetc(f)) != EOF && c != '\n') {
       }
@@ -531,8 +536,8 @@ static bool settings_load(void) {
 
     char* eq = strchr(trimmed, '=');
     if (!eq) {
-      SIF_LOG_WARNING(TAG, "%s:%u: no '=' (ignored)", settings_filepath,
-        lineno);
+      if (n_no_eq++ == 0)
+        first_no_eq = lineno;
       continue;
     }
 
@@ -543,6 +548,14 @@ static bool settings_load(void) {
       settings_load_line(key, val, lineno);
   }
   fclose(f);
+  if (n_long)
+    SIF_LOG_WARNING(TAG,
+      "%s:%u: longer than %d characters (ignored, with %u more such line%s)",
+      settings_filepath, first_long, LINE_CAP - 1, n_long - 1,
+      n_long == 2 ? "" : "s");
+  if (n_no_eq)
+    SIF_LOG_WARNING(TAG, "%s:%u: no '=' (ignored, with %u more such line%s)",
+      settings_filepath, first_no_eq, n_no_eq - 1, n_no_eq == 2 ? "" : "s");
   SIF_LOG_TRACE(TAG, "%s: loaded", settings_filepath);
   return true;
 }

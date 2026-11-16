@@ -485,7 +485,17 @@ it echoes the tag: the error record keeps the message without the tag, and
 the message is what a Python exception says.
 
 **No logging from a parallel region.** Count inside it, and log once after
-it, with the count and the first occurrence.
+it, with the count and the first occurrence. A `SIF_DEBUG_CHECKS` build
+asserts it.
+
+**No repeated warnings.** A loop that can warn more than once counts instead,
+and warns once after it with the count and the first location; over radii,
+`utils/log_tally.h` keeps the count, the range and the worst value.
+
+**An ERROR means the call fails.** Optional work whose failure the call
+survives -- a cache read or write -- runs between `sif__log_demote_begin()`
+and `sif__log_demote_end()`, which log its ERRORs as WARNINGs and keep them
+out of the error record.
 
 **Validate at the boundary.** Public entry points check their arguments and
 return `SIF_ERR_INVALID`; internal helpers assume the contract holds and use

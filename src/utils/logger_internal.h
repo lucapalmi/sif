@@ -64,4 +64,19 @@ void sif__log_capture_begin(
 /** @brief Restore the capture sif__log_capture_begin() replaced. */
 void sif__log_capture_end(const sif__log_capture_t* saved);
 
+/**
+ * @brief Log this thread's ERRORs as WARNINGs, and keep them out of the
+ * error record, until sif__log_demote_end().
+ *
+ * For optional work done with functions that treat a failure as an error --
+ * reading or writing a cache, say -- where the call around it goes on either
+ * way: an ERROR there would claim a failure the caller never sees, and leave
+ * a reason in the record that a later, real failure would be reported under.
+ * Nests; per thread.
+ */
+void sif__log_demote_begin(void);
+
+/** @brief End the sif__log_demote_begin() in force on this thread. */
+void sif__log_demote_end(void);
+
 #endif /* SIF__UTILS_LOGGER_INTERNAL_H */

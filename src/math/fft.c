@@ -6,6 +6,7 @@
 
 #include "fft.h"
 
+#include <errno.h>
 #include <math.h>
 #include <omp.h>
 #include <stdio.h>
@@ -49,7 +50,8 @@ sif_fft_manager_t* sif__fft_manager_init(
   mgr->wisdom_dir = wisdom_dir ? strdup(wisdom_dir) : NULL;
 
   if (wisdom_dir && !mgr->wisdom_dir) {
-    SIF_LOG_WARNING(TAG, "failed to copy the wisdom directory path");
+    SIF_LOG_WARNING(
+      TAG, "%s: out of memory; wisdom not loaded or saved", wisdom_dir);
   }
 
   /* Zero is FFTW's failure, and planning with threads after it is not
@@ -184,14 +186,16 @@ static void fft_save_wisdom(const sif_fft_manager_t* mgr) {
 
   /* FFTW's export returns non-zero on success, unlike most of C. */
   if (real_fftw_export_wisdom_to_filename(tmp_path) == 0) {
-    SIF_LOG_WARNING(TAG, "failed to export wisdom to %s", tmp_path);
+    SIF_LOG_WARNING(
+      TAG, "%s: wisdom not saved: FFTW could not write it", tmp_path);
     remove(tmp_path);
     return;
   }
 
   if (rename(tmp_path, final_path) != 0) {
-    SIF_LOG_WARNING(
-      TAG, "failed to install the wisdom file %s", final_path);
+    SIF_LOG_WARNING(TAG,
+      "%s: wisdom not saved: cannot rename %s into place: %s", final_path,
+      tmp_path, strerror(errno));
     remove(tmp_path);
     return;
   }
@@ -479,10 +483,8 @@ sif_real* sif__fft_workspace_take_real_buffer(sif_fft_workspace_t* ws) {
 }
 
 void sif__fft_workspace_free(sif_fft_workspace_t* ws) {
-  if (!ws) {
-    SIF_LOG_WARNING(TAG, "cannot free a NULL workspace");
+  if (!ws)
     return;
-  }
 
   /* Nothing to save here: wisdom is written the moment a plan is measured,
    * see fft_plan_stage(). */

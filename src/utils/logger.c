@@ -89,6 +89,16 @@ static SIF_THREAD_LOCAL sif__log_capture_t capture;
 
 int sif__log_captures = 0;
 
+/* sif__log_demote_begin() calls in force on this thread. */
+static SIF_THREAD_LOCAL int demoted = 0;
+
+void sif__log_demote_begin(void) { demoted++; }
+
+void sif__log_demote_end(void) {
+  if (demoted > 0)
+    demoted--;
+}
+
 void sif__log_capture_begin(
   sif__log_sink_t sink, void* ctx, sif__log_capture_t* saved) {
   *saved = capture;
@@ -257,11 +267,18 @@ int sif_log_sink_file_set(const char* path) {
 /* --- dispatch --- */
 
 void sif__log_impl(uint8_t level, const char* tag, const char* fmt, ...) {
+  /* The library's own rule, checked where it can be: a message from a
+   * parallel region comes out in scheduling order, once per thread that hit
+   * it. Count inside the region and log once after it. */
+  SIF_ASSERT(!sif__system_in_parallel() && "logged from a parallel region");
+
   /* Clamped, not asserted: this function backs the SIF_LOG_* macros and is
    * therefore part of the ABI, so the level can be anything a caller passes,
    * while the tables above have one entry per real level. */
   if (level >= N_LEVELS)
     level = N_LEVELS - 1;
+  if (demoted && level == SIF_LOG_LEVEL_ERROR)
+    level = SIF_LOG_LEVEL_WARNING;
 
   const bool to_capture = capture.sink && level >= SIF_LOG_LEVEL_WARNING;
   const bool to_sink = level >= sif__log_level;

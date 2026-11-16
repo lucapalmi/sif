@@ -73,7 +73,10 @@ static PyGetSetDef sifBitmask_getset[] = {
 
 static PyObject* sifBitmask_clear_all(PyObject* self_obj, PyObject* args) {
   sifBitmaskObject* self = (sifBitmaskObject*)self_obj;
-  sif_bitmask_clear_all(self->bitmask);
+  sif_error_clear();
+  const int status = sif_bitmask_clear_all(self->bitmask);
+  if (status != SIF_OK)
+    return py_sif_raise(status, "Bitmask.clear_all");
   Py_RETURN_NONE;
 }
 

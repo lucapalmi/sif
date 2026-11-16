@@ -13,6 +13,9 @@ Current version: v0.5 release 0
   `finder.exodus`); the list is in `logger.h`
 - `pysif.system_init()` no longer takes `log_level`: configure
   `logging.getLogger("pysif")` instead (breaking)
+- Diagnostics that fired once per radius (sigma moments, BBKS, the
+  covariance) or per bad settings line now warn once, with a count and range
+- `sif_bitmask_clear_all()` returns a status (breaking)
 - The size functions (`sif_size_function_svdw`, `_vdn`, `_evm`, `_evm_kernel`,
   `_evm_walk`; pysif `size_function_*`) take the non-linear threshold, strictly
   between -1 and 0, and convert it to the linear barrier inside; the argument
@@ -65,6 +68,13 @@ Current version: v0.5 release 0
   catalogue keeping R. Variant `"lagrangian-overlap"`, `overlap_type=` in
   `exodus_raw()`, `SIF_FINDER_LAGRANGIAN_OVERLAP`
 
+
+### Fixed
+
+- The catalogue size function fails on log bins too narrow to separate,
+  instead of returning zero counts
+- A grid cache file that cannot be read or written no longer leaves an error
+  behind a call that succeeded
 
 ## v0.5.0 -- 5/11/2026
 

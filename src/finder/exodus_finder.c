@@ -2437,13 +2437,13 @@ sif_catalogue_t* sif__exodus_run(sif_grid_t* grid, const sif_chain_mesh_t* mesh,
     int restored = sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0);
     if (restored == SIF_OK) {
       grid->values = sif__fft_grid_backward(ctx.fft_ws);
-      SIF_LOG_INFO(TAG, "recovered original density grid");
+      SIF_LOG_TRACE(TAG, "density grid: restored");
     }
     if (survey && restored == SIF_OK) {
       restored = sif__fft_apply_filter(ctx.random_ws, SIF__FILTER_NONE, 0, 0);
       if (restored == SIF_OK) {
         random_grid->values = sif__fft_grid_backward(ctx.random_ws);
-        SIF_LOG_INFO(TAG, "recovered original random grid");
+        SIF_LOG_TRACE(TAG, "random grid: restored");
       }
     }
     if (restored != SIF_OK && status == SIF_OK) {

@@ -111,10 +111,12 @@ void sif_log_level_set(uint8_t level);
  * sif_log_sink_set(&sink);
  * @endcode
  *
- * The library calls the sink from whichever thread logged, OpenMP workers
- * included, so a sink must be safe to call concurrently; the built-in ones
- * are. Sinks are process-wide and independent of sif_system_init(): one set
- * before init receives init's own messages.
+ * The library calls the sink from whichever thread logged, so a sink must
+ * be safe to call concurrently; the built-in ones are. The library itself
+ * never logs from an OpenMP parallel region -- it counts inside and logs
+ * once after -- and a SIF_DEBUG_CHECKS build asserts as much, for every
+ * caller of the macros. Sinks are process-wide and independent of
+ * sif_system_init(): one set before init receives init's own messages.
  *
  * @note Not synchronised: set the sink between library calls, not while one
  * may be logging from another thread.

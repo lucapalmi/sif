@@ -21,6 +21,7 @@
 #include "sif/utils/align.h"
 #include "sif/utils/logger.h"
 #include "structures/results_internal.h"
+#include "utils/log_tally.h"
 
 #include <math.h>
 #include <stdbool.h>
@@ -290,15 +291,18 @@ sif_real* sif_bbks_gamma(const sif_delta_moments_t* moments) {
     return NULL;
   }
 
+  sif_log_tally_t undefined = {0};
   for (uint32_t r = 0; r < moments->n_radii; r++) {
-    if (s0[r] > 0.0f && s2[r] > 0.0f) {
+    if (s0[r] > 0.0f && s2[r] > 0.0f)
       out[r] = (sif_real)((double)s1[r] * s1[r] / ((double)s0[r] * s2[r]));
-    } else {
-      SIF_LOG_WARNING(TAG,
-        "gamma at radius %g is undefined: sigma_0 = %g, sigma_2 = %g",
-        (double)moments->radii[r], (double)s0[r], (double)s2[r]);
-    }
+    else
+      sif__log_tally_add(&undefined, (double)moments->radii[r], 0.0);
   }
+  if (undefined.n)
+    SIF_LOG_WARNING(TAG,
+      "gamma: undefined (sigma_0 or sigma_2 not positive) at %u of %u radii, "
+      "R from %g to %g; left at 0",
+      undefined.n, moments->n_radii, undefined.r_min, undefined.r_max);
 
   return out;
 }
@@ -320,14 +324,18 @@ sif_real* sif_bbks_r_star(const sif_delta_moments_t* moments) {
 
   const double root3 = sqrt(3.0);
 
+  sif_log_tally_t undefined = {0};
   for (uint32_t r = 0; r < moments->n_radii; r++) {
-    if (s2[r] > 0.0f) {
+    if (s2[r] > 0.0f)
       out[r] = (sif_real)(root3 * (double)s1[r] / s2[r]);
-    } else {
-      SIF_LOG_WARNING(TAG, "R_star at radius %g is undefined: sigma_2 = %g",
-        (double)moments->radii[r], (double)s2[r]);
-    }
+    else
+      sif__log_tally_add(&undefined, (double)moments->radii[r], 0.0);
   }
+  if (undefined.n)
+    SIF_LOG_WARNING(TAG,
+      "R_star: undefined (sigma_2 not positive) at %u of %u radii, R from %g "
+      "to %g; left at 0",
+      undefined.n, moments->n_radii, undefined.r_min, undefined.r_max);
 
   return out;
 }

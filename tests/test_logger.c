@@ -25,9 +25,7 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifdef _OPENMP
-#  include <omp.h>
-#endif
+#include <pthread.h>
 
 #include "test_util.h"
 
@@ -210,6 +208,36 @@ static void test_capture(void) {
   kept_clear(&k);
 }
 
+static void test_demote(void) {
+  printf("demoted errors\n");
+  kept_t k = {0};
+  const sif_log_sink_t sink = {.write = keep_write, .flush = NULL, .ctx = &k};
+  CHECK(sif_log_sink_set(&sink) == SIF_OK, "sink not set");
+  sif_log_level_set(SIF_LOG_LEVEL_TRACE);
+
+  /* Inside the scope, an ERROR is a WARNING, and leaves no record: optional
+   * work that fails must not stand in for the reason of a later failure. */
+  sif_error_clear();
+  sif__log_demote_begin();
+  sif__log_demote_begin();
+  SIF_LOG_ERROR("t", "cache unreadable");
+  sif__log_demote_end();
+  SIF_LOG_ERROR("t", "still demoted");
+  sif__log_demote_end();
+  CHECK(k.n == 2 && k.level[0] == SIF_LOG_LEVEL_WARNING &&
+          k.level[1] == SIF_LOG_LEVEL_WARNING,
+    "demoted: %d messages, levels %u %u", k.n, k.level[0], k.level[1]);
+  CHECK(sif_error_message()[0] == '\0', "demoted error recorded: '%s'",
+    sif_error_message());
+
+  SIF_LOG_ERROR("t", "real failure");
+  CHECK(k.n == 3 && k.level[2] == SIF_LOG_LEVEL_ERROR, "error after the scope");
+  CHECK(error_has("real failure"), "record: '%s'", sif_error_message());
+
+  CHECK(sif_log_sink_set(NULL) == SIF_OK, "default not restored");
+  kept_clear(&k);
+}
+
 /* --- stream and file sinks --- */
 
 /* Every line of @p text is "[LEVEL] tag: message"; returns the count, or -1
@@ -254,6 +282,21 @@ static void test_stream_sink(void) {
   free(buf);
 }
 
+/* Plain threads, not an OpenMP region: the library never logs from one, and a
+ * SIF_DEBUG_CHECKS build asserts it does not. What is tested is the sink. */
+#define N_WRITERS  8
+#define PER_WRITER 500
+
+static void* write_lines(void* arg) {
+  const int id = *(const int*)arg;
+  for (int i = 0; i < PER_WRITER; i++)
+    SIF_LOG_INFO("worker",
+      "message %d of a line long enough to interleave if "
+      "it were written in pieces: %d %d %d",
+      i, id, id, id);
+  return NULL;
+}
+
 static void test_threads(void) {
   printf("stream sink, from threads\n");
   char* buf = NULL;
@@ -265,19 +308,24 @@ static void test_threads(void) {
   }
   CHECK(sif_log_sink_stream_set(mem) == SIF_OK, "stream sink not set");
 
-  const int n = 4000;
-#pragma omp parallel for num_threads(8)
-  for (int i = 0; i < n; i++)
-    SIF_LOG_INFO("worker",
-      "message %d of a line long enough to interleave if "
-      "it were written in pieces: %d %d %d",
-      i, i, i, i);
+  pthread_t threads[N_WRITERS];
+  int ids[N_WRITERS];
+  int started = 0;
+  for (; started < N_WRITERS; started++) {
+    ids[started] = started;
+    if (pthread_create(&threads[started], NULL, write_lines, &ids[started]))
+      break;
+  }
+  for (int t = 0; t < started; t++)
+    pthread_join(threads[t], NULL);
   SIF_LOG_FLUSH();
+  CHECK(started == N_WRITERS, "%d of %d threads started", started, N_WRITERS);
 
   CHECK(sif_log_sink_set(NULL) == SIF_OK, "default not restored");
   fclose(mem);
   const int lines = buf ? count_lines(buf, "[INFO] worker: message ") : -1;
-  CHECK(lines == n, "%d whole lines, expected %d", lines, n);
+  CHECK(lines == started * PER_WRITER, "%d whole lines, expected %d", lines,
+    started * PER_WRITER);
   free(buf);
 }
 
@@ -345,6 +393,7 @@ int main(void) {
   test_custom_sink();
   test_level();
   test_capture();
+  test_demote();
   test_stream_sink();
   test_threads();
   test_file_sink();

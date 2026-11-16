@@ -113,8 +113,7 @@ sif_delta_distribution_t* sif_delta_distribution_grid(const sif_grid_t* grid,
    * few ulp away from the bound the histogram actually clamps against. */
   dist->delta_edges[n_bins] = delta_bounds[1];
 
-  SIF_LOG_INFO(TAG,
-    "measuring the delta PDF over %u radii on a %u^3 grid (%s window, %s)",
+  SIF_LOG_INFO(TAG, "delta PDF: %u radii on a %u^3 grid (%s window, %s)",
     n_radii, grid->n_cells,
     filter == SIF__FILTER_GAUSSIAN ? "Gaussian" : "top-hat",
     (opt & SIF__DELTA_SHUFFLE_MASK) == SIF_DELTA_SHUFFLE_NONE
@@ -162,8 +161,6 @@ sif_delta_distribution_t* sif_delta_distribution_grid(const sif_grid_t* grid,
   }
 
   sif__fft_workspace_free(ws);
-
-  SIF_LOG_INFO(TAG, "delta distribution computation complete");
 
   return dist;
 

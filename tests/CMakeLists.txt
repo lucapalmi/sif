@@ -61,6 +61,12 @@ foreach(test_name IN LISTS SIF_TESTS)
     target_link_libraries(${test_name} PRIVATE OpenMP::OpenMP_C)
   endif()
 
+  # test_logger writes from threads of its own, plain POSIX ones.
+  if(test_name STREQUAL "test_logger")
+    find_package(Threads REQUIRED)
+    target_link_libraries(${test_name} PRIVATE Threads::Threads)
+  endif()
+
   # What sif itself was built with, so a test can expect the HDF5 entry
   # points to work or to refuse. The library's own definition is private.
   if(SIF_WITH_HDF5)

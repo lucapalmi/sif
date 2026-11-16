@@ -186,7 +186,7 @@ int sif_system_init(sif_config_t* config) {
   char fits[64];
   sif__fits_describe(fits, sizeof(fits));
 
-  SIF_LOG_INFO(TAG, "sif system state initialised (threads: %u, %s, %s)",
+  SIF_LOG_INFO(TAG, "initialised: %u threads, %s, %s",
     system_state->max_threads, hdf5, fits);
 
   SIF_LOG_FLUSH();
@@ -201,9 +201,7 @@ void sif_system_finalise(void) {
 
   sif_timer_stop(&system_state->total_runtime_timer);
   double total_time = sif_timer_elapsed_ms(&system_state->total_runtime_timer);
-  SIF_LOG_INFO(TAG,
-    "sif system state finalised. Total execution time: %.2f s",
-    total_time / 1000);
+  SIF_LOG_INFO(TAG, "finalised after %.2f s", total_time / 1000);
 
   /* Flush before tearing anything down: the teardown below can abort the
    * process on a broken FFTW state, and a buffered log line would be lost. */
@@ -285,6 +283,14 @@ int sif__system_num_threads(void) {
 int sif__system_thread_num(void) {
 #ifdef _OPENMP
   return omp_get_thread_num();
+#else
+  return 0;
+#endif
+}
+
+int sif__system_in_parallel(void) {
+#ifdef _OPENMP
+  return omp_in_parallel();
 #else
   return 0;
 #endif

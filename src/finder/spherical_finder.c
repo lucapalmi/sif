@@ -260,7 +260,7 @@ sif_catalogue_t* sif_finder_spherical(sif_grid_t* grid, const sif_real* radii,
   if (!(options & SIF_FINDER_CONSUME_GRID)) {
     if (sif__fft_apply_filter(ctx.fft_ws, SIF__FILTER_NONE, 0, 0) == SIF_OK) {
       grid->values = sif__fft_grid_backward(ctx.fft_ws);
-      SIF_LOG_INFO(TAG, "recovered original density grid");
+      SIF_LOG_TRACE(TAG, "density grid: restored");
     }
   }
 
